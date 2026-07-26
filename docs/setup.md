@@ -1,5 +1,46 @@
 # Setup & infrastructure
 
+## Deployed
+
+| | |
+|---|---|
+| Repo | https://github.com/kianwoon/expressautomate (private) |
+| API | https://expressautomate.app — Koyeb app `expressautomate`, service `api` (WEB) |
+| Worker | Koyeb service `worker` (WORKER) |
+| Instances | `eco-nano` (0.1 vCPU / 256 MB), 1 replica each, region `was` — the cheapest tier Koyeb offers |
+| CI/CD | GitHub Actions → lint, migrate, test → deploy on push to `main` |
+
+Both services sit in `was`, the same region as the Postgres instance, so
+database round-trips stay in-datacentre.
+
+**Watch memory.** `eco-nano` gives 256 MB and a FastAPI + SQLAlchemy + asyncpg
+process idles near half of that. It was chosen to keep the starting bill down
+and it is healthy today, but the first real ingestion load is the moment to
+check for OOM restarts and move up to `eco-micro` (512 MB) if they appear.
+
+### Deployment path
+
+CI deploys with `koyeb deploy` (archive upload, Koyeb builds the Dockerfile)
+rather than pushing to a registry. The Actions build *can* push to GHCR, but
+the resulting package is private and readable only by the Actions-scoped
+`GITHUB_TOKEN`, which Koyeb cannot reuse — archive deploy keeps `KOYEB_TOKEN`
+as the single deployment credential instead of minting a second long-lived PAT.
+
+### DNS
+
+| Record | Status |
+|---|---|
+| `expressautomate.app` → `…cname.koyeb.app` | **live**, TLS valid |
+| `www.expressautomate.app` | **not resolving** |
+
+`www` is created in Cloudflare and ACTIVE on Koyeb, but Cloudflare's
+authoritative nameservers return no answer for it while serving the apex
+normally. The record is identical in shape to the working apex, so this looks
+like zone settling on a domain registered the same day rather than a
+misconfiguration. If it has not resolved within 24 hours, the cleaner fix is
+to drop the `www` CNAME entirely and add a Cloudflare Redirect Rule sending
+`www` → apex, which is the usual arrangement anyway.
+
 ## Provisioned
 
 | Resource | Value | Source |

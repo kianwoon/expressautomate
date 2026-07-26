@@ -45,8 +45,32 @@ uv run ruff check .
   in separate tables; extractions keep evidence, confidence, and model version.
 - **The AI must not fabricate missing values** (§15) — return `Not mentioned`.
 
+## Auth
+
+Users sign in with **Microsoft or Google** (decided 2026-07-27; amends plan
+§6.1, which assumed Microsoft only). Keep the two concerns separate:
+
+- *Identity* — either provider.
+- *Mailbox ingestion* — Microsoft Graph only. There is no Gmail path.
+
+A Google-only user therefore has nothing to ingest. Onboarding must say so
+rather than showing an empty dashboard.
+
+## Deploy
+
+Push to `main` → GitHub Actions lints, migrates, tests, then deploys both
+Koyeb services. Tests run against a throwaway Postgres container, never the
+live database — they create roles and toggle RLS.
+
+Live: https://expressautomate.app · repo: `kianwoon/expressautomate` (private)
+
 ## Status
 
-Stage 1 (Foundation) done: env, database, tenant/user model, migrations,
-logging, health endpoints. Stage 2 (Microsoft integration) is **blocked** on an
-Entra ID app registration — see [docs/setup.md](docs/setup.md).
+**Stage 1 (Foundation) done and deployed:** env, database, tenant/user model,
+migrations, RLS, logging, health endpoints, worker skeleton, CI/CD.
+
+**Blocked** on credentials only you can create — Entra ID app registration and
+Google OAuth client. See [docs/setup.md](docs/setup.md).
+
+Not started: frontend (`frontend/` is empty), Microsoft OAuth flow, ingestion,
+AI extraction.
