@@ -32,11 +32,35 @@ log = get_logger(__name__)
 router = APIRouter(tags=["auth"])
 
 SESSION_COOKIE = "ea_session"
-FLOW_COOKIE = "ea_ms_flow"
 
-# A sign-in must be completed promptly; the login page is not a place to leave
-# a tab open for an hour.
-FLOW_TTL_SECONDS = 10 * 60
+# Prefix, not a single cookie name. One fixed name is unusable here: Chrome
+# speculatively prerenders the "Sign in" anchor, so a single user click can
+# issue two GET /auth/microsoft/login requests. Each starts its own MSAL flow,
+# and with one name the second `set_cookie` silently overwrites the first —
+# while the browser navigates using the *first* flow's `auth_uri`. The callback
+# then arrives holding the wrong flow and 400s. Each flow therefore gets its
+# own cookie, named for its `state`.
+#
+# Chosen over "one cookie holding a map of state -> flow": a sealed flow is
+# already ~1.2 KB, and browsers drop cookies over ~4096 bytes, so a map would
+# hold at most two flows before silently truncating. Separate cookies are
+# limited per-cookie instead of in aggregate, and each expires on its own.
+FLOW_COOKIE = "ea_ms_flow"
+FLOW_COOKIE_PREFIX = f"{FLOW_COOKIE}_"
+
+# How many in-flight flows to keep. Two covers the prerender double-fire; four
+# leaves room for a user who clicks again in another tab. Beyond that the
+# oldest are dropped, so a bot hammering /login cannot grow the Cookie header
+# without bound.
+MAX_CONCURRENT_FLOWS = 4
+
+# The sign-in must be completed in one sitting, but "one sitting" is not ten
+# minutes: a first-ever sign-in can walk through the consent screen, MFA
+# enrolment (installing Authenticator, scanning a QR code) and a password
+# reset before Microsoft ever issues the code. Ten minutes timed those users
+# out. Thirty is long enough for that path and still far short of leaving a
+# login tab open indefinitely.
+FLOW_TTL_SECONDS = 30 * 60
 
 # Every personal Microsoft account (outlook.com, hotmail.com, live.com) reports
 # this one shared `tid`. It is a fixed Microsoft protocol constant, not
@@ -111,6 +135,32 @@ def _open_flow(sealed: str) -> dict:
     return json.loads(raw)
 
 
+def _flow_cookie_name(state: str) -> str:
+    """Cookie name for one flow, derived from its `state`.
+
+    MSAL puts `state` in the flow dict and Microsoft echoes it back as a query
+    parameter, so the callback can name the exact cookie it needs. The value is
+    hashed rather than used verbatim: `state` is attacker-influenceable only in
+    the callback, and a raw value there could carry characters that are illegal
+    in a cookie name or, worse, smuggle a `;`. A truncated digest is a fixed,
+    always-legal token. It is not a secret — the flow itself stays encrypted.
+    """
+    return FLOW_COOKIE_PREFIX + hashlib.sha256(state.encode()).hexdigest()[:16]
+
+
+def _stale_flow_cookies(request: Request) -> list[str]:
+    """Flow cookie names to evict, oldest first, to stay under the cap.
+
+    RFC 6265 has the browser send same-path cookies in creation order, so the
+    head of the list is the oldest. Ordering is a hint, not a guarantee, and
+    getting it wrong only drops a flow the user is not completing anyway.
+    """
+    names = [n for n in request.cookies if n.startswith(FLOW_COOKIE_PREFIX)]
+    # One slot is about to be taken by the flow being started.
+    excess = len(names) - (MAX_CONCURRENT_FLOWS - 1)
+    return names[:excess] if excess > 0 else []
+
+
 def _slug_for(tenant_uuid: uuid.UUID, stem_source: str) -> str:
     """A readable, collision-free slug.
 
@@ -151,12 +201,16 @@ def _tenant_for(tid: str, oid: str, email: str) -> tuple[uuid.UUID, str, str, bo
 
 
 @router.get("/auth/microsoft/login")
-async def microsoft_login() -> RedirectResponse:
+async def microsoft_login(request: Request) -> RedirectResponse:
     """Send the browser to Microsoft, carrying the flow back in a sealed cookie."""
     _require_microsoft()
     flow = ms_auth.begin_login()
     response = RedirectResponse(flow["auth_uri"])
-    response.set_cookie(FLOW_COOKIE, _seal_flow(flow), **_cookie_kwargs(FLOW_TTL_SECONDS))
+    for stale in _stale_flow_cookies(request):
+        response.delete_cookie(stale, path="/")
+    response.set_cookie(
+        _flow_cookie_name(flow["state"]), _seal_flow(flow), **_cookie_kwargs(FLOW_TTL_SECONDS)
+    )
     return response
 
 
@@ -165,12 +219,32 @@ async def microsoft_callback(request: Request) -> RedirectResponse:
     """Complete the flow, provision tenant + user, and start a session."""
     _require_microsoft()
 
-    sealed = request.cookies.get(FLOW_COOKIE)
+    # Each branch below logs a distinct, stable reason code: in production they
+    # were indistinguishable, which is why a prerender race took so long to
+    # identify. Nothing logged here is secret — no code, token or cookie value,
+    # only counts and the reason.
+    state = request.query_params.get("state")
+    if not state:
+        log.warning("ms_callback_rejected", reason="no_state_param")
+        raise HTTPException(status_code=400, detail="Sign-in did not start here, or it expired.")
+
+    cookie_name = _flow_cookie_name(state)
+    sealed = request.cookies.get(cookie_name)
     if not sealed:
+        log.warning(
+            "ms_callback_rejected",
+            reason="no_flow_cookie_for_state",
+            flow_cookies_present=sum(
+                1 for n in request.cookies if n.startswith(FLOW_COOKIE_PREFIX)
+            ),
+        )
         raise HTTPException(status_code=400, detail="Sign-in did not start here, or it expired.")
     try:
         flow = _open_flow(sealed)
     except (InvalidToken, ValueError) as exc:
+        # Undecryptable: expired past FLOW_TTL_SECONDS, or sealed under a
+        # different APP_SECRET_KEY (a key rotation, or a replica mid-rollout).
+        log.warning("ms_callback_rejected", reason="flow_cookie_unsealable")
         raise HTTPException(status_code=400, detail="Sign-in state is invalid or expired.") from exc
 
     # MSAL validates state, nonce and the id_token signature in here. It raises
@@ -179,7 +253,7 @@ async def microsoft_callback(request: Request) -> RedirectResponse:
     try:
         result = ms_auth.complete_login(flow, dict(request.query_params))
     except ValueError as exc:
-        log.warning("ms_login_rejected_flow")
+        log.warning("ms_callback_rejected", reason="msal_rejected_flow")
         raise HTTPException(status_code=400, detail="Sign-in state is invalid or expired.") from exc
 
     if "id_token_claims" not in result:
@@ -273,7 +347,11 @@ async def microsoft_callback(request: Request) -> RedirectResponse:
         _session_serializer.dumps({"uid": str(user_id), "tid": str(tenant_uuid)}),
         **_cookie_kwargs(SESSION_TTL_SECONDS),
     )
-    response.delete_cookie(FLOW_COOKIE, path="/")
+    # Clear every in-flight flow, not just the one just completed: the others
+    # are abandoned siblings from the same click and hold live PKCE verifiers.
+    for name in request.cookies:
+        if name.startswith(FLOW_COOKIE_PREFIX):
+            response.delete_cookie(name, path="/")
     return response
 
 

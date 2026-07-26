@@ -8,6 +8,7 @@ break silently, so those statements run for real.
 """
 
 import uuid
+from urllib.parse import parse_qs, urlparse
 
 import httpx
 import pytest
@@ -90,11 +91,23 @@ def token_response(tid: str, oid: str, email: str, name: str = "Rachel Tan") -> 
     }
 
 
+def state_of(login: httpx.Response) -> str:
+    """The `state` Microsoft will echo back, read off the authorize URL."""
+    return parse_qs(urlparse(login.headers["location"]).query)["state"][0]
+
+
+def flow_cookies(client: httpx.AsyncClient) -> list[str]:
+    return [n for n in client.cookies.keys() if n.startswith(auth_api.FLOW_COOKIE_PREFIX)]
+
+
 async def sign_in(client: httpx.AsyncClient, monkeypatch, result: dict) -> httpx.Response:
     login = await client.get("/api/auth/microsoft/login")
     assert login.status_code == 307
     monkeypatch.setattr(ms_auth, "complete_login", lambda flow, params: result)
-    return await client.get("/api/auth/microsoft/callback", params={"code": "any-code"})
+    return await client.get(
+        "/api/auth/microsoft/callback",
+        params={"code": "any-code", "state": state_of(login)},
+    )
 
 
 @pytest.fixture
@@ -114,13 +127,13 @@ async def test_login_redirects_to_the_microsoft_authorize_endpoint(client) -> No
     assert response.status_code == 307
     assert response.headers["location"].startswith(f"{AUTHORIZE_HOST}/")
     assert "authorize" in response.headers["location"]
-    assert auth_api.FLOW_COOKIE in response.cookies
+    assert auth_api._flow_cookie_name(state_of(response)) in response.cookies
 
 
 async def test_login_does_not_leak_the_flow_secrets_into_the_cookie(client) -> None:
     """The cookie is encrypted, not merely signed — the PKCE verifier is secret."""
     response = await client.get("/api/auth/microsoft/login")
-    sealed = response.cookies[auth_api.FLOW_COOKIE]
+    sealed = response.cookies[auth_api._flow_cookie_name(state_of(response))]
     assert auth_api._open_flow(sealed)["code_verifier"] not in sealed
 
 
@@ -291,9 +304,12 @@ async def test_a_replayed_callback_is_a_400(client, monkeypatch, cleanup) -> Non
     def explode(flow: dict, params: dict) -> dict:
         raise ValueError("state mismatch")
 
-    await client.get("/api/auth/microsoft/login")
+    login = await client.get("/api/auth/microsoft/login")
     monkeypatch.setattr(ms_auth, "complete_login", explode)
-    response = await client.get("/api/auth/microsoft/callback", params={"code": "replayed"})
+    response = await client.get(
+        "/api/auth/microsoft/callback",
+        params={"code": "replayed", "state": state_of(login)},
+    )
     assert response.status_code == 400
 
 
@@ -356,6 +372,84 @@ async def test_me_rejects_a_forged_cookie(client) -> None:
 async def test_callback_without_a_flow_cookie_is_rejected(client) -> None:
     response = await client.get(
         "/api/auth/microsoft/callback", params={"code": "x"}
+    )
+    assert response.status_code == 400
+
+
+async def test_a_prerendered_second_login_does_not_break_the_first(
+    client, monkeypatch, cleanup
+) -> None:
+    """The production bug: one click, two /login calls, callback on the first.
+
+    Chrome prerenders the "Sign in" anchor, so the endpoint fires twice while
+    the browser navigates with the *first* flow's state. With a single fixed
+    cookie name the second response overwrote the first and the callback 400d.
+    """
+    tid, oid = str(uuid.uuid4()), uuid.uuid4().hex
+    cleanup.append(uuid.UUID(tid))
+
+    first = await client.get("/api/auth/microsoft/login")
+    second = await client.get("/api/auth/microsoft/login")
+    assert state_of(first) != state_of(second)
+    assert len(flow_cookies(client)) == 2, "the second login clobbered the first"
+
+    monkeypatch.setattr(
+        ms_auth, "complete_login", lambda flow, params: token_response(tid, oid, "r@agency-a.sg")
+    )
+    response = await client.get(
+        "/api/auth/microsoft/callback",
+        params={"code": "any-code", "state": state_of(first)},
+    )
+    assert response.status_code == 307, response.text
+    assert response.headers["location"] == settings.FRONTEND_ORIGIN
+
+
+async def test_the_callback_hands_msal_the_flow_matching_the_state(client, monkeypatch) -> None:
+    """Not merely 'a' flow — the one whose state came back."""
+    first = await client.get("/api/auth/microsoft/login")
+    await client.get("/api/auth/microsoft/login")
+
+    seen: dict = {}
+
+    def capture(flow: dict, params: dict) -> dict:
+        seen.update(flow)
+        raise ValueError("stop here; the flow is all this test needs")
+
+    monkeypatch.setattr(ms_auth, "complete_login", capture)
+    await client.get(
+        "/api/auth/microsoft/callback",
+        params={"code": "any-code", "state": state_of(first)},
+    )
+    assert seen["state"] == state_of(first)
+
+
+async def test_a_completed_callback_clears_every_in_flight_flow(
+    client, monkeypatch, cleanup
+) -> None:
+    tid = str(uuid.uuid4())
+    cleanup.append(uuid.UUID(tid))
+    await client.get("/api/auth/microsoft/login")
+    await sign_in(client, monkeypatch, token_response(tid, uuid.uuid4().hex, "r@agency-a.sg"))
+    assert flow_cookies(client) == []
+
+
+async def test_in_flight_flows_are_capped(client) -> None:
+    """A repeatedly hit /login must not grow the Cookie header without bound."""
+    for _ in range(auth_api.MAX_CONCURRENT_FLOWS + 3):
+        await client.get("/api/auth/microsoft/login")
+    assert len(flow_cookies(client)) <= auth_api.MAX_CONCURRENT_FLOWS
+
+
+async def test_a_callback_without_state_is_rejected(client) -> None:
+    await client.get("/api/auth/microsoft/login")
+    response = await client.get("/api/auth/microsoft/callback", params={"code": "x"})
+    assert response.status_code == 400
+
+
+async def test_a_callback_with_an_unknown_state_is_rejected(client) -> None:
+    await client.get("/api/auth/microsoft/login")
+    response = await client.get(
+        "/api/auth/microsoft/callback", params={"code": "x", "state": "never-issued"}
     )
     assert response.status_code == 400
 

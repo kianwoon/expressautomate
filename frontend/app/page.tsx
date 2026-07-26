@@ -88,8 +88,15 @@ export default function Home() {
             <a href="#how">How it works</a>
             <a href="#security">Security</a>
             {/* A full page load, not a client route: the API answers with a
-                redirect to Microsoft, which a Next link would not follow. */}
-            <a className="btn btn-primary" href={SIGN_IN_PATH}>
+                redirect to Microsoft, which a Next link would not follow.
+
+                rel="nofollow" discourages Chrome's link-preloading heuristics
+                from prerendering this endpoint — a speculative GET here starts
+                a whole OAuth flow. It is a hint only: no HTML attribute
+                reliably disables preloading in every browser and setting, so
+                the backend keeps one cookie per flow (app/api/auth.py) and
+                stays correct even when two /login calls race. */}
+            <a className="btn btn-primary" rel="nofollow" href={SIGN_IN_PATH}>
               Sign in
             </a>
           </div>
