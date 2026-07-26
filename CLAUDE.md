@@ -12,7 +12,7 @@ generic horizontal-SMB copy and needs rewriting against this vertical.
 
 | Layer | Choice |
 |---|---|
-| Frontend | Next.js / React / TypeScript (`frontend/`, not yet scaffolded) |
+| Frontend | Next.js static export + nginx (`frontend/`) |
 | Backend | FastAPI / Python 3.12, `uv` (`backend/`) |
 | DB | Postgres 16 on Koyeb — `expressautomate` database on the `draftproof-db` instance |
 | Migrations | Alembic, async engine |
@@ -58,9 +58,14 @@ rather than showing an empty dashboard.
 
 ## Deploy
 
-Push to `main` → GitHub Actions lints, migrates, tests, then deploys both
-Koyeb services. Tests run against a throwaway Postgres container, never the
-live database — they create roles and toggle RLS.
+`backend/**` and `frontend/**` deploy independently — see `.github/workflows/`.
+Tests run against a throwaway Postgres container, never the live database:
+they create roles and toggle RLS, and `tests/conftest.py` refuses to run
+against a non-local host.
+
+**Koyeb strips the `/api` route prefix**, so API routes are declared
+unprefixed and `API_ROOT_PATH` carries the public prefix. Adding a route as
+`/api/...` will 404 in production; `tests/test_routing.py` catches it first.
 
 Live: https://expressautomate.app · repo: `kianwoon/expressautomate` (private)
 

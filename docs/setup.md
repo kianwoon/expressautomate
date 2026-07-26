@@ -2,13 +2,47 @@
 
 ## Deployed
 
-| | |
-|---|---|
-| Repo | https://github.com/kianwoon/expressautomate (private) |
-| API | https://expressautomate.app — Koyeb app `expressautomate`, service `api` (WEB) |
-| Worker | Koyeb service `worker` (WORKER) |
-| Instances | `eco-nano` (0.1 vCPU / 256 MB), 1 replica each, region `was` — the cheapest tier Koyeb offers |
-| CI/CD | GitHub Actions → lint, migrate, test → deploy on push to `main` |
+Repo: https://github.com/kianwoon/expressautomate (private). One Koyeb app,
+`expressautomate`, with three services — all `eco-nano` (0.1 vCPU / 256 MB),
+one replica, region `was`, the cheapest tier Koyeb offers.
+
+| Service | Type | Route | Source |
+|---|---|---|---|
+| `web` | WEB | `/` | `frontend/` — Next.js static export behind nginx |
+| `api` | WEB | `/api` | `backend/` — FastAPI |
+| `worker` | WORKER | — | `backend/`, `python -u -m app.workers.main` |
+
+Both public services sit behind the one domain, so the landing page calls the
+API same-origin and needs no CORS.
+
+### Route prefixes are stripped
+
+**Koyeb removes the matched route prefix before forwarding.** A request to
+`/api/health` reaches FastAPI as `/health`. So:
+
+- API routes are declared **unprefixed** (`/health`, `/early-access`).
+- `API_ROOT_PATH=/api` is set on the service so `/docs` and the OpenAPI schema
+  advertise the public prefix.
+- The service has exactly **one** route, `/api`. Several prefixes cannot share
+  a single `root_path` — an earlier attempt with `/health`, `/docs` and
+  `/openapi.json` as separate routes had each stripped differently and 404'd.
+
+`backend/tests/test_routing.py` fails CI if a route is ever declared with the
+`/api` prefix again.
+
+### CI/CD
+
+Two workflows with independent path triggers:
+
+| Workflow | Triggers on | Deploys |
+|---|---|---|
+| `backend.yml` | `backend/**`, `.github/scripts/**` | `api` + `worker` |
+| `frontend.yml` | `frontend/**` | `web` |
+
+Cancellation is limited to pull requests. Run-level `cancel-in-progress` kills
+in-progress jobs regardless of any job-level concurrency group, which could
+interrupt a deploy between `alembic upgrade head` and the rollout. Each deploy
+job instead checks it is still the tip of `main` and skips if superseded.
 
 Both services sit in `was`, the same region as the Postgres instance, so
 database round-trips stay in-datacentre.
