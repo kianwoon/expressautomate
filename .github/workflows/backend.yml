@@ -33,6 +33,43 @@ env:
   WORKER_SERVICE_ID: e1423408-7877-43bd-ad6f-182f0e6f2ddd
 
 jobs:
+  # The image depends only on backend/, frontend/ and the Dockerfile. Tagging by
+  # commit SHA meant a workflow- or docs-only commit produced a *new* tag for
+  # byte-identical content, so every push rebuilt and every push restarted both
+  # services. Tagging by a hash of those inputs makes the build skippable: if
+  # the tag already exists in the registry, there is nothing to build.
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      exists: ${{ steps.tag.outputs.exists }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: tag
+        env:
+          GHCR_PAT: ${{ secrets.GHCR_PAT }}
+        run: |
+          set -euo pipefail
+          # git object ids already hash content, so hashing the tree listing is
+          # enough — no need to read the files.
+          TAG=img-$(git ls-tree -r HEAD --format='%(objectname) %(path)' \
+                     -- backend frontend Dockerfile | sha256sum | cut -c1-16)
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+          BEARER=$(printf '%s' "$GHCR_PAT" | base64 -w0)
+          CODE=$(curl -s -o /dev/null -w '%{http_code}' \
+            -H "Authorization: Bearer $BEARER" \
+            -H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.v2+json' \
+            "https://ghcr.io/v2/${IMAGE#ghcr.io/}/manifests/$TAG")
+          if [ "$CODE" = "200" ]; then
+            echo "$TAG already in the registry; skipping build"
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "$TAG not found (HTTP $CODE); build required"
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
   # Tests and the image build are independent, so they run concurrently: the
   # critical path is the slower of the two, not their sum. Neither result
   # reaches Koyeb unless both pass.
@@ -87,6 +124,9 @@ jobs:
           uv run pytest -q
 
   build:
+    needs: [plan]
+    # Nothing to do when an image for this exact content is already published.
+    if: needs.plan.outputs.exists != 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -108,14 +148,19 @@ jobs:
           context: .
           push: true
           tags: |
-            ${{ env.IMAGE }}:sha-${{ github.sha }}
+            ${{ env.IMAGE }}:${{ needs.plan.outputs.tag }}
             ${{ github.ref == 'refs/heads/main' && format('{0}:latest', env.IMAGE) || '' }}
           cache-from: type=gha,scope=backend
           cache-to: type=gha,mode=max,scope=backend
 
   deploy:
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    needs: [test, build]
+    if: >-
+      github.ref == 'refs/heads/main' && github.event_name == 'push' &&
+      needs.test.result == 'success' &&
+      (needs.build.result == 'success' || needs.build.result == 'skipped')
+    # `always()`-free: the guard above already handles build being skipped,
+    # which GitHub otherwise treats as a reason to skip this job too.
+    needs: [plan, test, build]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -153,6 +198,9 @@ jobs:
       - name: Decide what to deploy
         id: scope
         if: steps.freshness.outputs.stale == 'false'
+        env:
+          KOYEB_TOKEN: ${{ secrets.KOYEB_TOKEN }}
+          TAG: ${{ needs.plan.outputs.tag }}
         run: |
           BEFORE="${{ github.event.before }}"
           # All-zeros on a branch's first push, and a force-push can leave it
@@ -183,9 +231,29 @@ jobs:
 
           # api serves both tiers; worker only ever needs backend changes.
           if [ "$BACKEND" = true ] || [ "$FRONTEND" = true ]; then API=true; else API=false; fi
+
+          # A service already on the target image needs nothing: restarting it
+          # would drop connections to ship bytes it is already running. This is
+          # what made a workflow-only commit redeploy both services.
+          running() {
+            curl -s -H "Authorization: Bearer $KOYEB_TOKEN" \
+              "https://app.koyeb.com/v1/services/$1" \
+            | python3 -c 'import sys,json; print(json.load(sys.stdin)["service"]["latest_deployment_id"])' \
+            | xargs -I{} curl -s -H "Authorization: Bearer $KOYEB_TOKEN" \
+              "https://app.koyeb.com/v1/deployments/{}" \
+            | python3 -c 'import sys,json; d=json.load(sys.stdin)["deployment"]["definition"]; print((d.get("docker") or {}).get("image",""))'
+          }
+          TARGET="${IMAGE}:${TAG}"
+          if [ "$API" = true ] && [ "$(running "$API_SERVICE_ID")" = "$TARGET" ]; then
+            echo "api already on $TARGET"; API=false
+          fi
+          if [ "$BACKEND" = true ] && [ "$(running "$WORKER_SERVICE_ID")" = "$TARGET" ]; then
+            echo "worker already on $TARGET"; BACKEND=false
+          fi
+
           echo "api=$API"        >> "$GITHUB_OUTPUT"
           echo "worker=$BACKEND" >> "$GITHUB_OUTPUT"
-          echo "-> api=$API worker=$BACKEND (backend=$BACKEND frontend=$FRONTEND)"
+          echo "-> api=$API worker=$BACKEND"
 
       - uses: astral-sh/setup-uv@v6
         if: steps.freshness.outputs.stale == 'false' && steps.scope.outputs.worker == 'true'
@@ -211,7 +279,9 @@ jobs:
       # Pinned tarball, not `curl | sh` from master: this step holds
       # KOYEB_TOKEN and DATABASE_ADMIN_URL.
       - name: Install Koyeb CLI
-        if: steps.freshness.outputs.stale == 'false'
+        if: >-
+          steps.freshness.outputs.stale == 'false' &&
+          (steps.scope.outputs.api == 'true' || steps.scope.outputs.worker == 'true')
         env:
           KOYEB_CLI_VERSION: v5.10.1
         run: |
@@ -231,10 +301,11 @@ jobs:
         if: steps.freshness.outputs.stale == 'false' && steps.scope.outputs.api == 'true'
         env:
           KOYEB_TOKEN: ${{ secrets.KOYEB_TOKEN }}
+          TAG: ${{ needs.plan.outputs.tag }}
         run: |
           set -euo pipefail
           koyeb service update expressautomate/api \
-            --docker "${IMAGE}:sha-${GITHUB_SHA}" \
+            --docker "${IMAGE}:${TAG}" \
             --docker-private-registry-secret "$KOYEB_REGISTRY_SECRET" \
             --token "$KOYEB_TOKEN"
 
@@ -242,10 +313,11 @@ jobs:
         if: steps.freshness.outputs.stale == 'false' && steps.scope.outputs.worker == 'true'
         env:
           KOYEB_TOKEN: ${{ secrets.KOYEB_TOKEN }}
+          TAG: ${{ needs.plan.outputs.tag }}
         run: |
           set -euo pipefail
           koyeb service update expressautomate/worker \
-            --docker "${IMAGE}:sha-${GITHUB_SHA}" \
+            --docker "${IMAGE}:${TAG}" \
             --docker-private-registry-secret "$KOYEB_REGISTRY_SECRET" \
             --docker-command python \
             --docker-args -u --docker-args -m --docker-args app.workers.main \
@@ -266,6 +338,7 @@ jobs:
           (steps.scope.outputs.api == 'true' || steps.scope.outputs.worker == 'true')
         env:
           KOYEB_TOKEN: ${{ secrets.KOYEB_TOKEN }}
+          IMAGE_TAG: ${{ needs.plan.outputs.tag }}
           SERVICE_IDS: >-
             ${{ steps.scope.outputs.api == 'true' && env.API_SERVICE_ID || '' }}${{
             steps.scope.outputs.api == 'true' && steps.scope.outputs.worker == 'true' && ',' || ''

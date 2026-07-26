@@ -91,7 +91,10 @@ def confirm(service_id: str, image: str, token: str, min_env: int = 0) -> None:
 
 def main() -> int:
     token = os.environ["KOYEB_TOKEN"]
-    image = f"{os.environ['IMAGE']}:sha-{os.environ['GITHUB_SHA']}"
+    # Content-addressed: the tag is a hash of backend/, frontend/ and the
+    # Dockerfile, so a commit that changes none of them reuses the published
+    # image instead of rebuilding it under a new commit-SHA tag.
+    image = f"{os.environ['IMAGE']}:{os.environ['IMAGE_TAG']}"
     # Comma-separated so the same script serves both workflows: the backend
     # deploys two services from one image, the frontend one.
     service_ids = [s.strip() for s in os.environ["SERVICE_IDS"].split(",") if s.strip()]
