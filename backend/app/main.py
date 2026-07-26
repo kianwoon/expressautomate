@@ -41,6 +41,10 @@ app = FastAPI(
     lifespan=lifespan,
     # Public prefix stripped by Koyeb's router — see settings.API_ROOT_PATH.
     root_path=settings.API_ROOT_PATH,
+    # A 307 from the slash-redirect is built from the *stripped* path, so
+    # `POST /api/early-access/` would redirect to `/early-access` — off this
+    # service entirely and onto the landing page. Better a clean 404.
+    redirect_slashes=False,
 )
 
 app.add_middleware(

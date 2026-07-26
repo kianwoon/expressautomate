@@ -30,6 +30,12 @@ API same-origin and needs no CORS.
 `backend/tests/test_routing.py` fails CI if a route is ever declared with the
 `/api` prefix again.
 
+**Running the frontend against a local backend:** the browser calls
+`/api/early-access`, but locally nothing strips the prefix, so set
+`API_ROOT_PATH=/api` in the repo-root `.env`. Starlette then strips it itself
+and the paths line up with production. Leave it empty when running the API
+alone.
+
 ### CI/CD
 
 Two workflows with independent path triggers:

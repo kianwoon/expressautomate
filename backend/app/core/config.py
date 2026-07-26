@@ -77,6 +77,20 @@ class Settings(BaseSettings):
     def _non_empty_when_configured(cls, v: str) -> str:
         return v.strip()
 
+    @field_validator("API_ROOT_PATH")
+    @classmethod
+    def _normalise_root_path(cls, v: str) -> str:
+        """Force a leading slash and no trailing one.
+
+        `/api/` would make the OpenAPI URL `/api//openapi.json`, which the
+        proxy strips to `//openapi.json` and nothing serves — routing still
+        works, so only /docs quietly breaks. Normalising removes that trap.
+        """
+        v = v.strip().rstrip("/")
+        if v and not v.startswith("/"):
+            v = f"/{v}"
+        return v
+
     @property
     def graph_scopes(self) -> list[str]:
         return [s for s in self.MS_GRAPH_SCOPES.split() if s]
