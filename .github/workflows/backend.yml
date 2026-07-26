@@ -145,14 +145,57 @@ jobs:
             echo "stale=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - uses: astral-sh/setup-uv@v6
+      # Both services run the SAME image, but they do different jobs:
+      #   api    serves the site AND the API  -> needs frontend or backend changes
+      #   worker runs background jobs only    -> needs backend changes only
+      # So a frontend-only commit redeploys api and leaves the worker alone,
+      # instead of restarting both for a copy tweak.
+      - name: Decide what to deploy
+        id: scope
         if: steps.freshness.outputs.stale == 'false'
+        run: |
+          BEFORE="${{ github.event.before }}"
+          # All-zeros on a branch's first push, and a force-push can leave it
+          # unreachable — deploy everything rather than guess.
+          if [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ] \
+             || ! git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+            echo "no usable diff base; deploying both services"
+            echo "api=true"    >> "$GITHUB_OUTPUT"
+            echo "worker=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          CHANGED=$(git diff --name-only "$BEFORE" "$GITHUB_SHA")
+          echo "changed files:"; echo "$CHANGED" | sed 's/^/  /'
+
+          # Anything shared (Dockerfile, workflow, deploy scripts) counts as a
+          # backend change: it can alter how either service is built or run.
+          if echo "$CHANGED" | grep -qE '^(backend/|Dockerfile$|\.github/)'; then
+            BACKEND=true
+          else
+            BACKEND=false
+          fi
+          if echo "$CHANGED" | grep -qE '^frontend/'; then
+            FRONTEND=true
+          else
+            FRONTEND=false
+          fi
+
+          # api serves both tiers; worker only ever needs backend changes.
+          if [ "$BACKEND" = true ] || [ "$FRONTEND" = true ]; then API=true; else API=false; fi
+          echo "api=$API"        >> "$GITHUB_OUTPUT"
+          echo "worker=$BACKEND" >> "$GITHUB_OUTPUT"
+          echo "-> api=$API worker=$BACKEND (backend=$BACKEND frontend=$FRONTEND)"
+
+      - uses: astral-sh/setup-uv@v6
+        if: steps.freshness.outputs.stale == 'false' && steps.scope.outputs.worker == 'true'
         with:
           enable-cache: true
           cache-dependency-glob: backend/uv.lock
 
+      # Migrations are backend-only; a frontend commit must not touch the schema.
       - name: Migrate production
-        if: steps.freshness.outputs.stale == 'false'
+        if: steps.freshness.outputs.stale == 'false' && steps.scope.outputs.worker == 'true'
         working-directory: backend
         env:
           DATABASE_ADMIN_URL: ${{ secrets.DATABASE_ADMIN_URL }}
@@ -184,19 +227,25 @@ jobs:
       # a minute, so the deploy silently ran the previous build. The CLI applies
       # the source change reliably. deploy_koyeb.py is kept for its payload
       # logic and tests, but is not on the deploy path.
-      - name: Deploy api + worker
-        if: steps.freshness.outputs.stale == 'false'
+      - name: Deploy api
+        if: steps.freshness.outputs.stale == 'false' && steps.scope.outputs.api == 'true'
         env:
           KOYEB_TOKEN: ${{ secrets.KOYEB_TOKEN }}
         run: |
           set -euo pipefail
-          TAG="${IMAGE}:sha-${GITHUB_SHA}"
           koyeb service update expressautomate/api \
-            --docker "$TAG" \
+            --docker "${IMAGE}:sha-${GITHUB_SHA}" \
             --docker-private-registry-secret "$KOYEB_REGISTRY_SECRET" \
             --token "$KOYEB_TOKEN"
+
+      - name: Deploy worker
+        if: steps.freshness.outputs.stale == 'false' && steps.scope.outputs.worker == 'true'
+        env:
+          KOYEB_TOKEN: ${{ secrets.KOYEB_TOKEN }}
+        run: |
+          set -euo pipefail
           koyeb service update expressautomate/worker \
-            --docker "$TAG" \
+            --docker "${IMAGE}:sha-${GITHUB_SHA}" \
             --docker-private-registry-secret "$KOYEB_REGISTRY_SECRET" \
             --docker-command python \
             --docker-args -u --docker-args -m --docker-args app.workers.main \
@@ -209,11 +258,18 @@ jobs:
       #
       # The CLI returns before the rollout finishes, so confirm the image
       # actually landed AND became healthy rather than trusting the exit code.
+      # Verify only what this run actually deployed. Checking a service that
+      # was deliberately left alone would fail on its older (correct) image.
       - name: Verify deploy landed
-        if: steps.freshness.outputs.stale == 'false'
+        if: >-
+          steps.freshness.outputs.stale == 'false' &&
+          (steps.scope.outputs.api == 'true' || steps.scope.outputs.worker == 'true')
         env:
           KOYEB_TOKEN: ${{ secrets.KOYEB_TOKEN }}
-          SERVICE_IDS: ${{ env.API_SERVICE_ID }},${{ env.WORKER_SERVICE_ID }}
+          SERVICE_IDS: >-
+            ${{ steps.scope.outputs.api == 'true' && env.API_SERVICE_ID || '' }}${{
+            steps.scope.outputs.api == 'true' && steps.scope.outputs.worker == 'true' && ',' || ''
+            }}${{ steps.scope.outputs.worker == 'true' && env.WORKER_SERVICE_ID || '' }}
           # Both carry DATABASE_URL and friends; a definition that lost them
           # would boot and fail at the first query.
           MIN_ENV_VARS: 5
