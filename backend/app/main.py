@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import insert, text
 
+from app.api import auth
 from app.core.config import settings
 from app.core.logging import configure_logging, get_logger
 from app.db.rls import verify_rls_enforced
@@ -50,6 +51,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(auth.router)
 
 
 class EarlyAccessRequest(BaseModel):
