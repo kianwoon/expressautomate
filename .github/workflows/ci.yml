@@ -6,27 +6,30 @@ on:
     paths:
       - 'backend/**'
       - '.github/workflows/ci.yml'
+      - '.github/scripts/**'
   pull_request:
     branches: [main]
     paths:
       - 'backend/**'
       - '.github/workflows/ci.yml'
+      - '.github/scripts/**'
 
 concurrency:
+  # Superseding a test run is free; the deploy job opts out of cancellation
+  # separately, because killing it mid-migration or between the two service
+  # deploys leaves production in a half-updated state.
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Consumed by .github/scripts/deploy_koyeb.py once image-based deploys are
+# switched on. Unused today — see the Deploy step and docs/setup.md.
 env:
   IMAGE: ghcr.io/kianwoon/expressautomate-api
-  # Koyeb registry secret holding the GHCR pull credentials.
   KOYEB_REGISTRY_SECRET: ghcr-expressautomate
   API_SERVICE_ID: 4a352e28-a0dc-4ae8-bda1-9b13c0605b27
   WORKER_SERVICE_ID: e1423408-7877-43bd-ad6f-182f0e6f2ddd
 
 jobs:
-  # Tests and the image build are independent — running them in parallel keeps
-  # the critical path at whichever is slower, not their sum. Nothing is
-  # promoted to Koyeb unless both succeed.
   test:
     runs-on: ubuntu-latest
 
@@ -81,6 +84,12 @@ jobs:
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     needs: [test]
     runs-on: ubuntu-latest
+    concurrency:
+      # Never cancelled: a deploy interrupted between `alembic upgrade head`
+      # and the service rollout, or between the api and worker deploys, leaves
+      # a version mismatch that no later run repairs on its own.
+      group: deploy-${{ github.ref }}
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6

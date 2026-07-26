@@ -41,16 +41,33 @@ scoped to the `draftproof-api` package**, so it can neither create nor read
 `expressautomate-api`. Pushing as `GITHUB_TOKEN` instead produces a package
 only that ephemeral token can read, which Koyeb cannot pull.
 
-To unblock: GitHub → Settings → Developer settings → Personal access tokens →
-either a **classic** token with `write:packages` and `read:packages`, or a
-fine-grained token granted access to this repository's packages. Then:
+Two ways to unblock, both yours to do:
+
+**A — new token (simplest).** GitHub → Settings → Developer settings →
+Personal access tokens → a **classic** token with `write:packages` and
+`read:packages`. Then:
 
 ```bash
 gh secret set GHCR_PAT --body '<new token>' --repo kianwoon/expressautomate
 ```
 
-and update the Koyeb registry secret `ghcr-expressautomate` with the same
-value so Koyeb can pull.
+**B — keep the existing fine-grained PAT.** Let one build push as
+`GITHUB_TOKEN` to create the package, then GitHub → your packages →
+`expressautomate-api` → Package settings → add the PAT's scope to it.
+
+Either way, refresh the Koyeb registry secret so Koyeb can pull:
+
+```bash
+printf '%s' '<token>' | koyeb secrets update ghcr-expressautomate \
+  --type registry-private --registry-url ghcr.io \
+  --registry-username kianwoon --value-from-stdin
+```
+
+Then in `.github/workflows/ci.yml`, restore the `build` job (docker/login with
+`GHCR_PAT`, `build-push-action` with `cache-from/to: type=gha`), make `deploy`
+depend on `[test, build]`, and replace the Koyeb CLI steps with
+`python3 .github/scripts/deploy_koyeb.py`. That script's payload transform is
+covered by `backend/tests/test_deploy_payload.py`.
 
 ### Deployment path
 

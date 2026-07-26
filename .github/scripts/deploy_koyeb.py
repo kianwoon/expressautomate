@@ -36,51 +36,80 @@ def _request(method: str, path: str, token: str, body: dict | None = None) -> di
         raise SystemExit(f"Koyeb {method} {path} failed: HTTP {e.code}\n{detail}") from e
 
 
-def deploy(service_id: str, image: str, registry_secret: str, token: str) -> None:
-    service = _request("GET", f"/services/{service_id}", token)["service"]
-    deployment_id = service.get("active_deployment_id") or service["latest_deployment_id"]
-    definition = _request("GET", f"/deployments/{deployment_id}", token)["deployment"][
-        "definition"
-    ]
+SOURCE_KEYS = ("archive", "git", "docker")
+RUN_KEYS = ("command", "args", "entrypoint", "privileged")
 
-    # Swap the source, preserving everything else verbatim.
-    #
-    # The command/args live INSIDE the source block, so converting from archive
-    # to docker has to carry them across — the worker's
-    # `python -u -m app.workers.main` is defined there, and dropping it would
-    # silently start a second copy of the API instead.
-    previous_source = definition.pop("archive", None) or definition.pop("git", None) or {}
-    carried = {
-        key: value
-        for key, value in (previous_source.get("docker") or {}).items()
-        if key in ("command", "args", "entrypoint", "privileged") and value not in (None, "", [])
-    }
+
+def build_payload(definition: dict, image: str, registry_secret: str) -> dict:
+    """Return `definition` with its source swapped to a docker image.
+
+    Pure so it can be tested without touching Koyeb.
+
+    The run configuration (command/args/entrypoint) lives *inside* the source
+    block, so an archive→docker conversion has to carry it across: the
+    worker's `python -u -m app.workers.main` is defined there, and losing it
+    would silently start a second copy of the API.
+    """
+    definition = dict(definition)
+
+    # Collect run config from whichever source block is present, then drop all
+    # of them. Popping with `or` would short-circuit and leave a second source
+    # key in the payload.
+    carried: dict = {}
+    for key in SOURCE_KEYS:
+        block = definition.pop(key, None) or {}
+        inner = (block.get("docker") if key != "docker" else block) or {}
+        for run_key in RUN_KEYS:
+            value = inner.get(run_key)
+            # Explicitly skip empty values: the API emits "" / [] for unset
+            # fields, and letting those through would blank the real command.
+            if run_key not in carried and value not in (None, "", [], False):
+                carried[run_key] = value
+
     definition["docker"] = {
         **carried,
-        **definition.get("docker", {}),
         "image": image,
         "image_registry_secret": registry_secret,
     }
+    # The definition carries an explicit source discriminator; leaving it as
+    # ARCHIVE while sending a docker block is rejected.
+    definition["type"] = "DOCKER"
+    return definition
 
-    env_count = len(definition.get("env", []))
-    if not env_count:
+
+def deploy(service_id: str, image: str, registry_secret: str, token: str) -> tuple[str, dict]:
+    """Build the payload for one service. Does not send it — see main()."""
+    service = _request("GET", f"/services/{service_id}", token)["service"]
+    # latest, not active: a rollout still provisioning is the intended state,
+    # and copying `active` would silently revert it.
+    deployment_id = service.get("latest_deployment_id") or service["active_deployment_id"]
+    current = _request("GET", f"/deployments/{deployment_id}", token)["deployment"]["definition"]
+
+    definition = build_payload(current, image, registry_secret)
+
+    if not definition.get("env"):
         raise SystemExit(
             f"{service['name']}: refusing to deploy a definition with no environment "
             "variables — the service would boot without DATABASE_URL."
         )
-
-    _request("PATCH", f"/services/{service_id}", token, {"definition": definition})
-    command = definition["docker"].get("command") or "(image default)"
-    print(f"{service['name']}: -> {image} | cmd={command} | {env_count} env vars preserved")
+    return service["name"], definition
 
 
 def main() -> int:
     token = os.environ["KOYEB_TOKEN"]
     image = f"{os.environ['IMAGE']}:sha-{os.environ['GITHUB_SHA']}"
     registry_secret = os.environ["KOYEB_REGISTRY_SECRET"]
+    service_ids = [os.environ["API_SERVICE_ID"], os.environ["WORKER_SERVICE_ID"]]
 
-    for var in ("API_SERVICE_ID", "WORKER_SERVICE_ID"):
-        deploy(os.environ[var], image, registry_secret, token)
+    # Build every payload before sending any. If the worker's definition is
+    # malformed we fail having changed nothing, rather than leaving the API on
+    # the new image and the worker on the old one.
+    planned = [deploy(sid, image, registry_secret, token) for sid in service_ids]
+
+    for service_id, (name, definition) in zip(service_ids, planned, strict=True):
+        _request("PATCH", f"/services/{service_id}", token, {"definition": definition})
+        command = definition["docker"].get("command") or "(image default)"
+        print(f"{name}: -> {image} | cmd={command} | {len(definition['env'])} env vars preserved")
     return 0
 
 
