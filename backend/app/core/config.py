@@ -52,6 +52,11 @@ class Settings(BaseSettings):
     MS_WEBHOOK_CLIENT_STATE: str = ""
     MS_WEBHOOK_NOTIFICATION_URL: str = ""
 
+    # --- Google sign-in (identity only — no Gmail scope; see docs/setup.md) ---
+    GOOGLE_CLIENT_ID: str = ""
+    GOOGLE_CLIENT_SECRET: str = ""
+    GOOGLE_REDIRECT_URI: str = ""
+
     # --- AI extraction ---
     OPENROUTER_API_KEY: str = ""
     LLM_BASE_URL: str = ""
@@ -113,7 +118,12 @@ class Settings(BaseSettings):
         return {"ssl": ssl_module.create_default_context()}
 
     def microsoft_configured(self) -> bool:
+        """Identity *and* the only path to mailbox ingestion (§6.1)."""
         return bool(self.MS_CLIENT_ID and self.MS_CLIENT_SECRET)
+
+    def google_configured(self) -> bool:
+        """Identity only — Google users have no mailbox to ingest."""
+        return bool(self.GOOGLE_CLIENT_ID and self.GOOGLE_CLIENT_SECRET)
 
 
 @lru_cache

@@ -24,6 +24,7 @@ async def lifespan(app: FastAPI):
         "startup",
         env=settings.APP_ENV,
         microsoft_configured=settings.microsoft_configured(),
+        google_configured=settings.google_configured(),
     )
     yield
     await engine.dispose()

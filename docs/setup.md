@@ -21,6 +21,34 @@ stored OAuth refresh tokens per §30), `MS_WEBHOOK_CLIENT_STATE`.
 
 ## Blocked — needs you
 
+### 0. Sign-in providers — Microsoft **and** Google
+
+Decided 2026-07-27, and it amends plan §6.1, which assumes Microsoft only.
+
+Worth being explicit about the split, because the two are not interchangeable:
+
+- **Identity** (who you are) — Microsoft or Google. Either can sign a user in.
+- **Mailbox access** (what we ingest) — Microsoft Graph only. The product
+  ingests Outlook mail; there is no Gmail ingestion path in the plan.
+
+So a Google-only user can sign in, create a tenant and invite colleagues, but
+will have nothing to ingest until someone connects a Microsoft 365 mailbox.
+The onboarding flow must handle that state honestly rather than leaving them
+on an empty dashboard — either prompt to connect Outlook, or say plainly that
+Google sign-in does not yet carry mail ingestion.
+
+Google side needs credentials you must create (Google Cloud Console →
+APIs & Services → Credentials → OAuth client ID → Web application), then:
+
+```
+GOOGLE_CLIENT_ID=
+GOOGLE_CLIENT_SECRET=
+```
+
+Authorised redirect URI: `https://expressautomate.app/auth/google/callback`
+(plus `http://localhost:8000/auth/google/callback` for development). Scopes
+`openid email profile` only — no Gmail scope, since we do not read Google mail.
+
 ### 1. Microsoft Entra ID app registration
 
 Nothing in Stage 2 can be built without this, and only you can create it.
