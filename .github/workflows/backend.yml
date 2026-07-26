@@ -198,4 +198,8 @@ jobs:
         if: steps.freshness.outputs.stale == 'false'
         env:
           KOYEB_TOKEN: ${{ secrets.KOYEB_TOKEN }}
+          SERVICE_IDS: ${{ env.API_SERVICE_ID }},${{ env.WORKER_SERVICE_ID }}
+          # Both carry DATABASE_URL and friends; a definition that lost them
+          # would boot and fail at the first query.
+          MIN_ENV_VARS: 5
         run: python3 .github/scripts/verify_koyeb.py

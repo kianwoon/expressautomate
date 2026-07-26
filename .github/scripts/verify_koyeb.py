@@ -40,7 +40,7 @@ def _get(path: str, token: str) -> dict:
         raise SystemExit(f"Koyeb GET {path} failed: HTTP {e.code}\n{detail}") from e
 
 
-def confirm(service_id: str, image: str, token: str) -> None:
+def confirm(service_id: str, image: str, token: str, min_env: int = 0) -> None:
     name = service_id
     last = ""
     for attempt in range(MAX_ATTEMPTS):
@@ -68,10 +68,13 @@ def confirm(service_id: str, image: str, token: str) -> None:
             )
 
         if on_target and status in HEALTHY_STATUSES:
-            if not env_count:
+            # Opt-in: the backend must never boot without DATABASE_URL, but the
+            # static frontend legitimately carries no environment at all.
+            if env_count < min_env:
                 raise SystemExit(
-                    f"{name}: image is correct but the definition has no environment "
-                    "variables — the service would boot without DATABASE_URL."
+                    f"{name}: image is correct but only {env_count} environment "
+                    f"variables are set, expected at least {min_env} — the service "
+                    "would boot without its configuration."
                 )
             print(f"{name}: running {running} ({env_count} env vars, {status})")
             return
@@ -89,8 +92,14 @@ def confirm(service_id: str, image: str, token: str) -> None:
 def main() -> int:
     token = os.environ["KOYEB_TOKEN"]
     image = f"{os.environ['IMAGE']}:sha-{os.environ['GITHUB_SHA']}"
-    for var in ("API_SERVICE_ID", "WORKER_SERVICE_ID"):
-        confirm(os.environ[var], image, token)
+    # Comma-separated so the same script serves both workflows: the backend
+    # deploys two services from one image, the frontend one.
+    service_ids = [s.strip() for s in os.environ["SERVICE_IDS"].split(",") if s.strip()]
+    if not service_ids:
+        raise SystemExit("SERVICE_IDS is empty — nothing would be verified.")
+    min_env = int(os.environ.get("MIN_ENV_VARS", "0"))
+    for service_id in service_ids:
+        confirm(service_id, image, token, min_env)
     return 0
 
 
