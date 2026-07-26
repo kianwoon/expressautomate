@@ -16,6 +16,7 @@ installs nothing.
 import json
 import os
 import sys
+import time
 import urllib.error
 import urllib.request
 
@@ -109,6 +110,44 @@ def deploy(service_id: str, image: str, registry_secret: str, token: str) -> tup
     return service["name"], definition
 
 
+def _confirm_applied(
+    service_id: str, name: str, image: str, token: str, attempts: int = 12
+) -> None:
+    """Read the definition back until the new image appears.
+
+    PATCH merges, and an earlier version of this script silently kept the old
+    archive source — the deploy reported success while Koyeb went on running
+    the previous build. Reading back is the only honest confirmation.
+
+    Koyeb creates the new deployment asynchronously, so an immediate read
+    returns the *previous* one; poll rather than assume.
+    """
+    deadline_note = ""
+    for attempt in range(attempts):
+        service = _request("GET", f"/services/{service_id}", token)["service"]
+        applied = _request("GET", f"/deployments/{service['latest_deployment_id']}", token)[
+            "deployment"
+        ]["definition"]
+        got = (applied.get("docker") or {}).get("image")
+        stale_source = bool(applied.get("archive") or applied.get("git"))
+
+        if got == image and not stale_source:
+            print(f"{name}: verified running {got}")
+            return
+
+        deadline_note = (
+            f"image={got!r} archive={bool(applied.get('archive'))} "
+            f"git={bool(applied.get('git'))}"
+        )
+        if attempt < attempts - 1:
+            time.sleep(5)
+
+    raise SystemExit(
+        f"{name}: deploy did not take within {attempts * 5}s. "
+        f"Expected {image}, last saw {deadline_note}."
+    )
+
+
 def main() -> int:
     token = os.environ["KOYEB_TOKEN"]
     image = f"{os.environ['IMAGE']}:sha-{os.environ['GITHUB_SHA']}"
@@ -125,21 +164,7 @@ def main() -> int:
         command = definition["docker"].get("command") or "(image default)"
         print(f"{name}: -> {image} | cmd={command} | {len(definition['env'])} env vars preserved")
 
-        # Read back, because PATCH merges and has silently kept the old source
-        # before — the deploy reported success while Koyeb went on rebuilding
-        # from the previous archive. Assert the change actually landed.
-        service = _request("GET", f"/services/{service_id}", token)["service"]
-        applied = _request(
-            "GET", f"/deployments/{service['latest_deployment_id']}", token
-        )["deployment"]["definition"]
-        got = (applied.get("docker") or {}).get("image")
-        if applied.get("archive") or applied.get("git") or got != image:
-            raise SystemExit(
-                f"{name}: deploy did not take. Expected docker image {image}, "
-                f"got image={got!r} archive={bool(applied.get('archive'))} "
-                f"git={bool(applied.get('git'))}."
-            )
-        print(f"{name}: verified running {got}")
+        _confirm_applied(service_id, name, image, token)
     return 0
 
 
