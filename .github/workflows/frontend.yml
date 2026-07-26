@@ -6,11 +6,13 @@ on:
     paths:
       - 'frontend/**'
       - '.github/workflows/frontend.yml'
+      - '.github/scripts/**'
   pull_request:
     branches: [main]
     paths:
       - 'frontend/**'
       - '.github/workflows/frontend.yml'
+      - '.github/scripts/**'
 
 concurrency:
   group: frontend-${{ github.ref }}
@@ -63,10 +65,10 @@ jobs:
           context: frontend
           push: true
           tags: |
-            ${{ env.IMAGE }}:latest
             ${{ env.IMAGE }}:sha-${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+            ${{ github.ref == 'refs/heads/main' && format('{0}:latest', env.IMAGE) || '' }}
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,mode=max,scope=frontend
 
   deploy:
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
@@ -80,10 +82,21 @@ jobs:
         run: |
           git fetch origin main --quiet
           HEAD_SHA=$(git rev-parse origin/main)
-          if [ "$HEAD_SHA" != "$GITHUB_SHA" ]; then
-            echo "origin/main is now $HEAD_SHA; this run ($GITHUB_SHA) is stale."
+          if [ "$HEAD_SHA" = "$GITHUB_SHA" ]; then
+            echo "stale=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Only a NEWER commit touching the frontend supersedes this deploy. A
+          # bare "origin/main moved" check skipped whenever an unrelated
+          # commit landed mid-build — and because the paths filter means no
+          # further run is triggered, that deploy was never retried. It
+          # happened: a frontend change sat undeployed until fixed by hand.
+          CHANGED=$(git diff --name-only "$GITHUB_SHA" "$HEAD_SHA" -- frontend/ .github/workflows/frontend.yml)
+          if [ -n "$CHANGED" ]; then
+            echo "origin/main is now $HEAD_SHA and changes the frontend; this run is stale."
             echo "stale=true" >> "$GITHUB_OUTPUT"
           else
+            echo "origin/main moved to $HEAD_SHA but the frontend is unchanged; deploying."
             echo "stale=false" >> "$GITHUB_OUTPUT"
           fi
 
@@ -116,4 +129,7 @@ jobs:
         env:
           KOYEB_TOKEN: ${{ secrets.KOYEB_TOKEN }}
           SERVICE_IDS: ${{ env.WEB_SERVICE_ID }}
+          # Static site: no configuration to lose. Set explicitly so the
+          # floor is never silently absent.
+          MIN_ENV_VARS: "0"
         run: python3 .github/scripts/verify_koyeb.py

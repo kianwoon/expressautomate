@@ -97,7 +97,17 @@ def main() -> int:
     service_ids = [s.strip() for s in os.environ["SERVICE_IDS"].split(",") if s.strip()]
     if not service_ids:
         raise SystemExit("SERVICE_IDS is empty — nothing would be verified.")
-    min_env = int(os.environ.get("MIN_ENV_VARS", "0"))
+    # Required, not defaulted. A default of 0 means a typo like MIN_ENV_VAR
+    # silently turns the floor into "0 or more" — always true. This script
+    # exists because a deploy once reported success while changing nothing;
+    # its own guards must fail loudly when unset.
+    try:
+        min_env = int(os.environ["MIN_ENV_VARS"])
+    except KeyError:
+        raise SystemExit(
+            "MIN_ENV_VARS is not set. Set it explicitly per workflow — 0 for a "
+            "static site, or the number of variables the service cannot boot without."
+        ) from None
     for service_id in service_ids:
         confirm(service_id, image, token, min_env)
     return 0
