@@ -2,11 +2,9 @@
 
 import uuid
 from contextlib import asynccontextmanager
-from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import insert, text
 
@@ -15,8 +13,6 @@ from app.core.logging import configure_logging, get_logger
 from app.db.rls import verify_rls_enforced
 from app.db.session import SessionLocal, engine
 from app.models import EarlyAccessSignup
-
-STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 log = get_logger(__name__)
 
@@ -94,7 +90,3 @@ async def health_db() -> dict[str, str]:
         db = (await conn.execute(text("SELECT current_database()"))).scalar_one()
     return {"status": "ok", "database": db}
 
-
-# Mounted last so it never shadows an API route: StaticFiles(html=True) claims
-# "/" and would otherwise swallow everything declared after it.
-app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")

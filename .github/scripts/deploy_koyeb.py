@@ -38,6 +38,8 @@ def _request(method: str, path: str, token: str, body: dict | None = None) -> di
 
 SOURCE_KEYS = ("archive", "git", "docker")
 RUN_KEYS = ("command", "args", "entrypoint", "privileged")
+# A deployment in one of these states is not a definition worth copying.
+FAILED_STATUSES = frozenset({"ERROR", "ERRORING", "CANCELED", "CANCELING", "STASHED", "DEGRADED"})
 
 
 def build_payload(definition: dict, image: str, registry_secret: str) -> dict:
@@ -80,10 +82,18 @@ def build_payload(definition: dict, image: str, registry_secret: str) -> dict:
 def deploy(service_id: str, image: str, registry_secret: str, token: str) -> tuple[str, dict]:
     """Build the payload for one service. Does not send it — see main()."""
     service = _request("GET", f"/services/{service_id}", token)["service"]
-    # latest, not active: a rollout still provisioning is the intended state,
-    # and copying `active` would silently revert it.
+
+    # Prefer the latest deployment: one still provisioning is the intended
+    # state, and copying `active` would silently revert it. But a latest that
+    # FAILED is a config someone rolled back from — redeploying it would
+    # reinstate the breakage, so fall back to whatever is actually running.
     deployment_id = service.get("latest_deployment_id") or service["active_deployment_id"]
-    current = _request("GET", f"/deployments/{deployment_id}", token)["deployment"]["definition"]
+    deployment = _request("GET", f"/deployments/{deployment_id}", token)["deployment"]
+    if deployment.get("status") in FAILED_STATUSES:
+        fallback = service.get("active_deployment_id")
+        if fallback and fallback != deployment_id:
+            deployment = _request("GET", f"/deployments/{fallback}", token)["deployment"]
+    current = deployment["definition"]
 
     definition = build_payload(current, image, registry_secret)
 

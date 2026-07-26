@@ -1,33 +1,26 @@
-name: CI/CD
+name: Backend
 
 on:
   push:
     branches: [main]
     paths:
       - 'backend/**'
-      - '.github/workflows/ci.yml'
+      - '.github/workflows/backend.yml'
       - '.github/scripts/**'
   pull_request:
     branches: [main]
     paths:
       - 'backend/**'
-      - '.github/workflows/ci.yml'
+      - '.github/workflows/backend.yml'
       - '.github/scripts/**'
 
 concurrency:
-  # Superseding a test run is free; the deploy job opts out of cancellation
-  # separately, because killing it mid-migration or between the two service
-  # deploys leaves production in a half-updated state.
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
-# Consumed by .github/scripts/deploy_koyeb.py once image-based deploys are
-# switched on. Unused today — see the Deploy step and docs/setup.md.
-env:
-  IMAGE: ghcr.io/kianwoon/expressautomate-api
-  KOYEB_REGISTRY_SECRET: ghcr-expressautomate
-  API_SERVICE_ID: 4a352e28-a0dc-4ae8-bda1-9b13c0605b27
-  WORKER_SERVICE_ID: e1423408-7877-43bd-ad6f-182f0e6f2ddd
+  group: backend-${{ github.ref }}
+  # Cancel superseded PR runs freely, but NEVER cancel a run that may be
+  # deploying: workflow-level cancellation kills in-progress jobs regardless of
+  # any job-level concurrency group, and the deploy job sits between
+  # `alembic upgrade head` and the service rollout.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   test:
@@ -84,20 +77,31 @@ jobs:
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     needs: [test]
     runs-on: ubuntu-latest
-    concurrency:
-      # Never cancelled: a deploy interrupted between `alembic upgrade head`
-      # and the service rollout, or between the api and worker deploys, leaves
-      # a version mismatch that no later run repairs on its own.
-      group: deploy-${{ github.ref }}
-      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
+
+      # With run-level cancellation disabled on main, a slow older run could
+      # otherwise deploy after a newer commit already shipped.
+      - name: Skip if superseded
+        id: freshness
+        run: |
+          git fetch origin main --quiet
+          HEAD_SHA=$(git rev-parse origin/main)
+          if [ "$HEAD_SHA" != "$GITHUB_SHA" ]; then
+            echo "origin/main is now $HEAD_SHA; this run ($GITHUB_SHA) is stale."
+            echo "stale=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "stale=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: astral-sh/setup-uv@v6
+        if: steps.freshness.outputs.stale == 'false'
         with:
           enable-cache: true
           cache-dependency-glob: backend/uv.lock
 
       - name: Migrate production
+        if: steps.freshness.outputs.stale == 'false'
         working-directory: backend
         env:
           DATABASE_ADMIN_URL: ${{ secrets.DATABASE_ADMIN_URL }}
@@ -110,18 +114,12 @@ jobs:
           uv sync --frozen
           uv run alembic upgrade head
 
-      # Point the services at the freshly pushed image. Koyeb pulls a prebuilt
-      # layer-cached image instead of rebuilding from an uploaded archive,
-      # which is where the previous pipeline lost most of its time. No CLI
-      # download, and no piping an upstream install script into a shell in a
-      # step that holds production credentials.
-      # Koyeb builds the Dockerfile from an uploaded archive. Pushing a
-      # prebuilt image to GHCR would be faster (Actions caches layers; Koyeb
-      # does not), but the available PAT is fine-grained and scoped to another
-      # package, so it can neither create nor read `expressautomate-api`.
-      # deploy_koyeb.py is ready for the switch the moment a PAT with
-      # write:packages exists — see docs/setup.md.
+      # Koyeb builds the Dockerfile from an uploaded archive. A prebuilt GHCR
+      # image would be faster, but needs a PAT with write:packages —
+      # .github/scripts/deploy_koyeb.py is ready for that switch. See
+      # docs/setup.md.
       - name: Install Koyeb CLI
+        if: steps.freshness.outputs.stale == 'false'
         env:
           KOYEB_CLI_VERSION: v5.10.1
         run: |
@@ -129,7 +127,8 @@ jobs:
           tar -xzf /tmp/koyeb.tar.gz -C /tmp koyeb
           install -m 0755 /tmp/koyeb /usr/local/bin/koyeb
 
-      - name: Deploy
+      - name: Deploy api + worker
+        if: steps.freshness.outputs.stale == 'false'
         env:
           KOYEB_TOKEN: ${{ secrets.KOYEB_TOKEN }}
         run: |

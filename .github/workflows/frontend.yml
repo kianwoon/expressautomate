@@ -1,0 +1,79 @@
+name: Frontend
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'frontend/**'
+      - '.github/workflows/frontend.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'frontend/**'
+      - '.github/workflows/frontend.yml'
+
+concurrency:
+  group: frontend-${{ github.ref }}
+  # Same rule as the backend workflow: run-level cancellation would kill an
+  # in-progress deploy, so only PR runs are cancellable.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install
+        working-directory: frontend
+        run: npm ci
+
+      - name: Lint
+        working-directory: frontend
+        run: npm run lint
+
+      - name: Build
+        working-directory: frontend
+        run: npm run build
+
+  deploy:
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    needs: [build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Skip if superseded
+        id: freshness
+        run: |
+          git fetch origin main --quiet
+          HEAD_SHA=$(git rev-parse origin/main)
+          if [ "$HEAD_SHA" != "$GITHUB_SHA" ]; then
+            echo "origin/main is now $HEAD_SHA; this run ($GITHUB_SHA) is stale."
+            echo "stale=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "stale=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install Koyeb CLI
+        if: steps.freshness.outputs.stale == 'false'
+        env:
+          KOYEB_CLI_VERSION: v5.10.1
+        run: |
+          curl -fsSL "https://github.com/koyeb/koyeb-cli/releases/download/${KOYEB_CLI_VERSION}/koyeb-cli_${KOYEB_CLI_VERSION#v}_linux_amd64.tar.gz" -o /tmp/koyeb.tar.gz
+          tar -xzf /tmp/koyeb.tar.gz -C /tmp koyeb
+          install -m 0755 /tmp/koyeb /usr/local/bin/koyeb
+
+      - name: Deploy web
+        if: steps.freshness.outputs.stale == 'false'
+        env:
+          KOYEB_TOKEN: ${{ secrets.KOYEB_TOKEN }}
+        run: |
+          koyeb deploy ./frontend expressautomate/web \
+            --archive-builder docker --archive-docker-dockerfile Dockerfile \
+            --token "$KOYEB_TOKEN"
