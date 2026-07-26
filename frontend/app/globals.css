@@ -168,7 +168,12 @@ section { padding: 88px 0; }
 
 /* The hero is a claim beside a demonstration of it. The visual column is the
    narrower one: it is evidence for the sentence, not the point itself. */
-.hero-grid { display: grid; grid-template-columns: 0.92fr 1.08fr; gap: 44px; align-items: center; }
+.hero-grid { display: grid; grid-template-columns: 1.04fr 0.96fr; gap: 44px; align-items: center; }
+
+/* The headline is a full sentence rather than a phrase, so it needs a smaller
+   ceiling than the global h1 or it runs to five lines and pushes the lede and
+   the buttons below the fold. */
+.hero h1 { font-size: clamp(2rem, 3.4vw, 2.9rem); line-height: 1.12; }
 
 /* A centred section head, for the sections that introduce a grid of equals
    rather than argue left-to-right. */
@@ -214,6 +219,40 @@ section { padding: 88px 0; }
   display: grid; place-items: center;
   font-size: 0.875rem; font-weight: 700;
 }
+
+/* ---- connectors ---- */
+/* What the platform consumes. The planned entries are deliberately styled
+   *down* rather than hidden: a row where everything looks equally available
+   would read as a claim that they all work today, which is the one thing this
+   strip exists to avoid. Muted text plus a hollow dot plus the word "Planned"
+   is three signals for the same fact, on purpose. */
+.connectors {
+  list-style: none; display: grid; gap: 2px; margin-top: 32px;
+  border: 1px solid var(--line); border-radius: 12px;
+  background: var(--surface); overflow: hidden;
+}
+.connector {
+  display: grid; grid-template-columns: 10px minmax(0, 1fr) auto;
+  align-items: center; gap: 12px;
+  padding: 12px 16px; font-size: 0.875rem;
+}
+.connector + .connector { border-top: 1px solid var(--line); }
+.connector strong { display: block; font-weight: 650; }
+.connector-detail { color: var(--ink-500); font-size: 0.8125rem; }
+.connector-dot { width: 10px; height: 10px; border-radius: 999px; }
+.connector[data-state="live"] .connector-dot { background: var(--teal-500); }
+.connector[data-state="planned"] .connector-dot {
+  border: 2px solid var(--ink-300); background: transparent;
+}
+.connector-state {
+  font-size: 0.6875rem; font-weight: 700; letter-spacing: 0.08em;
+  text-transform: uppercase; padding: 3px 9px; border-radius: 999px;
+}
+.connector[data-state="live"] .connector-state { background: #e7f7f4; color: var(--teal-500); }
+.connector[data-state="planned"] .connector-state {
+  background: var(--surface-alt); color: var(--ink-500);
+}
+.connector[data-state="planned"] strong { color: var(--ink-500); font-weight: 600; }
 
 /* ---- extraction demo ---- */
 .demo { border: 1px solid var(--line); border-radius: 14px; overflow: hidden; background: var(--surface); }
@@ -308,10 +347,12 @@ section { padding: 88px 0; }
 /* Half the width of the "How it works" demo, so the shared .row track sizes
    have to give: a 130px key column would leave the value nothing to wrap in. */
 .mock .row {
-  grid-template-columns: minmax(64px, 88px) minmax(0, 1fr);
+  grid-template-columns: minmax(64px, 98px) minmax(0, 1fr);
   gap: 10px; padding: 7px 0; font-size: 0.8125rem;
 }
-.mock .row-k { font-size: 0.6875rem; letter-spacing: 0.05em; }
+/* "REQUIREMENTS" is the longest key and was breaking across two lines at the
+   shared letter-spacing; it fits on one at this size. */
+.mock .row-k { font-size: 0.625rem; letter-spacing: 0.03em; }
 
 footer { border-top: 1px solid var(--line); padding: 40px 0; color: var(--ink-500); font-size: 0.875rem; }
 .footer-inner { display: flex; gap: 20px; flex-wrap: wrap; justify-content: space-between; align-items: center; }

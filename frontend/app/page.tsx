@@ -2,40 +2,42 @@ import { HeroCta } from "./hero-cta";
 import { Logo } from "./logo";
 import { SiteNav } from "./site-nav";
 
-/** The three objections an agency raises before reading any further. */
+/** The three objections an agency raises before reading any further.
+ *  The first one is also where the page is honest about scope: Outlook is the
+ *  connector that exists today, said as a starting point rather than a limit. */
 const TRUST = [
-  { label: "Read-only Microsoft 365", icon: "shield" },
+  { label: "Starts with Outlook, read-only", icon: "shield" },
   { label: "No Power Automate required", icon: "bolt" },
   { label: "Built for recruitment agencies", icon: "users" },
 ] as const;
 
 const CAPABILITIES = [
   {
-    title: "Every role, captured",
-    body: "New recruitment mail is picked up automatically. One email describing four vacancies becomes four job records — company, position, salary, hours, location, requirements — read by meaning, not by matching labels.",
-    icon: "inbox",
+    title: "One source of truth",
+    body: "Everything the platform consumes lands in the same structured record — company, position, salary, hours, location, requirements — read by meaning rather than by matching labels. Not another silo for your team to remember to check.",
+    icon: "layers",
   },
   {
     title: "Nothing invented",
-    body: "If the salary was not stated, it stays unstated. Anything ambiguous goes to a review queue instead of being guessed at, so your team checks exceptions rather than processing every message.",
+    body: "If the salary was not stated, it stays unstated. Anything ambiguous goes to a review queue instead of being guessed at, so your team checks exceptions rather than processing everything by hand.",
     icon: "shield",
   },
   {
-    title: "A dataset that compounds",
-    body: "Every role captured is another row of evidence about what clients pay, which skills keep recurring, and which vacancies will not fill. Daily work becomes the record your competitors discard.",
+    title: "Insight that compounds",
+    body: "The more it consolidates, the sharper the picture: what clients actually pay, which skills keep recurring, which roles never fill. Daily operations become the asset your competitors throw away.",
     icon: "chart",
   },
 ] as const;
 
 const FEATURES = [
   {
-    title: "Email capture",
-    body: "Recruitment mail is read from Outlook as it lands, with read-only access. Nothing is sent, moved or deleted.",
+    title: "Connect your sources",
+    body: "Point it at where recruitment work already arrives. Access is read-only — nothing is ever sent, moved or deleted on your behalf.",
     icon: "download",
   },
   {
     title: "AI extraction",
-    body: "Roles, salary, requirements and working hours are read from the wording of the email, not from a template it had to match.",
+    body: "Roles, salary, requirements and working hours are read from how people actually write, not from a template they had to match.",
     icon: "sparkle",
   },
   {
@@ -44,25 +46,41 @@ const FEATURES = [
     icon: "list",
   },
   {
-    title: "Search & export",
-    body: "Search across every captured role, see what your pipeline actually contains, and export to Excel in one click.",
+    title: "Insight & export",
+    body: "Search everything at once, see the rates, skills and client patterns underneath it, and export to Excel when you need to.",
     icon: "trend",
   },
 ] as const;
 
 const STEPS = [
   {
-    title: "Sign in with Microsoft",
-    body: "Grant read-only access to the mailbox that receives recruitment mail. There is nothing to install and no flow to build.",
+    title: "Connect your first source",
+    body: "Sign in with Microsoft and grant read-only access to the mailbox recruitment work arrives at. Nothing to install, no flow to build.",
   },
   {
-    title: "Choose where to start",
-    body: "Today, the last few days, or a date you pick. We never pull your whole mailbox. New mail is processed as it lands.",
+    title: "Let the AI structure it",
+    body: "Choose how far back to start — today, the last few days, or a date you pick. From then on it keeps up on its own, and everything lands in one record.",
   },
   {
-    title: "Review, search and export",
-    body: "Check what needs a human, correct anything wrong, then search across roles or export to Excel when you need it.",
+    title: "Act on one consolidated view",
+    body: "Search across everything at once, see what the numbers say about your market, correct the handful of things that need a human, and export when you need to.",
   },
+] as const;
+
+/**
+ * What the platform consumes. Outlook is the only one that exists today and
+ * says so; the rest are marked planned rather than shown as a row of logos
+ * that implies otherwise — the same rule the extraction itself follows (§15):
+ * state what is known, mark what is not.
+ *
+ * Every planned entry is something the plan actually commits to (§36 Phase 2),
+ * so this list stays a roadmap rather than a wish.
+ */
+const CONNECTORS = [
+  { name: "Outlook", detail: "Recruitment mail, read-only", state: "live" },
+  { name: "Documents", detail: "PDF and Word attachments", state: "planned" },
+  { name: "Excel trackers", detail: "The sheets you keep today", state: "planned" },
+  { name: "Your ATS", detail: "Where placements are recorded", state: "planned" },
 ] as const;
 
 const EXTRACTED = [
@@ -146,6 +164,14 @@ function Icon({ name }: { name: string }) {
           <path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" />
         </svg>
       );
+    case "layers":
+      return (
+        <svg {...common}>
+          <path d="m12 2 9 5-9 5-9-5z" />
+          <path d="m3 12 9 5 9-5" />
+          <path d="m3 17 9 5 9-5" />
+        </svg>
+      );
     case "trend":
       return (
         <svg {...common}>
@@ -195,7 +221,7 @@ function HeroMock() {
             <span className="mock-badge">
               <Icon name="inbox" />
             </span>
-            New mail captured
+            What comes in
           </span>
         </div>
         <div className="mock-body">
@@ -232,7 +258,7 @@ function HeroMock() {
 
       <div className="mock">
         <div className="mock-head">
-          <span className="mock-head-l">Extracted role</span>
+          <span className="mock-head-l">One consolidated record</span>
           <span className="pill">Ready</span>
         </div>
         <div className="mock-body" style={{ paddingTop: 4 }}>
@@ -246,7 +272,7 @@ function HeroMock() {
           </div>
         </div>
         <div className="demo-foot">
-          <Icon name="sparkle" />2 more roles in the same email
+          <Icon name="sparkle" />2 more roles found in the same source
         </div>
       </div>
     </div>
@@ -262,17 +288,18 @@ export default function Home() {
         <section className="hero">
           <div className="wrap hero-grid">
             <div>
-              <span className="eyebrow">For Microsoft 365 recruitment agencies</span>
+              <span className="eyebrow">For recruitment agencies of 3–50</span>
               <h1 style={{ marginTop: 14 }}>
-                The roles are already
+                Your agency knows more than any one person can see.
                 <br />
-                <span className="gradient-text">in your inbox.</span>
+                <span className="gradient-text">Put it in one place.</span>
               </h1>
               <p className="lede" style={{ marginTop: 22 }}>
-                Recruitment arrives as email — job specs, rates, requirements, buried in forwarded
-                threads and pasted adverts. expressautomate reads what lands in Outlook and turns it
-                into structured, searchable job records, so your team stops retyping and starts
-                seeing the shape of their market.
+                Recruitment knowledge is scattered — across mailboxes, spreadsheets, job specs and
+                people&rsquo;s heads. expressautomate consolidates it into one structured, searchable
+                record of your market: what clients actually pay, which skills keep recurring, which
+                roles never fill. Your recruiters stop retyping and remembering, and start acting on
+                evidence.
               </p>
               <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginTop: 28 }}>
                 <HeroCta />
@@ -304,7 +331,7 @@ export default function Home() {
           <div className="wrap">
             <div className="head-center">
               <span className="eyebrow">Why it matters</span>
-              <h2 style={{ marginTop: 12 }}>Recruitment data is trapped in email</h2>
+              <h2 style={{ marginTop: 12 }}>Scattered data cannot be acted on</h2>
             </div>
             <div className="grid-3" style={{ marginTop: 44 }}>
               {CAPABILITIES.map((c) => (
@@ -326,9 +353,7 @@ export default function Home() {
           <div className="wrap split">
             <div>
               <span className="eyebrow">How it works</span>
-              <h2 style={{ marginTop: 12 }}>
-                From email to structured job records in three steps
-              </h2>
+              <h2 style={{ marginTop: 12 }}>Connect a source. Get a picture.</h2>
               <ol className="steps" style={{ marginTop: 28 }}>
                 {STEPS.map((s, i) => (
                   <li className="step" key={s.title}>
@@ -342,10 +367,25 @@ export default function Home() {
                   </li>
                 ))}
               </ol>
+
+              <ul className="connectors">
+                {CONNECTORS.map((c) => (
+                  <li className="connector" key={c.name} data-state={c.state}>
+                    <span className="connector-dot" aria-hidden="true" />
+                    <span>
+                      <strong>{c.name}</strong>
+                      <span className="connector-detail">{c.detail}</span>
+                    </span>
+                    <span className="connector-state">
+                      {c.state === "live" ? "Live" : "Planned"}
+                    </span>
+                  </li>
+                ))}
+              </ul>
             </div>
 
             <div className="demo">
-              <div className="demo-head">One email in</div>
+              <div className="demo-head">What one message becomes</div>
               <div className="demo-body">
                 <p className="quote">
                   “Our client is looking for someone to support their Treasury desk. Budget is
@@ -383,7 +423,7 @@ export default function Home() {
           <div className="wrap">
             <div className="head-center">
               <span className="eyebrow">What you can do</span>
-              <h2 style={{ marginTop: 12 }}>From inbox to intelligence</h2>
+              <h2 style={{ marginTop: 12 }}>From scattered work to one clear picture</h2>
             </div>
             <div className="grid-4" style={{ marginTop: 44 }}>
               {FEATURES.map((f) => (

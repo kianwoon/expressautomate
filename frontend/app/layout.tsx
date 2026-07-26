@@ -7,7 +7,7 @@ const TITLE = "expressautomate.app — AI recruitment operations";
    two lines and the description at two more, so this says what the product
    does and stops — no feature list that will be cut mid-word. */
 const PREVIEW_DESCRIPTION =
-  "Outlook email, turned into structured job records. Read-only Microsoft 365 access, built for recruitment agencies.";
+  "AI that consolidates your agency's scattered recruitment data into one structured, searchable picture — so your team acts on evidence instead of retyping.";
 
 /**
  * metadataBase makes every relative URL below absolute in the emitted HTML,
@@ -22,7 +22,7 @@ export const metadata: Metadata = {
   metadataBase: new URL("https://expressautomate.app"),
   title: TITLE,
   description:
-    "Connect Outlook and turn recruitment email into structured, searchable job data. Read-only Microsoft 365 access. Built for small recruitment agencies.",
+    "AI recruitment intelligence and operations for small agencies. Consolidate scattered recruitment data into one structured, searchable record — rates, skills and client patterns included. Starts with read-only Outlook access.",
   openGraph: {
     siteName: "expressautomate.app",
     title: TITLE,
@@ -35,7 +35,7 @@ export const metadata: Metadata = {
         url: "/og.png",
         width: 1200,
         height: 630,
-        alt: "expressautomate.app — the roles are already in your inbox.",
+        alt: "expressautomate.app — your agency knows more than any one person can see. Put it in one place.",
       },
     ],
   },

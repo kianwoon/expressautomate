@@ -57,15 +57,18 @@
       AI RECRUITMENT OPERATIONS
     </text>
 
-    <text x="96" y="360" font-size="76" font-weight="700" fill="#0b1220" letter-spacing="-2">
-      The roles are already
+    <text x="96" y="355" font-size="66" font-weight="700" fill="#0b1220" letter-spacing="-2">
+      Your agency knows more than
     </text>
-    <text x="96" y="450" font-size="76" font-weight="700" fill="#1D4ED8" letter-spacing="-2">
-      in your inbox.
+    <text x="96" y="432" font-size="66" font-weight="700" fill="#0b1220" letter-spacing="-2">
+      any one person can see.
+    </text>
+    <text x="96" y="509" font-size="66" font-weight="700" fill="#1D4ED8" letter-spacing="-2">
+      Put it in one place.
     </text>
 
-    <text x="96" y="530" font-size="30" font-weight="500" fill="#263449">
-      Outlook email, turned into structured job records.
+    <text x="96" y="566" font-size="27" font-weight="500" fill="#5b6b82">
+      AI recruitment intelligence &amp; operations
     </text>
   </g>
 </svg>
