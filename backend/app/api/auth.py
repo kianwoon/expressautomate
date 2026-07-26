@@ -363,7 +363,13 @@ async def logout(response: Response) -> dict[str, str]:
 
 
 @router.get("/auth/me")
-async def me(request: Request) -> dict[str, str | None]:
+async def me(request: Request) -> dict[str, dict]:
+    """The signed-in user, their tenant, and their mailbox connection state.
+
+    Grouped rather than flat because the dashboard renders onboarding from it:
+    a Microsoft user with no mailbox row and a personal-account user with no
+    colleagues need different prompts, and both are decided here (§6.1).
+    """
     cookie = request.cookies.get(SESSION_COOKIE)
     if not cookie:
         raise HTTPException(status_code=401, detail="Not signed in.")
@@ -378,15 +384,52 @@ async def me(request: Request) -> dict[str, str | None]:
         user = (
             await session.execute(select(User).where(User.id == user_uuid))
         ).scalar_one_or_none()
+        if user is None:
+            # A deleted user with a live cookie must not look signed in.
+            raise HTTPException(status_code=401, detail="Not signed in.")
 
-    # A deleted user with a live cookie must not look signed in.
-    if user is None:
-        raise HTTPException(status_code=401, detail="Not signed in.")
+        tenant = (
+            await session.execute(select(Tenant).where(Tenant.id == user.tenant_id))
+        ).scalar_one()
+
+        # Only the scope is read, never the ciphertext: the row's existence is
+        # the whole signal. Decrypting would put a live refresh token in memory
+        # to answer a question its presence already answers, and a token that
+        # Entra has since revoked still decrypts fine — so decryption would not
+        # even make the answer more truthful.
+        # The id comes back too, so a row whose `scope` is null still counts as
+        # connected rather than being mistaken for a missing row.
+        token = (
+            await session.execute(
+                select(MicrosoftToken.id, MicrosoftToken.scope).where(
+                    MicrosoftToken.user_id == user.id
+                )
+            )
+        ).one_or_none()
+        connected = token is not None
+        scope = token.scope if token else None
 
     return {
-        "id": str(user.id),
-        "tenant_id": str(user.tenant_id),
-        "email": user.email,
-        "display_name": user.display_name,
-        "role": user.role,
+        "user": {
+            "id": str(user.id),
+            "email": user.email,
+            "display_name": user.display_name,
+            "role": user.role,
+        },
+        "tenant": {
+            "id": str(tenant.id),
+            "name": tenant.name,
+            "is_personal_account": tenant.is_personal_account,
+        },
+        "mailbox": {
+            # Microsoft Graph is the only ingestion path; a Google identity has
+            # no mailbox to connect at all.
+            "provider": "microsoft",
+            "connected": connected,
+            "scopes": (scope or "").split(),
+            # Hardcoded until ingestion exists (§7). It must become a real read
+            # of the ingestion subscription state when that ships — a connected
+            # mailbox is not the same as one being polled.
+            "ingestion_active": False,
+        },
     }

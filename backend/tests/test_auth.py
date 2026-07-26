@@ -350,9 +350,74 @@ async def test_me_returns_the_signed_in_user(client, monkeypatch, cleanup) -> No
     await sign_in(client, monkeypatch, token_response(tid, oid, "rachel@agency-a.sg"))
 
     body = (await client.get("/api/auth/me")).json()
-    assert body["email"] == "rachel@agency-a.sg"
-    assert body["tenant_id"] == tid
-    assert body["role"] == "recruiter"
+    assert body["user"]["email"] == "rachel@agency-a.sg"
+    assert body["user"]["display_name"] == "Rachel Tan"
+    assert body["user"]["role"] == "recruiter"
+    assert body["tenant"]["id"] == tid
+    assert body["tenant"]["name"] == "agency-a.sg"
+    # The dashboard is built against exactly these keys.
+    assert set(body) == {"user", "tenant", "mailbox"}
+
+
+async def test_me_reports_a_connected_mailbox_with_its_scopes(
+    client, monkeypatch, cleanup
+) -> None:
+    tid = str(uuid.uuid4())
+    cleanup.append(uuid.UUID(tid))
+    await sign_in(client, monkeypatch, token_response(tid, uuid.uuid4().hex, "rachel@agency-a.sg"))
+
+    mailbox = (await client.get("/api/auth/me")).json()["mailbox"]
+    assert mailbox["provider"] == "microsoft"
+    assert mailbox["connected"] is True
+    assert mailbox["scopes"] == ms_auth.delegated_scopes()
+    # No ingestion exists yet (§7); claiming otherwise would be a lie to the UI.
+    assert mailbox["ingestion_active"] is False
+
+
+async def test_me_reports_no_mailbox_when_no_token_was_stored(
+    client, monkeypatch, cleanup
+) -> None:
+    """Microsoft can return no refresh token — onboarding must say so, not guess."""
+    tid = str(uuid.uuid4())
+    cleanup.append(uuid.UUID(tid))
+    result = token_response(tid, uuid.uuid4().hex, "rachel@agency-a.sg")
+    del result["refresh_token"]
+    await sign_in(client, monkeypatch, result)
+
+    mailbox = (await client.get("/api/auth/me")).json()["mailbox"]
+    assert mailbox["connected"] is False
+    assert mailbox["scopes"] == []
+
+
+async def test_me_flags_a_personal_account_tenant(client, monkeypatch, cleanup) -> None:
+    oid = uuid.uuid4().hex
+    cleanup.append(personal_tenant_id(oid))
+    await sign_in(client, monkeypatch, token_response(MSA, oid, "rachel@hotmail.com"))
+
+    body = (await client.get("/api/auth/me")).json()
+    assert body["tenant"]["is_personal_account"] is True
+    assert body["tenant"]["id"] == str(personal_tenant_id(oid))
+
+
+async def test_me_does_not_flag_a_work_tenant(client, monkeypatch, cleanup) -> None:
+    tid = str(uuid.uuid4())
+    cleanup.append(uuid.UUID(tid))
+    await sign_in(client, monkeypatch, token_response(tid, uuid.uuid4().hex, "rachel@agency-a.sg"))
+
+    assert (await client.get("/api/auth/me")).json()["tenant"]["is_personal_account"] is False
+
+
+async def test_me_is_401_when_the_session_user_no_longer_exists(
+    client, monkeypatch, cleanup
+) -> None:
+    tid = str(uuid.uuid4())
+    cleanup.append(uuid.UUID(tid))
+    await sign_in(client, monkeypatch, token_response(tid, uuid.uuid4().hex, "rachel@agency-a.sg"))
+
+    async with tenant_session(uuid.UUID(tid)) as s:
+        await s.execute(text("DELETE FROM ms_oauth_tokens"))
+        await s.execute(text("DELETE FROM users"))
+    assert (await client.get("/api/auth/me")).status_code == 401
 
 
 async def test_logout_clears_the_session(client, monkeypatch, cleanup) -> None:

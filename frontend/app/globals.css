@@ -95,6 +95,28 @@ h3 { font-size: 1.125rem; letter-spacing: -0.01em; font-weight: 650; }
 .nav-links a { font-size: 0.9375rem; color: var(--ink-700); }
 .nav-links a:hover { color: var(--ink-900); }
 
+/* The auth-dependent corner. min-height/min-width keep the nav the same size
+   in every state, so correcting from signed-out to signed-in cannot reflow it;
+   [data-resolved="no"] hides it without removing it from layout. */
+.nav-auth {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 116px;
+  min-height: 42px;
+  justify-content: flex-end;
+}
+.nav-auth[data-resolved="no"] { visibility: hidden; }
+.nav-who {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--ink-700);
+  max-width: 22ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .brand { display: flex; align-items: center; gap: 10px; }
 .brand-name { font-size: 1.125rem; font-weight: 700; letter-spacing: -0.02em; }
 .brand-tag {
@@ -200,4 +222,5 @@ footer { border-top: 1px solid var(--line); padding: 40px 0; color: var(--ink-50
   .hero { padding: 56px 0 40px; }
   .grid-3, .split { grid-template-columns: 1fr; gap: 24px; }
   .nav-links a:not(.btn) { display: none; }
+  .nav-who { display: none; }
 }

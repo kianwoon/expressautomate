@@ -10,3 +10,12 @@ export const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "";
 export const SIGN_IN_PATH = `${API_BASE}/api/auth/microsoft/login`;
 
 export const EARLY_ACCESS_PATH = `${API_BASE}/api/early-access`;
+
+/** Who is signed in: 200 with user/tenant/mailbox, or 401 when nobody is. */
+export const ME_PATH = `${API_BASE}/api/auth/me`;
+
+/** Clears the session cookie. POST only. */
+export const LOGOUT_PATH = `${API_BASE}/api/auth/logout`;
+
+/** The landing page — where a signed-out visitor is sent from a guarded route. */
+export const LANDING_PATH = "/";
