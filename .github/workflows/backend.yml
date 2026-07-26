@@ -154,12 +154,17 @@ jobs:
           cache-to: type=gha,mode=max,scope=backend
 
   deploy:
+    # `!cancelled()` is load-bearing. Without it GitHub skips this job whenever
+    # a dependency was skipped, regardless of what the rest of the condition
+    # says — so a reused image skipped the deploy outright instead of letting
+    # the scope step decide. That happened to be harmless (the services were
+    # already on the target image) but would silently skip a genuine redeploy,
+    # such as after a rollback.
     if: >-
+      !cancelled() &&
       github.ref == 'refs/heads/main' && github.event_name == 'push' &&
       needs.test.result == 'success' &&
       (needs.build.result == 'success' || needs.build.result == 'skipped')
-    # `always()`-free: the guard above already handles build being skipped,
-    # which GitHub otherwise treats as a reason to skip this job too.
     needs: [plan, test, build]
     runs-on: ubuntu-latest
     steps:
