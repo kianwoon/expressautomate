@@ -71,9 +71,22 @@ async def main() -> None:
     tasks = build_tasks()
     log.info("worker_startup", env=settings.APP_ENV, tasks=[t.name for t in tasks])
 
+    running = [asyncio.create_task(_run_periodically(t, stop)) for t in tasks]
     try:
-        await asyncio.gather(*(_run_periodically(t, stop) for t in tasks))
+        # return_exceptions keeps one unexpected failure from tearing the others
+        # down mid-flight and disposing the engine underneath them; siblings are
+        # cancelled deliberately below instead.
+        results = await asyncio.gather(*running, return_exceptions=True)
+        for task, outcome in zip(tasks, results, strict=True):
+            if isinstance(outcome, BaseException) and not isinstance(
+                outcome, asyncio.CancelledError
+            ):
+                log.error("worker_task_crashed", task=task.name, error=repr(outcome))
     finally:
+        stop.set()
+        for t in running:
+            t.cancel()
+        await asyncio.gather(*running, return_exceptions=True)
         await engine.dispose()
         log.info("worker_shutdown")
 

@@ -13,12 +13,40 @@ Two connection paths are deliberately available:
 """
 
 from collections.abc import AsyncGenerator
+from urllib.parse import urlsplit
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.core.config import settings
 from app.db.session import engine
+
+# Hosts a test run is allowed to write to. Anything else is assumed to be real.
+_LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", "postgres", "db"}
+
+
+def _refuse_to_run_against_a_remote_database() -> None:
+    """Abort collection if the configured database is not obviously disposable.
+
+    These tests INSERT and DELETE in `tenants` and `users`, and the schema-level
+    ones use the admin role, which bypasses RLS. Pointed at a live database that
+    is exactly a data-loss bug — and it already happened once, stranding test
+    fixtures in production before this guard existed.
+    """
+    host = (urlsplit(str(settings.DATABASE_URL)).hostname or "").lower()
+    if host in _LOCAL_HOSTS:
+        return
+    raise RuntimeError(
+        f"Refusing to run the test suite against database host {host!r}.\n"
+        "The suite writes and deletes rows and uses the RLS-bypassing admin role.\n"
+        "Point DATABASE_URL and DATABASE_ADMIN_URL at a local or CI Postgres "
+        "(see docs/setup.md), e.g.:\n"
+        "  docker run --rm -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres "
+        "-e POSTGRES_DB=expressautomate --name ea-test-db postgres:16"
+    )
+
+
+_refuse_to_run_against_a_remote_database()
 
 _admin_engine = create_async_engine(
     settings.alembic_url,

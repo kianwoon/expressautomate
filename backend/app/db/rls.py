@@ -78,6 +78,13 @@ async def verify_rls_enforced() -> None:
                 "unenforced. Point DATABASE_URL at the application role, not the admin role."
             )
 
+        # Deny by default: flag every table this role can read that is not
+        # behind a forced policy — not merely those with a `tenant_id` column.
+        # ALTER DEFAULT PRIVILEGES grants DML on new tables automatically while
+        # RLS is NOT enabled automatically, so a Stage-2 ingestion table keyed
+        # on mailbox_id or user_id would otherwise boot wide open and silently
+        # serve every agency's mail. The check is structural (privilege + RLS
+        # flags from the catalog), never a list of known table names.
         unprotected = (
             await session.execute(
                 text(
@@ -87,12 +94,7 @@ async def verify_rls_enforced() -> None:
                     JOIN pg_namespace n ON n.oid = c.relnamespace
                     WHERE n.nspname = 'public'
                       AND c.relkind = 'r'
-                      AND EXISTS (
-                          SELECT 1 FROM pg_attribute a
-                          WHERE a.attrelid = c.oid
-                            AND a.attname = 'tenant_id'
-                            AND NOT a.attisdropped
-                      )
+                      AND has_table_privilege(current_user, c.oid, 'SELECT')
                       AND NOT (c.relrowsecurity AND c.relforcerowsecurity)
                     ORDER BY c.relname
                     """
@@ -101,9 +103,11 @@ async def verify_rls_enforced() -> None:
         ).scalars().all()
 
         if unprotected:
+            # allow-hardcode: operator-facing diagnostic text, not matching logic
             raise RuntimeError(
-                "Tables carry tenant_id but lack FORCE ROW LEVEL SECURITY: "
-                f"{', '.join(unprotected)}"
+                "Readable by the application role but lacking FORCE ROW LEVEL SECURITY: "
+                f"{', '.join(unprotected)}. Add a tenant_isolation policy in a migration, "
+                "or revoke the role's access if the table is not tenant-scoped."
             )
 
     log.info("rls_verified", role=current_user)
