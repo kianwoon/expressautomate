@@ -70,9 +70,19 @@ Tests run against a throwaway Postgres container, never the live database:
 they create roles and toggle RLS, and `tests/conftest.py` refuses to run
 against a non-local host.
 
-**Koyeb strips the `/api` route prefix**, so API routes are declared
-unprefixed and `API_ROOT_PATH` carries the public prefix. Adding a route as
-`/api/...` will 404 in production; `tests/test_routing.py` catches it first.
+**One Koyeb service serves everything.** `api` owns route `/`: FastAPI serves
+the Next.js static export (built into the image) at `/`, and every API route
+lives under an `/api` router. Nothing strips a prefix, so `API_ROOT_PATH` is
+empty. `tests/test_routing.py` fails if a route escapes `/api`, where the
+static mount would shadow it.
+
+Two Koyeb settings are **not** in this repo and must be re-applied by hand if
+the service is ever recreated — both caused outages when they drifted:
+
+| Setting | Value |
+|---|---|
+| Route | `/` (not `/api`) |
+| Health check | `/api/health` (not `/health` — a 404 there leaves the deploy `PENDING` until CI times out) |
 
 Live: https://expressautomate.app · repo: `kianwoon/expressautomate` (private)
 
