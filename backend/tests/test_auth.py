@@ -37,6 +37,23 @@ async def client() -> httpx.AsyncClient:
 
 
 @pytest.fixture(autouse=True)
+def microsoft_configured(monkeypatch) -> None:
+    """Credentials the suite supplies itself.
+
+    Without this the routes 503 wherever `MS_CLIENT_ID` / `MS_CLIENT_SECRET`
+    are absent, which passes on a developer machine — the repo-root `.env`
+    holds real credentials — and fails in CI, where it must not depend on them.
+    """
+    monkeypatch.setattr(settings, "MS_CLIENT_ID", settings.MS_CLIENT_ID or "test-client-id")
+    monkeypatch.setattr(settings, "MS_CLIENT_SECRET", settings.MS_CLIENT_SECRET or "test-secret")
+    monkeypatch.setattr(
+        settings,
+        "MS_REDIRECT_URI",
+        settings.MS_REDIRECT_URI or "https://testserver/api/auth/microsoft/callback",
+    )
+
+
+@pytest.fixture(autouse=True)
 def fake_msal(monkeypatch) -> None:
     """A believable flow dict and token response, with no MSAL client built."""
 
