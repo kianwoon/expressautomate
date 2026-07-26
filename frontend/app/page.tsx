@@ -1,3 +1,4 @@
+import { SIGN_IN_PATH } from "./api";
 import { Logo } from "./logo";
 import { SignupForm } from "./signup-form";
 
@@ -86,8 +87,10 @@ export default function Home() {
             <a href="#what">What it does</a>
             <a href="#how">How it works</a>
             <a href="#security">Security</a>
-            <a className="btn btn-primary" href="#start">
-              Request early access
+            {/* A full page load, not a client route: the API answers with a
+                redirect to Microsoft, which a Next link would not follow. */}
+            <a className="btn btn-primary" href={SIGN_IN_PATH}>
+              Sign in
             </a>
           </div>
         </div>

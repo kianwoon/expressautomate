@@ -2,10 +2,7 @@
 
 import { useState } from "react";
 
-// The page is a static export served by nginx, so the form talks to the API
-// service directly. Same-origin in production via the /api proxy; overridable
-// for local development.
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "";
+import { EARLY_ACCESS_PATH } from "./api";
 
 type State = "idle" | "sending" | "ok" | "error";
 
@@ -24,7 +21,7 @@ export function SignupForm() {
     setState("sending");
     setMessage("Sending…");
     try {
-      const res = await fetch(`${API_BASE}/api/early-access`, {
+      const res = await fetch(EARLY_ACCESS_PATH, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email }),
