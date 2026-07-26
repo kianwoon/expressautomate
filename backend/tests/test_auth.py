@@ -354,7 +354,10 @@ async def test_me_rejects_a_forged_cookie(client) -> None:
 
 
 async def test_callback_without_a_flow_cookie_is_rejected(client) -> None:
-    assert (await client.get("/api/auth/microsoft/callback", params={"code": "x"})).status_code == 400
+    response = await client.get(
+        "/api/auth/microsoft/callback", params={"code": "x"}
+    )
+    assert response.status_code == 400
 
 
 async def test_reserved_scopes_are_not_passed_to_msal() -> None:
