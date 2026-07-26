@@ -1,4 +1,15 @@
 # syntax=docker/dockerfile:1
+
+# The Next.js site is built here and copied into the Python image, so one
+# service serves both. Frontend edits therefore redeploy the API too — the
+# trade for running a single instance instead of two.
+FROM node:22-alpine AS site
+WORKDIR /site
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
+COPY frontend/ ./
+RUN npm run build
+
 FROM python:3.12-slim AS base
 
 ENV PYTHONUNBUFFERED=1 \
@@ -13,13 +24,14 @@ COPY --from=ghcr.io/astral-sh/uv:0.5.11 /uv /usr/local/bin/uv
 WORKDIR /app
 
 # Dependency layer first — application edits do not invalidate it.
-COPY pyproject.toml uv.lock ./
+COPY backend/pyproject.toml backend/uv.lock ./
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev --no-install-project
 
-COPY alembic.ini ./
-COPY alembic ./alembic
-COPY app ./app
+COPY backend/alembic.ini ./
+COPY backend/alembic ./alembic
+COPY backend/app ./app
+COPY --from=site /site/out ./app/static
 
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev

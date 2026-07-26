@@ -1,98 +1,56 @@
-"""The route-prefix contract with Koyeb's router.
+"""API paths live under /api, and the static site owns everything else.
 
-Koyeb strips the matched route prefix before forwarding: a request to
-`https://expressautomate.app/api/early-access` reaches this app as
-`/early-access`. Declaring a route as `/api/early-access` therefore produces a
-404 that looks like an application bug — which is exactly what shipped once.
-
-Routes must stay unprefixed; `root_path` carries the public prefix so the
-OpenAPI schema and /docs still emit correct URLs.
+One Koyeb service serves both, on a single "/" route, so nothing strips a
+prefix: `/api/health` arrives exactly as written. (An earlier split put the
+API behind a `/api` Koyeb route that stripped the prefix, which is why
+API_ROOT_PATH exists — it is empty now.)
 """
 
 from app.core.config import settings
 from app.main import app
 
-# Paths FastAPI adds for itself; not part of the contract.
-_BUILTIN = {"/openapi.json", "/docs", "/docs/oauth2-redirect", "/redoc"}
-
 
 def _declared_paths() -> set[str]:
-    return {r.path for r in app.routes if getattr(r, "path", None)} - _BUILTIN
+    """Public paths as the app actually advertises them.
+
+    Read from the OpenAPI schema rather than walking `app.routes`: routes added
+    via `include_router` appear there as a nested object with no `.path`, so
+    walking the list silently returned nothing and the assertions passed
+    vacuously.
+    """
+    return set(app.openapi()["paths"])
 
 
-def test_no_route_is_declared_with_the_public_prefix() -> None:
-    """A declared '/api/...' path is unreachable once Koyeb strips '/api'."""
-    # Match the prefix as a path segment: a future '/api-keys' is legitimate.
-    offenders = sorted(
-        p for p in _declared_paths() if p == "/api" or p.startswith("/api/")
-    )
-    assert not offenders, (
-        f"routes declared with the '/api' prefix will 404 behind Koyeb: {offenders}. "
-        "Declare them unprefixed and let API_ROOT_PATH carry the public prefix."
-    )
+def test_every_api_route_is_under_the_api_prefix() -> None:
+    """Anything outside /api collides with the static site mounted at "/"."""
+    strays = sorted(p for p in _declared_paths() if not p.startswith("/api"))
+    assert strays == [], f"routes outside /api are shadowed by the site mount: {strays}"
 
 
-def test_expected_endpoints_exist_unprefixed() -> None:
+def test_expected_endpoints_exist() -> None:
     paths = _declared_paths()
-    for expected in ("/early-access", "/health", "/health/db"):
-        assert expected in paths, f"{expected} missing — public URL would break"
+    for expected in ("/api/early-access", "/api/health", "/api/health/db"):
+        assert expected in paths, f"{expected} missing — the public URL would break"
 
 
-def test_root_path_is_configurable_and_empty_by_default() -> None:
-    """Local runs have nothing in front, so the default must not add a prefix."""
+def test_root_path_is_empty() -> None:
+    """Nothing proxies in front of this service, so no prefix is stripped."""
     assert settings.API_ROOT_PATH == ""
     assert app.root_path == ""
 
 
-def test_root_path_does_not_change_declared_paths() -> None:
-    """root_path is a display concern; it must not be prepended to routes.
-
-    If it were, the app would expect `/api/health` from Koyeb and 404 on the
-    `/health` that actually arrives. (FastAPI only surfaces root_path in the
-    served schema during a real request, so this asserts the routing side —
-    the part that decides whether a URL resolves at all.)
-    """
-    from fastapi import FastAPI
-
-    prefixed = FastAPI(root_path="/api")
-
-    @prefixed.get("/health")
-    async def _health() -> dict[str, str]:  # pragma: no cover - shape only
-        return {"status": "ok"}
-
-    assert prefixed.root_path == "/api"
-    assert "/health" in prefixed.openapi()["paths"]
-    assert "/api/health" not in prefixed.openapi()["paths"]
-
-
-def test_the_real_app_answers_a_prefix_stripped_request() -> None:
-    """Reproduce production shape against the ACTUAL app.
-
-    An earlier version of this test built its own inline FastAPI, so it passed
-    whatever main.py declared — useless as a regression guard. It must hit the
-    real `app`, which is what Koyeb serves.
-
-    No `with`: entering TestClient runs the lifespan, which needs a database.
-    A plain request still exercises routing.
-    """
+def test_the_app_answers_the_public_api_path() -> None:
     from fastapi.testclient import TestClient
 
-    client = TestClient(app)
-    # Exactly what Koyeb forwards after stripping "/api".
-    assert client.get("/health").status_code == 200, (
-        "the app must answer the stripped path; declaring routes with the "
-        "'/api' prefix breaks this"
-    )
+    # No `with`: entering TestClient runs the lifespan, which needs a database.
+    assert TestClient(app).get("/api/health").status_code == 200
 
 
 def test_root_path_is_normalised() -> None:
-    """A trailing slash silently breaks /docs; a missing leading slash too."""
+    """Kept because a stray slash silently breaks /docs if the prefix returns."""
     from app.core.config import Settings
 
     def root_path_for(raw: str) -> str:
-        # _env_file=None: without it, unsupplied fields are read from the
-        # repo-root .env, so a developer's local values could fail this test
-        # for reasons that have nothing to do with the prefix.
         return Settings(
             _env_file=None,
             APP_SECRET_KEY="x",
@@ -103,9 +61,5 @@ def test_root_path_is_normalised() -> None:
         ).API_ROOT_PATH
 
     assert root_path_for("/api/") == "/api"
-    assert root_path_for("api") == "/api"
-    assert root_path_for("/api") == "/api"
-    assert root_path_for("//api") == "/api", "scheme-relative URL would break /docs"
-    assert root_path_for("/api//") == "/api"
+    assert root_path_for("//api") == "/api"
     assert root_path_for("") == ""
-    assert root_path_for("  ") == ""

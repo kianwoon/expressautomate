@@ -2,9 +2,11 @@
 
 import uuid
 from contextlib import asynccontextmanager
+from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import APIRouter, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import insert, text
 
@@ -40,13 +42,15 @@ app = FastAPI(
     description="AI recruitment intelligence & operations platform",
     version="0.1.0",
     lifespan=lifespan,
-    # Public prefix stripped by Koyeb's router — see settings.API_ROOT_PATH.
+    # One service serves both the site and the API on a single Koyeb route
+    # ("/"), so nothing strips a prefix any more — API paths carry /api
+    # literally, via `api` below.
     root_path=settings.API_ROOT_PATH,
-    # A 307 from the slash-redirect is built from the *stripped* path, so
-    # `POST /api/early-access/` would redirect to `/early-access` — off this
-    # service entirely and onto the landing page. Better a clean 404.
     redirect_slashes=False,
 )
+
+# Everything under /api. The static site owns everything else.
+api = APIRouter(prefix="/api")
 
 app.add_middleware(
     CORSMiddleware,
@@ -56,7 +60,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(auth.router)
+api.include_router(auth.router)
 
 
 class EarlyAccessRequest(BaseModel):
@@ -64,7 +68,7 @@ class EarlyAccessRequest(BaseModel):
     source: str = Field(default="landing", max_length=64)
 
 
-@app.post("/early-access", status_code=201)
+@api.post("/early-access", status_code=201)
 async def early_access(payload: EarlyAccessRequest) -> dict[str, str]:
     """Record a landing-page signup.
 
@@ -88,14 +92,22 @@ async def early_access(payload: EarlyAccessRequest) -> dict[str, str]:
     return {"status": "received"}
 
 
-@app.get("/health")
+@api.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok", "env": settings.APP_ENV}
 
 
-@app.get("/health/db")
+@api.get("/health/db")
 async def health_db() -> dict[str, str]:
     async with engine.connect() as conn:
         db = (await conn.execute(text("SELECT current_database()"))).scalar_one()
     return {"status": "ok", "database": db}
 
+
+app.include_router(api)
+
+# Mounted last: StaticFiles(html=True) claims "/" and would swallow any route
+# declared after it. The Next.js static export is copied here at image build.
+STATIC_DIR = Path(__file__).resolve().parent / "static"
+if STATIC_DIR.is_dir():
+    app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="site")

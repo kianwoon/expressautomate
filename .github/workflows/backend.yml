@@ -1,21 +1,25 @@
-name: Backend
+name: CI/CD
 
 on:
   push:
     branches: [main]
     paths:
       - 'backend/**'
+      - 'frontend/**'
+      - 'Dockerfile'
       - '.github/workflows/backend.yml'
       - '.github/scripts/**'
   pull_request:
     branches: [main]
     paths:
       - 'backend/**'
+      - 'frontend/**'
+      - 'Dockerfile'
       - '.github/workflows/backend.yml'
       - '.github/scripts/**'
 
 concurrency:
-  group: backend-${{ github.ref }}
+  group: cicd-${{ github.ref }}
   # Cancel superseded PR runs freely, but NEVER cancel a run that may be
   # deploying: workflow-level cancellation kills in-progress jobs regardless of
   # any job-level concurrency group, and the deploy job sits between
@@ -101,7 +105,7 @@ jobs:
       # from scratch on every deploy, this reuses unchanged layers.
       - uses: docker/build-push-action@v6
         with:
-          context: backend
+          context: .
           push: true
           tags: |
             ${{ env.IMAGE }}:sha-${{ github.sha }}
@@ -132,7 +136,7 @@ jobs:
           # commit landed mid-build — and because the paths filter means no
           # further run is triggered, that deploy was never retried. It
           # happened: a frontend change sat undeployed until fixed by hand.
-          CHANGED=$(git diff --name-only "$GITHUB_SHA" "$HEAD_SHA" -- backend/ .github/workflows/backend.yml .github/scripts/)
+          CHANGED=$(git diff --name-only "$GITHUB_SHA" "$HEAD_SHA" -- backend/ frontend/ Dockerfile .github/workflows/backend.yml .github/scripts/)
           if [ -n "$CHANGED" ]; then
             echo "origin/main is now $HEAD_SHA and changes the backend; this run is stale."
             echo "stale=true" >> "$GITHUB_OUTPUT"
