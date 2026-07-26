@@ -18,6 +18,40 @@ process idles near half of that. It was chosen to keep the starting bill down
 and it is healthy today, but the first real ingestion load is the moment to
 check for OOM restarts and move up to `eco-micro` (512 MB) if they appear.
 
+### Pipeline timing
+
+Measured on commit `6910051`: GitHub Actions **61s** (test 29s → deploy 25s,
+sequential because deploy gates on tests), then Koyeb builds and rolls out,
+reaching HEALTHY roughly **30s** later. Push to live is about **1.5 minutes**.
+
+Koyeb layer-caches between deploys of the same service, so the archive rebuild
+is much cheaper than a cold build — that was the main wrong assumption in the
+first attempt at speeding this up.
+
+### Faster still — needs a PAT from you
+
+The remaining win is to stop Koyeb building at all: have Actions build once
+with GHA layer caching, push to GHCR, and PATCH the services to the new image
+tag. That is what `draftproof-service` does, and
+`.github/scripts/deploy_koyeb.py` is written and dry-run-verified against both
+live service definitions, ready to switch on.
+
+It is blocked on credentials. The reused `GHCR_PAT` is **fine-grained and
+scoped to the `draftproof-api` package**, so it can neither create nor read
+`expressautomate-api`. Pushing as `GITHUB_TOKEN` instead produces a package
+only that ephemeral token can read, which Koyeb cannot pull.
+
+To unblock: GitHub → Settings → Developer settings → Personal access tokens →
+either a **classic** token with `write:packages` and `read:packages`, or a
+fine-grained token granted access to this repository's packages. Then:
+
+```bash
+gh secret set GHCR_PAT --body '<new token>' --repo kianwoon/expressautomate
+```
+
+and update the Koyeb registry secret `ghcr-expressautomate` with the same
+value so Koyeb can pull.
+
 ### Deployment path
 
 CI deploys with `koyeb deploy` (archive upload, Koyeb builds the Dockerfile)

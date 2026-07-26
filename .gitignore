@@ -28,3 +28,6 @@ out/
 *.log
 dist/
 build/
+
+# Design assets (not code)
+branding.png
