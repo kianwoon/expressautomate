@@ -1,15 +1,22 @@
 """expressautomate.app API entrypoint."""
 
+import uuid
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import text
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, EmailStr, Field
+from sqlalchemy import insert, text
 
 from app.core.config import settings
 from app.core.logging import configure_logging, get_logger
 from app.db.rls import verify_rls_enforced
-from app.db.session import engine
+from app.db.session import SessionLocal, engine
+from app.models import EarlyAccessSignup
+
+STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 log = get_logger(__name__)
 
@@ -47,21 +54,33 @@ app.add_middleware(
 )
 
 
-@app.get("/")
-async def root() -> dict[str, str | bool]:
-    """Service descriptor.
+class EarlyAccessRequest(BaseModel):
+    email: EmailStr
+    source: str = Field(default="landing", max_length=64)
 
-    The apex currently serves the API, not the marketing site — hitting it in a
-    browser otherwise returns a bare FastAPI 404, which reads like an outage.
-    The frontend takes this route over once it exists.
+
+@app.post("/api/early-access", status_code=201)
+async def early_access(payload: EarlyAccessRequest) -> dict[str, str]:
+    """Record a landing-page signup.
+
+    Public and unauthenticated. The table is insert-only under RLS, so this
+    endpoint cannot read back who has signed up. Duplicate submissions are
+    accepted rather than reported — telling an anonymous caller whether an
+    address is already on the list would leak it.
     """
-    return {
-        "service": "expressautomate.app",
-        "status": "ok",
-        "frontend_deployed": False,
-        "docs": "/docs",
-        "health": "/health",
-    }
+    # A Core INSERT with no RETURNING clause, deliberately. The ORM would add
+    # RETURNING to fetch server defaults, and Postgres evaluates RETURNING
+    # against the SELECT policy — which this table does not have, by design.
+    # The id is generated here so nothing needs reading back.
+    async with SessionLocal() as session:
+        await session.execute(
+            insert(EarlyAccessSignup).values(
+                id=uuid.uuid4(), email=str(payload.email), source=payload.source
+            )
+        )
+        await session.commit()
+    log.info("early_access_signup", source=payload.source)
+    return {"status": "received"}
 
 
 @app.get("/health")
@@ -74,3 +93,8 @@ async def health_db() -> dict[str, str]:
     async with engine.connect() as conn:
         db = (await conn.execute(text("SELECT current_database()"))).scalar_one()
     return {"status": "ok", "database": db}
+
+
+# Mounted last so it never shadows an API route: StaticFiles(html=True) claims
+# "/" and would otherwise swallow everything declared after it.
+app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
