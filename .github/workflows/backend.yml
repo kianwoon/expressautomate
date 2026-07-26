@@ -150,16 +150,47 @@ jobs:
           uv sync --frozen
           uv run alembic upgrade head
 
-      # Point both services at the image built above. Koyeb pulls a finished,
-      # layer-cached image instead of rebuilding from an uploaded archive. No
-      # CLI download either, so nothing pipes an upstream script into a shell
-      # in a step holding production credentials.
+      # Pinned tarball, not `curl | sh` from master: this step holds
+      # KOYEB_TOKEN and DATABASE_ADMIN_URL.
+      - name: Install Koyeb CLI
+        if: steps.freshness.outputs.stale == 'false'
+        env:
+          KOYEB_CLI_VERSION: v5.10.1
+        run: |
+          curl -fsSL "https://github.com/koyeb/koyeb-cli/releases/download/${KOYEB_CLI_VERSION}/koyeb-cli_${KOYEB_CLI_VERSION#v}_linux_amd64.tar.gz" -o /tmp/koyeb.tar.gz
+          tar -xzf /tmp/koyeb.tar.gz -C /tmp koyeb
+          install -m 0755 /tmp/koyeb /usr/local/bin/koyeb
+
+      # Point both services at the image built above; Koyeb pulls it instead of
+      # rebuilding from an uploaded archive.
+      #
+      # `service update --docker` rather than a raw API PATCH: a PATCH carrying
+      # the full definition returned 2xx but left the image unchanged for over
+      # a minute, so the deploy silently ran the previous build. The CLI applies
+      # the source change reliably. deploy_koyeb.py is kept for its payload
+      # logic and tests, but is not on the deploy path.
       - name: Deploy api + worker
         if: steps.freshness.outputs.stale == 'false'
         env:
           KOYEB_TOKEN: ${{ secrets.KOYEB_TOKEN }}
-          IMAGE: ${{ env.IMAGE }}
-          KOYEB_REGISTRY_SECRET: ${{ env.KOYEB_REGISTRY_SECRET }}
-          API_SERVICE_ID: ${{ env.API_SERVICE_ID }}
-          WORKER_SERVICE_ID: ${{ env.WORKER_SERVICE_ID }}
-        run: python3 .github/scripts/deploy_koyeb.py
+        run: |
+          set -euo pipefail
+          TAG="${IMAGE}:sha-${GITHUB_SHA}"
+          koyeb service update expressautomate/api \
+            --docker "$TAG" \
+            --docker-private-registry-secret "$KOYEB_REGISTRY_SECRET" \
+            --token "$KOYEB_TOKEN"
+          koyeb service update expressautomate/worker \
+            --docker "$TAG" \
+            --docker-private-registry-secret "$KOYEB_REGISTRY_SECRET" \
+            --docker-command python \
+            --docker-args -u --docker-args -m --docker-args app.workers.main \
+            --token "$KOYEB_TOKEN"
+
+      # The CLI returns before the rollout finishes, so confirm the image
+      # actually landed rather than trusting the exit code.
+      - name: Verify deploy landed
+        if: steps.freshness.outputs.stale == 'false'
+        env:
+          KOYEB_TOKEN: ${{ secrets.KOYEB_TOKEN }}
+        run: python3 .github/scripts/verify_koyeb.py
