@@ -149,6 +149,14 @@ h3 { font-size: 1.125rem; letter-spacing: -0.01em; font-weight: 650; }
 .btn-secondary { background: var(--surface); color: var(--ink-900); border-color: var(--line); }
 .btn-secondary:hover { background: var(--surface-alt); }
 
+/* The hero's auth-dependent primary button. Same device as .nav-auth: the slot
+   is laid out at build time and only revealed once useAuth() has answered, so
+   the label can be corrected without a flash or a reflow. min-width fits the
+   wider of the two labels ("Request early access"), so the secondary button
+   beside it never moves. */
+.hero-cta { display: flex; min-width: 196px; min-height: 44px; }
+.hero-cta[data-resolved="no"] { visibility: hidden; }
+
 /* ---- layout ---- */
 section { padding: 88px 0; }
 .hero { padding: 96px 0 72px; background: linear-gradient(180deg, #f7fbff 0%, #ffffff 100%); }
@@ -195,10 +203,23 @@ section { padding: 88px 0; }
   border-left: 3px solid var(--teal-400); padding-left: 14px;
 }
 .rows { display: grid; gap: 0; margin-top: 18px; }
+/* Definition rows, shared by the landing-page demo and the dashboard cards.
+   Two things stop a long value (an email address is one unbreakable word)
+   pushing past the card border:
+   - minmax(0, 1fr) — a grid track's default minimum is min-content, which for
+     "someone@somewhere.example" is the whole string, so a plain 1fr refuses to
+     shrink and the row overflows. minmax(0, …) lets the track be narrower than
+     its content, and then
+   - overflow-wrap: anywhere makes the word itself break rather than spill.
+   Deliberately not text-overflow: ellipsis — an address you cannot read in
+   full is worse than one that takes two lines.
+   The key column may also give ground (down to 88px) before the value has to
+   start breaking, which is what keeps three-across cards readable. */
 .row {
-  display: grid; grid-template-columns: 130px 1fr; gap: 12px;
+  display: grid; grid-template-columns: minmax(88px, 130px) minmax(0, 1fr); gap: 12px;
   padding: 9px 0; border-top: 1px solid var(--line); font-size: 0.9375rem;
 }
+.row > * { min-width: 0; overflow-wrap: anywhere; }
 .row-k { color: var(--ink-500); font-size: 0.8125rem; text-transform: uppercase; letter-spacing: 0.06em; padding-top: 2px; }
 .muted { color: var(--ink-300); font-style: italic; }
 

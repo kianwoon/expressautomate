@@ -25,6 +25,9 @@ from app.services import ms_auth
 
 AUTHORIZE_HOST = "https://login.microsoftonline.com"
 
+# Derived, never a literal: FRONTEND_ORIGIN differs between CI and a dev .env.
+DASHBOARD_URL = settings.FRONTEND_ORIGIN.rstrip("/") + auth_api.DASHBOARD_PATH
+
 
 @pytest.fixture
 async def client() -> httpx.AsyncClient:
@@ -154,7 +157,7 @@ async def test_callback_creates_the_tenant_and_user(client, monkeypatch, cleanup
     response = await sign_in(client, monkeypatch, token_response(tid, oid, "rachel@agency-a.sg"))
 
     assert response.status_code == 307
-    assert response.headers["location"] == settings.FRONTEND_ORIGIN
+    assert response.headers["location"] == DASHBOARD_URL
 
     async with tenant_session(uuid.UUID(tid)) as s:
         rows = (
@@ -477,7 +480,38 @@ async def test_a_prerendered_second_login_does_not_break_the_first(
         params={"code": "any-code", "state": state_of(first)},
     )
     assert response.status_code == 307, response.text
-    assert response.headers["location"] == settings.FRONTEND_ORIGIN
+    assert response.headers["location"] == DASHBOARD_URL
+
+
+async def test_callback_lands_on_the_dashboard_not_the_marketing_page(
+    client, monkeypatch, cleanup
+) -> None:
+    """A signed-in user must see the dashboard, on the frontend's own origin."""
+    tid = str(uuid.uuid4())
+    cleanup.append(uuid.UUID(tid))
+    response = await sign_in(
+        client, monkeypatch, token_response(tid, uuid.uuid4().hex, "rachel@agency-a.sg")
+    )
+
+    location = response.headers["location"]
+    assert location != settings.FRONTEND_ORIGIN
+    assert urlparse(location).path == auth_api.DASHBOARD_PATH
+    origin = urlparse(settings.FRONTEND_ORIGIN)
+    assert (urlparse(location).scheme, urlparse(location).netloc) == (origin.scheme, origin.netloc)
+
+
+async def test_a_trailing_slash_on_the_origin_does_not_double_the_separator(
+    client, monkeypatch, cleanup
+) -> None:
+    """`https://host/` + `/dashboard` must not become `https://host//dashboard`."""
+    monkeypatch.setattr(settings, "FRONTEND_ORIGIN", "https://example.test/")
+    tid = str(uuid.uuid4())
+    cleanup.append(uuid.UUID(tid))
+    response = await sign_in(
+        client, monkeypatch, token_response(tid, uuid.uuid4().hex, "rachel@agency-a.sg")
+    )
+
+    assert response.headers["location"] == "https://example.test/dashboard"
 
 
 async def test_the_callback_hands_msal_the_flow_matching_the_state(client, monkeypatch) -> None:

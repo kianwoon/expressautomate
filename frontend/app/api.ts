@@ -19,3 +19,6 @@ export const LOGOUT_PATH = `${API_BASE}/api/auth/logout`;
 
 /** The landing page — where a signed-out visitor is sent from a guarded route. */
 export const LANDING_PATH = "/";
+
+/** The signed-in shell. A site route, not an API one — no API_BASE prefix. */
+export const DASHBOARD_PATH = "/dashboard";

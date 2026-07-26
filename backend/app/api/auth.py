@@ -78,6 +78,17 @@ PERSONAL_TENANT_NAMESPACE = uuid.UUID("6f1f7f7a-6b1e-5a6d-9d2a-7c4f1c9f0b3e")
 
 SESSION_TTL_SECONDS = 14 * 24 * 60 * 60
 
+# Where a completed sign-in lands. A signed-in user dropped back on the
+# marketing page has no sign that anything happened. Not configuration — it is
+# a route the frontend owns, so it must stay in step with `frontend/app/
+# dashboard/`; renaming that route means renaming this.
+DASHBOARD_PATH = "/dashboard"
+
+
+def _frontend_url(path: str) -> str:
+    """A URL under FRONTEND_ORIGIN, tolerating a configured trailing slash."""
+    return f"{settings.FRONTEND_ORIGIN.rstrip('/')}{path}"
+
 _session_serializer = URLSafeTimedSerializer(settings.APP_SECRET_KEY, salt=SESSION_COOKIE)
 
 
@@ -341,7 +352,7 @@ async def microsoft_callback(request: Request) -> RedirectResponse:
 
     log.info("ms_login", tenant_id=str(tenant_uuid), user_id=str(user_id))
 
-    response = RedirectResponse(settings.FRONTEND_ORIGIN)
+    response = RedirectResponse(_frontend_url(DASHBOARD_PATH))
     response.set_cookie(
         SESSION_COOKIE,
         _session_serializer.dumps({"uid": str(user_id), "tid": str(tenant_uuid)}),

@@ -1,3 +1,4 @@
+import { HeroCta } from "./hero-cta";
 import { Logo } from "./logo";
 import { SignupForm } from "./signup-form";
 import { SiteNav } from "./site-nav";
@@ -90,9 +91,7 @@ export default function Home() {
               seeing the shape of their market.
             </p>
             <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginTop: 28 }}>
-              <a className="btn btn-primary" href="#start">
-                Request early access
-              </a>
+              <HeroCta />
               <a className="btn btn-secondary" href="#how">
                 See how it works
               </a>
