@@ -9,7 +9,9 @@ export const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "";
 /** Starts the Microsoft OAuth flow; the API redirects on to Microsoft. */
 export const SIGN_IN_PATH = `${API_BASE}/api/auth/microsoft/login`;
 
-export const EARLY_ACCESS_PATH = `${API_BASE}/api/early-access`;
+/* No EARLY_ACCESS_PATH: the early-access form was removed when sign-in went
+   live, and the site now has no consumer for it. The backend route and the
+   signups table still exist and still hold the submissions already collected. */
 
 /** Who is signed in: 200 with user/tenant/mailbox, or 401 when nobody is. */
 export const ME_PATH = `${API_BASE}/api/auth/me`;

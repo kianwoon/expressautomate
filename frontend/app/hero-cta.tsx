@@ -1,6 +1,6 @@
 "use client";
 
-import { DASHBOARD_PATH } from "./api";
+import { DASHBOARD_PATH, SIGN_IN_PATH } from "./api";
 import { useAuth } from "./auth";
 
 /**
@@ -8,7 +8,7 @@ import { useAuth } from "./auth";
  *
  * Same problem as the nav's auth corner (see site-nav.tsx): this is a static
  * export, so the HTML is written at build time and cannot know who is signed
- * in. "Request early access" is a lie to someone who already has an account,
+ * in. "Sign in with Microsoft" is wrong for someone who already has a session,
  * but the page must ship *some* label and correct it once /api/auth/me answers.
  *
  * So the same fix, applied to one button instead of a whole slot: the
@@ -22,10 +22,10 @@ import { useAuth } from "./auth";
  * visible throughout, so the hero is never left with no action at all while
  * the check is in flight.
  *
- * "unreachable" and "anonymous" both fall back to the early-access button: it
- * only offers an action and asserts nothing, and offering early access to
- * someone who turns out to have an account is a far smaller error than hiding
- * the sign-up from a genuine visitor because our API blipped.
+ * "unreachable" and "anonymous" both fall back to the sign-in button: it only
+ * offers an action and asserts nothing, and offering sign-in to someone who
+ * turns out to already have a session is a far smaller error than hiding the
+ * only way in from a genuine visitor because our API blipped.
  */
 export function HeroCta() {
   const auth = useAuth();
@@ -43,8 +43,11 @@ export function HeroCta() {
           Open dashboard
         </a>
       ) : (
-        <a className="btn btn-primary" href="#start">
-          Request early access
+        /* A full page load, not a client route: the API answers with a redirect
+           to Microsoft, which a Next link would not follow. rel="nofollow"
+           discourages link preloading — see the same note in site-nav.tsx. */
+        <a className="btn btn-primary" rel="nofollow" href={SIGN_IN_PATH}>
+          Sign in with Microsoft
         </a>
       )}
     </div>

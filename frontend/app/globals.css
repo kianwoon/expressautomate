@@ -152,18 +152,42 @@ h3 { font-size: 1.125rem; letter-spacing: -0.01em; font-weight: 650; }
 /* The hero's auth-dependent primary button. Same device as .nav-auth: the slot
    is laid out at build time and only revealed once useAuth() has answered, so
    the label can be corrected without a flash or a reflow. min-width fits the
-   wider of the two labels ("Request early access"), so the secondary button
+   wider of the two labels ("Sign in with Microsoft"), so the secondary button
    beside it never moves. */
-.hero-cta { display: flex; min-width: 196px; min-height: 44px; }
+.hero-cta { display: flex; min-width: 214px; min-height: 44px; }
 .hero-cta[data-resolved="no"] { visibility: hidden; }
 
 /* ---- layout ---- */
 section { padding: 88px 0; }
-.hero { padding: 96px 0 72px; background: linear-gradient(180deg, #f7fbff 0%, #ffffff 100%); }
+.hero { padding: 88px 0 64px; background: linear-gradient(180deg, #f7fbff 0%, #ffffff 100%); }
 .alt { background: var(--surface-alt); border-block: 1px solid var(--line); }
 
 .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 28px; }
+.grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 22px; }
 .split { display: grid; grid-template-columns: 1.05fr 0.95fr; gap: 56px; align-items: center; }
+
+/* The hero is a claim beside a demonstration of it. The visual column is the
+   narrower one: it is evidence for the sentence, not the point itself. */
+.hero-grid { display: grid; grid-template-columns: 0.92fr 1.08fr; gap: 44px; align-items: center; }
+
+/* A centred section head, for the sections that introduce a grid of equals
+   rather than argue left-to-right. */
+.head-center { text-align: center; max-width: 46ch; margin: 0 auto; }
+
+/* The bar of plain claims under the hero: the three objections a recruitment
+   agency raises before reading any further. */
+.trustbar {
+  display: flex; flex-wrap: wrap; justify-content: center; align-items: center;
+  gap: 8px 28px;
+  border: 1px solid var(--line); border-radius: 14px;
+  background: var(--surface); padding: 14px 22px;
+}
+.trust-item {
+  display: flex; align-items: center; gap: 9px;
+  font-size: 0.875rem; font-weight: 550; color: var(--ink-700);
+}
+.trust-item svg { color: var(--blue-600); flex: none; }
+.trust-sep { width: 1px; align-self: stretch; background: var(--line); }
 
 .card {
   background: var(--surface);
@@ -223,25 +247,104 @@ section { padding: 88px 0; }
 .row-k { color: var(--ink-500); font-size: 0.8125rem; text-transform: uppercase; letter-spacing: 0.06em; padding-top: 2px; }
 .muted { color: var(--ink-300); font-style: italic; }
 
-/* ---- form ---- */
-.signup { display: flex; gap: 10px; flex-wrap: wrap; max-width: 460px; }
-.input {
-  flex: 1; min-width: 220px; font: inherit; font-size: 0.9375rem;
-  padding: 11px 14px; border: 1px solid var(--line);
-  border-radius: var(--radius); background: var(--surface); color: inherit;
+/* The demo's closing strip: what the record is *for*. Kept out of .rows so it
+   reads as a verdict on the extraction rather than another extracted field. */
+.demo-foot {
+  border-top: 1px solid var(--line); background: #f2fbf9;
+  padding: 11px 18px; font-size: 0.8125rem; font-weight: 600; color: var(--teal-500);
+  display: flex; align-items: center; gap: 8px;
 }
-.input:focus { outline: 2px solid var(--blue-500); outline-offset: 1px; border-color: transparent; }
-.note { font-size: 0.875rem; margin-top: 12px; min-height: 22px; }
-.note[data-state="ok"] { color: var(--teal-500); }
-.note[data-state="error"] { color: #b4342a; }
+.pill {
+  font-size: 0.75rem; font-weight: 650; padding: 3px 10px; border-radius: 999px;
+  background: #e7f7f4; color: var(--teal-500);
+}
+/* A confidence score is the one extracted value that is about the extraction
+   itself, so it gets a meter rather than a text row.
+   display: block is load-bearing — this is a <span> inside a row value, and an
+   inline box ignores height and overflow, which would collapse the fill to
+   nothing. */
+.meter {
+  display: block; width: 100%; height: 6px; margin: 4px 0 6px;
+  border-radius: 999px; background: var(--surface-alt); overflow: hidden;
+}
+.meter > span { display: block; height: 100%; background: var(--brand-gradient); }
+
+/* ---- hero mock ---- */
+/* Two stacked panels showing the same email before and after extraction. The
+   arrow between them is decorative and hidden from assistive tech; the panels
+   carry the meaning. */
+.mock-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; align-items: start; position: relative; }
+.mock {
+  border: 1px solid var(--line); border-radius: 14px; background: var(--surface);
+  box-shadow: 0 18px 40px -28px rgba(11, 18, 32, 0.5);
+  overflow: hidden;
+}
+.mock-head {
+  display: flex; align-items: center; gap: 9px; justify-content: space-between;
+  padding: 12px 14px; border-bottom: 1px solid var(--line);
+  font-size: 0.8125rem; font-weight: 650;
+}
+.mock-head-l { display: flex; align-items: center; gap: 9px; }
+.mock-badge {
+  width: 22px; height: 22px; border-radius: 6px; flex: none;
+  background: var(--brand-gradient); color: #fff;
+  display: grid; place-items: center; font-size: 0.6875rem; font-weight: 700;
+}
+.mock-body { padding: 14px; font-size: 0.8125rem; color: var(--ink-700); }
+.mock-meta { display: grid; grid-template-columns: 54px minmax(0, 1fr); gap: 4px 10px; margin-bottom: 12px; }
+.mock-meta dt { color: var(--ink-500); }
+.mock-meta dd { overflow-wrap: anywhere; }
+.mock-list { list-style: none; display: grid; gap: 5px; margin: 10px 0; }
+.mock-list li { padding-left: 14px; position: relative; }
+.mock-list li::before { content: "•"; position: absolute; left: 2px; color: var(--ink-300); }
+.mock-arrow {
+  position: absolute; left: 50%; top: 44%; transform: translate(-50%, -50%);
+  color: var(--blue-500); background: var(--surface);
+  border: 1px solid var(--line); border-radius: 999px; padding: 4px;
+  display: grid; place-items: center;
+}
+.mock .rows { margin-top: 0; }
+.mock .row:first-child { border-top: none; }
+/* Half the width of the "How it works" demo, so the shared .row track sizes
+   have to give: a 130px key column would leave the value nothing to wrap in. */
+.mock .row {
+  grid-template-columns: minmax(64px, 88px) minmax(0, 1fr);
+  gap: 10px; padding: 7px 0; font-size: 0.8125rem;
+}
+.mock .row-k { font-size: 0.6875rem; letter-spacing: 0.05em; }
 
 footer { border-top: 1px solid var(--line); padding: 40px 0; color: var(--ink-500); font-size: 0.875rem; }
 .footer-inner { display: flex; gap: 20px; flex-wrap: wrap; justify-content: space-between; align-items: center; }
+.footer-links { display: flex; gap: 24px; flex-wrap: wrap; }
+.footer-links a:hover { color: var(--ink-900); }
+
+@media (max-width: 980px) {
+  /* Below this the two mock panels are too narrow to read side by side, so
+     they stack and the arrow between them stops making sense. */
+  .mock-pair { grid-template-columns: 1fr; }
+  .mock-arrow { display: none; }
+}
 
 @media (max-width: 860px) {
   section { padding: 56px 0; }
   .hero { padding: 56px 0 40px; }
-  .grid-3, .split { grid-template-columns: 1fr; gap: 24px; }
+  .grid-3, .grid-4, .split, .hero-grid { grid-template-columns: 1fr; gap: 24px; }
   .nav-links a:not(.btn) { display: none; }
   .nav-who { display: none; }
+  .trust-sep { display: none; }
+}
+
+@media (max-width: 1080px) and (min-width: 861px) {
+  .grid-4 { grid-template-columns: repeat(2, 1fr); }
+}
+
+/* On a phone the nav is only the wordmark and one button, and at 375px those
+   two together are wider than the screen — the button was being cut off. The
+   strapline is the part that can go: it repeats the page's own eyebrow, and
+   the mark plus wordmark still identify the site. */
+@media (max-width: 560px) {
+  .nav-inner { gap: 12px; padding: 12px 18px; }
+  .brand-tag { display: none; }
+  .brand-name { font-size: 1rem; }
+  .nav-auth { min-width: 0; }
 }

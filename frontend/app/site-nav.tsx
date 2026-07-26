@@ -10,6 +10,7 @@ import { Logo } from "./logo";
 const SECTION_LINKS = [
   { href: "/#what", label: "What it does" },
   { href: "/#how", label: "How it works" },
+  { href: "/#features", label: "What you can do" },
   { href: "/#security", label: "Security" },
 ] as const;
 
