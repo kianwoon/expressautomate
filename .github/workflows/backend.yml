@@ -168,7 +168,13 @@ jobs:
     needs: [plan, test, build]
     runs-on: ubuntu-latest
     steps:
+      # Full history: the default shallow clone has no parent commits, so
+      # `git diff <before> <sha>` cannot resolve its base. That silently sent
+      # every run down the "deploy both services" fallback, which is why the
+      # per-service scoping never actually took effect.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       # With run-level cancellation disabled on main, a slow older run could
       # otherwise deploy after a newer commit already shipped.
