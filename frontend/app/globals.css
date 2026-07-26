@@ -28,7 +28,18 @@
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
-html { scroll-behavior: smooth; }
+html {
+  scroll-behavior: smooth;
+  /* Stops iOS Safari inflating text in landscape, which breaks the layout in
+     ways that never show up on a desktop browser at the same width. */
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+/* The nav is sticky, so an in-page jump would otherwise land with the heading
+   hidden behind it. Clears the two-row mobile nav (104px), which is the taller
+   of the two cases. */
+:target { scroll-margin-top: 112px; }
 
 body {
   font-family: var(--font-sans);
@@ -92,8 +103,16 @@ h3 { font-size: 1.125rem; letter-spacing: -0.01em; font-weight: 650; }
   gap: 28px;
 }
 .nav-links { display: flex; gap: 24px; margin-left: auto; align-items: center; }
-.nav-links a { font-size: 0.9375rem; color: var(--ink-700); }
+.nav-links a {
+  font-size: 0.9375rem; color: var(--ink-700);
+  /* A nav link is a finger target, not just text: pad it to the 44px minimum
+     rather than leaving a 22px-tall strip to aim at. */
+  display: inline-flex; align-items: center; min-height: 44px;
+}
 .nav-links a:hover { color: var(--ink-900); }
+/* Without a section-link row the auth corner has nothing pushing it right. */
+.nav-links + .nav-auth { margin-left: 24px; }
+.nav-inner > .nav-auth:nth-child(2) { margin-left: auto; }
 
 /* The auth-dependent corner. min-height/min-width keep the nav the same size
    in every state, so correcting from signed-out to signed-in cannot reflow it;
@@ -117,7 +136,7 @@ h3 { font-size: 1.125rem; letter-spacing: -0.01em; font-weight: 650; }
   white-space: nowrap;
 }
 
-.brand { display: flex; align-items: center; gap: 10px; }
+.brand { display: flex; align-items: center; gap: 10px; min-height: 44px; }
 .brand-name { font-size: 1.125rem; font-weight: 700; letter-spacing: -0.02em; }
 .brand-tag {
   display: block;
@@ -368,15 +387,64 @@ footer { border-top: 1px solid var(--line); padding: 40px 0; color: var(--ink-50
 
 @media (max-width: 860px) {
   section { padding: 56px 0; }
-  .hero { padding: 56px 0 40px; }
+  .hero { padding: 40px 0 40px; }
   .grid-3, .grid-4, .split, .hero-grid { grid-template-columns: 1fr; gap: 24px; }
-  .nav-links a:not(.btn) { display: none; }
   .nav-who { display: none; }
   .trust-sep { display: none; }
+
+  /* The section links used to be display:none here, which left a phone with
+     no way to reach any section but the top — the one device where scrolling
+     past four screens to find "Security" is most expensive. Instead the nav
+     wraps: wordmark and sign-in stay on the first row, and the links become a
+     full-width strip below that scrolls sideways if they do not fit.
+     Horizontal scroll inside a bounded strip is fine; horizontal scroll of
+     the page is what we avoid, and this cannot cause it. */
+  /* Two sticky rows would otherwise hold ~130px of a 844px screen for the
+     whole scroll. Everything here is bought back from padding, not from tap
+     targets, which stay at 44px. */
+  .nav-inner { flex-wrap: wrap; gap: 0 12px; padding: 6px 16px; }
+  /* Out-specifies the desktop `.nav-links + .nav-auth` gap rule, whose 24px
+     is what pushed the button onto a third row at 320px. */
+  .nav-inner .nav-links + .nav-auth { margin-left: auto; }
+  .nav-auth { margin-left: auto; min-height: 0; }
+  .nav-auth .btn { padding: 9px 16px; }
+  /* Two rows of nav eat a real share of an 844px-tall screen, so the mark
+     shrinks to buy the link strip its height back. */
+  .brand svg { width: 32px; height: 32px; }
+  .nav-links {
+    order: 3; flex-basis: 100%; margin-left: 0; gap: 20px;
+    overflow-x: auto; overscroll-behavior-x: contain;
+    scrollbar-width: none; -webkit-overflow-scrolling: touch;
+    border-top: 1px solid var(--line); margin-top: 2px;
+  }
+  .nav-links::-webkit-scrollbar { display: none; }
+  .nav-links a { min-height: 44px; white-space: nowrap; font-size: 0.875rem; }
+
+  /* The two demo panels are illustrations of real records; at 13px — and 10px
+     for the field labels — they stop being legible and become texture. */
+  .mock-body, .demo-body, .mock-head, .connector { font-size: 0.875rem; }
+  .mock .row, .row { font-size: 0.875rem; }
+  .row-k, .mock .row-k { font-size: 0.75rem; }
+  .connector-detail { font-size: 0.8125rem; }
+
+  /* Footer links were a 22px-tall row of small text sitting 20px apart. */
+  .footer-inner { gap: 8px 20px; }
+  .footer-links { gap: 4px 20px; }
+  .footer-links a { display: inline-flex; align-items: center; min-height: 44px; }
 }
 
 @media (max-width: 1080px) and (min-width: 861px) {
   .grid-4 { grid-template-columns: repeat(2, 1fr); }
+}
+
+/* Tablet and small-laptop widths, signed in. The section links still show
+   here, and the identity text beside "Sign out" is what tips the row over:
+   measured at 880px it squeezed to 70px — an ellipsis, not a name — and
+   pushed the links onto a second line. The name is a nicety and the sign-out
+   button is not, so the name goes first. It is still on the dashboard, where
+   there are no section links competing for the row. */
+@media (max-width: 1050px) and (min-width: 861px) {
+  .nav-who { display: none; }
 }
 
 /* On a phone the nav is only the wordmark and one button, and at 375px those
@@ -384,8 +452,18 @@ footer { border-top: 1px solid var(--line); padding: 40px 0; color: var(--ink-50
    strapline is the part that can go: it repeats the page's own eyebrow, and
    the mark plus wordmark still identify the site. */
 @media (max-width: 560px) {
-  .nav-inner { gap: 12px; padding: 12px 18px; }
   .brand-tag { display: none; }
   .brand-name { font-size: 1rem; }
   .nav-auth { min-width: 0; }
+}
+
+/* At 320px the wordmark and the sign-in button together are wider than the
+   screen, so the button wrapped to a third row and the sticky nav grew to
+   147px. Shrinking the wordmark keeps them on one row; hiding it entirely
+   would be cheaper still, but the mark alone does not identify the site to a
+   first-time visitor. */
+@media (max-width: 400px) {
+  .nav-inner { padding: 6px 12px; }
+  .brand-name { font-size: 0.875rem; }
+  .brand { gap: 8px; }
 }

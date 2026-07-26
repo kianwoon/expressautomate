@@ -62,34 +62,40 @@ export function SiteNav({ sectionLinks = false }: { sectionLinks?: boolean }) {
             <span className="brand-tag">AI recruitment operations</span>
           </span>
         </a>
-        <div className="nav-links">
-          {sectionLinks &&
-            SECTION_LINKS.map((l) => (
+        {/* Section links and the auth corner are siblings rather than nested,
+            so a phone can put them on separate rows: the auth button stays
+            beside the wordmark and the links become their own scrollable
+            strip underneath. Nested, the links could only be hidden. */}
+        {sectionLinks && (
+          <div className="nav-links">
+            {SECTION_LINKS.map((l) => (
               <a href={l.href} key={l.href}>
                 {l.label}
               </a>
             ))}
-          <div
-            className="nav-auth"
-            data-resolved={resolved ? "yes" : "no"}
-            aria-live="polite"
-            aria-busy={!resolved}
-          >
-            {auth.status === "signed-in" ? (
-              <>
-                <span className="nav-who" title={auth.me.user.email}>
-                  {displayNameOf(auth.me)}
-                </span>
-                <button
-                  className="btn btn-secondary"
-                  type="button"
-                  onClick={signOut}
-                  disabled={signingOut}
-                >
-                  {signingOut ? "Signing out…" : "Sign out"}
-                </button>
-              </>
-            ) : (
+          </div>
+        )}
+        <div
+          className="nav-auth"
+          data-resolved={resolved ? "yes" : "no"}
+          aria-live="polite"
+          aria-busy={!resolved}
+        >
+          {auth.status === "signed-in" ? (
+            <>
+              <span className="nav-who" title={auth.me.user.email}>
+                {displayNameOf(auth.me)}
+              </span>
+              <button
+                className="btn btn-secondary"
+                type="button"
+                onClick={signOut}
+                disabled={signingOut}
+              >
+                {signingOut ? "Signing out…" : "Sign out"}
+              </button>
+            </>
+          ) : (
               /* A full page load, not a client route: the API answers with a
                  redirect to Microsoft, which a Next link would not follow.
 
@@ -99,11 +105,10 @@ export function SiteNav({ sectionLinks = false }: { sectionLinks?: boolean }) {
                  reliably disables preloading in every browser and setting, so
                  the backend keeps one cookie per flow (app/api/auth.py) and
                  stays correct even when two /login calls race. */
-              <a className="btn btn-primary" rel="nofollow" href={SIGN_IN_PATH}>
-                Sign in
-              </a>
-            )}
-          </div>
+            <a className="btn btn-primary" rel="nofollow" href={SIGN_IN_PATH}>
+              Sign in
+            </a>
+          )}
         </div>
       </div>
     </nav>
