@@ -28,10 +28,17 @@ dev = [
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+# Alembic writes these; reformatting them only creates diff noise.
+extend-exclude = ["alembic/versions"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+# The engine in app.db.session is module-level, so its pooled asyncpg
+# connections bind to whichever loop first opened them. A per-test loop would
+# leave them stranded ("Event loop is closed") — every test shares one loop.
+asyncio_default_test_loop_scope = "session"
+asyncio_default_fixture_loop_scope = "session"
 testpaths = ["tests"]

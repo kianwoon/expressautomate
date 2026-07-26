@@ -73,6 +73,20 @@ curl localhost:8000/health/db
 
 ## Verified 2026-07-27
 
-- `alembic upgrade head` → `alembic_version`, `tenants`, `users` created
+- `alembic upgrade head` → `alembic_version`, `tenants`, `users` created,
+  `users_tenant_id_fkey` present with `ON DELETE CASCADE`
 - `GET /health` → `{"status":"ok","env":"development"}`
 - `GET /health/db` → `{"status":"ok","database":"expressautomate"}`
+- `uv run pytest` → 5 passed · `uv run ruff check .` → clean
+
+## Known follow-ups
+
+- **Row-level security is not yet in place.** `tenant_id` + the FK are the only
+  isolation today. RLS policies (§18, §30) should land before the first
+  business tables (emails, opportunities) are created — retrofitting them
+  across a populated schema is far more work.
+- **TLS to Postgres is encrypt-without-verify.** Koyeb's server certificate is
+  not in the system trust store, so `sslmode=require` maps to `CERT_NONE`.
+  Pin Koyeb's CA and move to `verify-full` before production traffic.
+- Tests run against the shared `expressautomate` database and clean up after
+  themselves. Give CI its own database before running them concurrently.

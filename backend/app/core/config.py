@@ -10,7 +10,7 @@ from functools import lru_cache
 from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from pydantic import Field, PostgresDsn, field_validator
+from pydantic import PostgresDsn, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -29,6 +29,7 @@ class Settings(BaseSettings):
 
     # --- App ---
     APP_ENV: str = "development"
+    SQL_ECHO: bool = False
     APP_SECRET_KEY: str
     TOKEN_ENCRYPTION_KEY: str
     FRONTEND_ORIGIN: str
