@@ -30,6 +30,12 @@ class Settings(BaseSettings):
     # --- App ---
     APP_ENV: str = "development"
     SQL_ECHO: bool = False
+    # Koyeb strips the matched route prefix before forwarding, so a request to
+    # https://expressautomate.app/api/early-access arrives here as
+    # /early-access. Routes are therefore declared unprefixed, and root_path
+    # tells FastAPI the public prefix so /docs and openapi.json emit correct
+    # URLs. Empty locally, where nothing sits in front.
+    API_ROOT_PATH: str = ""
     APP_SECRET_KEY: str
     TOKEN_ENCRYPTION_KEY: str
     FRONTEND_ORIGIN: str

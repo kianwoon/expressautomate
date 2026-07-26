@@ -39,6 +39,8 @@ app = FastAPI(
     description="AI recruitment intelligence & operations platform",
     version="0.1.0",
     lifespan=lifespan,
+    # Public prefix stripped by Koyeb's router — see settings.API_ROOT_PATH.
+    root_path=settings.API_ROOT_PATH,
 )
 
 app.add_middleware(
@@ -55,7 +57,7 @@ class EarlyAccessRequest(BaseModel):
     source: str = Field(default="landing", max_length=64)
 
 
-@app.post("/api/early-access", status_code=201)
+@app.post("/early-access", status_code=201)
 async def early_access(payload: EarlyAccessRequest) -> dict[str, str]:
     """Record a landing-page signup.
 
