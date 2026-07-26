@@ -43,13 +43,23 @@ def microsoft_configured(monkeypatch) -> None:
     Without this the routes 503 wherever `MS_CLIENT_ID` / `MS_CLIENT_SECRET`
     are absent, which passes on a developer machine — the repo-root `.env`
     holds real credentials — and fails in CI, where it must not depend on them.
+
+    Unconditional, not `settings.X or <default>`: falling back only when unset
+    would leave the dev machine running the suite under different values from
+    CI, which is the whole failure mode this exists to remove. Nothing here
+    reaches MSAL — `begin_login` and `complete_login` are both patched — so the
+    real credentials are never needed.
     """
-    monkeypatch.setattr(settings, "MS_CLIENT_ID", settings.MS_CLIENT_ID or "test-client-id")
-    monkeypatch.setattr(settings, "MS_CLIENT_SECRET", settings.MS_CLIENT_SECRET or "test-secret")
+    monkeypatch.setattr(settings, "MS_CLIENT_ID", "test-client-id")
+    monkeypatch.setattr(settings, "MS_CLIENT_SECRET", "test-secret")
+    monkeypatch.setattr(settings, "MS_TENANT_ID", "common")
     monkeypatch.setattr(
-        settings,
-        "MS_REDIRECT_URI",
-        settings.MS_REDIRECT_URI or "https://testserver/api/auth/microsoft/callback",
+        settings, "MS_REDIRECT_URI", "https://testserver/api/auth/microsoft/callback"
+    )
+    # Unset in CI, so the reserved-scope filter would otherwise be tested
+    # against an empty list — vacuously true.
+    monkeypatch.setattr(
+        settings, "MS_GRAPH_SCOPES", "openid profile email User.Read Mail.Read offline_access"
     )
 
 
@@ -289,13 +299,18 @@ async def test_a_replayed_callback_is_a_400(client, monkeypatch, cleanup) -> Non
 
 def test_a_placeholder_encryption_key_is_not_a_real_fernet_key() -> None:
     """In production such a key is refused; CI's placeholder still derives one."""
+    # Literals, never settings: a developer .env holds a genuine key, so
+    # asserting on the configured value passes in CI and fails on their machine.
     assert not crypto._is_real_fernet_key("changeme")
-    assert not crypto._is_real_fernet_key(settings.TOKEN_ENCRYPTION_KEY)
+    assert not crypto._is_real_fernet_key("ci-not-a-real-key")
     assert crypto._is_real_fernet_key(Fernet.generate_key().decode())
 
 
 def test_production_refuses_a_derived_encryption_key(monkeypatch) -> None:
     monkeypatch.setattr(settings, "APP_ENV", "production")
+    # Pin the key too — otherwise a developer .env supplies a real one and the
+    # first half of this test, which asserts production refuses it, cannot fire.
+    monkeypatch.setattr(settings, "TOKEN_ENCRYPTION_KEY", "not-a-real-fernet-key")
     crypto._fernet.cache_clear()
     try:
         with pytest.raises(RuntimeError, match="url-safe base64 Fernet key"):
@@ -344,7 +359,10 @@ async def test_callback_without_a_flow_cookie_is_rejected(client) -> None:
 
 async def test_reserved_scopes_are_not_passed_to_msal() -> None:
     """MSAL adds openid/profile/offline_access itself and errors if given them."""
-    assert not {"openid", "profile", "offline_access"} & set(ms_auth.delegated_scopes())
+    scopes = set(ms_auth.delegated_scopes())
+    # Assert what survives too, or an empty list would satisfy the filter check.
+    assert {"User.Read", "Mail.Read"} <= scopes
+    assert not {"openid", "profile", "offline_access"} & scopes
 
 
 async def test_login_is_503_when_microsoft_is_not_configured(client, monkeypatch) -> None:
