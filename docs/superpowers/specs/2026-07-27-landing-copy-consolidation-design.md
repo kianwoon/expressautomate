@@ -82,12 +82,17 @@ the planned ones are styled down rather than hidden.
 
 ## Success criteria
 
-1. "email"/"mail"/"inbox" drops from about fifteen uses to six, and every
-   remaining one does real work: one in the hero lede (naming the silos the
-   data is scattered across — that is the problem statement, not positioning),
-   two in "how it works" (the setup instruction and the Outlook connector's own
-   detail line), three in security (`Mail.Read`, "cannot send mail", "the
-   original email is never discarded"). None of them frames the product.
+1. "email"/"mail"/"inbox" drops from about fifteen uses to seven in visible
+   copy, and every remaining one does real work: one in the hero lede (naming
+   the silos the data is scattered across — that is the problem statement, not
+   positioning), two in "how it works" (the setup instruction and the Outlook
+   connector's own detail line), and four in security ("We cannot send mail",
+   `Mail.Read`, "cannot send, modify or delete email", "the original email is
+   never discarded"). None of them frames the product.
+
+   Counted as occurrences in the rendered copy. A DOM sweep by element returns
+   six, because two of the security uses sit in one paragraph — worth knowing
+   before re-checking this number and thinking it moved.
 2. No sentence claims a capability that does not exist today.
 3. `next build` and `eslint --max-warnings=0` pass; no horizontal overflow at
    375/768/1024/1440px.
