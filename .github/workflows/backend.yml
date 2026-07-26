@@ -176,17 +176,17 @@ jobs:
             echo "stale=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          # Only a NEWER commit touching the backend supersedes this deploy. A
+          # Only a NEWER commit touching the app supersedes this deploy. A
           # bare "origin/main moved" check skipped whenever an unrelated
           # commit landed mid-build — and because the paths filter means no
           # further run is triggered, that deploy was never retried. It
           # happened: a frontend change sat undeployed until fixed by hand.
           CHANGED=$(git diff --name-only "$GITHUB_SHA" "$HEAD_SHA" -- backend/ frontend/ Dockerfile .github/workflows/backend.yml .github/scripts/)
           if [ -n "$CHANGED" ]; then
-            echo "origin/main is now $HEAD_SHA and changes the backend; this run is stale."
+            echo "origin/main is now $HEAD_SHA and changes the app; this run is stale."
             echo "stale=true" >> "$GITHUB_OUTPUT"
           else
-            echo "origin/main moved to $HEAD_SHA but the backend is unchanged; deploying."
+            echo "origin/main moved to $HEAD_SHA but the app is unchanged; deploying."
             echo "stale=false" >> "$GITHUB_OUTPUT"
           fi
 
