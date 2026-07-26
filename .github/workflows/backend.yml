@@ -22,7 +22,16 @@ concurrency:
   # `alembic upgrade head` and the service rollout.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+env:
+  IMAGE: ghcr.io/kianwoon/expressautomate-api
+  KOYEB_REGISTRY_SECRET: ghcr-expressautomate
+  API_SERVICE_ID: 4a352e28-a0dc-4ae8-bda1-9b13c0605b27
+  WORKER_SERVICE_ID: e1423408-7877-43bd-ad6f-182f0e6f2ddd
+
 jobs:
+  # Tests and the image build are independent, so they run concurrently: the
+  # critical path is the slower of the two, not their sum. Neither result
+  # reaches Koyeb unless both pass.
   test:
     runs-on: ubuntu-latest
 
@@ -73,9 +82,36 @@ jobs:
           uv run alembic upgrade head
           uv run pytest -q
 
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+
+      # Authenticate as the PAT, not GITHUB_TOKEN: a package created by
+      # GITHUB_TOKEN is readable only by that ephemeral token, so Koyeb could
+      # never pull it.
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ secrets.GHCR_USERNAME }}
+          password: ${{ secrets.GHCR_PAT }}
+
+      # GHA layer caching is the point of the whole exercise — Koyeb rebuilt
+      # from scratch on every deploy, this reuses unchanged layers.
+      - uses: docker/build-push-action@v6
+        with:
+          context: backend
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:latest
+            ${{ env.IMAGE }}:sha-${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
   deploy:
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    needs: [test]
+    needs: [test, build]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -114,31 +150,16 @@ jobs:
           uv sync --frozen
           uv run alembic upgrade head
 
-      # Koyeb builds the Dockerfile from an uploaded archive. A prebuilt GHCR
-      # image would be faster, but needs a PAT with write:packages —
-      # .github/scripts/deploy_koyeb.py is ready for that switch. See
-      # docs/setup.md.
-      - name: Install Koyeb CLI
-        if: steps.freshness.outputs.stale == 'false'
-        env:
-          KOYEB_CLI_VERSION: v5.10.1
-        run: |
-          curl -fsSL "https://github.com/koyeb/koyeb-cli/releases/download/${KOYEB_CLI_VERSION}/koyeb-cli_${KOYEB_CLI_VERSION#v}_linux_amd64.tar.gz" -o /tmp/koyeb.tar.gz
-          tar -xzf /tmp/koyeb.tar.gz -C /tmp koyeb
-          install -m 0755 /tmp/koyeb /usr/local/bin/koyeb
-
+      # Point both services at the image built above. Koyeb pulls a finished,
+      # layer-cached image instead of rebuilding from an uploaded archive. No
+      # CLI download either, so nothing pipes an upstream script into a shell
+      # in a step holding production credentials.
       - name: Deploy api + worker
         if: steps.freshness.outputs.stale == 'false'
         env:
           KOYEB_TOKEN: ${{ secrets.KOYEB_TOKEN }}
-        run: |
-          set -euo pipefail
-          koyeb deploy ./backend expressautomate/api \
-            --archive-builder docker --archive-docker-dockerfile Dockerfile \
-            --token "$KOYEB_TOKEN"
-          koyeb deploy ./backend expressautomate/worker \
-            --archive-builder docker --archive-docker-dockerfile Dockerfile \
-            --archive-docker-command python \
-            --archive-docker-args -u --archive-docker-args -m \
-            --archive-docker-args app.workers.main \
-            --token "$KOYEB_TOKEN"
+          IMAGE: ${{ env.IMAGE }}
+          KOYEB_REGISTRY_SECRET: ${{ env.KOYEB_REGISTRY_SECRET }}
+          API_SERVICE_ID: ${{ env.API_SERVICE_ID }}
+          WORKER_SERVICE_ID: ${{ env.WORKER_SERVICE_ID }}
+        run: python3 .github/scripts/deploy_koyeb.py
