@@ -210,7 +210,7 @@ Authorised redirect URI: `https://expressautomate.app/auth/google/callback`
 Nothing in Stage 2 can be built without this, and only you can create it.
 
 1. Azure Portal → **Microsoft Entra ID** → **App registrations** → **New registration**
-2. Name `expressautomate.app`; supported accounts: **Accounts in any organizational directory** (multi-tenant — each agency is a tenant)
+2. Name `expressautomate.app`; supported accounts: **Accounts in any organizational directory and personal Microsoft accounts** (`AzureADandPersonalMicrosoftAccount`, with `api.requestedAccessTokenVersion: 2`). Work/school sign-ins make each agency a tenant; personal accounts (outlook.com, hotmail.com, live.com) all report one shared MSA tenant GUID, so each of those users gets a private tenant derived from their own `oid` — see `_tenant_for` in `backend/app/api/auth.py`. `MS_TENANT_ID=common` accordingly.
 3. Redirect URI (Web): `http://localhost:8000/auth/microsoft/callback`
 4. **Certificates & secrets** → new client secret → copy the *Value*
 5. **API permissions** → Microsoft Graph → *Delegated* → add exactly:

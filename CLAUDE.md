@@ -56,6 +56,13 @@ Users sign in with **Microsoft or Google** (decided 2026-07-27; amends plan
 A Google-only user therefore has nothing to ingest. Onboarding must say so
 rather than showing an empty dashboard.
 
+**Both work/school and personal Microsoft accounts sign in** (decided
+2026-07-27; `MS_TENANT_ID=common`). Every personal account reports the same
+MSA tenant GUID, so it is never used as a tenant key: `_tenant_for` in
+`app/api/auth.py` gives each such user a private tenant derived as a UUIDv5
+over their `oid`, flagged `tenants.is_personal_account`. Work accounts still
+key on `tid`, so colleagues share one agency tenant.
+
 ## Deploy
 
 `backend/**` and `frontend/**` deploy independently — see `.github/workflows/`.

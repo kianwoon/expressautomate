@@ -52,6 +52,11 @@ class Settings(BaseSettings):
     # --- Microsoft Entra ID / Graph ---
     MS_CLIENT_ID: str = ""
     MS_CLIENT_SECRET: str = ""
+    # `common`, deliberately: it admits work/school *and* personal Microsoft
+    # accounts, both of which can sign in. Personal accounts all report one
+    # shared MSA tenant GUID, so they are never keyed on it — `_tenant_for` in
+    # app/api/auth.py derives a private per-user tenant from the `oid` claim
+    # instead, which is what keeps them from reading each other's rows.
     MS_TENANT_ID: str = "common"
     MS_REDIRECT_URI: str = ""
     MS_GRAPH_SCOPES: str = ""
