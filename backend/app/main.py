@@ -47,6 +47,23 @@ app.add_middleware(
 )
 
 
+@app.get("/")
+async def root() -> dict[str, str | bool]:
+    """Service descriptor.
+
+    The apex currently serves the API, not the marketing site — hitting it in a
+    browser otherwise returns a bare FastAPI 404, which reads like an outage.
+    The frontend takes this route over once it exists.
+    """
+    return {
+        "service": "expressautomate.app",
+        "status": "ok",
+        "frontend_deployed": False,
+        "docs": "/docs",
+        "health": "/health",
+    }
+
+
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok", "env": settings.APP_ENV}

@@ -93,7 +93,14 @@ async def verify_rls_enforced() -> None:
                     FROM pg_class c
                     JOIN pg_namespace n ON n.oid = c.relnamespace
                     WHERE n.nspname = 'public'
-                      AND c.relkind = 'r'
+                      -- Not just ordinary tables ('r'): a partitioned parent
+                      -- ('p') carries its own RLS, and views/matviews ('v','m')
+                      -- run with their owner's rights — koyeb-adm, which has
+                      -- BYPASSRLS — so any view over `users` granted to this
+                      -- role would return every agency's rows, and a matview
+                      -- cannot carry a policy at all. Flagging them means such
+                      -- an object must be explicitly revoked to ship.
+                      AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
                       AND has_table_privilege(current_user, c.oid, 'SELECT')
                       AND NOT (c.relrowsecurity AND c.relforcerowsecurity)
                     ORDER BY c.relname

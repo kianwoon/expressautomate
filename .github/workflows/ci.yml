@@ -75,10 +75,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      # Pinned to a tag, not master. These steps hold DATABASE_ADMIN_URL and
+      # KOYEB_TOKEN, so piping an unpinned upstream script into a shell would
+      # let any change to that script run with production credentials.
       - name: Install Koyeb CLI
+        env:
+          KOYEB_CLI_VERSION: v5.10.1
         run: |
-          curl -fsSL https://raw.githubusercontent.com/koyeb/koyeb-cli/master/install.sh | sh
-          echo "$HOME/.koyeb/bin" >> "$GITHUB_PATH"
+          curl -fsSL "https://github.com/koyeb/koyeb-cli/releases/download/${KOYEB_CLI_VERSION}/koyeb-cli_${KOYEB_CLI_VERSION#v}_linux_amd64.tar.gz" \
+            -o /tmp/koyeb.tar.gz
+          tar -xzf /tmp/koyeb.tar.gz -C /tmp koyeb
+          install -m 0755 /tmp/koyeb /usr/local/bin/koyeb
+          koyeb version
 
       - name: Migrate the production database
         # Runs before the new image serves traffic. Migrations must be
@@ -92,8 +104,6 @@ jobs:
           TOKEN_ENCRYPTION_KEY: ${{ secrets.TOKEN_ENCRYPTION_KEY }}
           FRONTEND_ORIGIN: ${{ secrets.FRONTEND_ORIGIN }}
         run: |
-          curl -LsSf https://astral.sh/uv/install.sh | sh
-          export PATH="$HOME/.local/bin:$PATH"
           uv sync --frozen
           uv run alembic upgrade head
 

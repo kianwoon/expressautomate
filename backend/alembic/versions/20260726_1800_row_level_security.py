@@ -59,7 +59,10 @@ def upgrade() -> None:
     verb = "ALTER" if exists else "CREATE"
     op.execute(f"{verb} ROLE {quoted_role} WITH LOGIN PASSWORD {literal_pw} NOBYPASSRLS")
 
-    op.execute(f"GRANT CONNECT ON DATABASE expressautomate TO {quoted_role}")
+    # Database name comes from the connection, never a literal — CI, local and
+    # production all run this migration against differently-named databases.
+    db_name = conn.execute(sa.text("SELECT quote_ident(current_database())")).scalar_one()
+    op.execute(f"GRANT CONNECT ON DATABASE {db_name} TO {quoted_role}")
     op.execute(f"GRANT USAGE ON SCHEMA public TO {quoted_role}")
     op.execute(
         f"GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO {quoted_role}"
@@ -102,6 +105,8 @@ def upgrade() -> None:
 def downgrade() -> None:
     role = settings.DATABASE_APP_ROLE
     quoted_role = f'"{role}"'
+    conn = op.get_bind()
+    db_name = conn.execute(sa.text("SELECT quote_ident(current_database())")).scalar_one()
 
     for table, _ in PROTECTED:
         op.execute(f"DROP POLICY IF EXISTS tenant_isolation ON {table}")

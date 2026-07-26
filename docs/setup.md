@@ -148,6 +148,19 @@ curl localhost:8000/health/db
 - `GET /health/db` → `{"status":"ok","database":"expressautomate"}`
 - `uv run pytest` → 5 passed · `uv run ruff check .` → clean
 
+## What RLS does and does not protect
+
+Row-level security guards against **application bugs** — a missing `WHERE
+tenant_id = ...`, a mis-scoped join, a handler that forgets to set the tenant.
+Those are the realistic failure modes and RLS makes them return zero rows
+instead of another agency's data.
+
+It does **not** protect against **credential theft**. Anyone holding the
+`expressautomate_app` password can call `set_config('app.tenant_id', <any
+uuid>)` and read every tenant. The controls that matter there are secret
+management, network exposure, and rotation — not the policy. Treat
+`DATABASE_URL` with the same care as `DATABASE_ADMIN_URL`.
+
 ## Known follow-ups
 
 - **Row-level security is not yet in place.** `tenant_id` + the FK are the only

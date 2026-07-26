@@ -25,21 +25,40 @@ from app.db.session import engine
 _LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", "postgres", "db"}
 
 
+def remote_hosts(*urls: str) -> list[str]:
+    """Return the hosts among `urls` that are not obviously disposable.
+
+    Pure and total so both branches are unit-testable — CI only ever exercises
+    the passing path, so the refusal itself would otherwise never be tested.
+    """
+    seen: list[str] = []
+    for url in urls:
+        host = (urlsplit(url).hostname or "").lower()
+        if host and host not in _LOCAL_HOSTS and host not in seen:
+            seen.append(host)
+    return seen
+
+
 def _refuse_to_run_against_a_remote_database() -> None:
-    """Abort collection if the configured database is not obviously disposable.
+    """Abort collection if any configured database is not obviously disposable.
 
     These tests INSERT and DELETE in `tenants` and `users`, and the schema-level
     ones use the admin role, which bypasses RLS. Pointed at a live database that
     is exactly a data-loss bug — and it already happened once, stranding test
     fixtures in production before this guard existed.
+
+    Both URLs are checked. The admin URL is the dangerous one: it drives
+    `AdminSessionLocal` below and bypasses RLS, so guarding only DATABASE_URL
+    would still let a local-app-URL / production-admin-URL combination delete
+    real rows.
     """
-    host = (urlsplit(str(settings.DATABASE_URL)).hostname or "").lower()
-    if host in _LOCAL_HOSTS:
+    offenders = remote_hosts(str(settings.DATABASE_URL), settings.alembic_url)
+    if not offenders:
         return
     raise RuntimeError(
-        f"Refusing to run the test suite against database host {host!r}.\n"
+        f"Refusing to run the test suite against database host(s): {', '.join(offenders)}.\n"
         "The suite writes and deletes rows and uses the RLS-bypassing admin role.\n"
-        "Point DATABASE_URL and DATABASE_ADMIN_URL at a local or CI Postgres "
+        "Point BOTH DATABASE_URL and DATABASE_ADMIN_URL at a local or CI Postgres "
         "(see docs/setup.md), e.g.:\n"
         "  docker run --rm -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres "
         "-e POSTGRES_DB=expressautomate --name ea-test-db postgres:16"
