@@ -187,8 +187,13 @@ jobs:
             --docker-args -u --docker-args -m --docker-args app.workers.main \
             --token "$KOYEB_TOKEN"
 
+      # api is updated before worker, so a worker failure leaves them briefly
+      # on different builds. Tolerable because migrations run first and must be
+      # backward-compatible with the running image anyway; re-running the
+      # workflow reconciles them.
+      #
       # The CLI returns before the rollout finishes, so confirm the image
-      # actually landed rather than trusting the exit code.
+      # actually landed AND became healthy rather than trusting the exit code.
       - name: Verify deploy landed
         if: steps.freshness.outputs.stale == 'false'
         env:

@@ -1,5 +1,22 @@
 #!/usr/bin/env python3
-"""Point Koyeb services at a freshly built image.
+"""RETIRED — not on the deploy path. Do not re-enable without reading this.
+
+Deploys go through `koyeb service update --docker` in
+.github/workflows/backend.yml. This script drives the raw API instead, and
+**that approach silently fails**: `PATCH /v1/services/{id}` with a full
+definition returns 2xx and leaves the image unchanged. Observed twice in
+production — the deploy logged success while Koyeb kept serving the previous
+build. Polling for over a minute did not help; it is not a race.
+
+Kept only because `build_payload` documents the definition shape (run config
+lives inside the source block; PATCH merges, so sources must be nulled
+explicitly, not omitted) and is covered by
+backend/tests/test_deploy_payload.py. Treat it as reference, not as a
+deployment mechanism.
+
+Original description follows.
+
+Point Koyeb services at a freshly built image.
 
 Reads the service's *current* deployment definition and swaps only the source,
 rather than PATCHing a bare `{"definition": {"docker": ...}}`. A partial

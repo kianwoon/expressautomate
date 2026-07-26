@@ -1,10 +1,15 @@
-"""Tests for the Koyeb deploy payload transform.
+"""Tests for the RETIRED Koyeb deploy payload transform.
 
-This script is dormant — it runs only once image-based deploys are switched on,
-which is exactly when nobody will be watching it closely. A review found three
-defects in it while it sat unused: a missing `type` discriminator, a
-short-circuit that left a second source block in the payload, and empty-string
-run values that would blank the worker's command. These pin all three.
+`.github/scripts/deploy_koyeb.py` is **not** on the deploy path. Deploys use
+`koyeb service update --docker`; the raw-API PATCH this transform feeds returns
+2xx and silently leaves the image unchanged, so it was abandoned after it
+shipped a deploy that reported success while production ran the previous build.
+
+These tests are kept because the transform documents hard-won facts about the
+definition shape — run config lives inside the source block, PATCH merges so
+sources must be nulled rather than omitted, and `type` is the service type
+(WEB/WORKER), not a source discriminator. They are not a guard on anything
+that currently deploys.
 """
 
 import importlib.util
