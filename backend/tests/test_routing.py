@@ -65,26 +65,24 @@ def test_root_path_does_not_change_declared_paths() -> None:
     assert "/api/health" not in prefixed.openapi()["paths"]
 
 
-def test_a_prefix_stripped_request_resolves() -> None:
-    """Reproduce production shape: proxy strips '/api', app still answers.
+def test_the_real_app_answers_a_prefix_stripped_request() -> None:
+    """Reproduce production shape against the ACTUAL app.
 
-    This is the case that actually broke — the assertions above are about
-    declaration, this one is about a request resolving.
+    An earlier version of this test built its own inline FastAPI, so it passed
+    whatever main.py declared — useless as a regression guard. It must hit the
+    real `app`, which is what Koyeb serves.
+
+    No `with`: entering TestClient runs the lifespan, which needs a database.
+    A plain request still exercises routing.
     """
-    from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
-    prefixed = FastAPI(root_path="/api")
-
-    @prefixed.get("/health")
-    async def _health() -> dict[str, str]:
-        return {"status": "ok"}
-
-    with TestClient(prefixed) as client:
-        # What Koyeb forwards after stripping.
-        assert client.get("/health").status_code == 200
-        # What a caller types; TestClient applies root_path itself.
-        assert client.get("/api/health").status_code == 200
+    client = TestClient(app)
+    # Exactly what Koyeb forwards after stripping "/api".
+    assert client.get("/health").status_code == 200, (
+        "the app must answer the stripped path; declaring routes with the "
+        "'/api' prefix breaks this"
+    )
 
 
 def test_root_path_is_normalised() -> None:
@@ -92,7 +90,11 @@ def test_root_path_is_normalised() -> None:
     from app.core.config import Settings
 
     def root_path_for(raw: str) -> str:
+        # _env_file=None: without it, unsupplied fields are read from the
+        # repo-root .env, so a developer's local values could fail this test
+        # for reasons that have nothing to do with the prefix.
         return Settings(
+            _env_file=None,
             APP_SECRET_KEY="x",
             TOKEN_ENCRYPTION_KEY="x",
             FRONTEND_ORIGIN="http://localhost:3000",
@@ -103,5 +105,7 @@ def test_root_path_is_normalised() -> None:
     assert root_path_for("/api/") == "/api"
     assert root_path_for("api") == "/api"
     assert root_path_for("/api") == "/api"
+    assert root_path_for("//api") == "/api", "scheme-relative URL would break /docs"
+    assert root_path_for("/api//") == "/api"
     assert root_path_for("") == ""
     assert root_path_for("  ") == ""

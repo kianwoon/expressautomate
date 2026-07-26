@@ -84,12 +84,12 @@ class Settings(BaseSettings):
 
         `/api/` would make the OpenAPI URL `/api//openapi.json`, which the
         proxy strips to `//openapi.json` and nothing serves — routing still
-        works, so only /docs quietly breaks. Normalising removes that trap.
+        works, so only /docs quietly breaks. Stripping both ends also closes
+        `//api`, which a browser reads as a scheme-relative URL to host `api`:
+        the same broken /docs, reached a different way.
         """
-        v = v.strip().rstrip("/")
-        if v and not v.startswith("/"):
-            v = f"/{v}"
-        return v
+        v = v.strip().strip("/")
+        return f"/{v}" if v else ""
 
     @property
     def graph_scopes(self) -> list[str]:
