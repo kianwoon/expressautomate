@@ -68,7 +68,31 @@ Koyeb layer-caches between deploys of the same service, so the archive rebuild
 is much cheaper than a cold build — that was the main wrong assumption in the
 first attempt at speeding this up.
 
-### Faster still — needs a PAT from you
+### Image-based deploys (live)
+
+Actions builds the backend image once with GHA layer caching, pushes it to
+`ghcr.io/kianwoon/expressautomate-api`, and Koyeb pulls it. Test and build run
+concurrently. Measured on `6c7cd42`: **52s** for the whole run — test 28s and
+build 28s in parallel, deploy 20s.
+
+Deployment uses `koyeb service update --docker`, **not** a raw API PATCH. A
+PATCH carrying the full definition returns 2xx and leaves the image unchanged;
+the deploy then reports success while production keeps running the previous
+build. That happened here, silently, and is why every deploy now ends with
+`.github/scripts/verify_koyeb.py` reading the state back and failing if the
+running image is not the one this commit built.
+
+Credentials: `GHCR_PAT` (GitHub Actions secret) pushes; the Koyeb registry
+secret `ghcr-expressautomate` pulls. Both currently hold the `gh` CLI OAuth
+token, which carries `write:packages`.
+
+> **This token is not permanent.** `gh auth logout`, re-authenticating, or
+> revoking the CLI's authorisation invalidates it, and deploys will fail on
+> push (Actions) or pull (Koyeb) with a scopes error. For something durable,
+> create a **classic** PAT with `write:packages` + `read:packages` and set it
+> in both places — see below.
+
+### Replacing the GHCR credential
 
 The remaining win is to stop Koyeb building at all: have Actions build once
 with GHA layer caching, push to GHCR, and PATCH the services to the new image
