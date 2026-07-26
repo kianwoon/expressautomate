@@ -73,9 +73,13 @@ def build_payload(definition: dict, image: str, registry_secret: str) -> dict:
         "image": image,
         "image_registry_secret": registry_secret,
     }
-    # The definition carries an explicit source discriminator; leaving it as
-    # ARCHIVE while sending a docker block is rejected.
-    definition["type"] = "DOCKER"
+    # `type` is the SERVICE type (WEB / WORKER), not a source discriminator —
+    # setting it to "DOCKER" was wrong and Koyeb silently ignored it. The
+    # source is decided by which of archive/git/docker is populated. Explicit
+    # nulls matter: PATCH merges, so simply omitting `archive` leaves the old
+    # archive source in place and the deploy no-ops while reporting success.
+    definition["archive"] = None
+    definition["git"] = None
     return definition
 
 
@@ -120,6 +124,22 @@ def main() -> int:
         _request("PATCH", f"/services/{service_id}", token, {"definition": definition})
         command = definition["docker"].get("command") or "(image default)"
         print(f"{name}: -> {image} | cmd={command} | {len(definition['env'])} env vars preserved")
+
+        # Read back, because PATCH merges and has silently kept the old source
+        # before — the deploy reported success while Koyeb went on rebuilding
+        # from the previous archive. Assert the change actually landed.
+        service = _request("GET", f"/services/{service_id}", token)["service"]
+        applied = _request(
+            "GET", f"/deployments/{service['latest_deployment_id']}", token
+        )["deployment"]["definition"]
+        got = (applied.get("docker") or {}).get("image")
+        if applied.get("archive") or applied.get("git") or got != image:
+            raise SystemExit(
+                f"{name}: deploy did not take. Expected docker image {image}, "
+                f"got image={got!r} archive={bool(applied.get('archive'))} "
+                f"git={bool(applied.get('git'))}."
+            )
+        print(f"{name}: verified running {got}")
     return 0
 
 

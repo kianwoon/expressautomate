@@ -52,8 +52,12 @@ WORKER_DEFINITION = {
 
 def test_source_is_switched_to_docker() -> None:
     out = build_payload(API_DEFINITION, IMAGE, SECRET)
-    assert out["type"] == "DOCKER", "source discriminator must change with the source block"
-    assert "archive" not in out and "git" not in out
+    # `type` is the SERVICE type (WEB/WORKER), not a source discriminator.
+    # Overwriting it with "DOCKER" was silently ignored by Koyeb.
+    assert out["type"] == API_DEFINITION["type"]
+    # Explicit nulls, not omission: PATCH merges, so an omitted `archive`
+    # leaves the old source in place and the deploy no-ops.
+    assert out["archive"] is None and out["git"] is None
     assert out["docker"]["image"] == IMAGE
     assert out["docker"]["image_registry_secret"] == SECRET
 
@@ -86,7 +90,7 @@ def test_every_source_block_is_removed_even_when_several_are_present() -> None:
         "docker": {"image": "stale:tag"},
     }
     out = build_payload(messy, IMAGE, SECRET)
-    assert set(out) & {"archive", "git"} == set()
+    assert out["archive"] is None and out["git"] is None
     assert out["docker"]["image"] == IMAGE, "a stale docker block must not survive"
     assert out["docker"]["command"] == "python", "archive is read before git"
 
