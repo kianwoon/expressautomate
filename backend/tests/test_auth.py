@@ -91,10 +91,10 @@ def token_response(tid: str, oid: str, email: str, name: str = "Rachel Tan") -> 
 
 
 async def sign_in(client: httpx.AsyncClient, monkeypatch, result: dict) -> httpx.Response:
-    login = await client.get("/auth/microsoft/login")
+    login = await client.get("/api/auth/microsoft/login")
     assert login.status_code == 307
     monkeypatch.setattr(ms_auth, "complete_login", lambda flow, params: result)
-    return await client.get("/auth/microsoft/callback", params={"code": "any-code"})
+    return await client.get("/api/auth/microsoft/callback", params={"code": "any-code"})
 
 
 @pytest.fixture
@@ -110,7 +110,7 @@ async def cleanup() -> list[uuid.UUID]:
 
 
 async def test_login_redirects_to_the_microsoft_authorize_endpoint(client) -> None:
-    response = await client.get("/auth/microsoft/login")
+    response = await client.get("/api/auth/microsoft/login")
     assert response.status_code == 307
     assert response.headers["location"].startswith(f"{AUTHORIZE_HOST}/")
     assert "authorize" in response.headers["location"]
@@ -119,7 +119,7 @@ async def test_login_redirects_to_the_microsoft_authorize_endpoint(client) -> No
 
 async def test_login_does_not_leak_the_flow_secrets_into_the_cookie(client) -> None:
     """The cookie is encrypted, not merely signed — the PKCE verifier is secret."""
-    response = await client.get("/auth/microsoft/login")
+    response = await client.get("/api/auth/microsoft/login")
     sealed = response.cookies[auth_api.FLOW_COOKIE]
     assert auth_api._open_flow(sealed)["code_verifier"] not in sealed
 
@@ -291,9 +291,9 @@ async def test_a_replayed_callback_is_a_400(client, monkeypatch, cleanup) -> Non
     def explode(flow: dict, params: dict) -> dict:
         raise ValueError("state mismatch")
 
-    await client.get("/auth/microsoft/login")
+    await client.get("/api/auth/microsoft/login")
     monkeypatch.setattr(ms_auth, "complete_login", explode)
-    response = await client.get("/auth/microsoft/callback", params={"code": "replayed"})
+    response = await client.get("/api/auth/microsoft/callback", params={"code": "replayed"})
     assert response.status_code == 400
 
 
@@ -325,7 +325,7 @@ def test_production_refuses_a_derived_encryption_key(monkeypatch) -> None:
 
 
 async def test_me_is_401_without_a_cookie(client) -> None:
-    assert (await client.get("/auth/me")).status_code == 401
+    assert (await client.get("/api/auth/me")).status_code == 401
 
 
 async def test_me_returns_the_signed_in_user(client, monkeypatch, cleanup) -> None:
@@ -333,7 +333,7 @@ async def test_me_returns_the_signed_in_user(client, monkeypatch, cleanup) -> No
     cleanup.append(uuid.UUID(tid))
     await sign_in(client, monkeypatch, token_response(tid, oid, "rachel@agency-a.sg"))
 
-    body = (await client.get("/auth/me")).json()
+    body = (await client.get("/api/auth/me")).json()
     assert body["email"] == "rachel@agency-a.sg"
     assert body["tenant_id"] == tid
     assert body["role"] == "recruiter"
@@ -344,17 +344,17 @@ async def test_logout_clears_the_session(client, monkeypatch, cleanup) -> None:
     cleanup.append(uuid.UUID(tid))
     await sign_in(client, monkeypatch, token_response(tid, uuid.uuid4().hex, "rachel@agency-a.sg"))
 
-    assert (await client.post("/auth/logout")).status_code == 200
-    assert (await client.get("/auth/me")).status_code == 401
+    assert (await client.post("/api/auth/logout")).status_code == 200
+    assert (await client.get("/api/auth/me")).status_code == 401
 
 
 async def test_me_rejects_a_forged_cookie(client) -> None:
     client.cookies.set(auth_api.SESSION_COOKIE, "not-a-signed-value")
-    assert (await client.get("/auth/me")).status_code == 401
+    assert (await client.get("/api/auth/me")).status_code == 401
 
 
 async def test_callback_without_a_flow_cookie_is_rejected(client) -> None:
-    assert (await client.get("/auth/microsoft/callback", params={"code": "x"})).status_code == 400
+    assert (await client.get("/api/auth/microsoft/callback", params={"code": "x"})).status_code == 400
 
 
 async def test_reserved_scopes_are_not_passed_to_msal() -> None:
@@ -367,4 +367,4 @@ async def test_reserved_scopes_are_not_passed_to_msal() -> None:
 
 async def test_login_is_503_when_microsoft_is_not_configured(client, monkeypatch) -> None:
     monkeypatch.setattr(settings, "MS_CLIENT_ID", "")
-    assert (await client.get("/auth/microsoft/login")).status_code == 503
+    assert (await client.get("/api/auth/microsoft/login")).status_code == 503
