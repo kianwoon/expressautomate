@@ -92,6 +92,17 @@ token, which carries `write:packages`.
 > create a **classic** PAT with `write:packages` + `read:packages` and set it
 > in both places — see below.
 
+### Why `api` and `web` are separate services
+
+Both are Koyeb **type** `WEB` — that only means "accepts HTTP and gets a
+route". `web` is a service *name*. They are two services because frontend and
+backend deploy independently, which needs two images.
+
+They *can* be merged: FastAPI served the landing page before the split. One
+Koyeb service is one image is one deploy unit, so the choice is independent
+deploys **or** one instance, not both. Merging saves an `eco-nano` but makes
+every landing-copy tweak restart the API.
+
 ### Replacing the GHCR credential
 
 The remaining win is to stop Koyeb building at all: have Actions build once
