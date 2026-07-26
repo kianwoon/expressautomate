@@ -35,7 +35,13 @@ class Settings(BaseSettings):
     FRONTEND_ORIGIN: str
 
     # --- Database ---
+    # DATABASE_URL is the runtime connection and MUST use a role without
+    # BYPASSRLS. DATABASE_ADMIN_URL owns the schema and is used only by
+    # Alembic — see app/db/rls.py.
     DATABASE_URL: PostgresDsn
+    DATABASE_ADMIN_URL: PostgresDsn | None = None
+    DATABASE_APP_ROLE: str = "expressautomate_app"
+    DATABASE_APP_PASSWORD: str = ""
 
     # --- Microsoft Entra ID / Graph ---
     MS_CLIENT_ID: str = ""
@@ -75,7 +81,17 @@ class Settings(BaseSettings):
         libpq's `sslmode` query parameter is not an asyncpg kwarg, so it is
         stripped here and re-expressed via `asyncpg_connect_args`.
         """
-        parts = urlsplit(str(self.DATABASE_URL))
+        return self._to_asyncpg(str(self.DATABASE_URL))
+
+    @property
+    def alembic_url(self) -> str:
+        """Migrations run as the schema owner, not the RLS-bound runtime role."""
+        dsn = str(self.DATABASE_ADMIN_URL or self.DATABASE_URL)
+        return self._to_asyncpg(dsn)
+
+    @staticmethod
+    def _to_asyncpg(dsn: str) -> str:
+        parts = urlsplit(dsn)
         query = [(k, v) for k, v in parse_qsl(parts.query) if k not in _LIBPQ_SSL_PARAMS]
         url = urlunsplit(parts._replace(query=urlencode(query)))
         return url.replace("postgresql://", "postgresql+asyncpg://", 1)

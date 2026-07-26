@@ -8,6 +8,7 @@ from sqlalchemy import text
 
 from app.core.config import settings
 from app.core.logging import configure_logging, get_logger
+from app.db.rls import verify_rls_enforced
 from app.db.session import engine
 
 log = get_logger(__name__)
@@ -16,6 +17,9 @@ log = get_logger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     configure_logging()
+    # Refuse to serve if tenant isolation is not actually being enforced —
+    # a silent boot here would mean every query reads every agency's data.
+    await verify_rls_enforced()
     log.info(
         "startup",
         env=settings.APP_ENV,
