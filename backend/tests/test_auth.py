@@ -12,7 +12,7 @@ from urllib.parse import parse_qs, urlparse
 
 import httpx
 import pytest
-from cryptography.fernet import Fernet
+from cryptography.fernet import Fernet, InvalidToken
 from sqlalchemy import text
 
 from app.api import auth as auth_api
@@ -131,10 +131,21 @@ async def test_login_redirects_to_the_microsoft_authorize_endpoint(client) -> No
 
 
 async def test_login_does_not_leak_the_flow_secrets_into_the_cookie(client) -> None:
-    """The cookie is encrypted, not merely signed — the PKCE verifier is secret."""
+    """The cookie is encrypted, not merely signed — the PKCE verifier is secret.
+
+    Asserting only that the verifier is absent as a substring would not catch
+    the regression this guards: a signed-but-unencrypted itsdangerous payload
+    is compressed and base64'd, so the plaintext would not appear literally
+    there either. The real property is that the bytes are unreadable without
+    the key, so that is what is checked.
+    """
     response = await client.get("/api/auth/microsoft/login")
     sealed = response.cookies[auth_api._flow_cookie_name(state_of(response))]
+
     assert auth_api._open_flow(sealed)["code_verifier"] not in sealed
+    # A different key must not open it — proves encryption, not just encoding.
+    with pytest.raises(InvalidToken):
+        Fernet(Fernet.generate_key()).decrypt(sealed.encode())
 
 
 async def test_callback_creates_the_tenant_and_user(client, monkeypatch, cleanup) -> None:
