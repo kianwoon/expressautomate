@@ -68,8 +68,8 @@ arq: fetch_email ──► Graph GET /messages/{id}  (Prefer: IdType="ImmutableI
    ▼
 arq: classify_email ─► cheap model: is this a recruitment job order?
    │                    • recruitment | uncertain → enqueue extract_email
-   │                    • non_recruitment → terminal; body purged after a
-   │                      short retention window (default 7 days)
+   │                    • non_recruitment → status `skipped`; body purged after
+   │                      a short retention window (default 7 days)
    ▼
 arq: extract_email ─► preprocess (HTML→text, §11)
    │                  • LLM fast model, JSON schema (§12, §13)
@@ -95,7 +95,7 @@ failure mode.
 | `renew_subscriptions` | 15 min | Graph message subscriptions have a maximum lifetime (currently 10080 minutes). Read the returned `expirationDateTime` rather than assuming a constant; renew at under 50 % of remaining life; recreate on failure (§8) |
 | `delta_sync` | 10 min | Per-mailbox `deltaLink` walk. Recovers missed notifications and webhook downtime (§9), and updates `source_state` |
 | `rescan_stuck` | 5 min | Re-enqueues any row stalled in a non-terminal status — `pending` older than 5 min, `fetched` / `classifying` / `extracting` older than 15 min |
-| `purge_expired` | daily | Deletes R2 objects and rows past their retention horizon |
+| `purge_expired` | daily | Strips bodies past their retention horizon — see *Retention* for exactly what is deleted |
 
 `rescan_stuck` must sweep every non-terminal status. A worker killed after the
 status flips to `fetched`, or mid-`extracting`, would otherwise strand the row
@@ -117,8 +117,23 @@ Agencies often keep a dedicated `Jobs` or `Client Requirements` folder.
 Monitoring one folder is cheaper and less privacy-invasive than the whole inbox,
 so folder scope is offered at onboarding rather than bolted on later.
 
+**Both scopes resolve to exactly one folder id.** Graph's message delta is
+folder-scoped, so `whole_inbox` is not a distinct mechanism — it resolves to the
+well-known `Inbox` folder at onboarding and is stored as a folder id like any
+other. Subscription resource and delta resource are then derived identically,
+and there is one code path rather than two that look like one. Mail filed into a
+subfolder of Inbox leaves the monitored scope and surfaces as
+`removed_from_folder`, which is why that state exists. Enumerating every folder
+in a mailbox is explicitly not in scope.
+
 **`graph_subscriptions`** — tenant_id, mailbox_id, subscription_id, resource,
-expires_at, last_renewed_at, status, timestamps.
+`client_state`, expires_at, last_renewed_at, status, timestamps.
+
+`client_state` is generated per subscription, not shared. Graph echoes it on
+every notification, and comparing it is the only thing standing between the
+public webhook and anyone who can guess the URL. One global secret makes every
+tenant's notifications forgeable if it ever leaks; a per-subscription random
+value limits the blast radius to one mailbox. Compare in constant time.
 
 `graph_subscriptions` is read **policy-exempt**. Graph notifications are lean —
 a message id and a subscription id, nothing else — and the webhook is
@@ -139,12 +154,21 @@ Three orthogonal state machines, deliberately not collapsed into one column:
 
 ```text
 processing_status   pending → fetched → classifying → extracting →
-                    extracted | no_opportunity | non_recruitment | failed
+                    extracted | no_opportunity | skipped | unfetchable | failed
 
 source_state        present | removed_from_folder | deleted | unknown
 
 classification_status  unknown | recruitment | non_recruitment | uncertain
 ```
+
+The five terminal values of `processing_status` are distinct outcomes, and
+`rescan_stuck` ignores all of them: `extracted` (vacancies written),
+`no_opportunity` (a recruitment email containing no vacancy), `skipped` (the
+classifier said non-recruitment — the pipeline mirror of
+`classification_status = non_recruitment`), `unfetchable` (the message vanished
+before any body was stored), and `failed` (we broke, and it is worth alerting
+on). Collapsing `skipped` or `unfetchable` into `failed` would make the failure
+rate meaningless.
 
 `processing_status` describes *our* pipeline. `source_state` describes the
 mailbox. Conflating them was a bug in revision 1: Graph's message delta is
@@ -217,12 +241,16 @@ Every field preserves the `Not mentioned` distinction (§15): a nullable column
 plus the raw string the model returned. "The model found nothing" and "the model
 was not asked" must stay distinguishable.
 
-**`extractions`** — one row per LLM run: model name, model version, prompt
-version, token counts, latency, raw JSON response. Enough to replay every
-extraction when the prompt improves (§14).
+**`extractions`** — one row per LLM run: tenant_id, **email_message_id**, model
+name, model version, prompt version, token counts, latency, raw JSON response,
+created_at. Keyed on the email, not the opportunity, because a run that finds
+three vacancies is still one run — and a run that finds none must still be
+recorded. Replaying a prompt upgrade appends a row; nothing is updated in place,
+so the extraction history of any email is the ordered set of its rows (§14).
 
-**`extraction_evidence`** — per field: field name, extracted value, the source
-text span, `start_char`, `end_char`, model confidence, and `evidence_valid`.
+**`extraction_evidence`** — extraction_id, **opportunity_id**, field name,
+extracted value, the source text span, `start_char`, `end_char`, model
+confidence, and `evidence_valid`.
 
 **`opportunity_field_overrides`** — opportunity_id, field_name, ai_value,
 human_value, corrected_by, corrected_at. The effective value of a field is
@@ -344,10 +372,16 @@ protection review would accept it.
 
 | Class | Default | Behaviour |
 |---|---|---|
-| Recruitment email source | 24 months, per-tenant configurable | R2 object and body deleted; `email_messages` row and derived `opportunities` retained with provenance metadata |
-| Non-recruitment email source | 7 days, configurable | Body purged; minimal metadata retained so re-notification is deduplicated |
+| Recruitment email source | 24 months, per-tenant configurable | R2 objects deleted, `body_r2_key` / `body_html_r2_key` nulled. The `email_messages` row and derived `opportunities` survive |
+| Non-recruitment email source | 7 days, configurable | R2 objects deleted, keys nulled. The row survives |
 | Mailbox disconnected | — | Subscription deleted, ingestion stops; existing data retained until its own horizon |
-| Tenant deleted | — | All rows and every R2 object under `{tenant_id}/` deleted |
+| Tenant deleted | — | The only case that deletes rows: every row and every R2 object under `{tenant_id}/` |
+
+**`purge_expired` never deletes an `email_messages` row.** It deletes R2 objects
+and nulls the keys. The row is the dedup index entry — delete it and the next
+delta walk re-ingests, re-classifies, and re-pays for an email the system
+already decided about. Only tenant deletion removes rows, and at that point
+there is nothing left to deduplicate against.
 
 Non-recruitment bodies are kept for a short window rather than discarded on the
 spot, because a classifier false negative is otherwise unrecoverable and
@@ -397,7 +431,7 @@ lookback days, initial-sync message cap, and the three retention horizons.
 |---|---|
 | Enqueue fails after DB commit | `rescan_stuck` re-enqueues stalled rows |
 | Graph 429 / 503 on fetch | arq retry honouring `Retry-After`, exponential backoff, max 5 attempts |
-| Message deleted before any body stored (404) | `source_state = deleted`, terminal. The source is genuinely lost; record it rather than hide it |
+| Message deleted before any body stored (404) | `processing_status = unfetchable`, `source_state = deleted`. Terminal, not retried. The source is genuinely lost; record it rather than hide it |
 | Message removed from monitored folder | `source_state = removed_from_folder`. Extracted opportunities remain valid |
 | R2 write fails | Retry. Status flips to `fetched` only after the object lands |
 | Classifier fails or is unsure | Treated as `uncertain` → proceeds to extraction. Failing open costs an LLM call; failing closed loses a job order |
