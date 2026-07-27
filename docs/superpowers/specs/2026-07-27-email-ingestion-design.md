@@ -135,11 +135,25 @@ public webhook and anyone who can guess the URL. One global secret makes every
 tenant's notifications forgeable if it ever leaks; a per-subscription random
 value limits the blast radius to one mailbox. Compare in constant time.
 
-`graph_subscriptions` is read **policy-exempt**. Graph notifications are lean —
-a message id and a subscription id, nothing else — and the webhook is
-unauthenticated, so this table is the only way to learn which tenant a
-notification belongs to. It is the routing table, and the lookup necessarily
-precedes any tenant context.
+`graph_subscriptions` is the routing table: Graph notifications are lean — a
+message id and a subscription id, nothing else — and the webhook is
+unauthenticated, so this is the only way to learn which tenant a notification
+belongs to, and the lookup necessarily precedes any tenant context.
+
+It is **not** exempt from RLS. `verify_rls_enforced()` in `app/db/rls.py` fails
+startup for any table the runtime role can read that lacks FORCE ROW LEVEL
+SECURITY, deliberately and by structure rather than by a table allowlist — so an
+exempt table would not boot. The narrow exemption is instead a
+`SECURITY DEFINER` function owned by the migration role:
+
+```sql
+resolve_subscription(subscription_id text)
+  RETURNS TABLE (tenant_id uuid, mailbox_id uuid, client_state text)
+```
+
+The table keeps its policy; one function with one argument and three returned
+columns is the entire pre-tenant surface. A leak there exposes routing ids, not
+mail.
 
 ### Raw layer (§10, §2.3)
 
@@ -297,15 +311,17 @@ The runtime role is RLS-bound and has no `BYPASSRLS`.
 
 Background work has no HTTP request and therefore no session tenant:
 
-1. The webhook (unauthenticated) reads `graph_subscriptions` through a
-   policy-exempt path to map `subscription_id` → tenant, user, mailbox.
-2. Every arq job body runs inside `app/workers/tenant_context.py`, which issues
-   `SET LOCAL` on the tenant GUC for the transaction. Nothing touches a business
-   table outside that wrapper.
+1. The webhook (unauthenticated) calls `resolve_subscription()` to map
+   `subscription_id` → tenant, mailbox, client_state.
+2. Every arq job body runs inside the **existing** `tenant_session()` context
+   manager in `app/db/rls.py`, which sets `app.tenant_id` transaction-locally
+   via `set_config(..., true)`. Nothing touches a business table outside it.
 
-`verify_rls_enforced()` already runs at worker startup
-(`app/workers/main.py:64`); it proves policies exist but never sets context.
-The wrapper supplies it.
+No new tenant-context module is needed — revision 2 proposed
+`app/workers/tenant_context.py` before checking, and `tenant_session()` already
+does exactly this. `verify_rls_enforced()` runs at worker startup
+(`app/workers/main.py:64`); it proves policies exist, and `tenant_session()`
+supplies the context they compare against.
 
 ## Token lifecycle
 
@@ -413,7 +429,7 @@ app/services/ingest/evidence.py      offset verification, quality_state derivati
 app/services/ingest/persist.py       opportunities + extraction + evidence, one transaction
 app/services/retention.py            retention horizons and purge
 app/workers/jobs.py                  arq: fetch_email, classify_email, extract_email
-app/workers/tenant_context.py        SET LOCAL tenant GUC wrapper
+app/db/rls.py                        (exists) tenant_session() — reused, not rebuilt
 app/models/{mailbox,graph_subscription,email_message,opportunity,extraction}.py
 ```
 
