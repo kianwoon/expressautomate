@@ -75,6 +75,10 @@ class Settings(BaseSettings):
     # Used only when Graph throttles without a parseable Retry-After. It sends
     # one nearly always; this keeps the absence from becoming an exception.
     GRAPH_DEFAULT_RETRY_AFTER_SECONDS: float = 10.0
+    # The notification endpoint is unauthenticated and public. Without a bound,
+    # one request could demand a database round trip per element for as long as
+    # the caller cared to make the list. Graph's own batches are far smaller.
+    GRAPH_MAX_NOTIFICATIONS_PER_REQUEST: int = 200
 
     # --- Google sign-in (identity only — no Gmail scope; see docs/setup.md) ---
     GOOGLE_CLIENT_ID: str = ""

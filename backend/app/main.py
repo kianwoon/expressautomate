@@ -10,7 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import insert, text
 
-from app.api import auth
+from app.api import auth, graph_webhook
 from app.core.config import settings
 from app.core.logging import configure_logging, get_logger
 from app.db.rls import verify_rls_enforced
@@ -61,6 +61,7 @@ app.add_middleware(
 )
 
 api.include_router(auth.router)
+api.include_router(graph_webhook.router)
 
 
 class EarlyAccessRequest(BaseModel):
