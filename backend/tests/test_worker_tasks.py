@@ -45,16 +45,34 @@ async def tenant(admin_session):
 
 
 async def _add_mailbox(session, tenant_id, *, status="active", ms_user_id=None):
-    mailbox_id = uuid.uuid4()
+    """A mailbox as onboarding actually creates one.
+
+    An owner and a start date are both set, because the sweeps filter on them:
+    a helper leaving them NULL would make every backfill assertion below pass
+    for the wrong reason.
+
+    allow-hardcode: SQL fixture data, not matching logic.
+    """
+    mailbox_id, user_id = uuid.uuid4(), uuid.uuid4()
+    await session.execute(
+        text(
+            "INSERT INTO users (id, tenant_id, email, role)"
+            " VALUES (:id, :tenant, :email, 'member')"
+        ),
+        {"id": user_id, "tenant": tenant_id, "email": f"u-{user_id.hex[:8]}@example.com"},
+    )
     await session.execute(
         text(
             "INSERT INTO mailboxes"
-            " (id, tenant_id, ms_user_id, folder_id, scope, status, retention_months)"
-            " VALUES (:id, :tenant, :user, 'inbox', 'folder', :status, 24)"
+            " (id, tenant_id, user_id, ms_user_id, folder_id, scope, status,"
+            "  retention_months, initial_sync_from)"
+            " VALUES (:id, :tenant, :owner, :user, 'inbox', 'folder', :status, 24,"
+            "         now() - interval '3 days')"
         ),
         {
             "id": mailbox_id,
             "tenant": tenant_id,
+            "owner": user_id,
             "user": ms_user_id or f"ms-{mailbox_id.hex[:8]}",
             "status": status,
         },
@@ -549,6 +567,31 @@ async def test_a_mailbox_we_cannot_read_is_not_backfilled(
 ):
     """Walking it needs a working grant, so it would fail every hour."""
     await _add_mailbox(admin_session, tenant, status=status)
+    await admin_session.commit()
+
+    assert await tasks.ensure_backfills() == 0
+
+
+async def test_a_mailbox_with_no_start_date_is_not_swept(admin_session, tenant, queued):
+    """Found in production. `backfill_mailbox_job` returns early without
+    setting `backfill_completed_at` when there is no window to walk, so an
+    unfiltered sweep re-enqueues the same row on every tick, forever."""
+    mailbox_id = await _add_mailbox(admin_session, tenant)
+    await admin_session.execute(
+        text("UPDATE mailboxes SET initial_sync_from = NULL WHERE id = :id"),
+        {"id": mailbox_id},
+    )
+    await admin_session.commit()
+
+    assert await tasks.ensure_backfills() == 0
+
+
+async def test_a_mailbox_with_no_owner_is_not_swept(admin_session, tenant, queued):
+    """No owner, no grant to walk with. It needs reconnecting, not retrying."""
+    mailbox_id = await _add_mailbox(admin_session, tenant)
+    await admin_session.execute(
+        text("UPDATE mailboxes SET user_id = NULL WHERE id = :id"), {"id": mailbox_id}
+    )
     await admin_session.commit()
 
     assert await tasks.ensure_backfills() == 0

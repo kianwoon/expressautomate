@@ -310,7 +310,12 @@ MS_WEBHOOK_NOTIFICATION_URL=https://expressautomate.app/api/graph/notifications
 MS_WEBHOOK_LIFECYCLE_URL=https://expressautomate.app/api/graph/lifecycle
 ```
 
-### 4. Create the `arq` Koyeb service
+### 4. Create the `arq` Koyeb service — done 2026-07-27
+
+Created as `0822002c-1024-4eb7-816e-25b75adf721c` and wired into
+`ARQ_SERVICE_ID`. On first start it drained a 443-second backlog of jobs that
+had been queued with no consumer. The rest of this section is kept for whoever
+has to recreate it.
 
 `koyeb service update` cannot create a service, so this one must be made by
 hand once — the deploy step then keeps it on the current image. No route, no

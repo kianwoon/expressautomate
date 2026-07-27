@@ -31,11 +31,7 @@ env:
   KOYEB_REGISTRY_SECRET: ghcr-expressautomate
   API_SERVICE_ID: 4a352e28-a0dc-4ae8-bda1-9b13c0605b27
   WORKER_SERVICE_ID: e1423408-7877-43bd-ad6f-182f0e6f2ddd
-  # Fill in once the arq service exists (see docs/setup.md §4). Until then arq
-  # is deployed on every backend change without the already-on-target
-  # short-circuit, and is left out of the post-deploy verification — both
-  # degrade safely, and the run says so rather than pretending.
-  ARQ_SERVICE_ID: ""
+  ARQ_SERVICE_ID: 0822002c-1024-4eb7-816e-25b75adf721c
 
 jobs:
   # The image depends only on backend/, frontend/ and the Dockerfile. Tagging by
