@@ -1,5 +1,7 @@
 "use client";
 
+import { useEffect, useState } from "react";
+
 import type { Me } from "../auth";
 import { when } from "./format";
 import type { Counts } from "./opportunities";
@@ -20,9 +22,37 @@ import type { Counts } from "./opportunities";
  * is matched against.
  */
 
+/** Re-render on a timer so the relative time on the sync card stays true. */
+function useTick(seconds: number): void {
+  const [, force] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => force((n) => n + 1), seconds * 1000);
+    return () => clearInterval(id);
+  }, [seconds]);
+}
+
+/**
+ * How long ago, in words.
+ *
+ * Returns null rather than "just now" for an absent timestamp: nothing having
+ * happened and something having happened a moment ago are different facts, and
+ * the card styles an absence differently from a figure.
+ */
+function ago(iso: string | null): string | null {
+  if (!iso) return null;
+  const seconds = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
+  if (seconds < 90) return "Just now";
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes} min ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 48) return `${hours} hr ago`;
+  return `${Math.round(hours / 24)} days ago`;
+}
+
 export function StatCards({ me, counts }: { me: Me; counts: Counts }) {
   const { total, in_progress: inProgress, awaiting_extraction: awaiting } = me.mailbox.ingested;
   const last = when(me.mailbox.last_activity);
+  useTick(30);
 
   return (
     <div className="grid-4 jo-stats">
@@ -30,6 +60,8 @@ export function StatCards({ me, counts }: { me: Me; counts: Counts }) {
         value={total.toLocaleString()}
         label="Emails read"
         sub={range(me) ?? "Nothing read yet"}
+        glyph="mail"
+        accent="blue"
       />
       <Stat
         value={counts.needs_review.toLocaleString()}
@@ -42,6 +74,8 @@ export function StatCards({ me, counts }: { me: Me; counts: Counts }) {
             : "Job orders where the email left too much out"
         }
         tone={counts.needs_review > 0 ? "attention" : undefined}
+        glyph="clock"
+        accent="amber"
       />
       <Stat
         value={counts.all.toLocaleString()}
@@ -55,35 +89,97 @@ export function StatCards({ me, counts }: { me: Me; counts: Counts }) {
               : "Nothing extracted yet"
             : "Listed below"
         }
+        glyph="briefcase"
+        accent="teal"
       />
+      {/* "4 minutes ago" answers the question this card is asked — is any of
+          this current? — which a timestamp makes the reader work out. The
+          exact moment stays underneath, because "recently" is not something
+          to take on trust when a mailbox has stopped.
+
+          It ticks. A relative time rendered once quietly ages into a lie on a
+          page left open, and this is the one card whose entire job is to say
+          whether the data is stale. */}
       <Stat
-        value={last}
+        value={ago(me.mailbox.last_activity)}
         label="Latest sync"
-        sub={last ? "The last thing ingestion did" : "Nothing has happened yet"}
+        sub={last ?? "Nothing has happened yet"}
+        glyph="sync"
+        accent="blue"
       />
     </div>
   );
 }
 
+/**
+ * The four glyphs.
+ *
+ * Line art at one weight, sharing the card's accent colour, so the row reads
+ * as one set of four rather than four unrelated boxes — which is what four
+ * bare numerals in four bare cards looked like. Inline SVG rather than an icon
+ * font: three paths cost less than a webfont request, and nothing here should
+ * render as a missing-glyph box if that request fails.
+ */
+const GLYPH: Record<string, React.ReactNode> = {
+  mail: (
+    <>
+      <rect x="3" y="5" width="18" height="14" rx="2.5" />
+      <path d="m3.6 6.8 7.3 5.2a2 2 0 0 0 2.2 0l7.3-5.2" />
+    </>
+  ),
+  clock: (
+    <>
+      <circle cx="12" cy="12" r="8.5" />
+      <path d="M12 7.4V12l3 1.8" />
+    </>
+  ),
+  briefcase: (
+    <>
+      <rect x="3" y="7.5" width="18" height="12" rx="2.5" />
+      <path d="M9 7.5V6a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v1.5M3 12.5h18" />
+    </>
+  ),
+  sync: (
+    <>
+      <path d="M20 12a8 8 0 1 1-2.6-5.9" />
+      <path d="M20 4.2V9h-4.8" />
+    </>
+  ),
+};
+
 function Stat({
   value,
   label,
   sub,
+  glyph,
+  accent,
   tone,
 }: {
   value: string | null;
   label: string;
   sub: string;
+  glyph: keyof typeof GLYPH;
+  accent: "blue" | "amber" | "teal";
   tone?: "attention";
 }) {
   return (
-    <div className="card jo-stat" data-tone={tone}>
+    <div className="card jo-stat" data-tone={tone} data-accent={accent}>
+      <span className="jo-stat-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor"
+          strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+          {GLYPH[glyph]}
+        </svg>
+      </span>
+      {/* The label comes first in the DOM and reads first on the card. A
+          figure means nothing until you know what it counts, and the previous
+          order made every card a number you had to look underneath to
+          understand. */}
+      <div className="jo-stat-k">{label}</div>
       {/* A null value is an absence, and it is styled as one. The gradient
           numeral is for a figure we actually have. */}
       <div className={value ? "gradient-text jo-stat-v" : "muted jo-stat-v"}>
         {value ?? "Nothing yet"}
       </div>
-      <div className="jo-stat-k">{label}</div>
       <p className="body muted jo-stat-sub">{sub}</p>
     </div>
   );

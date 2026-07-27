@@ -599,10 +599,41 @@ section { padding: 60px 0; }
 /* ---- dashboard workspace ---- */
 .jo-workspace { margin-top: 44px; }
 .jo-stats { margin-bottom: 40px; }
-.jo-stat { display: flex; flex-direction: column; gap: 6px; }
-.jo-stat-v { font-size: 1.75rem; font-weight: 700; line-height: 1.15; overflow-wrap: anywhere; }
-.jo-stat-k { font-weight: 650; }
-.jo-stat-sub { font-size: 0.8125rem; }
+.jo-stat {
+  display: flex; flex-direction: column; gap: 4px;
+  /* A minimum, not a height: the four cards sit on one row and the longest
+     caption used to make its own card taller than its neighbours, which read
+     as a mistake rather than as a longer sentence. */
+  min-height: 148px;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.jo-stat:hover { border-color: var(--ink-300); box-shadow: 0 4px 14px rgba(11, 18, 32, 0.06); }
+/* The glyph sits in its own tinted square rather than floating beside the
+   text: at 18px a line icon on white disappears next to a 2rem numeral, and
+   the wash is what gives each card its colour without tinting the whole
+   surface. */
+.jo-stat-icon {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 34px; height: 34px; border-radius: 9px; margin-bottom: 8px;
+}
+.jo-stat[data-accent="blue"] .jo-stat-icon { background: var(--blue-050); color: var(--blue-600); }
+.jo-stat[data-accent="teal"] .jo-stat-icon { background: var(--teal-050); color: var(--teal-500); }
+.jo-stat[data-accent="amber"] .jo-stat-icon { background: var(--amber-050); color: var(--amber-600); }
+/* The label is the small uppercase key and the figure is the loud part, which
+   is the opposite of how these read before: four large numerals with their
+   meaning in smaller text underneath. */
+.jo-stat-k {
+  font-size: 0.75rem; font-weight: 650; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--ink-500);
+}
+.jo-stat-v {
+  font-size: 2rem; font-weight: 700; line-height: 1.1; overflow-wrap: anywhere;
+  /* The sync card carries words where the others carry a numeral. Letting it
+     set its own smaller size keeps four cards looking like one row instead of
+     three numbers and an outlier wrapping onto two lines. */
+  font-size: clamp(1.4rem, 2.2vw, 2rem);
+}
+.jo-stat-sub { font-size: 0.8125rem; margin-top: 2px; }
 /* The one card that is asking for something gets a left edge, and nothing
    else. A whole card tinted amber reads as an error, which a queue of work
    waiting to be looked at is not. */

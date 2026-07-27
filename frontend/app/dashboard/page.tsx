@@ -8,7 +8,6 @@ import { SiteFooter } from "../site-footer";
 import { SiteNav } from "../site-nav";
 import { AccountDetails } from "./account-details";
 import { ChoosePeriod } from "./choose-period";
-import { plural } from "./format";
 import { JobOrders } from "./job-orders";
 
 /**
@@ -106,12 +105,24 @@ function stageOf(me: Me): Stage {
 function SignedIn({ me }: { me: Me }) {
   const stage = stageOf(me);
 
+  // A running mailbox needs no introduction: the nav already says whose
+  // account this is, and the first stat card already says how much mail was
+  // read, so "Signed in as X" and "We have read N emails" were the same two
+  // facts a second time, occupying the top of the page. The other stages keep
+  // a heading because on those the page IS about the mailbox — there is no
+  // workspace under it to be the subject.
+  const running = stage === "ingesting";
+
   return (
     <>
-      <span className="eyebrow">Your account</span>
-      <h1 style={{ marginTop: 14, fontSize: "clamp(1.75rem, 3.4vw, 2.5rem)" }}>
-        Signed in as <span className="gradient-text">{displayNameOf(me)}</span>
-      </h1>
+      {!running && (
+        <>
+          <span className="eyebrow">Your account</span>
+          <h1 style={{ marginTop: 14, fontSize: "clamp(1.75rem, 3.4vw, 2.5rem)" }}>
+            Signed in as <span className="gradient-text">{displayNameOf(me)}</span>
+          </h1>
+        </>
+      )}
 
       {stage === "ingesting" ? (
         <Ingesting me={me} />
@@ -156,13 +167,18 @@ function SignedIn({ me }: { me: Me }) {
 function Ingesting({ me }: { me: Me }) {
   const { total } = me.mailbox.ingested;
 
+  // Only the empty case says anything. Once mail is arriving, the count is on
+  // the card immediately below and repeating it in a sentence was one fact
+  // taking two rows at the top of the page. An empty mailbox has no card worth
+  // reading, so it keeps its sentence.
+  if (total > 0) return null;
+
   return (
     <p className="lede" style={{ marginTop: 18 }}>
       {/* No delivery-time promise: Microsoft decides when a notification
           arrives, and a stated "minute or two" would be our claim to keep. */}
-      {total === 0
-        ? "Your mailbox is connected and being watched. Nothing has arrived yet — new mail appears here shortly after it reaches Outlook."
-        : `We have read ${plural(total, "email")} from your mailbox.`}
+      Your mailbox is connected and being watched. Nothing has arrived yet — new mail appears here
+      shortly after it reaches Outlook.
     </p>
   );
 }
