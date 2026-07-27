@@ -355,13 +355,19 @@ notifications quietly stopping.
 
 ## Mailbox onboarding (§6.2)
 
-1. User completes Microsoft sign-in with mailbox read scope.
-2. User chooses scope — whole inbox or a specific folder — and where ingestion
-   begins: today, last 3 days, last 7 days, or a custom date.
-3. Insert the `mailboxes` row with `status = active`.
-4. **Create the Graph subscription** and store `subscription_id` plus the
+1. User completes Microsoft sign-in with mailbox read scope. **This stores the
+   token and nothing else** — no mailbox row, no subscription, no backfill.
+2. **Preview.** `GET /api/mailbox/preview` reports the inbox: Graph's
+   `totalItemCount`, the oldest message's date, and a live `$count` per offered
+   window. Every figure is Graph's own; a window Graph refuses to count is
+   offered without a number rather than with a guess.
+3. User chooses where ingestion begins from those windows — *from now on*
+   (import nothing historical, the default), 7 days, 30 days, or the configured
+   lookback cap. `POST /api/mailbox/ingest` carries the answer.
+4. Insert the `mailboxes` row with `status = active`.
+5. **Create the Graph subscription** and store `subscription_id` plus the
    `expirationDateTime` Graph returns.
-5. **Initial sync job:** walk the delta endpoint from `initial_sync_from`,
+6. **Initial sync job:** walk the delta endpoint from `initial_sync_from`,
    inserting `email_messages` at `pending` and enqueueing `fetch_email`. Page to
    the end and store the final `deltaLink`. This is the same code path
    `delta_sync` uses; only the starting point differs.
@@ -377,7 +383,15 @@ default 90 days lookback and 5,000 messages — and the UI must not offer a cust
 date beyond the configured lookback. Whichever limit is hit first stops the walk
 and the mailbox is marked backfilled from that point. Bulk historical import is a
 separate feature with a different mechanism; the onboarding UI must not imply it
-exists.
+exists. `offered_windows()` therefore derives the choices from the configured
+cap rather than listing them, so a period the backfill cannot honour is never
+shown, and `/api/mailbox/ingest` validates against that same list — the cap is
+real, not advisory.
+
+**Folder scope is not yet asked for.** `mailboxes.scope`/`folder_id` already
+carry it and every window is measured against the Inbox, so a folder picker is
+a UI addition later, not a schema change. Mailboxes provisioned before this step
+existed keep the 90-day window they were given; nothing migrates them.
 
 ## Retention (review comment #12)
 

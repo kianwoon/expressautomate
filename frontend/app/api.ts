@@ -39,6 +39,18 @@ export const SWITCH_ACCOUNT_PATH = `${SIGN_IN_PATH}?prompt=select_account`;
  */
 export const CONNECT_MAILBOX_PATH = `${API_BASE}/api/auth/microsoft/connect-mailbox`;
 
+/**
+ * What is in the connected inbox, before any of it is imported.
+ *
+ * Needs the grant, so it can only be asked after consent — which is why the
+ * choice comes second rather than first. Costs a few Graph calls and reads
+ * nothing into our own storage.
+ */
+export const MAILBOX_PREVIEW_PATH = `${API_BASE}/api/mailbox/preview`;
+
+/** POST the chosen period. The only thing that starts ingestion. */
+export const MAILBOX_INGEST_PATH = `${API_BASE}/api/mailbox/ingest`;
+
 /** Who is signed in: 200 with user/tenant/mailbox, or 401 when nobody is. */
 export const ME_PATH = `${API_BASE}/api/auth/me`;
 

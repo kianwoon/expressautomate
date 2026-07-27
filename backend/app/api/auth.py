@@ -27,7 +27,6 @@ from app.core.logging import get_logger
 from app.db.rls import tenant_session
 from app.models import MicrosoftToken, Tenant, User
 from app.services import ms_auth
-from app.workers.queue import enqueue
 
 log = get_logger(__name__)
 router = APIRouter(tags=["auth"])
@@ -602,7 +601,7 @@ _UPSERT_MAILBOX = text(
         (id, tenant_id, user_id, ms_user_id, scope, folder_id,
          initial_sync_from, retention_months)
     VALUES (:id, :tenant_id, :user_id, :ms_user_id, 'whole_inbox', 'inbox',
-            now() - make_interval(days => :lookback_days), :retention_months)
+            :initial_sync_from, :retention_months)
     ON CONFLICT (tenant_id, ms_user_id, folder_id) DO UPDATE SET
         status = 'active',
         user_id = EXCLUDED.user_id
@@ -612,19 +611,24 @@ _UPSERT_MAILBOX = text(
 
 
 async def _provision_mailbox(
-    session, tenant_uuid: uuid.UUID, user_id: uuid.UUID, ms_object_id: str
+    session,
+    tenant_uuid: uuid.UUID,
+    user_id: uuid.UUID,
+    ms_object_id: str,
+    initial_sync_from: datetime,
 ) -> uuid.UUID:
-    """Create — or reactivate — the mailbox this consent was granted for.
+    """Create — or reactivate — a mailbox the user has asked us to read.
 
-    Whole inbox from the configured lookback. The folder picker and a chosen
-    start date belong to the dashboard; defaulting here means a consent always
-    results in ingestion rather than a permission nothing acts on.
+    `initial_sync_from` is the user's answer to "how far back?", passed in
+    rather than defaulted here. Consent alone no longer provisions anything:
+    approving a permission and choosing to import three months of mail are two
+    different decisions, and the second one is theirs to make (§6.2).
 
     Reusing the row on conflict is what makes reconnection work: mail already
     ingested stays attached to it, and flipping `status` back to active is
     exactly what a mailbox coming out of `needs_reauth` needs.
-    `initial_sync_from` is deliberately NOT overwritten — a reconnection should
-    not silently re-walk history the user never asked for again.
+    `initial_sync_from` is deliberately NOT overwritten on conflict — a
+    reconnection should not silently re-walk history again.
     """
     return (
         await session.execute(
@@ -634,7 +638,7 @@ async def _provision_mailbox(
                 "tenant_id": tenant_uuid,
                 "user_id": user_id,
                 "ms_user_id": ms_object_id,
-                "lookback_days": settings.INITIAL_SYNC_MAX_LOOKBACK_DAYS,
+                "initial_sync_from": initial_sync_from,
                 "retention_months": settings.DEFAULT_RETENTION_MONTHS,
             },
         )
@@ -706,36 +710,17 @@ async def _store_mailbox_consent(
             session, result, tenant_uuid, user_id, f"{oid}.{tid}", now, authoritative=True
         )
 
-        mailbox_id = None
-        if _covers_mailbox(result.get("scope")):
-            # The grant is only half of connecting a mailbox — without a row to
-            # ingest into, a subscription to hear about new mail, and a walk
-            # over what is already there, the user has approved a permission
-            # nothing uses (plan §6.2).
-            mailbox_id = await _provision_mailbox(session, tenant_uuid, user_id, oid)
-
-    if mailbox_id is not None:
-        # Queued, not inline: a large mailbox must not hold the browser on the
-        # OAuth redirect. `recreate_subscription` also retires any subscription
-        # left over from a previous connection, so reconnecting is the same
-        # path as connecting.
-        await enqueue(
-            "recreate_subscription",
-            tenant_id=str(tenant_uuid),
-            mailbox_id=str(mailbox_id),
-        )
-        await enqueue(
-            "backfill_mailbox_job",
-            tenant_id=str(tenant_uuid),
-            mailbox_id=str(mailbox_id),
-        )
-
+    # Nothing is provisioned here, on purpose. Consent grants permission to
+    # read the mailbox; it does not say which of it to read. Ingestion starts
+    # only when the user has seen what is in there and chosen a period —
+    # `POST /mailbox/ingest` (§6.2). Until then we hold a token and nothing
+    # else, which is also the state that costs the user nothing if they change
+    # their mind and disconnect.
     log.info(
-        "ms_mailbox_connected",
+        "ms_mailbox_consent_stored",
         tenant_id=str(tenant_uuid),
         user_id=str(user_id),
         granted=_covers_mailbox(result.get("scope")),
-        mailbox_id=str(mailbox_id) if mailbox_id else None,
     )
 
     response = RedirectResponse(_frontend_url(DASHBOARD_PATH))
@@ -817,6 +802,11 @@ async def me(request: Request) -> dict[str, dict]:
             # no mailbox to connect at all.
             "provider": "microsoft",
             "connected": connected,
+            # The grant is in place but the user has not yet said how far back
+            # to read. This is a state of its own, not a half-broken connection:
+            # the dashboard owes them the preview and the chooser, not a
+            # spinner suggesting work is happening (§6.2).
+            "awaiting_period": connected and state is None,
             "scopes": (scope or "").split(),
             # None until a mailbox row exists — signing in alone provisions
             # nothing. `needs_reauth` is the one the UI must not swallow: the

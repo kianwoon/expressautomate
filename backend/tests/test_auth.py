@@ -8,6 +8,7 @@ break silently, so those statements run for real.
 """
 
 import uuid
+from datetime import UTC, datetime, timedelta
 from urllib.parse import parse_qs, quote, urlparse
 
 import httpx
@@ -16,6 +17,7 @@ from cryptography.fernet import Fernet, InvalidToken
 from sqlalchemy import text
 
 from app.api import auth as auth_api
+from app.api import mailbox as mailbox_api
 from app.core import crypto
 from app.core.config import settings
 from app.core.crypto import decrypt
@@ -146,6 +148,23 @@ async def connect_mailbox(
         "/api/auth/microsoft/callback",
         params={"code": "any-code", "state": state_of(start)},
     )
+
+
+async def start_ingestion(
+    client: httpx.AsyncClient, monkeypatch, window: str = "30d"
+) -> httpx.Response:
+    """Choose a period, which is what actually provisions the mailbox.
+
+    Consent no longer does this (§6.2), so every test that needs a mailbox row
+    has to say how far back the user asked to read — the same thing the
+    dashboard makes them say.
+    """
+
+    async def _enqueue(name, **kwargs):
+        return True
+
+    monkeypatch.setattr(mailbox_api, "enqueue", _enqueue)
+    return await client.post("/api/mailbox/ingest", json={"window": window})
 
 
 @pytest.fixture
@@ -502,11 +521,6 @@ async def test_me_reports_a_dead_grant_instead_of_claiming_connected(
     while ingestion had stopped. That is the failure the whole recovery layer
     exists to surface; the dashboard must not hide it.
     """
-    async def _enqueue(name, **kwargs):
-        return True
-
-    monkeypatch.setattr(auth_api, "enqueue", _enqueue)
-
     tid, oid = str(uuid.uuid4()), uuid.uuid4().hex
     cleanup.append(uuid.UUID(tid))
     await sign_in(client, monkeypatch, token_response(tid, oid, "rachel@agency-a.sg"))
@@ -515,6 +529,7 @@ async def test_me_reports_a_dead_grant_instead_of_claiming_connected(
         monkeypatch,
         token_response(tid, oid, "rachel@agency-a.sg", scopes=ms_auth.mailbox_scopes()),
     )
+    await start_ingestion(client, monkeypatch)
 
     async with tenant_session(uuid.UUID(tid)) as session:
         await session.execute(
@@ -534,11 +549,6 @@ async def test_me_counts_only_what_was_actually_ingested(
     A count that came from anywhere but the rows themselves would be the one
     thing this product promises not to do.
     """
-    async def _enqueue(name, **kwargs):
-        return True
-
-    monkeypatch.setattr(auth_api, "enqueue", _enqueue)
-
     tid, oid = str(uuid.uuid4()), uuid.uuid4().hex
     cleanup.append(uuid.UUID(tid))
     await sign_in(client, monkeypatch, token_response(tid, oid, "rachel@agency-a.sg"))
@@ -547,6 +557,7 @@ async def test_me_counts_only_what_was_actually_ingested(
         monkeypatch,
         token_response(tid, oid, "rachel@agency-a.sg", scopes=ms_auth.mailbox_scopes()),
     )
+    await start_ingestion(client, monkeypatch)
 
     before = (await client.get("/api/auth/me")).json()["mailbox"]
     assert before["ingested"] == {"total": 0, "in_progress": 0, "extracted": 0}
@@ -589,11 +600,6 @@ async def test_me_surfaces_the_worst_state_across_several_mailboxes(
     stopped, which is the silence this endpoint exists to break. Whatever needs
     attention outranks whatever is working.
     """
-    async def _enqueue(name, **kwargs):
-        return True
-
-    monkeypatch.setattr(auth_api, "enqueue", _enqueue)
-
     tid, oid = str(uuid.uuid4()), uuid.uuid4().hex
     cleanup.append(uuid.UUID(tid))
     await sign_in(client, monkeypatch, token_response(tid, oid, "rachel@agency-a.sg"))
@@ -602,6 +608,7 @@ async def test_me_surfaces_the_worst_state_across_several_mailboxes(
         monkeypatch,
         token_response(tid, oid, "rachel@agency-a.sg", scopes=ms_auth.mailbox_scopes()),
     )
+    await start_ingestion(client, monkeypatch)
 
     async with tenant_session(uuid.UUID(tid)) as session:
         user_id = (await session.execute(text("SELECT id FROM users"))).scalar_one()
@@ -633,33 +640,56 @@ async def test_me_reports_no_counts_before_a_mailbox_exists(
     assert mailbox["ingested"]["total"] == 0
 
 
-async def test_connecting_a_mailbox_provisions_it_for_ingestion(
+async def test_consent_waits_for_the_user_to_choose_a_period(
     client, monkeypatch, cleanup
 ) -> None:
-    """A grant on its own ingests nothing.
+    """Consent grants permission; it does not choose how much mail to import.
 
-    Without a mailbox row to ingest into, a subscription to hear about new
-    mail, and a walk over what is already there, the user has approved a
-    permission that nothing acts on (plan §6.2).
+    Provisioning here is what used to pull ninety days of someone's mail on the
+    strength of a button they pressed to grant a permission. Now the grant is
+    all that lands, and `/auth/me` says a choice is outstanding (§6.2).
     """
-    queued: list[tuple[str, dict]] = []
-
-    async def _enqueue(name, **kwargs):
-        queued.append((name, kwargs))
-        return True
-
-    monkeypatch.setattr(auth_api, "enqueue", _enqueue)
-
     tid, oid = str(uuid.uuid4()), uuid.uuid4().hex
     cleanup.append(uuid.UUID(tid))
     await sign_in(client, monkeypatch, token_response(tid, oid, "rachel@agency-a.sg"))
-    assert queued == [], "signing in alone provisions nothing"
 
     await connect_mailbox(
         client,
         monkeypatch,
         token_response(tid, oid, "rachel@agency-a.sg", scopes=ms_auth.mailbox_scopes()),
     )
+
+    async with tenant_session(uuid.UUID(tid)) as session:
+        count = (await session.execute(text("SELECT count(*) FROM mailboxes"))).scalar_one()
+    assert count == 0, "consent must not provision a mailbox"
+
+    mailbox = (await client.get("/api/auth/me")).json()["mailbox"]
+    assert mailbox["connected"] is True
+    assert mailbox["awaiting_period"] is True
+    assert mailbox["status"] is None
+
+
+async def test_choosing_a_period_provisions_the_mailbox(client, monkeypatch, cleanup) -> None:
+    """The chosen window is what gets written, and only then does work start."""
+    queued: list[tuple[str, dict]] = []
+
+    async def _enqueue(name, **kwargs):
+        queued.append((name, kwargs))
+        return True
+
+    monkeypatch.setattr(mailbox_api, "enqueue", _enqueue)
+
+    tid, oid = str(uuid.uuid4()), uuid.uuid4().hex
+    cleanup.append(uuid.UUID(tid))
+    await sign_in(client, monkeypatch, token_response(tid, oid, "rachel@agency-a.sg"))
+    await connect_mailbox(
+        client,
+        monkeypatch,
+        token_response(tid, oid, "rachel@agency-a.sg", scopes=ms_auth.mailbox_scopes()),
+    )
+
+    response = await client.post("/api/mailbox/ingest", json={"window": "7d"})
+    assert response.status_code == 200
 
     async with tenant_session(uuid.UUID(tid)) as session:
         row = (
@@ -673,17 +703,20 @@ async def test_connecting_a_mailbox_provisions_it_for_ingestion(
     assert row.ms_user_id == oid
     assert row.scope == "whole_inbox"
     assert row.status == "active"
-    assert row.initial_sync_from is not None
+    # Seven days back, not the 90-day maximum the old default would have used.
+    age = datetime.now(UTC) - row.initial_sync_from
+    assert timedelta(days=6, hours=23) < age < timedelta(days=7, hours=1)
 
-    assert [name for name, _ in queued] == [
-        "recreate_subscription",
-        "backfill_mailbox_job",
-    ]
+    assert [name for name, _ in queued] == ["recreate_subscription", "backfill_mailbox_job"]
     for _, kwargs in queued:
         assert kwargs["tenant_id"] == tid
 
+    # Asked twice, it refuses rather than re-walking history or silently
+    # doing nothing.
+    assert (await client.post("/api/mailbox/ingest", json={"window": "30d"})).status_code == 409
 
-async def test_a_declined_mailbox_permission_provisions_nothing(
+
+async def test_ingestion_is_refused_without_the_mailbox_grant(
     client, monkeypatch, cleanup
 ) -> None:
     """Microsoft can return a token narrower than asked for. Provisioning on
@@ -694,7 +727,7 @@ async def test_a_declined_mailbox_permission_provisions_nothing(
         queued.append((name, kwargs))
         return True
 
-    monkeypatch.setattr(auth_api, "enqueue", _enqueue)
+    monkeypatch.setattr(mailbox_api, "enqueue", _enqueue)
 
     tid, oid = str(uuid.uuid4()), uuid.uuid4().hex
     cleanup.append(uuid.UUID(tid))
@@ -705,6 +738,8 @@ async def test_a_declined_mailbox_permission_provisions_nothing(
         monkeypatch,
         token_response(tid, oid, "rachel@agency-a.sg", scopes=ms_auth.identity_scopes()),
     )
+
+    assert (await client.post("/api/mailbox/ingest", json={"window": "7d"})).status_code == 403
 
     async with tenant_session(uuid.UUID(tid)) as session:
         count = (await session.execute(text("SELECT count(*) FROM mailboxes"))).scalar_one()

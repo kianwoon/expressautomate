@@ -11,6 +11,8 @@ export type Me = {
     provider: string;
     /** The grant. Survives the mailbox going bad, so never show it alone. */
     connected: boolean;
+    /** Granted, but the user has not yet said how far back to read. */
+    awaiting_period: boolean;
     scopes: string[];
     /** null until a mailbox exists; "needs_reauth" is the one to surface. */
     status: "active" | "needs_reauth" | "disconnected" | null;

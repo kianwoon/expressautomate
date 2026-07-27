@@ -81,8 +81,17 @@ class GraphClient:
     async def aclose(self) -> None:
         await self._client.aclose()
 
-    async def get(self, path: str, params: dict | None = None) -> dict:
-        return self._unwrap(await self._client.get(path, params=params))
+    async def get(
+        self, path: str, params: dict | None = None, headers: dict | None = None
+    ) -> dict:
+        """GET, with optional per-request headers.
+
+        `headers` exists for `ConsistencyLevel: eventual`, which Graph requires
+        before it will answer `$count` on a filtered message collection. It is
+        per-request rather than on the client because setting it globally
+        changes the consistency guarantees of every other call.
+        """
+        return self._unwrap(await self._client.get(path, params=params, headers=headers))
 
     async def post(self, path: str, json: dict) -> dict:
         return self._unwrap(await self._client.post(path, json=json))

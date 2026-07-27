@@ -5,6 +5,7 @@ import { useEffect } from "react";
 import { CONNECT_MAILBOX_PATH, LANDING_PATH, SWITCH_ACCOUNT_PATH } from "../api";
 import { displayNameOf, useAuth, type Me } from "../auth";
 import { SiteNav } from "../site-nav";
+import { ChoosePeriod } from "./choose-period";
 
 /**
  * The signed-in shell.
@@ -75,7 +76,7 @@ function Notice({ eyebrow, heading, body }: { eyebrow: string; heading: string; 
 }
 
 /** The states a mailbox can be in, and what each needs from the user. */
-type Stage = "none" | "reconnect" | "starting" | "ingesting";
+type Stage = "none" | "reconnect" | "choose" | "starting" | "ingesting";
 
 function stageOf(me: Me): Stage {
   // `needs_reauth` first: the grant is still on file, so `connected` stays
@@ -87,6 +88,10 @@ function stageOf(me: Me): Stage {
   // seconds. Without it this fell through to "none" and offered Connect to
   // someone who had just connected, inviting them to do it twice.
   if (me.mailbox.status === "active") return "starting";
+  // Permission granted, no mailbox yet: the user still owes us an answer to
+  // "how far back?". This is the step that stops consent from silently
+  // importing three months of someone's mail (§6.2).
+  if (me.mailbox.awaiting_period) return "choose";
   return "none";
 }
 
@@ -104,6 +109,11 @@ function SignedIn({ me }: { me: Me }) {
         <Ingesting me={me} />
       ) : stage === "reconnect" ? (
         <Reconnect />
+      ) : stage === "choose" ? (
+        // Reload rather than patching state locally: `/auth/me` is the only
+        // thing that knows what the backend actually did, and guessing here is
+        // how a dashboard starts disagreeing with the database.
+        <ChoosePeriod onStarted={() => window.location.reload()} />
       ) : stage === "starting" ? (
         <Starting />
       ) : (
@@ -312,6 +322,7 @@ function Row({ k, v, empty = "Not mentioned" }: { k: string; v: string | null; e
 }
 
 function stateLabel(me: Me): string {
+  if (me.mailbox.awaiting_period) return "Waiting for you to choose a period";
   if (me.mailbox.status === null) return "No mailbox connected";
   if (me.mailbox.status === "needs_reauth") return "Needs reconnecting";
   if (me.mailbox.status === "disconnected") return "Disconnected";

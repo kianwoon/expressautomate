@@ -153,37 +153,57 @@ async def access_token_for_mailbox(tenant_id: uuid.UUID, mailbox_id: uuid.UUID) 
             # SET NULL on delete, so nobody is left who can authorise a read.
             raise MailboxNotAuthorised(f"mailbox {mailbox_id} has no owner")
 
-        await session.execute(_LOCK_PER_USER, {"key": f"ms-refresh:{owner}"})
-
-        encrypted = (
-            await session.execute(_GRANT_FOR_USER, {"user_id": owner})
-        ).scalar_one_or_none()
-        if encrypted is None:
-            raise MailboxNotAuthorised(f"no stored grant for mailbox {mailbox_id}")
-
-        result = await asyncio.to_thread(
-            client().acquire_token_by_refresh_token,
-            decrypt(encrypted),
-            # The full mailbox set — identity scopes included. Asking for
-            # only the new permission returns a token narrower than the grant
-            # already held, which is why `mailbox_scopes()` unions them.
-            scopes=mailbox_scopes(),
+        return await _token_for_user(
+            session, tenant_id, owner, absent=f"no stored grant for mailbox {mailbox_id}"
         )
-        if "access_token" not in result:
-            raise MailboxNotAuthorised(
-                result.get("error_description", "refresh token rejected")
-            )
 
-        if result.get("refresh_token"):
-            await store_refresh_token(
-                session,
-                tenant_id=tenant_id,
-                user_id=owner,
-                home_account_id=None,
-                result=result,
-                now=datetime.now(UTC),
-            )
-        return result["access_token"]
+
+async def access_token_for_user(tenant_id: uuid.UUID, user_id: uuid.UUID) -> str:
+    """The same exchange, for a user who has no mailbox row yet.
+
+    The preview step (§6.2) has to read Graph *before* anything is provisioned —
+    that is the whole point of showing someone their inbox before importing it.
+    It shares this path rather than reimplementing it so that the rotation lock,
+    which is the part that is easy to get subtly wrong, has exactly one
+    implementation.
+    """
+    async with tenant_session(tenant_id) as session:
+        return await _token_for_user(
+            session, tenant_id, user_id, absent=f"no stored grant for user {user_id}"
+        )
+
+
+async def _token_for_user(session, tenant_id: uuid.UUID, owner: uuid.UUID, *, absent: str) -> str:
+    """Lock, read, refresh, persist — in that order. See the caller's docstring."""
+    await session.execute(_LOCK_PER_USER, {"key": f"ms-refresh:{owner}"})
+
+    encrypted = (
+        await session.execute(_GRANT_FOR_USER, {"user_id": owner})
+    ).scalar_one_or_none()
+    if encrypted is None:
+        raise MailboxNotAuthorised(absent)
+
+    result = await asyncio.to_thread(
+        client().acquire_token_by_refresh_token,
+        decrypt(encrypted),
+        # The full mailbox set — identity scopes included. Asking for
+        # only the new permission returns a token narrower than the grant
+        # already held, which is why `mailbox_scopes()` unions them.
+        scopes=mailbox_scopes(),
+    )
+    if "access_token" not in result:
+        raise MailboxNotAuthorised(result.get("error_description", "refresh token rejected"))
+
+    if result.get("refresh_token"):
+        await store_refresh_token(
+            session,
+            tenant_id=tenant_id,
+            user_id=owner,
+            home_account_id=None,
+            result=result,
+            now=datetime.now(UTC),
+        )
+    return result["access_token"]
 
 
 async def store_refresh_token(
