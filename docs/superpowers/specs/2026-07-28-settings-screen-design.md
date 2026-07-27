@@ -38,6 +38,20 @@ why adding one is recorded here as a decision rather than made in passing.
 **No test framework.** There is no jest, vitest or playwright. This work adds
 none — see *Testing* below, which says plainly what that costs.
 
+**No shared fetch helper.** `app/api.ts` holds route constants only. Every
+component that talks to the backend repeats the same call shape by hand —
+`credentials: "include"` with an `Accept: application/json` header (see
+`app/auth.ts:71-75`, `app/settings/lookback.tsx:46-50`,
+`app/settings/glossary-data.ts`). The new files follow that existing pattern
+rather than inventing a private one. Extracting a shared helper is worth doing
+and is deliberately **not** done here: it would touch three working files for
+the benefit of a fourth, which belongs in its own change rather than buried in
+a new screen.
+
+Styling is a single global stylesheet, `app/globals.css` — no CSS modules and
+no component library. New markup reuses the existing classes (`eyebrow`,
+`wrap`, `lede`, `btn`) rather than introducing a parallel styling approach.
+
 ## Routes
 
 | Route | Content |
@@ -56,11 +70,17 @@ in exchange for not shipping a redirect that exists only to satisfy symmetry.
 
 A component wrapping `SiteNav`, the sub-nav, the auth guard and `SiteFooter`.
 
-The auth guard currently lives inside `app/settings/page.tsx`: it redirects to
-the landing page on `anonymous`, and distinguishes `unreachable` — where the
-session is untouched and the right advice is to reload — from a real sign-out.
-Three routes would otherwise carry three copies of that reasoning, and copies
-drift. It moves into the shell once.
+The auth guard redirects to the landing page on `anonymous`, and distinguishes
+`unreachable` — where the session is untouched and the right advice is to
+reload — from a real sign-out.
+
+That guard is **already duplicated**: `app/settings/page.tsx:29-31` and
+`app/dashboard/page.tsx:33-35` each carry their own copy today. Adding two more
+settings routes would make four. The shell absorbs the two settings copies; the
+dashboard keeps its own, since it is not a settings route and pulling it in
+would mean inventing a shared layout that spans unrelated screens. That leaves
+two copies rather than four, which is an improvement rather than a fix, and
+saying so is more honest than claiming the duplication is eliminated.
 
 The shell renders the sub-nav for every settings route, so a recruiter can see
 that notifications exist without knowing the URL.
@@ -119,15 +139,19 @@ thing to avoid, hence step 5.
 
 ## Error handling
 
-The shell already distinguishes three states, and the notifications page adds
-a fourth:
+`useAuth()` returns **four** states (`app/auth.ts:54-58`), and the
+notifications page adds a fifth condition of its own:
 
 | State | Behaviour |
 |---|---|
+| `loading` | "Checking your session." Nothing about the mailbox is asserted before the check resolves |
 | `anonymous` | Redirect to the landing page — never straight into a provider redirect; the choice of provider is the user's |
 | `unreachable` | "This is not a sign-in problem — your session is untouched." Reload advice |
 | `signed-in` | Render |
 | `channels.telegram === false` | Render "not configured" instead of a link button that would 503 |
+
+`loading` is easy to forget and its omission is visible: skip it and an
+anonymous visitor sees a flash of signed-in chrome before the redirect fires.
 
 Unlink asks for confirmation. It is reversible — re-linking restores it — but
 silently dropping a destination someone relies on is worse than one extra
