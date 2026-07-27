@@ -167,24 +167,49 @@ async def merge_client(request: Request, client_id: uuid.UUID, body: MergeReques
         # surviving row look newly discovered.
         #
         # A mention cannot simply be repointed with a bare UPDATE: if the
-        # target already has a mention for the same email_message_id (e.g.
-        # the loser was unmerged and re-attached to the same message by a
-        # later reprocess), repointing would collide with
-        # uq_client_mentions_once_per_message. That collision is not an
-        # error — one message mentioning one company only needs one mention
-        # on the surviving client — so the colliding loser mentions are
-        # dropped as redundant evidence and only the non-colliding ones move.
-        target_message_ids = set(
+        # target already has a mention for the same email_message_id, the
+        # repoint would collide with uq_client_mentions_once_per_message
+        # (NULLS NOT DISTINCT, so two NULL-message mentions collide too).
+        #
+        # A real (non-null) message id collision means one message mentioning
+        # one company only needs one mention on the surviving client — the
+        # weaker of the two is redundant and is dropped. Strength is judged
+        # by matched_by first (email_domain is a firmer claim than a
+        # normalised-name match, so it outranks it regardless of confidence),
+        # then by confidence, with NULL confidence ranked as the weakest
+        # score: an unscored match is not evidence that it is at least
+        # middling, and ranking it low avoids letting a missing score beat an
+        # explicit weak one.
+        #
+        # A NULL message id collision is different: the constraint permits
+        # only one NULL-message mention per client, but a NULL id does not
+        # mean "same missing source" — it means the source was retention-
+        # purged, and two purged mentions are two different purged emails.
+        # They are not duplicates of each other and neither is redundant, so
+        # neither is moved or deleted; the loser's NULL-message mention stays
+        # on the loser row exactly as it is. The loser row is not deleted by
+        # a merge (status just becomes `merged`), it stays reachable by id,
+        # and its mentions survive there — "the source is gone" stays true
+        # without ever becoming "this never happened" on either row.
+        def _strength(mention: ClientMention) -> tuple[int, float]:
+            matched_by_rank = {"email_domain": 2, "name": 1}.get(mention.matched_by, 0)
+            confidence_rank = (
+                float(mention.confidence) if mention.confidence is not None else -1.0
+            )
+            return (matched_by_rank, confidence_rank)
+
+        target_mentions = (
             (
                 await session.execute(
-                    select(ClientMention.email_message_id).where(
-                        ClientMention.client_id == body.target_id
-                    )
+                    select(ClientMention).where(ClientMention.client_id == body.target_id)
                 )
             )
             .scalars()
             .all()
         )
+        target_by_message = {
+            m.email_message_id: m for m in target_mentions if m.email_message_id is not None
+        }
         loser_mentions = (
             (
                 await session.execute(
@@ -194,21 +219,38 @@ async def merge_client(request: Request, client_id: uuid.UUID, body: MergeReques
             .scalars()
             .all()
         )
-        movable_ids = [
-            m.id for m in loser_mentions if m.email_message_id not in target_message_ids
-        ]
-        redundant_ids = [
-            m.id for m in loser_mentions if m.email_message_id in target_message_ids
-        ]
+
+        movable_ids = []
+        redundant_loser_ids = []
+        outranked_target_ids = []
+        for m in loser_mentions:
+            if m.email_message_id is None:
+                # Two purged sources, not one duplicated source — leave in place.
+                continue
+            collision = target_by_message.get(m.email_message_id)
+            if collision is None:
+                movable_ids.append(m.id)
+            elif _strength(m) > _strength(collision):
+                outranked_target_ids.append(collision.id)
+                movable_ids.append(m.id)
+            else:
+                redundant_loser_ids.append(m.id)
+
+        if outranked_target_ids:
+            # Free the (client_id, email_message_id) slot before the winning
+            # loser mention is repointed into it below.
+            await session.execute(
+                delete(ClientMention).where(ClientMention.id.in_(outranked_target_ids))
+            )
         if movable_ids:
             await session.execute(
                 update(ClientMention)
                 .where(ClientMention.id.in_(movable_ids))
                 .values(client_id=body.target_id)
             )
-        if redundant_ids:
+        if redundant_loser_ids:
             await session.execute(
-                delete(ClientMention).where(ClientMention.id.in_(redundant_ids))
+                delete(ClientMention).where(ClientMention.id.in_(redundant_loser_ids))
             )
         await session.execute(
             update(Client)

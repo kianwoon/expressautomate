@@ -53,6 +53,8 @@ async def agency_with_clients():
     yield tid, uid, ids
     async with AdminSessionLocal() as s:
         await s.execute(text("DELETE FROM client_mentions WHERE tenant_id = :t"), {"t": tid})
+        await s.execute(text("DELETE FROM email_messages WHERE tenant_id = :t"), {"t": tid})
+        await s.execute(text("DELETE FROM mailboxes WHERE tenant_id = :t"), {"t": tid})
         await s.execute(
             text(
                 "UPDATE clients SET status = 'unconfirmed', merged_into_client_id = NULL "
@@ -113,26 +115,27 @@ async def test_a_client_cannot_be_merged_into_itself(agency_with_clients) -> Non
     assert r.status_code == 400
 
 
-async def test_merge_drops_a_mention_that_collides_on_the_target(agency_with_clients) -> None:
-    """Re-merging after unmerge + reprocess must not 500 on a duplicate mention.
+async def test_merge_keeps_both_null_message_mentions_after_a_collision(
+    agency_with_clients,
+) -> None:
+    """A NULL message id is not a duplicate of another NULL message id.
 
-    A already holds a mention for message M (re-attached after an earlier
-    unmerge). Merging A into B again would try to move that mention onto B,
-    which already has its own mention for M — a unique violation unless the
-    collision is handled deliberately.
+    The unique constraint declares NULLS NOT DISTINCT, so two NULL-message
+    mentions on the *same* client collide with each other — but a NULL id
+    means the source email was retention-purged, and two purged mentions are
+    evidence of two different purged emails, not one email counted twice.
+    Neither may be deleted. Since the constraint forbids moving the loser's
+    NULL mention onto a target that already has one, it must stay put on the
+    loser row, which survives the merge (status becomes `merged`, reachable
+    by id) rather than being deleted.
     """
-    # A NULL email_message_id collides too: the unique constraint declares
-    # NULLS NOT DISTINCT, so two NULL-message mentions on one client already
-    # collide with each other, and the same is true across a merge. This lets
-    # the test reproduce the collision without standing up an email_messages
-    # (and mailboxes) fixture just to get two rows with equal, non-null ids.
     tid, uid, ids = agency_with_clients
     async with AdminSessionLocal() as s:
         # ids['live'] (the merge target) already has a mention with no message.
         await s.execute(
             text(
                 "INSERT INTO client_mentions (id, tenant_id, client_id, email_message_id, "
-                "matched_by) VALUES (:i, :t, :c, NULL, 'email_domain')"
+                "matched_by, confidence) VALUES (:i, :t, :c, NULL, 'name', 0.2)"
             ),
             {"i": uuid.uuid4(), "t": tid, "c": ids["live"]},
         )
@@ -149,7 +152,7 @@ async def test_merge_drops_a_mention_that_collides_on_the_target(agency_with_cli
         await s.execute(
             text(
                 "INSERT INTO client_mentions (id, tenant_id, client_id, email_message_id, "
-                "matched_by) VALUES (:i, :t, :c, NULL, 'email_domain')"
+                "matched_by, confidence) VALUES (:i, :t, :c, NULL, 'email_domain', 0.9)"
             ),
             {"i": uuid.uuid4(), "t": tid, "c": ids["merged"]},
         )
@@ -171,8 +174,90 @@ async def test_merge_drops_a_mention_that_collides_on_the_target(agency_with_cli
                 {"t": tid},
             )
         ).fetchall()
-    # Exactly one no-message mention survives, on the surviving client.
-    assert [row[0] for row in rows] == [ids["live"]]
+    # Both no-message mentions survive: one on each row. No evidence is lost,
+    # even though the stronger (email_domain, 0.9) one stayed on the now-
+    # merged loser rather than moving to the surviving client.
+    assert sorted(row[0] for row in rows) == sorted([ids["live"], ids["merged"]])
+
+
+async def test_merge_keeps_the_stronger_mention_on_a_real_message_collision(
+    agency_with_clients,
+) -> None:
+    """On a genuine same-message collision, the better evidence must win.
+
+    Both clients hold a mention for the same real message id. The loser's
+    mention is the stronger claim (email_domain, high confidence) against the
+    target's weaker one (name, low confidence). The merge must not simply
+    keep whichever happened to already be on the target.
+    """
+    tid, uid, ids = agency_with_clients
+    message_id = uuid.uuid4()
+    mailbox_id = uuid.uuid4()
+    async with AdminSessionLocal() as s:
+        # A real mailboxes row is required for the email_messages FK, and a
+        # real email_messages row is required for the client_mentions FK.
+        await s.execute(
+            text(
+                "INSERT INTO mailboxes (id, tenant_id, ms_user_id, scope, folder_id, "
+                "retention_months) VALUES (:i, :t, :m, 'inbox', 'inbox', 12)"
+            ),
+            {"i": mailbox_id, "t": tid, "m": f"ms-{mailbox_id.hex[:8]}"},
+        )
+        await s.execute(
+            text(
+                "INSERT INTO email_messages (id, tenant_id, mailbox_id, graph_message_id) "
+                "VALUES (:i, :t, :m, :g)"
+            ),
+            {"i": message_id, "t": tid, "m": mailbox_id, "g": f"g{message_id.hex[:8]}"},
+        )
+        # Target holds the weaker mention for this message.
+        await s.execute(
+            text(
+                "INSERT INTO client_mentions (id, tenant_id, client_id, email_message_id, "
+                "matched_by, confidence) VALUES (:i, :t, :c, :m, 'name', 0.2)"
+            ),
+            {"i": uuid.uuid4(), "t": tid, "c": ids["live"], "m": message_id},
+        )
+        await s.execute(
+            text(
+                "UPDATE clients SET status = 'unconfirmed', merged_into_client_id = NULL "
+                "WHERE id = :i"
+            ),
+            {"i": ids["merged"]},
+        )
+        # Loser holds the stronger mention for the same message.
+        loser_mention_id = uuid.uuid4()
+        await s.execute(
+            text(
+                "INSERT INTO client_mentions (id, tenant_id, client_id, email_message_id, "
+                "matched_by, confidence) VALUES (:i, :t, :c, :m, 'email_domain', 0.9)"
+            ),
+            {"i": loser_mention_id, "t": tid, "c": ids["merged"], "m": message_id},
+        )
+        await s.commit()
+
+    async with await _client_for(tid, uid) as http:
+        r = await http.post(
+            f"/api/clients/{ids['merged']}/merge", json={"target_id": str(ids["live"])}
+        )
+    assert r.status_code == 200
+
+    async with AdminSessionLocal() as s:
+        rows = (
+            await s.execute(
+                text(
+                    "SELECT id, client_id, matched_by, confidence FROM client_mentions "
+                    "WHERE tenant_id = :t AND email_message_id = :m"
+                ),
+                {"t": tid, "m": message_id},
+            )
+        ).fetchall()
+    # Exactly one mention for this message survives: the stronger one, now on
+    # the surviving client — not the target's original weaker row.
+    assert len(rows) == 1
+    assert rows[0][0] == loser_mention_id
+    assert rows[0][1] == ids["live"]
+    assert rows[0][2] == "email_domain"
 
 
 async def test_unmerge_refuses_when_the_domain_was_reclaimed(agency_with_clients) -> None:
