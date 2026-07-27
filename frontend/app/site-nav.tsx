@@ -227,7 +227,6 @@ function AccountMenu({
         type="button"
         aria-expanded={open}
         aria-controls={panelId}
-        title={email}
         onClick={() => setOpen((wasOpen) => !wasOpen)}
       >
         <span className="nav-who">{name}</span>
@@ -240,6 +239,13 @@ function AccountMenu({
           invisible menu. */}
       {open && (
         <div className="nav-menu-panel card" id={panelId}>
+          {/* The address lives here rather than in a `title` on the trigger.
+              A native tooltip appears under the cursor after a second —
+              directly over the path from the trigger to these items, on the
+              way to clicking one — and it is unreachable by keyboard and on
+              touch. In the panel it is simply visible whenever the menu is
+              open, which is when knowing which account this is matters. */}
+          <p className="nav-menu-who">{email}</p>
           <a className="nav-menu-item" href={SETTINGS_PATH}>
             Settings
           </a>

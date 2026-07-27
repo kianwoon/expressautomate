@@ -174,6 +174,23 @@ h3 { font-size: 1.125rem; letter-spacing: -0.01em; font-weight: 650; }
 .nav-menu-caret { font-size: 0.6875rem; color: var(--ink-500); flex: none; }
 .nav-menu-trigger[aria-expanded="true"] { background: var(--surface-alt); }
 
+/* The panel bridges its own gap.
+   `top: calc(100% + 8px)` leaves 8px of dead space between the trigger and the
+   panel that belongs to neither, so a pointer travelling from one to the other
+   passes over the nav instead — `pointerleave` fires on the wrapper and the
+   menu closes under the cursor on its way to being clicked. `pointerleave`
+   does NOT fire when moving into a descendant, so the fix is to make the gap
+   part of the panel rather than to chase it with a timer: a close delay would
+   make the menu linger after a deliberate exit, trading one wrong behaviour
+   for another. Transparent, so the gap still looks like a gap. */
+.nav-menu-panel::before {
+  content: "";
+  position: absolute;
+  top: -8px;
+  left: 0;
+  right: 0;
+  height: 8px;
+}
 .nav-menu-panel {
   position: absolute;
   top: calc(100% + 8px);
@@ -183,12 +200,29 @@ h3 { font-size: 1.125rem; letter-spacing: -0.01em; font-weight: 650; }
   z-index: 30;
   display: flex;
   flex-direction: column;
-  min-width: 220px;
+  /* Never narrower than the trigger it hangs from. `100%` here is the
+     wrapper's width, which is the button's, so a long account name cannot
+     leave part of the trigger overhanging the panel — a straight-down move
+     from that overhang would cross the bridge's edge and close the menu, the
+     same bug in a shape the gap fix alone does not cover. */
+  min-width: max(220px, 100%);
   /* .card's 26px is page padding; a menu row needs none of its own. */
   padding: 6px;
   gap: 2px;
   box-shadow: 0 12px 28px rgba(var(--shadow-rgb), 0.12);
 }
+/* The signed-in address, as a label rather than a control: it is context for
+   the three items below it, not a fourth thing to click. Wraps rather than
+   ellipsing, because a truncated address is exactly as useless as none. */
+.nav-menu-who {
+  padding: 8px 12px 10px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--line);
+  font-size: 0.8125rem;
+  color: var(--ink-500);
+  overflow-wrap: anywhere;
+}
+
 .nav-menu-item {
   display: flex;
   align-items: center;
