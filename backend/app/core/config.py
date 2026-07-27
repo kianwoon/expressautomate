@@ -59,7 +59,19 @@ class Settings(BaseSettings):
     # instead, which is what keeps them from reading each other's rows.
     MS_TENANT_ID: str = "common"
     MS_REDIRECT_URI: str = ""
-    MS_GRAPH_SCOPES: str = ""
+    # Two scope sets, not one, because they face very different consent bars
+    # (§6.1). Asking for both at sign-in is what locked a real agency out:
+    # Microsoft's recommended tenant policy lets users consent only to
+    # "low impact" permissions, and mailbox access is not one — so bundling
+    # them made *signing in at all* need an administrator.
+    #
+    # MS_IDENTITY_SCOPES is what sign-in asks for: enough to know who someone
+    # is, and nothing a cautious tenant would refuse.
+    # MS_MAILBOX_SCOPES is asked for separately, later, by someone who has
+    # chosen to connect a mailbox — and may still need an admin, which is a
+    # far better place to meet that wall than the front door.
+    MS_IDENTITY_SCOPES: str = ""
+    MS_MAILBOX_SCOPES: str = ""
     MS_WEBHOOK_CLIENT_STATE: str = ""
     MS_WEBHOOK_NOTIFICATION_URL: str = ""
 
@@ -77,7 +89,7 @@ class Settings(BaseSettings):
     # --- Queue ---
     REDIS_URL: str = ""
 
-    @field_validator("MS_GRAPH_SCOPES")
+    @field_validator("MS_IDENTITY_SCOPES", "MS_MAILBOX_SCOPES")
     @classmethod
     def _non_empty_when_configured(cls, v: str) -> str:
         return v.strip()
@@ -97,8 +109,26 @@ class Settings(BaseSettings):
         return f"/{v}" if v else ""
 
     @property
+    def identity_scopes(self) -> list[str]:
+        """What sign-in asks for."""
+        return [s for s in self.MS_IDENTITY_SCOPES.split() if s]
+
+    @property
+    def mailbox_scopes(self) -> list[str]:
+        """The extra permissions mailbox ingestion needs, asked for separately."""
+        return [s for s in self.MS_MAILBOX_SCOPES.split() if s]
+
+    @property
     def graph_scopes(self) -> list[str]:
-        return [s for s in self.MS_GRAPH_SCOPES.split() if s]
+        """Everything a fully connected user has granted.
+
+        Order matters only in that it is stable: this is what the mailbox
+        consent flow requests. It re-asks for the identity scopes too, because
+        an incremental consent that named only the new permission would return
+        a token narrower than the one already held.
+        """
+        seen = dict.fromkeys(self.identity_scopes + self.mailbox_scopes)
+        return list(seen)
 
     @property
     def is_production(self) -> bool:

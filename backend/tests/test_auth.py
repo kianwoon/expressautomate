@@ -8,7 +8,7 @@ break silently, so those statements run for real.
 """
 
 import uuid
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 import httpx
 import pytest
@@ -61,39 +61,57 @@ def microsoft_configured(monkeypatch) -> None:
         settings, "MS_REDIRECT_URI", "https://testserver/api/auth/microsoft/callback"
     )
     # Unset in CI, so the reserved-scope filter would otherwise be tested
-    # against an empty list — vacuously true.
+    # against an empty list — vacuously true. Split exactly as production is:
+    # the mailbox permission is NOT in the identity set, which is the whole
+    # point of the split.
     monkeypatch.setattr(
-        settings, "MS_GRAPH_SCOPES", "openid profile email User.Read Mail.Read offline_access"
+        settings, "MS_IDENTITY_SCOPES", "openid profile email User.Read offline_access"
     )
+    monkeypatch.setattr(settings, "MS_MAILBOX_SCOPES", "Mail.Read")
 
 
 @pytest.fixture(autouse=True)
 def fake_msal(monkeypatch) -> None:
     """A believable flow dict and token response, with no MSAL client built."""
 
-    def begin_login(prompt: str | None = None) -> dict:
+    def begin_login(scopes: list[str], prompt: str | None = None) -> dict:
         state = uuid.uuid4().hex
         # Real MSAL puts `prompt` in the authorize query only when one is
-        # given; mirroring that is what lets a test read it back off the
-        # redirect instead of reaching into the mock.
-        query = f"state={state}" + (f"&prompt={prompt}" if prompt else "")
+        # given, and always puts the scopes there; mirroring both is what lets
+        # a test read them back off the redirect instead of reaching into the
+        # mock.
+        query = f"state={state}&scope={quote(' '.join(scopes))}"
+        if prompt:
+            query += f"&prompt={prompt}"
         return {
             "state": state,
             "code_verifier": uuid.uuid4().hex,
             "nonce": uuid.uuid4().hex,
             "redirect_uri": settings.MS_REDIRECT_URI,
-            "scope": ms_auth.delegated_scopes(),
+            "scope": scopes,
             "auth_uri": f"{AUTHORIZE_HOST}/organizations/oauth2/v2.0/authorize?{query}",
         }
 
     monkeypatch.setattr(ms_auth, "begin_login", begin_login)
 
 
-def token_response(tid: str, oid: str, email: str, name: str = "Rachel Tan") -> dict:
+def scopes_of(response: httpx.Response) -> set[str]:
+    """The scopes an authorize redirect is asking Microsoft for."""
+    return set(parse_qs(urlparse(response.headers["location"]).query)["scope"][0].split())
+
+
+def token_response(
+    tid: str,
+    oid: str,
+    email: str,
+    name: str = "Rachel Tan",
+    scopes: list[str] | None = None,
+) -> dict:
+    """A token response. Identity-only by default — that is what sign-in gets."""
     return {
         "access_token": "access-token-value",
         "refresh_token": "refresh-token-value",
-        "scope": " ".join(ms_auth.delegated_scopes()),
+        "scope": " ".join(ms_auth.identity_scopes() if scopes is None else scopes),
         "id_token_claims": {"tid": tid, "oid": oid, "preferred_username": email, "name": name},
     }
 
@@ -114,6 +132,19 @@ async def sign_in(client: httpx.AsyncClient, monkeypatch, result: dict) -> httpx
     return await client.get(
         "/api/auth/microsoft/callback",
         params={"code": "any-code", "state": state_of(login)},
+    )
+
+
+async def connect_mailbox(
+    client: httpx.AsyncClient, monkeypatch, result: dict
+) -> httpx.Response:
+    """Walk the separate mailbox-consent round trip, for an already-signed-in user."""
+    start = await client.get("/api/auth/microsoft/connect-mailbox")
+    assert start.status_code == 307
+    monkeypatch.setattr(ms_auth, "complete_login", lambda flow, params: result)
+    return await client.get(
+        "/api/auth/microsoft/callback",
+        params={"code": "any-code", "state": state_of(start)},
     )
 
 
@@ -172,7 +203,7 @@ async def test_login_does_not_leak_the_flow_secrets_into_the_cookie(client) -> N
     response = await client.get("/api/auth/microsoft/login")
     sealed = response.cookies[auth_api._flow_cookie_name(state_of(response))]
 
-    assert auth_api._open_flow(sealed)["code_verifier"] not in sealed
+    assert auth_api._open_flow(sealed)["msal"]["code_verifier"] not in sealed
     # A different key must not open it — proves encryption, not just encoding.
     with pytest.raises(InvalidToken):
         Fernet(Fernet.generate_key()).decrypt(sealed.encode())
@@ -422,17 +453,39 @@ async def test_me_returns_the_signed_in_user(client, monkeypatch, cleanup) -> No
     assert set(body) == {"user", "tenant", "mailbox"}
 
 
-async def test_me_reports_a_connected_mailbox_with_its_scopes(
+async def test_signing_in_alone_does_not_count_as_a_connected_mailbox(
     client, monkeypatch, cleanup
 ) -> None:
+    """The regression the scope split could most easily introduce.
+
+    Sign-in asks for `offline_access`, so a refresh token — and therefore a
+    token row — exists for every signed-in user. Reading that row's existence
+    as "mailbox connected", which is what the endpoint used to do, would tell
+    someone their mail was hooked up when nothing had been granted to read it.
+    """
     tid = str(uuid.uuid4())
     cleanup.append(uuid.UUID(tid))
     await sign_in(client, monkeypatch, token_response(tid, uuid.uuid4().hex, "rachel@agency-a.sg"))
 
     mailbox = (await client.get("/api/auth/me")).json()["mailbox"]
     assert mailbox["provider"] == "microsoft"
+    assert mailbox["connected"] is False
+    assert "Mail.Read" not in mailbox["scopes"]
+
+
+async def test_me_reports_a_connected_mailbox_with_its_scopes(
+    client, monkeypatch, cleanup
+) -> None:
+    tid, oid = str(uuid.uuid4()), uuid.uuid4().hex
+    cleanup.append(uuid.UUID(tid))
+    await sign_in(client, monkeypatch, token_response(tid, oid, "rachel@agency-a.sg"))
+    await connect_mailbox(client, monkeypatch, token_response(tid, oid, "rachel@agency-a.sg",
+                                                              scopes=ms_auth.mailbox_scopes()))
+
+    mailbox = (await client.get("/api/auth/me")).json()["mailbox"]
+    assert mailbox["provider"] == "microsoft"
     assert mailbox["connected"] is True
-    assert mailbox["scopes"] == ms_auth.delegated_scopes()
+    assert mailbox["scopes"] == ms_auth.mailbox_scopes()
     # No ingestion exists yet (§7); claiming otherwise would be a lie to the UI.
     assert mailbox["ingestion_active"] is False
 
@@ -450,6 +503,147 @@ async def test_me_reports_no_mailbox_when_no_token_was_stored(
     mailbox = (await client.get("/api/auth/me")).json()["mailbox"]
     assert mailbox["connected"] is False
     assert mailbox["scopes"] == []
+
+
+async def test_login_asks_only_for_the_identity_scopes(client) -> None:
+    response = await client.get("/api/auth/microsoft/login")
+    assert scopes_of(response) == set(ms_auth.identity_scopes())
+    assert "Mail.Read" not in scopes_of(response)
+
+
+async def test_connect_mailbox_asks_for_the_mailbox_scopes(
+    client, monkeypatch, cleanup
+) -> None:
+    """Identity scopes are re-requested alongside, or the incremental consent
+    would hand back a token narrower than the one already held."""
+    tid = str(uuid.uuid4())
+    cleanup.append(uuid.UUID(tid))
+    await sign_in(client, monkeypatch, token_response(tid, uuid.uuid4().hex, "rachel@agency-a.sg"))
+
+    response = await client.get("/api/auth/microsoft/connect-mailbox")
+    assert response.status_code == 307
+    assert scopes_of(response) == set(ms_auth.mailbox_scopes())
+    assert "Mail.Read" in scopes_of(response)
+
+
+async def test_connect_mailbox_requires_a_session(client) -> None:
+    """The consent is filed against a user, so there must be one first."""
+    assert (await client.get("/api/auth/microsoft/connect-mailbox")).status_code == 401
+
+
+async def test_connect_mailbox_does_not_change_who_is_signed_in(
+    client, monkeypatch, cleanup
+) -> None:
+    """Granting a permission is not an authentication."""
+    tid, oid = str(uuid.uuid4()), uuid.uuid4().hex
+    cleanup.append(uuid.UUID(tid))
+    await sign_in(client, monkeypatch, token_response(tid, oid, "rachel@agency-a.sg"))
+    before = (await client.get("/api/auth/me")).json()["user"]["id"]
+
+    done = await connect_mailbox(
+        client, monkeypatch,
+        token_response(tid, oid, "rachel@agency-a.sg", scopes=ms_auth.mailbox_scopes()),
+    )
+    assert done.status_code == 307
+    assert auth_api.SESSION_COOKIE not in done.cookies
+    assert (await client.get("/api/auth/me")).json()["user"]["id"] == before
+
+
+async def test_consenting_as_a_different_account_is_rejected(
+    client, monkeypatch, cleanup
+) -> None:
+    """Microsoft will let the user approve as somebody else. Storing that token
+    against the session user would file one person's mail credential under
+    another person's row."""
+    tid, oid = str(uuid.uuid4()), uuid.uuid4().hex
+    cleanup.append(uuid.UUID(tid))
+    await sign_in(client, monkeypatch, token_response(tid, oid, "rachel@agency-a.sg"))
+
+    # Same tenant, different person — the `oid` is the guard, not the address.
+    response = await connect_mailbox(
+        client, monkeypatch,
+        token_response(tid, uuid.uuid4().hex, "sam@agency-a.sg",
+                       scopes=ms_auth.mailbox_scopes()),
+    )
+    assert response.status_code == 400
+    assert (await client.get("/api/auth/me")).json()["mailbox"]["connected"] is False
+
+
+async def test_consenting_from_another_tenant_is_rejected(
+    client, monkeypatch, cleanup
+) -> None:
+    tid, other = str(uuid.uuid4()), str(uuid.uuid4())
+    cleanup.extend([uuid.UUID(tid), uuid.UUID(other)])
+    await sign_in(client, monkeypatch, token_response(tid, uuid.uuid4().hex, "rachel@agency-a.sg"))
+
+    response = await connect_mailbox(
+        client, monkeypatch,
+        token_response(other, uuid.uuid4().hex, "sam@agency-b.sg",
+                       scopes=ms_auth.mailbox_scopes()),
+    )
+    assert response.status_code == 400
+    assert (await client.get("/api/auth/me")).json()["mailbox"]["connected"] is False
+
+
+async def test_signing_in_again_does_not_disconnect_a_connected_mailbox(
+    client, monkeypatch, cleanup
+) -> None:
+    """A later sign-in carries an identity-only refresh token. Storing it over
+    the mailbox one leaves a row claiming "connected" and a credential that
+    cannot read mail — a silent breakage, which is the worst kind."""
+    tid, oid = str(uuid.uuid4()), uuid.uuid4().hex
+    cleanup.append(uuid.UUID(tid))
+    await sign_in(client, monkeypatch, token_response(tid, oid, "rachel@agency-a.sg"))
+    await connect_mailbox(
+        client, monkeypatch,
+        token_response(tid, oid, "rachel@agency-a.sg", scopes=ms_auth.mailbox_scopes()),
+    )
+
+    async with tenant_session(uuid.UUID(tid)) as s:
+        kept = (await s.execute(text("SELECT refresh_token_encrypted FROM ms_oauth_tokens"))
+                ).scalar_one()
+
+    result = token_response(tid, oid, "rachel@agency-a.sg")
+    result["refresh_token"] = "an-identity-only-refresh-token"
+    await sign_in(client, monkeypatch, result)
+
+    assert (await client.get("/api/auth/me")).json()["mailbox"]["connected"] is True
+    async with tenant_session(uuid.UUID(tid)) as s:
+        still = (await s.execute(text("SELECT refresh_token_encrypted FROM ms_oauth_tokens"))
+                 ).scalar_one()
+    assert decrypt(still) == decrypt(kept) != "an-identity-only-refresh-token"
+
+
+async def test_reconnecting_a_mailbox_rotates_the_refresh_token(
+    client, monkeypatch, cleanup
+) -> None:
+    """The escape hatch from the downgrade guard.
+
+    The guard refuses anything narrower than what is stored. Taken literally
+    that is a trap: narrow the configured mailbox scopes, or have Microsoft
+    grant a subset, and no later consent could ever satisfy it — the token
+    could never be rotated and the only fix would be deleting the row by hand.
+    The mailbox flow asks for everything, so what it gets back IS the grant.
+    """
+    tid, oid = str(uuid.uuid4()), uuid.uuid4().hex
+    cleanup.append(uuid.UUID(tid))
+    await sign_in(client, monkeypatch, token_response(tid, oid, "rachel@agency-a.sg"))
+    await connect_mailbox(
+        client, monkeypatch,
+        token_response(tid, oid, "rachel@agency-a.sg", scopes=ms_auth.mailbox_scopes()),
+    )
+
+    # Consent again, granting strictly less than before and a fresh token.
+    again = token_response(tid, oid, "rachel@agency-a.sg", scopes=ms_auth.identity_scopes())
+    again["refresh_token"] = "a-rotated-refresh-token"
+    assert (await connect_mailbox(client, monkeypatch, again)).status_code == 307
+
+    async with tenant_session(uuid.UUID(tid)) as s:
+        stored = (await s.execute(text("SELECT refresh_token_encrypted FROM ms_oauth_tokens"))
+                  ).scalar_one()
+    assert decrypt(stored) == "a-rotated-refresh-token"
+    # And the narrower grant is reported honestly, not remembered as connected.
+    assert (await client.get("/api/auth/me")).json()["mailbox"]["connected"] is False
 
 
 async def test_me_flags_a_personal_account_tenant(client, monkeypatch, cleanup) -> None:
@@ -615,10 +809,17 @@ async def test_a_callback_with_an_unknown_state_is_rejected(client) -> None:
 
 async def test_reserved_scopes_are_not_passed_to_msal() -> None:
     """MSAL adds openid/profile/offline_access itself and errors if given them."""
-    scopes = set(ms_auth.delegated_scopes())
+    scopes = set(ms_auth.mailbox_scopes())
     # Assert what survives too, or an empty list would satisfy the filter check.
     assert {"User.Read", "Mail.Read"} <= scopes
     assert not {"openid", "profile", "offline_access"} & scopes
+
+
+async def test_sign_in_never_asks_for_the_mailbox_permission() -> None:
+    """The whole point of the split: a tenant that refuses Mail.Read must still
+    be able to sign its people in."""
+    assert "Mail.Read" not in ms_auth.identity_scopes()
+    assert "User.Read" in ms_auth.identity_scopes()
 
 
 async def test_login_is_503_when_microsoft_is_not_configured(client, monkeypatch) -> None:

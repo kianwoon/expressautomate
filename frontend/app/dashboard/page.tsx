@@ -2,7 +2,7 @@
 
 import { useEffect } from "react";
 
-import { LANDING_PATH, SWITCH_ACCOUNT_PATH } from "../api";
+import { CONNECT_MAILBOX_PATH, LANDING_PATH, SWITCH_ACCOUNT_PATH } from "../api";
 import { displayNameOf, useAuth, type Me } from "../auth";
 import { SiteNav } from "../site-nav";
 
@@ -115,8 +115,23 @@ function SignedIn({ me }: { me: Me }) {
           <p className="body" style={{ marginTop: 14, fontSize: "0.875rem" }}>
             {connected
               ? "We hold read-only access to this mailbox. Nothing is being read from it yet."
-              : "No mailbox is connected, so there is nothing for us to read."}
+              : "No mailbox is connected, so there is nothing for us to read. Reading mail is a "
+                + "separate permission from signing in, and we only ask for it when you say so."}
           </p>
+          {/* Only offered to a work account. A personal account has no agency
+              mailbox behind it, so this button would send someone through a
+              consent screen to connect something that cannot be ingested —
+              the card below tells them that instead. */}
+          {!connected && !personal && (
+            <a
+              className="btn btn-primary"
+              rel="nofollow"
+              href={CONNECT_MAILBOX_PATH}
+              style={{ marginTop: 16 }}
+            >
+              Connect your mailbox
+            </a>
+          )}
         </div>
       </div>
 

@@ -29,6 +29,16 @@ export const SWITCH_ACCOUNT_PATH = `${SIGN_IN_PATH}?prompt=select_account`;
    live, and the site now has no consumer for it. The backend route and the
    signups table still exist and still hold the submissions already collected. */
 
+/**
+ * Asks Microsoft, separately from sign-in, for permission to read the mailbox.
+ *
+ * Separate because the two consents face different bars: many tenants let a
+ * user consent to identity scopes but not to mailbox ones. Bundled, that made
+ * signing in itself need an administrator; split, the wall arrives only for
+ * the person who asked for their mail to be read.
+ */
+export const CONNECT_MAILBOX_PATH = `${API_BASE}/api/auth/microsoft/connect-mailbox`;
+
 /** Who is signed in: 200 with user/tenant/mailbox, or 401 when nobody is. */
 export const ME_PATH = `${API_BASE}/api/auth/me`;
 
