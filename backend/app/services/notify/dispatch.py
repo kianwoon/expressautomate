@@ -19,7 +19,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.db.rls import tenant_session
-from app.models.notification import STATUS_PENDING, STATUS_SUPPRESSED
+from app.models.notification import (
+    STATUS_PENDING,
+    STATUS_SENDING,
+    STATUS_SENT,
+    STATUS_SUPPRESSED,
+)
 from app.services.notify.events import OpportunityEvent
 from app.workers.queue import enqueue
 
@@ -42,15 +47,37 @@ _SUBSCRIBERS = text(
     """
 )
 
+# `status = ANY(:statuses)` against ('pending', 'sending', 'sent') rather
+# than `status <> 'suppressed'`. The cap exists to bound how many messages a
+# person actually receives per hour, so it must count only rows that
+# represent a real or in-flight delivery:
+#   - pending / sending — still queued to actually go out;
+#   - sent — actually delivered.
+# `failed` rows are deliberately excluded even though they are not
+# `suppressed`. That status covers two things that never reached anyone: a
+# genuine delivery failure, and — since finding 1's fix — a suppressed batch
+# marked 'failed'/'rolled up' once it was folded into a later message's "+N
+# more" text. Counting either as cap-consuming traffic is exactly the
+# phantom-traffic bug this predicate closes: after one suppression burst (or
+# one run of real failures), a destination could be capped by messages nobody
+# ever received. A row the recovery sweep repromotes from `suppressed` back
+# to `pending` is likewise a message that never went out the first time, so
+# it correctly falls under the `pending` branch here rather than double-
+# counting — it is counted once, as what it now is: queued again.
 _COUNT_RECENT = text(
     """
     SELECT count(*) FROM notification_deliveries
     WHERE destination_id = :destination_id
       AND event_kind = :event_kind
       AND created_at > now() - interval '1 hour'
-      AND status <> 'suppressed'
+      AND status = ANY(:statuses)
     """
 )
+
+# Bound once, not built as three OR'd literals in the SQL above, so the set of
+# statuses that count towards the cap has one Python-side definition instead
+# of drifting between the query text and whatever calls it.
+_COUNTS_TOWARD_CAP = [STATUS_PENDING, STATUS_SENDING, STATUS_SENT]
 
 # Re-reads status rather than trusting the caller's id list. `emit()` hands
 # back every id it wrote — pending and suppressed alike, because a caller may
@@ -95,7 +122,11 @@ async def rate_capped(
     recent = (
         await session.execute(
             _COUNT_RECENT,
-            {"destination_id": destination_id, "event_kind": event_kind},
+            {
+                "destination_id": destination_id,
+                "event_kind": event_kind,
+                "statuses": _COUNTS_TOWARD_CAP,
+            },
         )
     ).scalar_one()
     return recent >= settings.NOTIFY_RATE_CAP_PER_HOUR

@@ -307,3 +307,86 @@ async def test_enqueue_deliveries_returns_zero_if_pending_status_check_fails(
 
     result = await enqueue_deliveries(tenant_id, [delivery_id])
     assert result == 0
+
+
+async def test_rolled_up_rows_do_not_tighten_the_cap(wired, admin_session) -> None:
+    """Finding 2: a batch `deliver_notification` folded into a "+N more"
+    message is marked `failed`/'rolled up' once sent — never delivered on its
+    own — so it must not count as one of this hour's messages. Before the
+    fix, `status <> 'suppressed'` counted it anyway, and one suppression
+    burst could cap a destination on phantom traffic that never reached
+    anyone."""
+    tenant_id, _, dest_id = wired
+    for _ in range(settings.NOTIFY_RATE_CAP_PER_HOUR):
+        await admin_session.execute(
+            text(
+                "INSERT INTO notification_deliveries "
+                "(id, tenant_id, destination_id, event_kind, subject_id, status, error) "
+                "VALUES (:id, :tid, :did, :kind, :sub, 'failed', 'rolled up')"
+            ),
+            {
+                "id": uuid.uuid4(),
+                "tid": tenant_id,
+                "did": dest_id,
+                "kind": EVENT_OPPORTUNITY_NEW,
+                "sub": None,
+            },
+        )
+    await admin_session.commit()
+
+    async with tenant_session(tenant_id) as session:
+        assert await rate_capped(session, dest_id, EVENT_OPPORTUNITY_NEW) is False
+
+
+async def test_a_genuinely_failed_send_does_not_tighten_the_cap_either(
+    wired, admin_session
+) -> None:
+    """A real delivery failure (not a rollup) also never reached the person,
+    so it must not consume a cap slot either — only pending/sending/sent do."""
+    tenant_id, _, dest_id = wired
+    for _ in range(settings.NOTIFY_RATE_CAP_PER_HOUR):
+        await admin_session.execute(
+            text(
+                "INSERT INTO notification_deliveries "
+                "(id, tenant_id, destination_id, event_kind, subject_id, status, error) "
+                "VALUES (:id, :tid, :did, :kind, :sub, 'failed', 'gave up')"
+            ),
+            {
+                "id": uuid.uuid4(),
+                "tid": tenant_id,
+                "did": dest_id,
+                "kind": EVENT_OPPORTUNITY_NEW,
+                "sub": uuid.uuid4(),
+            },
+        )
+    await admin_session.commit()
+
+    async with tenant_session(tenant_id) as session:
+        assert await rate_capped(session, dest_id, EVENT_OPPORTUNITY_NEW) is False
+
+
+async def test_pending_and_sent_rows_still_count_toward_the_cap(
+    wired, admin_session
+) -> None:
+    """The fix must not accidentally let the cap be exceeded: rows that are
+    genuinely queued or delivered still fill it up exactly as before."""
+    tenant_id, _, dest_id = wired
+    for _ in range(settings.NOTIFY_RATE_CAP_PER_HOUR):
+        await admin_session.execute(
+            text(
+                "INSERT INTO notification_deliveries "
+                "(id, tenant_id, destination_id, event_kind, subject_id, status) "
+                "VALUES (:id, :tid, :did, :kind, :sub, 'pending')"
+            ),
+            {
+                "id": uuid.uuid4(),
+                "tid": tenant_id,
+                "did": dest_id,
+                "kind": EVENT_OPPORTUNITY_NEW,
+                "sub": uuid.uuid4(),
+            },
+        )
+    await admin_session.commit()
+
+    async with tenant_session(tenant_id) as session:
+        assert await rate_capped(session, dest_id, EVENT_OPPORTUNITY_NEW) is True

@@ -242,16 +242,42 @@ _DELIVERY_SUBJECT = text(
     """
 )
 
-# Suppressed rows since this destination's last completed delivery. This is the
-# "+N more" the next message carries, and marking them accounted-for here is
-# what stops the same batch being reported twice.
-_CLAIM_ROLLUP = text(
+# Suppressed rows since this destination's last completed delivery. This is
+# the "+N more" the next message carries. A plain SELECT, not an UPDATE: the
+# count has to be read before the send (rendering needs it), and whether this
+# batch actually gets to count as reported depends on whether the send that
+# quotes it succeeds — read-then-maybe-mark, never claim-then-send. See
+# _MARK_ROLLED_UP below for the write half.
+_ROLLUP_IDS = text(
     """
-    UPDATE notification_deliveries
-    SET status = :failed, error = 'rolled up'
+    SELECT id FROM notification_deliveries
     WHERE destination_id = :destination_id
       AND event_kind = :event_kind
       AND status = :suppressed
+    """
+)
+
+# Marks exactly the ids `_ROLLUP_IDS` returned earlier — not a fresh
+# destination_id/event_kind scan — as accounted for. That is what keeps the
+# rendered count and the rows actually retired in agreement even if a new
+# suppressed row lands in the gap between the read and this write: a fresh
+# scan here would silently sweep that row in as "reported" even though the
+# message already sent never mentioned it. The `status = :suppressed` guard
+# is defence in depth against the same row being retired twice (e.g. by a
+# concurrent sweep) rather than the thing that decides which rows are in
+# scope — the id list already fixed that.
+#
+# Run only alongside the SENT write, in the same transaction: a batch this
+# call could not confirm delivered (send failed, threw, or the row's
+# destination/subject vanished first) must remain `suppressed` so the next
+# attempt or the recovery sweep still carries it. Marking it here regardless
+# of outcome is finding 1 from the pre-merge review — the bug this shape
+# fixes.
+_MARK_ROLLED_UP = text(
+    """
+    UPDATE notification_deliveries
+    SET status = :failed, error = 'rolled up'
+    WHERE id = ANY(:ids) AND status = :suppressed
     RETURNING id
     """
 )
@@ -1126,10 +1152,13 @@ async def deliver_notification(ctx, *, delivery_id: str, tenant_id: str) -> None
         # database error on one of the intermediate queries — is a failure
         # nobody anticipated. Every anticipated outcome above moves the row
         # out of 'sending'; an unanticipated one must not leave it stranded
-        # there, because nothing else ever looks at 'sending' rows: arq's
-        # retry requires status = 'pending' to reclaim, and the recovery
-        # sweep only scans 'pending' and 'suppressed'. Left alone, this row
-        # would be lost silently and permanently.
+        # there, because nothing else ever looks at 'sending' rows on its
+        # own: arq's retry requires status = 'pending' to reclaim, and the
+        # recovery sweep is what else scans 'sending' — deliberately, so a
+        # worker killed by SIGKILL between claim and send (no exception
+        # handler runs then) still has a row the sweep can reclaim, on top
+        # of the 'pending' and 'suppressed' cases it also covers. Left
+        # alone, this row would be lost silently and permanently.
         #
         # This cannot help if the worker is killed outright (SIGKILL, OOM,
         # container eviction) — no except block runs then, and the row is
@@ -1189,17 +1218,28 @@ async def _send_claimed_delivery(tenant: uuid.UUID, delivery_id: str, claimed) -
             )
         ).one_or_none()
 
-        rolled = (
-            await session.execute(
-                _CLAIM_ROLLUP,
-                {
-                    "destination_id": claimed.destination_id,
-                    "event_kind": claimed.event_kind,
-                    "suppressed": STATUS_SUPPRESSED,
-                    "failed": STATUS_FAILED,
-                },
-            )
-        ).all()
+        # Read, not claimed, and fixed here as a concrete id list rather than
+        # a count: rendering needs the count now, but whether this batch is
+        # allowed to be reported as "accounted for" depends on whether the
+        # send below actually succeeds. Fixing the ids now (rather than
+        # re-deriving them by destination_id/event_kind after the send) is
+        # what keeps the rendered "+N more" and the rows later marked
+        # consumed in agreement even if another suppressed row lands for
+        # this destination while the send is in flight — that new row is
+        # simply left for the next delivery to count and report.
+        rollup_ids = [
+            row.id
+            for row in (
+                await session.execute(
+                    _ROLLUP_IDS,
+                    {
+                        "destination_id": claimed.destination_id,
+                        "event_kind": claimed.event_kind,
+                        "suppressed": STATUS_SUPPRESSED,
+                    },
+                )
+            ).all()
+        ]
 
     if subject is None:
         # The opportunity was deleted after emit. Nothing to say about it.
@@ -1225,7 +1265,7 @@ async def _send_claimed_delivery(tenant: uuid.UUID, delivery_id: str, claimed) -
         location=subject.location_raw,
         salary=subject.salary_raw,
     )
-    content = render(event, target.channel, rollup=len(rolled))
+    content = render(event, target.channel, rollup=len(rollup_ids))
     address = decrypt(target.address_encrypted)
 
     if target.channel == CHANNEL_WHATSAPP:
@@ -1270,6 +1310,21 @@ async def _send_claimed_delivery(tenant: uuid.UUID, delivery_id: str, claimed) -
             # A success clears the count, so three failures spread over a month
             # do not add up to a disabled destination.
             await session.execute(_RESET_FAILURES, {"id": claimed.destination_id})
+            if rollup_ids:
+                # Consumed in the same transaction as the SENT write, and
+                # only here: this is the one outcome where the "+N more" this
+                # message carried is actually true, so it is the only outcome
+                # allowed to retire the batch it reported. Every other exit
+                # from this function leaves these rows `suppressed` so a
+                # retry or the recovery sweep still carries them.
+                await session.execute(
+                    _MARK_ROLLED_UP,
+                    {
+                        "ids": rollup_ids,
+                        "suppressed": STATUS_SUPPRESSED,
+                        "failed": STATUS_FAILED,
+                    },
+                )
         return
 
     if result.outcome is SendOutcome.PERMANENT:
@@ -1284,21 +1339,40 @@ async def _send_claimed_delivery(tenant: uuid.UUID, delivery_id: str, claimed) -
                     "is_sent": False,
                 },
             )
-            # Passed as 1, not the configured NOTIFY_MAX_FAILURES: a permanent
-            # outcome (bot-blocked, undeliverable) means the address is dead
-            # right now, so disabling waits for nothing further to accumulate.
-            # The configured threshold governs only the transient-exhaustion
-            # path below, where several independent failures must add up first.
-            await session.execute(
-                _RECORD_FAILURE,
-                {"id": claimed.destination_id, "max_failures": 1},
+            if result.disable_destination:
+                # Passed as 1, not the configured NOTIFY_MAX_FAILURES: a
+                # permanent outcome that *is* about this address (bot-
+                # blocked, undeliverable) means it is dead right now, so
+                # disabling waits for nothing further to accumulate. The
+                # configured threshold governs only the transient-exhaustion
+                # path below, where several independent failures must add up
+                # first.
+                await session.execute(
+                    _RECORD_FAILURE,
+                    {"id": claimed.destination_id, "max_failures": 1},
+                )
+        if result.disable_destination:
+            log.warning(
+                "delivery_permanently_failed",
+                delivery_id=delivery_id,
+                channel=target.channel,
+                error=result.error,
             )
-        log.warning(
-            "delivery_permanently_failed",
-            delivery_id=delivery_id,
-            channel=target.channel,
-            error=result.error,
-        )
+        else:
+            # A configuration problem (e.g. an unapproved WhatsApp template),
+            # not a dead address — every send on this channel is failing the
+            # same way, so `log.error` is what makes an operator notice
+            # before it reads as "every destination happened to go quiet".
+            # The destination is deliberately left enabled: retrying won't
+            # help until the config is fixed, but the address itself is
+            # fine, and disabling it would make every recruiter re-link
+            # their number once the template lands.
+            log.error(
+                "delivery_permanently_failed_config",
+                delivery_id=delivery_id,
+                channel=target.channel,
+                error=result.error,
+            )
         return
 
     # Transient.

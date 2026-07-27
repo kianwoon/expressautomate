@@ -38,6 +38,19 @@ class ExplodingChannel:
         raise KeyError("chat_id")
 
 
+class ScriptedChannel:
+    """Answers with a different, pre-scripted result on each successive call —
+    e.g. a transient failure followed by a successful retry."""
+
+    def __init__(self, results: list[SendResult]) -> None:
+        self.results = list(results)
+        self.sends: list[tuple[str, object]] = []
+
+    async def send(self, address: str, content) -> SendResult:
+        self.sends.append((address, content))
+        return self.results[len(self.sends) - 1]
+
+
 @pytest.fixture
 async def delivery(admin_session):
     """A pending delivery to a verified Telegram destination."""
@@ -309,3 +322,159 @@ async def test_an_opted_out_number_is_never_messaged(
 
     await admin_session.execute(text("DELETE FROM whatsapp_suppressions"))
     await admin_session.commit()
+
+
+async def _insert_suppressed(admin_session, tenant_id, dest_id, event_kind, n: int) -> None:
+    from app.models.notification import STATUS_SUPPRESSED
+
+    for _ in range(n):
+        await admin_session.execute(
+            text(
+                "INSERT INTO notification_deliveries "
+                "(id, tenant_id, destination_id, event_kind, subject_id, status) "
+                "VALUES (:id, :tid, :did, :kind, :sub, :status)"
+            ),
+            {
+                "id": uuid.uuid4(),
+                "tid": tenant_id,
+                "did": dest_id,
+                "kind": event_kind,
+                "sub": uuid.uuid4(),
+                "status": STATUS_SUPPRESSED,
+            },
+        )
+    await admin_session.commit()
+
+
+async def test_a_transient_failure_leaves_the_rollup_batch_suppressed(
+    delivery, admin_session, monkeypatch
+) -> None:
+    """Finding 1: the rollup must not be consumed before the send succeeds.
+    A transient failure must leave the suppressed batch exactly as it was —
+    not permanently marked 'rolled up' — so a retry (or the sweep) can still
+    report it."""
+    from app.models.notification import STATUS_SUPPRESSED
+    from app.services.notify.events import EVENT_OPPORTUNITY_NEW
+
+    tenant_id, dest_id, delivery_id = delivery
+    await _insert_suppressed(admin_session, tenant_id, dest_id, EVENT_OPPORTUNITY_NEW, 2)
+
+    fake = FakeChannel(SendResult(outcome=SendOutcome.TRANSIENT, error="503"))
+    monkeypatch.setattr(jobs, "channel_for", lambda name: fake)
+
+    with pytest.raises(Exception):  # noqa: B017 — arq retries on any exception
+        await jobs.deliver_notification(
+            {}, delivery_id=str(delivery_id), tenant_id=str(tenant_id)
+        )
+
+    async with tenant_session(tenant_id) as session:
+        remaining = (
+            await session.execute(
+                text(
+                    "SELECT count(*) FROM notification_deliveries "
+                    "WHERE destination_id = :d AND event_kind = :k AND status = :status"
+                ),
+                {"d": dest_id, "k": EVENT_OPPORTUNITY_NEW, "status": STATUS_SUPPRESSED},
+            )
+        ).scalar_one()
+    assert remaining == 2
+
+
+async def test_a_retry_after_transient_failure_still_reports_the_rollup(
+    delivery, admin_session, monkeypatch
+) -> None:
+    """Finding 1, the full round trip: a transient failure followed by a
+    successful retry must still carry the "+N more" — the count read before
+    the failed attempt must not have been thrown away, and the batch must be
+    retired only once the message that reports it actually sends."""
+    from app.models.notification import STATUS_SUPPRESSED
+    from app.services.notify.events import EVENT_OPPORTUNITY_NEW
+
+    tenant_id, dest_id, delivery_id = delivery
+    await _insert_suppressed(admin_session, tenant_id, dest_id, EVENT_OPPORTUNITY_NEW, 3)
+
+    channel = ScriptedChannel(
+        [
+            SendResult(outcome=SendOutcome.TRANSIENT, error="503"),
+            SendResult(outcome=SendOutcome.SENT, provider_message_id="1"),
+        ]
+    )
+    monkeypatch.setattr(jobs, "channel_for", lambda name: channel)
+
+    with pytest.raises(Exception):  # noqa: B017
+        await jobs.deliver_notification(
+            {}, delivery_id=str(delivery_id), tenant_id=str(tenant_id)
+        )
+
+    # The retry — arq would re-enqueue the same job; here we just call again.
+    await jobs.deliver_notification(
+        {}, delivery_id=str(delivery_id), tenant_id=str(tenant_id)
+    )
+
+    assert await _status(tenant_id, delivery_id) == STATUS_SENT
+    assert len(channel.sends) == 2
+    _, content = channel.sends[1]
+    assert "3 more" in content.text
+
+    async with tenant_session(tenant_id) as session:
+        remaining = (
+            await session.execute(
+                text(
+                    "SELECT count(*) FROM notification_deliveries "
+                    "WHERE destination_id = :d AND event_kind = :k "
+                    "AND status = :status"
+                ),
+                {"d": dest_id, "k": EVENT_OPPORTUNITY_NEW, "status": STATUS_SUPPRESSED},
+            )
+        ).scalar_one()
+    assert remaining == 0
+
+
+async def test_a_whatsapp_template_error_does_not_disable_the_destination(
+    delivery, admin_session, monkeypatch
+) -> None:
+    """Finding 4: a template-config error (missing/paused template) is a
+    deployment problem, not a dead address. The delivery still fails
+    permanently — retrying can't help until a human fixes the template — but
+    the destination itself must stay enabled."""
+    from app.core.crypto import encrypt
+    from app.models.notification import CHANNEL_WHATSAPP, address_digest
+
+    tenant_id, dest_id, delivery_id = delivery
+    await admin_session.execute(
+        text(
+            "UPDATE notification_destinations "
+            "SET channel = :ch, address_encrypted = :enc, address_hash = :hash "
+            "WHERE id = :id"
+        ),
+        {
+            "ch": CHANNEL_WHATSAPP,
+            "enc": encrypt("+6591234567"),
+            "hash": address_digest("+6591234567"),
+            "id": dest_id,
+        },
+    )
+    await admin_session.commit()
+
+    fake = FakeChannel(
+        SendResult(
+            outcome=SendOutcome.PERMANENT,
+            error="template does not exist",
+            disable_destination=False,
+        )
+    )
+    monkeypatch.setattr(jobs, "channel_for", lambda name: fake)
+
+    await jobs.deliver_notification(
+        {}, delivery_id=str(delivery_id), tenant_id=str(tenant_id)
+    )
+
+    assert await _status(tenant_id, delivery_id) == STATUS_FAILED
+    async with tenant_session(tenant_id) as session:
+        disabled = (
+            await session.execute(
+                text("SELECT disabled_at FROM notification_destinations WHERE id = :id"),
+                {"id": dest_id},
+            )
+        ).scalar_one()
+    assert disabled is None
