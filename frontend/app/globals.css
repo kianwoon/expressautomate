@@ -1147,3 +1147,27 @@ footer { border-top: 1px solid var(--line); padding: 48px 0 40px; color: var(--i
   .brand-name { font-size: 1.4rem; }
   .brand { gap: 13px; }
 }
+
+/* Settings sub-navigation. `nt-` is the notifications/settings prefix, in the
+   same style as `gl-` (glossary) and `jo-` (job orders). */
+.nt-tabs {
+  display: flex;
+  gap: 22px;
+  margin-top: 26px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+}
+.nt-tab {
+  padding: 0 2px 10px;
+  font-size: 0.95rem;
+  text-decoration: none;
+  color: inherit;
+  opacity: 0.62;
+  border-bottom: 2px solid transparent;
+}
+.nt-tab:hover {
+  opacity: 0.9;
+}
+.nt-tab-on {
+  opacity: 1;
+  border-bottom-color: currentColor;
+}

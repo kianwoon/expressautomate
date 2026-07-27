@@ -100,6 +100,17 @@ export const DASHBOARD_PATH = "/dashboard";
 export const SETTINGS_PATH = "/settings";
 
 /**
+ * The settings sub-routes. Site routes, so no API_BASE prefix.
+ *
+ * `/settings` itself keeps the inbox setting rather than redirecting to
+ * `/settings/inbox`: this is a static export, so a redirect would have to
+ * render something first and flash, and existing links to `/settings` still
+ * land where they always did.
+ */
+export const SETTINGS_GLOSSARY_PATH = "/settings/glossary";
+export const SETTINGS_NOTIFICATIONS_PATH = "/settings/notifications";
+
+/**
  * The current "how far back" setting, and the periods that would extend it.
  *
  * Only periods *earlier* than the current one come back. Moving the date later
