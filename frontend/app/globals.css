@@ -1237,3 +1237,12 @@ footer { border-top: 1px solid var(--line); padding: 48px 0 40px; color: var(--i
 .nt-card-muted {
   opacity: 0.6;
 }
+/* White plate behind the QR: the site is dark, and a dark-on-dark QR does not
+   scan. */
+.nt-qr {
+  margin-top: 16px;
+  border-radius: 8px;
+  background: #fff;
+  padding: 10px;
+  display: block;
+}

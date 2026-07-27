@@ -3,6 +3,7 @@
 import { SettingsShell } from "../settings-shell";
 import { DestinationCard } from "./destination-card";
 import { useNotifications } from "./notifications-data";
+import { TelegramLinkPanel } from "./telegram-link-panel";
 
 /**
  * Where job orders get sent.
@@ -17,7 +18,7 @@ import { useNotifications } from "./notifications-data";
  */
 
 export default function NotificationsSettings() {
-  const { state, setEvents, unlink } = useNotifications();
+  const { state, setEvents, unlink, requestTelegramLink, reload } = useNotifications();
 
   return (
     <SettingsShell heading="Notifications." active="notifications">
@@ -51,6 +52,13 @@ export default function NotificationsSettings() {
           <h2 className="eyebrow" style={{ marginTop: 34 }}>
             Add a destination
           </h2>
+
+          <TelegramLinkPanel
+            available={state.settings.channels.telegram}
+            onRequestLink={requestTelegramLink}
+            onPoll={() => void reload()}
+            linkedCount={state.settings.destinations.length}
+          />
 
           <div className={`nt-card ${!state.settings.channels.whatsapp ? "nt-card-muted" : ""}`}>
             <div className="nt-card-head">
