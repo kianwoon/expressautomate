@@ -1232,3 +1232,8 @@ footer { border-top: 1px solid var(--line); padding: 48px 0 40px; color: var(--i
   gap: 10px;
   margin-top: 18px;
 }
+/* A destination that cannot be linked yet — present so the channel is visibly
+   planned rather than absent, but plainly not actionable. */
+.nt-card-muted {
+  opacity: 0.6;
+}
