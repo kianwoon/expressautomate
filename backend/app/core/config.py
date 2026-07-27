@@ -81,6 +81,20 @@ class Settings(BaseSettings):
     GOOGLE_CLIENT_SECRET: str = ""
     GOOGLE_REDIRECT_URI: str = ""
 
+    # --- Object storage (Cloudflare R2) ---
+    # Email bodies live here rather than in Postgres: they are large, they are
+    # read only by the extraction job, and retention deletes them independently
+    # of the row that describes them (spec: Retention).
+    R2_ENDPOINT_URL: str = ""
+    R2_ACCESS_KEY_ID: str = ""
+    R2_SECRET_ACCESS_KEY: str = ""
+    R2_BUCKET_NAME: str = ""
+    # Cloudflare's documented value. Pinned rather than left to botocore, which
+    # silently defaults S3 to us-east-1 — the region is part of the SigV4
+    # signature, so an ambient AWS_DEFAULT_REGION on the host would change how
+    # requests are signed and R2 would reject them.
+    R2_REGION: str = "auto"
+
     # --- AI extraction ---
     OPENROUTER_API_KEY: str = ""
     LLM_BASE_URL: str = ""
