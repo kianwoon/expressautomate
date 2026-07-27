@@ -130,10 +130,11 @@ export default function Page() {
 
       <h2>Cookies</h2>
       <p>
-        We set one cookie, which records that you are signed in. It is not readable by scripts in
-        your browser, it is not shared with anyone, and it exists only so that you are not asked to
-        sign in again on every page. There is no advertising or analytics cookie on this site, which
-        is why you have not been shown a consent banner — we have nothing to ask you to consent to.
+        Every cookie we set is functional: one recording that you are signed in, and short-lived
+        ones that hold a sign-in in progress and are discarded when it completes. None is readable
+        by scripts in your browser and none is shared with anyone. There is no advertising or
+        analytics cookie on this site, which is why you have not been shown a consent banner — we
+        have nothing to ask you to consent to.
       </p>
 
       <h2>How long we keep it</h2>

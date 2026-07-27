@@ -92,7 +92,10 @@ const IMPACT = [
     icon: "shield",
     title: "Your data stays yours",
     lead: "and only yours",
-    body: "Separated per agency, encrypted at rest, and never shared or resold.",
+    // Not "encrypted at rest" flatly: the mailbox token is, the business
+    // columns are not, and the privacy page says so. A card that implies
+    // otherwise is the kind of claim a security review catches.
+    body: "Separated per agency in the database itself, and never shared, resold or used to train AI models.",
   },
 ] as const;
 
