@@ -1,7 +1,30 @@
+"""The LLM client, against a fake transport — never a real model.
+
+allow-hardcode: the base URL below is a test fixture, not configuration. It is
+deliberately *not* read from settings: see `_own_base_url`.
+"""
+
 import httpx
 import pytest
 
+from app.core.config import settings
 from app.services.llm.client import LLMInvalidJSON, complete_json
+
+
+@pytest.fixture(autouse=True)
+def _own_base_url(monkeypatch):
+    """Give these tests a base URL of their own.
+
+    Without it they passed locally, where the repo `.env` supplies
+    `LLM_BASE_URL`, and failed in CI, where nothing does: httpx then builds a
+    hostless URL and raises `unknown url type: '/chat/completions'` — the same
+    failure that took `GRAPH_BASE_URL` a production afternoon to find.
+
+    A test that only passes because of an untracked file is testing the file.
+    The mock transport intercepts the request, so the value is never dialled;
+    what matters is only that a URL can be formed.
+    """
+    monkeypatch.setattr(settings, "LLM_BASE_URL", "https://llm.test/v1")
 
 
 def _transport(payload, status=200):

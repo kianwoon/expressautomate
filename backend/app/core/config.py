@@ -265,6 +265,16 @@ class Settings(BaseSettings):
         """Identity *and* the only path to mailbox ingestion (§6.1)."""
         return bool(self.MS_CLIENT_ID and self.MS_CLIENT_SECRET)
 
+    def llm_configured(self) -> bool:
+        """Can this process actually reach a model?
+
+        Same shape as `graph_configured`, and for the same reason: an empty
+        base URL makes httpx build a hostless URL and raise
+        `unknown url type` deep in the stack, naming nothing. Extraction asks
+        this before it starts rather than discovering it one email at a time.
+        """
+        return bool(self.LLM_BASE_URL and self.OPENROUTER_API_KEY)
+
     def graph_configured(self) -> bool:
         """Can this process actually reach Graph?
 
