@@ -1,9 +1,35 @@
 """Write an extraction and its opportunities in one transaction (plan §14).
 
-Append-only with respect to history: every run inserts a new `extractions` row
-and new opportunities. Nothing is updated in place, so an email's extraction
-history is the ordered set of its rows — and a prompt upgrade replayed across a
-year of mail adds to that history rather than rewriting it.
+Append-only with respect to history: every run inserts a new `extractions` row.
+Nothing is updated in place, so an email's extraction history is the ordered
+set of its rows.
+
+Opportunities are the exception, and the asymmetry is deliberate but narrow.
+Their ids are derived deterministically from the email and the job's position
+within the extraction, so a *retry* — `rescan_stuck` re-running a job that died
+between this transaction and `_FINISH_EXTRACTION` — produces the same ids and
+inserts nothing the second time. Without that, the retry minted fresh ids, the
+notification dedupe index never fired, and the recruiter was told twice about
+one vacancy.
+
+The cost is that a deliberate *replay* under a better prompt is currently a
+no-op for opportunities: the new `extractions` row lands with its evidence, but
+the improved field values are discarded by the same `ON CONFLICT DO NOTHING`
+that makes retries safe. Nothing distinguishes the two cases today because
+nothing replays yet. Whoever builds replay must separate them — most likely by
+keying the id on the extraction rather than the email — and should not simply
+drop the conflict clause, which would restore the duplicate-notification bug.
+
+Positional keying carries a second caveat worth knowing before replay exists:
+it assumes the model returns the same jobs in the same order for the same
+email. That holds at temperature zero and does not hold across a prompt or
+model change, where job 2 of the new run may be a different vacancy from job 2
+of the old one.
+
+Human corrections live in `opportunity_field_overrides` and are never read or
+written here. That separation is what makes replay safe: this module physically
+cannot clobber a recruiter's fix, because it never issues an UPDATE against
+anything a human has touched.
 
 Human corrections live in `opportunity_field_overrides` and are never read or
 written here. That separation is what makes replay safe: this module physically
