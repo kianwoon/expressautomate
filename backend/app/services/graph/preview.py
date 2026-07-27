@@ -81,9 +81,10 @@ async def preview_inbox(client: GraphClient, ms_user_id: str) -> InboxPreview:
     folder = await client.get(base, params={"$select": "displayName,totalItemCount"})
     oldest = await _oldest_received(client, base)
 
-    # Sequential, deliberately. Five round trips is roughly a second, which is
-    # slow enough to notice on a page someone is waiting at — but `gather` here
-    # would fire four `$count`s at once, and Graph throttles per user. A
+    # Sequential, deliberately. One round trip per option plus two, which at
+    # the default lookback is six and about a second — slow enough to notice on
+    # a page someone is waiting at. But `gather` would fire every `$count` at
+    # once, and Graph enforces a per-mailbox concurrency limit. A
     # throttled count is not a slow count: `_count_since` swallows it and the
     # option renders "count unavailable", which is precisely the number the
     # user needs to choose. Latency is the better thing to spend.

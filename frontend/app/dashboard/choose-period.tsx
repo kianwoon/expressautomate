@@ -59,7 +59,12 @@ export function ChoosePeriod({ onStarted }: { onStarted: () => void }) {
             message:
               res.status === 403
                 ? "Microsoft is no longer letting us read this mailbox. Reconnect it and try again."
-                : "We could not reach Microsoft to look at your inbox just now.",
+                : // A 401 is our session expiring, not Microsoft's doing.
+                  // Blaming Microsoft for it sends the user to fix the wrong
+                  // thing — and the fix, signing in again, is one they know.
+                  res.status === 401
+                  ? "Your session has expired. Sign in again and we will pick this up where you left it."
+                  : "We could not reach Microsoft to look at your inbox just now.",
           });
           return;
         }

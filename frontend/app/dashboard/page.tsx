@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { Fragment, useEffect } from "react";
 
 import { CONNECT_MAILBOX_PATH, LANDING_PATH, SWITCH_ACCOUNT_PATH } from "../api";
 import { displayNameOf, useAuth, type Me } from "../auth";
@@ -313,15 +313,39 @@ function Row({ k, v, empty = "Not mentioned" }: { k: string; v: string | null; e
   return (
     <div className="row">
       <span className="row-k">{k}</span>
-      {/* `anywhere`, not `break-all`: an address only breaks when it genuinely
-          cannot fit, and then at the end of a line rather than mid-word in the
-          middle of one. Untreated, "wiserly@hotmail.com" split as
-          "wiserly@hotmail.co / m", which reads as a typo in the user's own
-          address. */}
-      <span className={v ? undefined : "muted"} style={{ overflowWrap: "anywhere" }}>
-        {v ?? empty}
-      </span>
+      <span className={v ? undefined : "muted"}>{v ? <Breakable text={v} /> : empty}</span>
     </div>
+  );
+}
+
+/**
+ * A long value with break opportunities at the places a reader expects one.
+ *
+ * `.row` values carry `overflow-wrap: anywhere`, which stops an address
+ * spilling past the card but breaks it wherever the line happens to run out:
+ * "wiserly@hotmail.co / m" — which reads as a typo in the user's own address
+ * rather than as wrapping. `anywhere` is still the right backstop; what it was
+ * missing is somewhere better to break.
+ *
+ * `<wbr>` supplies exactly that. Browsers prefer an explicit opportunity over
+ * an arbitrary one, so the address now breaks after the `@` or before the
+ * `.com` and falls back to mid-token only for something with no boundaries at
+ * all. It inserts no character: copying the text still yields the address.
+ */
+function Breakable({ text }: { text: string }) {
+  // After @ : ; , and before . / - _ — every separator an address, URL or id
+  // is likely to contain, split so the delimiter stays with the part a reader
+  // scans for.
+  const pieces = text.split(/(?<=[@:;,])|(?=[./\-_])/);
+  return (
+    <>
+      {pieces.map((piece, i) => (
+        <Fragment key={i}>
+          {piece}
+          {i < pieces.length - 1 && <wbr />}
+        </Fragment>
+      ))}
+    </>
   );
 }
 
