@@ -263,12 +263,13 @@ async def merge_client(request: Request, client_id: uuid.UUID, body: MergeReques
 
 @router.post("/clients/{client_id}/unmerge")
 async def unmerge_client(request: Request, client_id: uuid.UUID) -> dict:
-    """Restore a merged client. Its mentions stay with the target.
+    """Restore a merged client. The mentions the merge moved stay with the target.
 
-    Deliberately partial: the mentions were rewritten by the merge and there is
-    no record of which ones came from where, so returning the row to
-    `unconfirmed` with no evidence is the honest outcome. Re-ingestion will
-    re-attach anything still arriving.
+    Deliberately partial: a moved mention carries no record of which client it
+    came from, so it cannot be given back. What does return is the evidence the
+    merge never moved — mentions whose source email has been purged, which are
+    kept on this row precisely because they cannot be deduplicated. Re-ingestion
+    re-attaches anything still arriving.
     """
     _user_uuid, tenant_uuid = _require_session(request)
     async with tenant_session(tenant_uuid) as session:

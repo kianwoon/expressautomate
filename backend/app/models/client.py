@@ -22,10 +22,12 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     ForeignKeyConstraint,
+    Index,
     Numeric,
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.dialects.postgresql import UUID as PgUUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -69,6 +71,19 @@ class Client(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
             name="fk_clients_merged_into_same_tenant",
             ondelete="SET NULL",
         ),
+        # The identity key, declared here as well as in the migration so
+        # autogenerate does not propose dropping it. `merged` is excluded so a
+        # merge frees the domain for the surviving row; `archived` is
+        # deliberately kept inside, because the matcher matches archived
+        # clients and an excluded one would send it to its insert path and
+        # into a violation of this very index.
+        Index(
+            "uq_clients_tenant_domain",
+            "tenant_id",
+            "email_domain",
+            unique=True,
+            postgresql_where=text("email_domain IS NOT NULL AND status <> 'merged'"),
+        ),
     )
 
 
@@ -100,10 +115,15 @@ class ClientMention(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
         # One mention per client per message. `extract_email` re-runs after a
         # crash and replay appends; without this every rerun duplicates the
         # evidence and the mention count stops meaning anything.
+        #
+        # NULLS NOT DISTINCT, matching the migration: without it Postgres treats
+        # every NULL `email_message_id` as unique and the rerun guard silently
+        # stops applying to exactly the rows whose source email is gone.
         UniqueConstraint(
             "tenant_id",
             "client_id",
             "email_message_id",
             name="uq_client_mentions_once_per_message",
+            postgresql_nulls_not_distinct=True,
         ),
     )
