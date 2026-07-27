@@ -52,17 +52,19 @@ export default function NotificationsSettings() {
             Add a destination
           </h2>
 
-          <div className="nt-card nt-card-muted">
+          <div className={`nt-card ${!state.settings.channels.whatsapp ? "nt-card-muted" : ""}`}>
             <div className="nt-card-head">
               <span className="nt-card-title">WhatsApp</span>
-              <span className="nt-badge nt-badge-off">
+              <span className={`nt-badge ${!state.settings.channels.whatsapp ? "nt-badge-off" : ""}`}>
                 {state.settings.channels.whatsapp ? "Available" : "Not yet available"}
               </span>
             </div>
-            <p className="nt-note">
-              WhatsApp needs a verified business account, which is still being approved. Telegram
-              works today.
-            </p>
+            {!state.settings.channels.whatsapp && (
+              <p className="nt-note">
+                WhatsApp needs a verified business account, which is still being approved. Telegram
+                works today.
+              </p>
+            )}
           </div>
         </>
       )}
