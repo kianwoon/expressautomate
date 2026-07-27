@@ -209,7 +209,20 @@ async def _seed_opportunity(admin_session, tenant_id: uuid.UUID) -> uuid.UUID:
     return opportunity_id
 
 
-async def _write_code(tenant_id: uuid.UUID, opportunity_id: uuid.UUID, meaning: str):
+async def _write_code(
+    tenant_id: uuid.UUID,
+    opportunity_id: uuid.UUID,
+    meaning: str,
+    *,
+    stamped_tenant: uuid.UUID | None = None,
+):
+    """Write a decoded code, optionally stamping a tenant the session is not.
+
+    `stamped_tenant` exists so the isolation test can attempt the thing RLS is
+    supposed to forbid. Without it the helper set `tenant_id` to the session's
+    own tenant, so `WITH CHECK` had nothing to object to and the test that
+    claimed to prove a cross-tenant write fails was proving nothing at all.
+    """
     async with tenant_session(tenant_id) as session:
         await session.execute(
             text(
@@ -218,7 +231,12 @@ async def _write_code(tenant_id: uuid.UUID, opportunity_id: uuid.UUID, meaning: 
                 " start_char, end_char) "
                 "VALUES (:id, :t, :o, 'C/F', :m, 'race', 13, 16)"
             ),
-            {"id": uuid.uuid4(), "t": tenant_id, "o": opportunity_id, "m": meaning},
+            {
+                "id": uuid.uuid4(),
+                "t": stamped_tenant or tenant_id,
+                "o": opportunity_id,
+                "m": meaning,
+            },
         )
 
 
@@ -272,11 +290,19 @@ async def test_another_tenant_cannot_read_a_decoded_code(tenants, admin_session)
 
 
 async def test_a_code_cannot_be_written_under_another_tenants_id(tenants, admin_session):
-    """WITH CHECK, not just USING: a write must fail, not vanish."""
+    """WITH CHECK, not just USING: a write must fail, not vanish.
+
+    The row must carry a tenant the session is not scoped to — that is the
+    whole claim. An earlier version of this stamped the session's own tenant
+    and asserted an error anyway, so it tested nothing and failed in CI for the
+    right reason by accident: there was no violation to detect.
+    """
     owner, other = tenants
     opportunity_id = await _seed_opportunity(admin_session, owner)
     with pytest.raises(DBAPIError):
-        await _write_code(other, opportunity_id, "Chinese female")
+        await _write_code(
+            other, opportunity_id, "Chinese female", stamped_tenant=owner
+        )
 
 
 # --- The list endpoint ------------------------------------------------------

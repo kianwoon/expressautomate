@@ -67,15 +67,34 @@ router = APIRouter(tags=["glossary"])
 # references. Several codes reference two (`C/F` is race *and* gender); the
 # column is singular by contract, so the secondary one is stated in `notes`
 # where a human reads it rather than dropped.
+#
+# The race/gender codes are a positional grammar, not a list of unrelated
+# tokens: the first letter states race and the second states gender, so the
+# set is a cross product and is written out in full. Written out rather than
+# generated, because each row is an editable record an agency can correct, and
+# because the grammar has one trap that a generator would hide —
+#
+#   **M means Malay in the first position and Male in the second.**
+#
+# `M/M` is therefore "Malay, male", and it is exactly the code an incomplete
+# list would omit and leave a recruiter to guess at. Every combination is
+# present for that reason; a missing one is not a neutral absence, it is a
+# code that silently fails to decode while its neighbours work.
 STARTER_CODES: tuple[tuple[str, str, str | None, str | None], ...] = (
     # (code, meaning, attribute, notes)
+    # First letter: C Chinese · M Malay · I Indian · E Eurasian · O open.
+    # Second letter: F female · M male · O open.
     ("C/F", "Chinese, female", "race", "Also states gender: female."),
     ("C/M", "Chinese, male", "race", "Also states gender: male."),
     ("C/O", "Chinese, gender open", "race", "Ambiguous — some clients write this for 'care of'."),
     ("M/F", "Malay, female", "race", "Also states gender: female."),
+    ("M/M", "Malay, male", "race", "The M's differ: Malay first, male second."),
     ("M/O", "Malay, gender open", "race", None),
+    ("I/F", "Indian, female", "race", "Also states gender: female."),
     ("I/M", "Indian, male", "race", "Also states gender: male."),
     ("I/O", "Indian, gender open", "race", None),
+    ("E/F", "Eurasian, female", "race", "Also states gender: female."),
+    ("E/M", "Eurasian, male", "race", "Also states gender: male."),
     ("E/O", "Eurasian, gender open", "race", None),
     ("O/O", "Open — no race or gender preference", None, "The absence of a preference."),
     ("O/F", "Race open, female", "gender", None),
