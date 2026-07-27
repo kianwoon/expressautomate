@@ -34,11 +34,21 @@ export default function Dashboard() {
     if (auth.status === "anonymous") window.location.replace(LANDING_PATH);
   }, [auth.status]);
 
+  // A running mailbox leads with the stat cards rather than a heading, so the
+  // section above them needs less room. Decided here because the padding
+  // belongs to the section, not to what fills it.
+  const running = auth.status === "signed-in" && stageOf(auth.me) === "ingesting";
+
   return (
     <>
       <SiteNav />
       <main>
-        <section className="hero" style={{ paddingBottom: 48 }}>
+        {/* The hero's 64px top padding was sized for a landing page opening
+            with a headline. With the heading gone for a running mailbox there
+            is nothing in that space, so the page opened with a band of empty
+            gradient between the nav and the first card. The other stages still
+            lead with a heading and keep the room for it. */}
+        <section className="hero" style={{ paddingTop: running ? 24 : undefined, paddingBottom: 48 }}>
           <div className="wrap" aria-live="polite">
             {auth.status === "signed-in" ? (
               <SignedIn me={auth.me} />
@@ -150,7 +160,11 @@ function SignedIn({ me }: { me: Me }) {
           mailbox overview are exactly what someone needs during the wait, and
           hiding them until the first extraction lands left the first hour
           looking like nothing was happening. */}
-      {(stage === "ingesting" || me.mailbox.ingested.opportunities > 0) && <JobOrders me={me} />}
+      {(stage === "ingesting" || me.mailbox.ingested.opportunities > 0) && (
+        // Its heading becomes the page's h1 exactly when nothing above it is
+        // one, so the outline never starts at h2 and never carries two h1s.
+        <JobOrders me={me} heading={running ? "h1" : "h2"} />
+      )}
 
       <AccountDetails me={me} />
     </>

@@ -32,7 +32,9 @@ const CHIPS: { key: Filter; label: string; countKey: "all" | "new" | "needs_revi
     { key: "reviewed", label: "Reviewed", countKey: "reviewed" },
   ];
 
-export function JobOrders({ me }: { me: Me }) {
+export function JobOrders({ me, heading = "h2" }: { me: Me; heading?: "h1" | "h2" }) {
+  const Heading = heading;
+
   const { state, filter, offset, counts, setFilter, setOffset, review } = useOpportunities();
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<Sort>(DEFAULT_SORT);
@@ -74,7 +76,12 @@ export function JobOrders({ me }: { me: Me }) {
       <div className="jo-head">
         <div>
           <span className="eyebrow">Job orders</span>
-          <h2 className="jo-head-title">Every vacancy we have read.</h2>
+          {/* The page's h1 when nothing above it is one. Removing "Signed in
+              as …" left a running dashboard whose outline began at h2, which
+              is how a screen reader loses the top of a document. This is the
+              heading that describes the page, so it is the one to promote —
+              rather than hiding an h1 nobody sees to satisfy the outline. */}
+          <Heading className="jo-head-title">Every vacancy we have read.</Heading>
         </div>
         <ReviewBell count={counts.needs_review} onOpen={() => setFilter("needs_review")} />
       </div>

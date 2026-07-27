@@ -41,12 +41,17 @@ function useTick(seconds: number): void {
 function ago(iso: string | null): string | null {
   if (!iso) return null;
   const seconds = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
-  if (seconds < 90) return "Just now";
-  const minutes = Math.round(seconds / 60);
-  if (minutes < 60) return `${minutes} min ago`;
-  const hours = Math.round(minutes / 60);
-  if (hours < 48) return `${hours} hr ago`;
-  return `${Math.round(hours / 24)} days ago`;
+  if (seconds < 60) return "Just now";
+  // Floor, not round. Elapsed time only ever counts what has actually passed:
+  // rounding said "2 min ago" at 91 seconds and "2 hr ago" at 90 minutes,
+  // overstating staleness by up to half a unit on the one card whose job is to
+  // tell you whether the data is fresh.
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return minutes === 1 ? "1 min ago" : `${minutes} min ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 48) return hours === 1 ? "1 hr ago" : `${hours} hr ago`;
+  const days = Math.floor(hours / 24);
+  return days === 1 ? "1 day ago" : `${days} days ago`;
 }
 
 export function StatCards({ me, counts }: { me: Me; counts: Counts }) {
@@ -120,7 +125,7 @@ export function StatCards({ me, counts }: { me: Me; counts: Counts }) {
  * font: three paths cost less than a webfont request, and nothing here should
  * render as a missing-glyph box if that request fails.
  */
-const GLYPH: Record<string, React.ReactNode> = {
+const GLYPH = {
   mail: (
     <>
       <rect x="3" y="5" width="18" height="14" rx="2.5" />
@@ -145,7 +150,9 @@ const GLYPH: Record<string, React.ReactNode> = {
       <path d="M20 4.2V9h-4.8" />
     </>
   ),
-};
+  // Not typed as Record<string, …>: that widens the key to `string`, so a
+  // misspelt glyph name compiles and renders an empty tinted square.
+} as const;
 
 function Stat({
   value,

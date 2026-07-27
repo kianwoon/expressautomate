@@ -34,6 +34,11 @@
   --surface-alt: #f5f8fc;
   --line: #e2e9f2;
 
+  /* The shadow colour is --ink-900 as channels, which a colour variable
+     cannot supply to rgba(). Named so the three depths below are visibly one
+     material rather than three literals that happen to match. */
+  --shadow-rgb: 11, 18, 32;
+
   --radius: 10px;
   --maxw: 1120px;
 
@@ -172,7 +177,7 @@ h3 { font-size: 1.125rem; letter-spacing: -0.01em; font-weight: 650; }
   /* .card's 26px is page padding; a menu row needs none of its own. */
   padding: 6px;
   gap: 2px;
-  box-shadow: 0 12px 28px rgba(11, 18, 32, 0.12);
+  box-shadow: 0 12px 28px rgba(var(--shadow-rgb), 0.12);
 }
 .nav-menu-item {
   display: flex;
@@ -402,7 +407,7 @@ section { padding: 60px 0; }
   display: grid; grid-template-columns: 44px minmax(0, 1fr);
   border: 1px solid var(--line); border-radius: 16px; overflow: hidden;
   background: var(--surface); margin: 0;
-  box-shadow: 0 30px 60px -40px rgba(11, 18, 32, 0.55);
+  box-shadow: 0 30px 60px -40px rgba(var(--shadow-rgb), 0.55);
 }
 .app-rail {
   display: grid; gap: 14px; align-content: start; justify-items: center;
@@ -607,7 +612,7 @@ section { padding: 60px 0; }
   min-height: 148px;
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
-.jo-stat:hover { border-color: var(--ink-300); box-shadow: 0 4px 14px rgba(11, 18, 32, 0.06); }
+.jo-stat:hover { border-color: var(--ink-300); box-shadow: 0 4px 14px rgba(var(--shadow-rgb), 0.06); }
 /* The glyph sits in its own tinted square rather than floating beside the
    text: at 18px a line icon on white disappears next to a 2rem numeral, and
    the wash is what gives each card its colour without tinting the whole
