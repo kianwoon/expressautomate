@@ -45,6 +45,153 @@
 
 ---
 
+### Task 0: Fix the scope configuration
+
+`.env` was split into `MS_IDENTITY_SCOPES` and `MS_MAILBOX_SCOPES`, but
+`app/core/config.py:62` still reads `MS_GRAPH_SCOPES`, which no longer exists.
+It falls back to `""`, so `graph_scopes` returns `[]` and `delegated_scopes()`
+requests nothing. Sign-in still works — Entra issues an ID token regardless —
+so this fails silently today and would surface as a 403 on the first mail call
+in Task 6.
+
+**Files:**
+- Modify: `app/core/config.py:62`, `app/core/config.py:100-101`, `app/services/ms_auth.py:34-35`
+- Test: `tests/test_scopes.py`
+
+**Interfaces:**
+- Produces: `settings.identity_scopes -> list[str]`, `settings.mailbox_scopes -> list[str]`,
+  `ms_auth.delegated_scopes(kind: str) -> list[str]` where `kind` is `"identity"` or `"mailbox"`
+
+- [ ] **Step 1: Write the failing test**
+
+`tests/test_scopes.py`:
+
+```python
+"""The scope configuration must match what .env actually declares.
+
+This test exists because it did not: .env was split into two keys while the
+code still read a single one that no longer existed, and every sign-in
+silently requested no permissions at all.
+"""
+
+from pathlib import Path
+
+import pytest
+
+from app.core.config import Settings, settings
+from app.services.ms_auth import delegated_scopes
+
+ENV = Path(__file__).resolve().parents[2] / ".env"
+
+
+def test_the_settings_match_the_keys_env_declares():
+    env_text = ENV.read_text()
+    declared = set(Settings.model_fields)
+
+    for key in ("MS_IDENTITY_SCOPES", "MS_MAILBOX_SCOPES"):
+        assert f"{key}=" in env_text, f"{key} missing from .env"
+        assert key in declared, f"{key} missing from Settings"
+
+    assert "MS_GRAPH_SCOPES" not in declared, "the single-key form is gone from .env"
+
+
+def test_identity_scopes_are_not_empty():
+    assert settings.identity_scopes, "sign-in would request no permissions"
+
+
+def test_mailbox_scopes_include_mail_read():
+    """Graph requires Mail.Read to subscribe to message change notifications."""
+    assert any(s.lower() == "mail.read" for s in settings.mailbox_scopes)
+
+
+def test_identity_consent_does_not_ask_for_mail():
+    """Incremental consent: a user who only signs in never sees a mail prompt."""
+    assert not any("mail" in s.lower() for s in delegated_scopes("identity"))
+
+
+def test_msal_reserved_scopes_are_stripped():
+    """MSAL injects these itself and errors if they are passed in."""
+    for reserved in ("openid", "profile", "offline_access"):
+        assert reserved not in delegated_scopes("identity")
+
+
+def test_an_unknown_scope_kind_is_rejected():
+    with pytest.raises(ValueError):
+        delegated_scopes("everything")
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `uv run pytest tests/test_scopes.py -v`
+Expected: FAIL — `MS_IDENTITY_SCOPES missing from Settings`
+
+- [ ] **Step 3: Replace the setting**
+
+In `app/core/config.py`, replace `MS_GRAPH_SCOPES` (line 62) with:
+
+```python
+    # Split deliberately: identity is requested at sign-in, mailbox access only
+    # when a mailbox is connected. A user who just signs in is never shown a
+    # "read your mail" prompt for a capability they have not asked for.
+    MS_IDENTITY_SCOPES: str = ""
+    MS_MAILBOX_SCOPES: str = ""
+```
+
+Replace the `_non_empty_when_configured` validator's target and the
+`graph_scopes` property (lines 100-101) with:
+
+```python
+    @property
+    def identity_scopes(self) -> list[str]:
+        return [s for s in self.MS_IDENTITY_SCOPES.split() if s]
+
+    @property
+    def mailbox_scopes(self) -> list[str]:
+        return [s for s in self.MS_MAILBOX_SCOPES.split() if s]
+```
+
+- [ ] **Step 4: Update `delegated_scopes`**
+
+In `app/services/ms_auth.py`, replace lines 34-35:
+
+```python
+def delegated_scopes(kind: str = "identity") -> list[str]:
+    """Scopes to request for one consent step.
+
+    MSAL adds openid/profile/offline_access itself and raises if they are
+    passed in explicitly, so they are stripped here even though `.env` lists
+    them as the app registration's permissions.
+    """
+    if kind == "identity":
+        requested = settings.identity_scopes
+    elif kind == "mailbox":
+        requested = settings.mailbox_scopes
+    else:
+        raise ValueError(f"unknown scope kind: {kind!r}")
+    return [s for s in requested if s.lower() not in _MSAL_RESERVED_SCOPES]
+```
+
+Update the two call sites in `begin_login` and `complete_login` to
+`delegated_scopes("identity")`.
+
+- [ ] **Step 5: Run the tests**
+
+```bash
+uv run pytest tests/test_scopes.py tests/test_auth.py -v
+```
+
+Expected: PASS. `test_auth.py` must still pass — sign-in behaviour is unchanged,
+only the key it reads from.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add app/core/config.py app/services/ms_auth.py tests/test_scopes.py
+git commit -m "Read the scope keys that .env actually declares"
+```
+
+---
+
 ### Task 1: Ingestion tables, RLS, and the subscription resolver
 
 **Files:**
@@ -1657,7 +1804,10 @@ async def access_token_for_mailbox(tenant_id: uuid.UUID, mailbox_id: uuid.UUID) 
         result = await asyncio.to_thread(
             client().acquire_token_by_refresh_token,
             decrypt(row.refresh_token_encrypted),
-            scopes=delegated_scopes(),
+            # Mailbox scopes, not identity: a token minted from a refresh token
+            # that only ever carried identity consent will 403 on every mail
+            # call, and it will do so at fetch time rather than here.
+            scopes=delegated_scopes("mailbox"),
         )
         if "access_token" not in result:
             raise PermissionError(result.get("error_description", "refresh failed"))
@@ -2986,6 +3136,70 @@ def test_whole_inbox_scope_requires_no_folder_id():
 def test_folder_scope_without_a_folder_id_is_rejected():
     with pytest.raises(ValueError):
         ConnectRequest(scope="folder", folder_id=None, start_from=datetime.now(UTC))
+
+
+async def test_connect_asks_for_mailbox_scopes_not_identity_scopes(monkeypatch):
+    """The sign-in token cannot read mail, including for users who signed in
+    before mailbox scopes existed. Connect must run its own consent."""
+    from app.api import mailboxes
+
+    captured = {}
+
+    class FakeMsal:
+        def initiate_auth_code_flow(self, scopes, redirect_uri):
+            captured["scopes"] = scopes
+            captured["redirect_uri"] = redirect_uri
+            return {"auth_uri": "https://login.microsoftonline.com/authorize?x=1"}
+
+    monkeypatch.setattr(mailboxes, "client", lambda: FakeMsal())
+    monkeypatch.setattr(mailboxes, "_seal_flow", lambda flow: "sealed")
+
+    result = await mailboxes.connect(
+        ConnectRequest(scope="whole_inbox", start_from=datetime.now(UTC)),
+        user=_FakeUser(),
+    )
+
+    assert any(s.lower() == "mail.read" for s in captured["scopes"])
+    assert not any("user.read" == s.lower() for s in captured["scopes"])
+    assert captured["redirect_uri"] == settings.MS_MAILBOX_REDIRECT_URI
+    assert result["authorize_url"].startswith("https://login.microsoftonline.com/")
+
+
+async def test_connect_creates_no_mailbox_row_before_consent(monkeypatch, admin_session):
+    """An abandoned consent screen must not leave a row the renewal sweep
+    then tries to subscribe for every fifteen minutes."""
+    from sqlalchemy import text
+
+    from app.api import mailboxes
+
+    class FakeMsal:
+        def initiate_auth_code_flow(self, scopes, redirect_uri):
+            return {"auth_uri": "https://login.microsoftonline.com/authorize"}
+
+    monkeypatch.setattr(mailboxes, "client", lambda: FakeMsal())
+    monkeypatch.setattr(mailboxes, "_seal_flow", lambda flow: "sealed")
+
+    before = (
+        await admin_session.execute(text("SELECT count(*) FROM mailboxes"))
+    ).scalar_one()
+
+    await mailboxes.connect(
+        ConnectRequest(scope="whole_inbox", start_from=datetime.now(UTC)),
+        user=_FakeUser(),
+    )
+
+    after = (
+        await admin_session.execute(text("SELECT count(*) FROM mailboxes"))
+    ).scalar_one()
+    assert after == before
+
+
+class _FakeUser:
+    import uuid as _uuid
+
+    id = _uuid.uuid4()
+    tenant_id = _uuid.uuid4()
+    ms_object_id = "ms-object-id"
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -3037,10 +3251,20 @@ Run `uv run pytest tests/test_auth.py -v` — it must still pass unchanged.
 ```python
 """Mailbox onboarding (plan §6.2).
 
-Order matters: the subscription is created *before* the historical walk
-starts, so a message arriving mid-onboarding is caught by the subscription, the
-backfill, or both. The dedup indexes make the overlap free — the reverse order
-leaves a gap where it is caught by neither.
+**Two steps, because consent is incremental.** Signing in grants identity
+scopes only, so the stored refresh token cannot read mail — including for users
+who signed in before mailbox scopes existed. `/connect` therefore starts a
+second consent for `MS_MAILBOX_SCOPES` and returns the authorize URL; the work
+happens in `/connect/callback` once the user has granted it.
+
+Entra's consent is cumulative per user and app, so after this second grant the
+newly stored refresh token can acquire tokens for both scope sets, and the
+identity flow is unaffected.
+
+Order matters inside the callback: the subscription is created *before* the
+historical walk starts, so a message arriving mid-onboarding is caught by the
+subscription, the backfill, or both. The dedup indexes make the overlap free —
+the reverse order leaves a gap where it is caught by neither.
 """
 
 import uuid
@@ -3050,16 +3274,18 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, model_validator
 from sqlalchemy import text
 
-from app.api.auth import current_user
+from app.api.auth import _open_flow, _seal_flow, current_user
 from app.core.config import settings
 from app.db.rls import tenant_session
 from app.services.graph.subscriptions import create_subscription
+from app.services.ms_auth import client, delegated_scopes
 from app.workers.jobs import graph_client_for_mailbox
 from app.workers.queue import enqueue
 
 router = APIRouter(prefix="/mailboxes", tags=["mailboxes"])
 
 WELL_KNOWN_INBOX = "inbox"
+MAILBOX_FLOW_COOKIE = "ea_mailbox_flow"
 
 
 class ConnectRequest(BaseModel):
@@ -3089,9 +3315,44 @@ def resolve_start_date(requested: datetime) -> datetime:
 
 @router.post("/connect")
 async def connect(payload: ConnectRequest, user=Depends(current_user)) -> dict:
+    """Start the mailbox consent. Returns the URL the browser must visit.
+
+    Nothing is created here. A user who abandons the consent screen must not
+    leave a `mailboxes` row behind that the renewal sweep then tries to
+    subscribe for every fifteen minutes.
+    """
     if not settings.microsoft_configured():
         raise HTTPException(status_code=503, detail="Microsoft sign-in is not configured")
 
+    flow = client().initiate_auth_code_flow(
+        delegated_scopes("mailbox"),
+        redirect_uri=settings.MS_MAILBOX_REDIRECT_URI,
+    )
+    # The user's onboarding choices ride through the OAuth round trip in the
+    # sealed flow cookie, not in the URL — a folder id in a query string is one
+    # more thing that can be tampered with on the way back.
+    return {
+        "authorize_url": flow["auth_uri"],
+        "flow": _seal_flow({**flow, "onboarding": payload.model_dump(mode="json")}),
+    }
+
+
+@router.get("/connect/callback")
+async def connect_callback(request: Request, user=Depends(current_user)) -> dict:
+    """Finish consent, then create the mailbox, subscription, and backfill."""
+    flow = _open_flow(request.cookies[MAILBOX_FLOW_COOKIE])
+    result = client().acquire_token_by_auth_code_flow(flow, dict(request.query_params))
+    if "refresh_token" not in result:
+        raise HTTPException(
+            status_code=400,
+            detail=result.get("error_description", "Mailbox consent was not granted."),
+        )
+
+    # Overwrite the identity-only token: consent is cumulative, so this one
+    # covers both scope sets and the old one covers strictly less.
+    await _store_refresh_token(user, result)
+
+    payload = ConnectRequest.model_validate(flow["onboarding"])
     tenant_id = user.tenant_id
     mailbox_id = uuid.uuid4()
     folder_id = payload.folder_id or WELL_KNOWN_INBOX
@@ -3142,13 +3403,25 @@ Add to `app/core/config.py`:
 
 ```python
     DEFAULT_RETENTION_MONTHS: int = 24
+    # A separate redirect URI keeps the mailbox consent from landing on the
+    # sign-in callback, which would create a session instead of a mailbox.
+    MS_MAILBOX_REDIRECT_URI: str = ""
 ```
 
 And `.env`:
 
 ```bash
 DEFAULT_RETENTION_MONTHS=24
+MS_MAILBOX_REDIRECT_URI=https://expressautomate.app/api/mailboxes/connect/callback
 ```
+
+Register this second redirect URI in the Entra app registration — Entra rejects
+any redirect it has not been told about, and the failure surfaces on the consent
+screen rather than in your logs.
+
+`_store_refresh_token(user, result)` is the same upsert `microsoft_callback`
+already performs in `app/api/auth.py`; extract it there rather than writing a
+second copy, so there is one place that encrypts a refresh token.
 
 - [ ] **Step 5: Add the four jobs**
 
@@ -3369,6 +3642,9 @@ def test_every_new_ingestion_setting_has_an_env_entry():
         "GRAPH_SUBSCRIPTION_REQUEST_MINUTES",
         "GRAPH_SUBSCRIPTION_RENEW_MARGIN",
         "MS_WEBHOOK_LIFECYCLE_URL",
+        "MS_IDENTITY_SCOPES",
+        "MS_MAILBOX_SCOPES",
+        "MS_MAILBOX_REDIRECT_URI",
         "ARQ_POLL_DELAY_SECONDS",
         "ARQ_MAX_JOBS",
         "ARQ_MAX_TRIES",

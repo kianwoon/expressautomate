@@ -222,20 +222,39 @@ Nothing in Stage 2 can be built without this, and only you can create it.
 
 1. Azure Portal → **Microsoft Entra ID** → **App registrations** → **New registration**
 2. Name `expressautomate.app`; supported accounts: **Accounts in any organizational directory and personal Microsoft accounts** (`AzureADandPersonalMicrosoftAccount`, with `api.requestedAccessTokenVersion: 2`). Work/school sign-ins make each agency a tenant; personal accounts (outlook.com, hotmail.com, live.com) all report one shared MSA tenant GUID, so each of those users gets a private tenant derived from their own `oid` — see `_tenant_for` in `backend/app/api/auth.py`. `MS_TENANT_ID=common` accordingly.
-3. Redirect URI (Web): `http://localhost:8000/auth/microsoft/callback`
+3. Redirect URIs (Web) — **two** are needed, because consent is incremental:
+   - `http://localhost:8000/auth/microsoft/callback` — sign-in
+   - `http://localhost:8000/api/mailboxes/connect/callback` — mailbox consent
+
+   Entra rejects any redirect it has not been told about, and the failure shows
+   up on the consent screen rather than in the logs.
 4. **Certificates & secrets** → new client secret → copy the *Value*
 5. **API permissions** → Microsoft Graph → *Delegated* → add exactly:
    `openid`, `profile`, `email`, `User.Read`, `Mail.Read`, `offline_access`
 
    Do **not** add `Mail.ReadWrite`, `Mail.Send`, or any Application permission —
-   read-only access is a product promise (§6.1).
+   read-only access is a product promise (§6.1). `Mail.Read` is also the
+   least-privileged permission Graph accepts for message change notification
+   subscriptions, so nothing broader is needed for ingestion.
+
+   Do **not** grant admin consent on the tenant's behalf. Each user consents to
+   mailbox access when they connect their own mailbox.
 
 Then fill in the repo-root `.env`:
 
 ```
 MS_CLIENT_ID=<Application (client) ID>
 MS_CLIENT_SECRET=<secret Value>
+MS_IDENTITY_SCOPES=openid profile email User.Read offline_access
+MS_MAILBOX_SCOPES=Mail.Read
+MS_MAILBOX_REDIRECT_URI=<the second redirect URI above>
 ```
+
+**The scopes are two keys, not one.** Signing in requests `MS_IDENTITY_SCOPES`
+only; `MS_MAILBOX_SCOPES` is requested separately when a user connects a
+mailbox, so nobody is asked to hand over their mail before they have asked for
+mail ingestion. Entra's consent is cumulative per user and app, so the token
+stored after the second grant covers both.
 
 ### 2. Domain
 
