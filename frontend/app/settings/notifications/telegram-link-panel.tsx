@@ -23,6 +23,11 @@ import QRCode from "qrcode";
    fifteen-minute window is a few hundred requests rather than thousands. */
 const POLL_MS = 3000;
 
+/* One source for the QR's pixel size: the encoder option and the <img>'s
+   width/height attributes must agree, or the browser box and the image data
+   inside it drift apart. */
+const QR_SIZE = 220;
+
 type Panel =
   | { status: "closed" }
   | { status: "opening" }
@@ -58,13 +63,21 @@ export function TelegramLinkPanel({
   useEffect(() => {
     poll.current = onPoll;
   }, [onPoll]);
+  // Bumped on every open() call and on cancel. The request has no client-side
+  // timeout, so cancelling out of "opening" does not abort the in-flight
+  // fetch — it is left to settle. Without this guard, a cancelled request
+  // that resolves later would still call setPanel and silently reopen a
+  // panel the recruiter already backed out of.
+  const requestId = useRef(0);
 
   const open = useCallback(async () => {
+    const myRequestId = ++requestId.current;
     setPanel({ status: "opening" });
     setQr(null);
     setJustLinked(false);
     baseline.current = new Set(destinationIds);
     const result = await onRequestLink();
+    if (requestId.current !== myRequestId) return;
     if ("error" in result) {
       setPanel({ status: "failed", message: result.error });
       return;
@@ -75,11 +88,12 @@ export function TelegramLinkPanel({
       expiresAt: Date.now() + result.expiresInMinutes * 60_000,
     });
     try {
-      setQr(await QRCode.toDataURL(result.url, { width: 220, margin: 1 }));
+      const dataUrl = await QRCode.toDataURL(result.url, { width: QR_SIZE, margin: 1 });
+      if (requestId.current === myRequestId) setQr(dataUrl);
     } catch {
       // A missing QR is a degraded panel, not a broken one — the link below it
       // still works, so this failure is deliberately silent on screen.
-      setQr(null);
+      if (requestId.current === myRequestId) setQr(null);
     }
   }, [destinationIds, onRequestLink]);
 
@@ -152,14 +166,17 @@ export function TelegramLinkPanel({
 
       {panel.status === "closed" ? (
         <>
-          {/* Same aria-live="polite" pattern the settings wrapper already
-              uses in settings-shell.tsx, scoped to this card so the
-              announcement fires exactly when the panel closes on success. */}
-          {justLinked ? (
-            <p className="nt-note" aria-live="polite">
-              Telegram linked.
-            </p>
-          ) : null}
+          {/* This card sits inside settings-shell.tsx's wrap-level
+              aria-live="polite", which already announces any text change
+              anywhere in the wrap. Nesting a second live region here would
+              not "scope" the announcement — nested live regions are
+              unreliable, and a node that mounts already containing its
+              message is frequently missed entirely because there was no
+              mutation for the outer region to notice. So this node is kept
+              in the tree permanently (no aria-live of its own, no
+              conditional mount) and only its text content changes; the
+              wrap's live region picks up that mutation and announces it. */}
+          <p className="nt-note">{justLinked ? "Telegram linked." : ""}</p>
           <p className="nt-note">
             Open the link on the phone you want messages on, and press Start.
           </p>
@@ -175,7 +192,25 @@ export function TelegramLinkPanel({
           </div>
         </>
       ) : panel.status === "opening" ? (
-        <p className="nt-note">Creating a link.</p>
+        <>
+          <p className="nt-note">Creating a link.</p>
+          {/* The request has no client-side timeout, so a hung request would
+              otherwise strand the recruiter on this message indefinitely.
+              Cancelling only resets the panel's own state — the in-flight
+              request is left to settle on its own and its result is
+              discarded by whichever `setPanel` call runs first. */}
+          <div className="nt-card-foot">
+            <button
+              className="btn btn-secondary"
+              onClick={() => {
+                requestId.current++;
+                setPanel({ status: "closed" });
+              }}
+            >
+              Cancel
+            </button>
+          </div>
+        </>
       ) : panel.status === "failed" ? (
         <>
           <p className="nt-error">{panel.message}</p>
@@ -200,7 +235,7 @@ export function TelegramLinkPanel({
             Scan this with your phone, or open the link if Telegram is on this machine. Then press
             Start. This page will notice by itself.
           </p>
-          {qr ? <img className="nt-qr" src={qr} alt="" width={220} height={220} /> : null}
+          {qr ? <img className="nt-qr" src={qr} alt="" width={QR_SIZE} height={QR_SIZE} /> : null}
           <p className="nt-note">
             <a href={panel.url} target="_blank" rel="noreferrer noopener">
               {panel.url}

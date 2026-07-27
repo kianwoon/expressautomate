@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 
 import { LANDING_PATH, SETTINGS_GLOSSARY_PATH, SETTINGS_NOTIFICATIONS_PATH, SETTINGS_PATH } from "../api";
 import { useAuth } from "../auth";
@@ -48,22 +48,14 @@ export function SettingsShell({
     if (auth.status === "anonymous") window.location.replace(LANDING_PATH);
   }, [auth.status]);
 
-  // Once we have confirmed the user is signed in, `children` stays mounted
-  // through a later transient `unreachable` from `useAuth` itself (a blip on
-  // the auth check, not the notifications fetch). This is a DIFFERENT outage
-  // than the one the Telegram panel cares about: that one is fixed where the
-  // panel's own data lives, in `notifications-data.ts` (a failed refresh
-  // keeps the last-good settings instead of replacing them with an error
-  // screen). This flag only stops the *shell* from unmounting every settings
-  // route's children the moment `useAuth` reports a hiccup — without it, an
-  // auth-check blip would tear down the panel regardless of what
-  // notifications-data.ts does, since children would not be in the tree at
-  // all.
-  const [everSignedIn, setEverSignedIn] = useState(false);
-  useEffect(() => {
-    if (auth.status === "signed-in") setEverSignedIn(true);
-  }, [auth.status]);
-
+  // `useAuth` fetches once, in an effect with no dependencies, and never
+  // re-checks — there is no poll or revalidation. So `signed-in` never
+  // reverts to `unreachable`; each status is terminal for the page's
+  // lifetime. Children therefore mount only on `signed-in`. Protecting a
+  // settings panel's own data (e.g. the Telegram panel's QR) across a failed
+  // *refresh* is a separate concern, handled where that data lives —
+  // `notifications-data.ts` keeps last-good settings and surfaces a
+  // `refreshError` instead of collapsing to unreadable.
   return (
     <>
       <SiteNav />
@@ -90,7 +82,7 @@ export function SettingsShell({
                 untouched. Reload the page in a moment.
               </p>
             ) : null}
-            {auth.status === "signed-in" || (everSignedIn && auth.status === "unreachable") ? (
+            {auth.status === "signed-in" ? (
               children
             ) : auth.status === "unreachable" ? null : (
               /* Covers both "loading" and the instant before the redirect
