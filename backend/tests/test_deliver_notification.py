@@ -430,6 +430,32 @@ async def test_a_retry_after_transient_failure_still_reports_the_rollup(
     assert remaining == 0
 
 
+async def test_a_transient_failures_retry_after_reaches_arqs_defer(
+    delivery, monkeypatch
+) -> None:
+    """Finding 3 of the final pre-merge review: both channel clients parse the
+    provider's Retry-After into SendResult.retry_after, but the transient path
+    used to raise a plain exception and throw it away, leaving arq to retry on
+    its own schedule regardless of what the provider asked for. Honouring the
+    hint is what keeps a throttled account from being throttled harder —
+    exactly what GraphThrottled -> Retry(defer=...) already does on the
+    ingestion side (app/workers/jobs.py, fetch_email)."""
+    from arq import Retry
+
+    tenant_id, _, delivery_id = delivery
+    fake = FakeChannel(
+        SendResult(outcome=SendOutcome.TRANSIENT, error="429", retry_after=17.5)
+    )
+    monkeypatch.setattr(jobs, "channel_for", lambda name: fake)
+
+    with pytest.raises(Retry) as excinfo:
+        await jobs.deliver_notification(
+            {}, delivery_id=str(delivery_id), tenant_id=str(tenant_id)
+        )
+
+    assert excinfo.value.defer_score == 17500
+
+
 async def test_a_whatsapp_template_error_does_not_disable_the_destination(
     delivery, admin_session, monkeypatch
 ) -> None:

@@ -25,6 +25,23 @@ stamps on the claim's own `UPDATE` — gating it on `created_at` instead would
 measure time-since-the-row-was-created rather than time-since-claimed, and
 could repromote a row a live worker had only just claimed.
 
+The `suppressed` branch promotes at most ONE row per (destination_id,
+event_kind) — the oldest, so the vacancy actually named in the resulting
+message is the one the recruiter has been waiting longest to hear about —
+rather than every row in the batch. Promoting the whole batch would turn the
+rate cap into a pure delay: an hour after a 50-vacancy burst capped to 6/hour,
+all 44 suppressed rows would queue and send individually, each one billable on
+WhatsApp, which is exactly the traffic the cap exists to prevent. The one
+promoted row becomes `pending`, gets claimed and sent by `deliver_notification`
+like any other delivery, and that job's existing rollup read (`_ROLLUP_IDS` in
+app/workers/jobs.py) counts every *other* still-`suppressed` row for the same
+(destination_id, event_kind) into that message's "+N more" and retires them
+via `_MARK_ROLLED_UP` once the send actually succeeds — so the rest of the
+batch is reported, once, as a count, not replayed message by message. Nothing
+new needs to consume them: that machinery already existed for the case where a
+later real event arrives; this just also gives it a synthetic one to piggyback
+on when none ever does.
+
 Revision ID: b1a1000a061c
 Revises: 9cb3950eccff
 Create Date: 2026-07-28
@@ -67,20 +84,44 @@ AS $$
     -- single FOR UPDATE SKIP LOCKED lock, holding it for as long as that
     -- takes. 500 rows is enough headroom for a large backlog to drain in a
     -- few ticks without turning one call into a table-wide lock.
-    UPDATE notification_deliveries d
-    SET status = 'pending'
-    WHERE d.id IN (
-        SELECT c.id FROM notification_deliveries c
+    --
+    -- `candidates` picks WHICH rows qualify, `locked` is what actually takes
+    -- FOR UPDATE SKIP LOCKED and enforces the combined 500-row cap — kept as
+    -- two steps because Postgres rejects FOR UPDATE together with DISTINCT
+    -- ON, which the suppressed branch needs to pick one carrier per
+    -- (destination_id, event_kind) rather than the whole batch.
+    WITH candidates AS (
+        SELECT c.id, c.created_at FROM notification_deliveries c
         WHERE (c.status = 'pending'
                AND c.created_at < now() - make_interval(mins => GREATEST(p_stale_minutes, 1)))
-           OR (c.status = 'suppressed'
-               AND c.created_at < now() - interval '1 hour')
            OR (c.status = 'sending'
                AND c.updated_at < now() - make_interval(mins => GREATEST(p_stale_minutes, 1)))
-        ORDER BY c.created_at
+        UNION ALL
+        -- One row per (destination_id, event_kind): the oldest suppressed
+        -- row becomes the rollup carrier, promoted to `pending` so it sends
+        -- normally; every other row in the batch is left `suppressed` for
+        -- deliver_notification's existing rollup read to fold into that
+        -- carrier's "+N more" and retire once the send succeeds.
+        SELECT carrier.id, carrier.created_at FROM (
+            SELECT DISTINCT ON (c.destination_id, c.event_kind)
+                   c.id, c.created_at
+            FROM notification_deliveries c
+            WHERE c.status = 'suppressed'
+              AND c.created_at < now() - interval '1 hour'
+            ORDER BY c.destination_id, c.event_kind, c.created_at
+        ) carrier
+    ),
+    locked AS (
+        SELECT c.id FROM notification_deliveries c
+        JOIN candidates cd ON cd.id = c.id
+        ORDER BY cd.created_at
         LIMIT LEAST(GREATEST(p_limit, 1), 500)
         FOR UPDATE SKIP LOCKED
     )
+    UPDATE notification_deliveries d
+    SET status = 'pending'
+    FROM locked l
+    WHERE d.id = l.id
     RETURNING d.id, d.tenant_id
 $$
 """

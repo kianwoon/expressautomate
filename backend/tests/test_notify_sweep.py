@@ -8,6 +8,7 @@ import pytest
 from sqlalchemy import text
 
 from app.core.config import settings
+from app.db.rls import tenant_session
 from app.models.notification import CHANNEL_TELEGRAM, address_digest
 from app.services.notify.events import EVENT_OPPORTUNITY_NEW
 from app.workers import tasks
@@ -207,6 +208,57 @@ async def test_the_function_clamps_an_abusive_stale_window(
     )
     promoted = {row.id for row in result}
     assert row_id not in promoted
+
+
+async def test_a_suppressed_burst_flushes_only_one_carrier(
+    scene, admin_session, monkeypatch
+) -> None:
+    """Finding 2 of the final pre-merge review: the old function promoted
+    EVERY hour-old suppressed row for a destination/event_kind at once, so a
+    burst capped to a handful per hour was replayed message by message an hour
+    later — on WhatsApp, each one billable. Only one row (the rollup carrier)
+    should come back as `pending`; the rest must stay `suppressed` for
+    deliver_notification's existing rollup read to fold into that carrier's
+    "+N more" once it sends."""
+    tenant_id, dest_id = scene
+    ids = [
+        await _insert(admin_session, tenant_id, dest_id, "suppressed", 90)
+        for _ in range(5)
+    ]
+    queued: list[dict] = []
+
+    async def fake_enqueue(name, **kwargs):
+        queued.append(kwargs)
+        return True
+
+    monkeypatch.setattr(tasks, "enqueue", fake_enqueue)
+    await tasks.flush_notifications()
+
+    assert len(queued) == 1, "only the carrier should be requeued, not the batch"
+    carrier_id = uuid.UUID(queued[0]["delivery_id"])
+    assert carrier_id in ids
+
+    async with tenant_session(tenant_id) as session:
+        pending = (
+            await session.execute(
+                text(
+                    "SELECT count(*) FROM notification_deliveries "
+                    "WHERE id = ANY(:ids) AND status = 'pending'"
+                ),
+                {"ids": ids},
+            )
+        ).scalar_one()
+        still_suppressed = (
+            await session.execute(
+                text(
+                    "SELECT count(*) FROM notification_deliveries "
+                    "WHERE id = ANY(:ids) AND status = 'suppressed'"
+                ),
+                {"ids": ids},
+            )
+        ).scalar_one()
+    assert pending == 1
+    assert still_suppressed == 4
 
 
 def test_the_sweep_is_registered_in_the_supervisor() -> None:

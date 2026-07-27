@@ -62,6 +62,15 @@ _INSERT_EXTRACTION = text(
 # the same statement rather than round-tripped first. The SELECT reads under
 # the tenant policy, so an email another tenant owns yields no row and inserts
 # no opportunity — the mismatch fails closed instead of writing a headless row.
+#
+# ON CONFLICT (id) DO NOTHING: `:id` is now a deterministic uuid5 (see
+# `_opportunity_id` below), so a retried extraction — `rescan_stuck` re-running
+# `extract_email` after a worker died between `persist()`'s commit and
+# `_FINISH_EXTRACTION` — computes the SAME id for the same vacancy and lands
+# here a second time. Without the clause that would be a primary-key
+# violation; with it, the row from the first run is left exactly as it was,
+# including any human correction recorded against it, and the retry's
+# evidence/codes rows (below) still attach to the id that already exists.
 _INSERT_OPPORTUNITY = text(
     f"""
     INSERT INTO opportunities
@@ -74,8 +83,27 @@ _INSERT_OPPORTUNITY = text(
            :salary_min, :salary_max, :salary_currency, :salary_period, :salary_raw,
            :skills, :quality_state, :review_status
     FROM email_messages em WHERE em.id = :email_message_id
+    ON CONFLICT (id) DO NOTHING
     """
 ).bindparams(bindparam("skills", type_=ARRAY(Text)))
+
+# Fixed namespace for uuid5, in the same style as
+# `app.api.auth.PERSONAL_TENANT_NAMESPACE`: a constant, not a secret, so it can
+# live in source. Deriving from (email_message_id, index-within-the-run)
+# rather than from the model's output means a retry that gets a byte-for-byte
+# identical answer (the common case — extraction runs at temperature zero)
+# reproduces the same id, which is what lets the dedupe above and the
+# notification dedupe index (`notification_deliveries`'s partial unique index
+# on (destination_id, event_kind, subject_id)) both actually fire on a retry.
+# A retry whose answer differs (a prompt/model upgrade re-run over old mail)
+# still lands on the same id for the same position — that is intentional: the
+# opportunity that email describes is one thing across replays, not a new one
+# each time the model is asked again.
+_OPPORTUNITY_ID_NAMESPACE = uuid.UUID("2f6b6e4a-8a3d-5b4a-9c1e-6a2d4e8f1b7c")
+
+
+def _opportunity_id(email_message_id: uuid.UUID, index: int) -> uuid.UUID:
+    return uuid.uuid5(_OPPORTUNITY_ID_NAMESPACE, f"{email_message_id}:{index}")
 
 _INSERT_EVIDENCE = text(
     """
@@ -168,8 +196,8 @@ async def persist(
         # An email describing three vacancies becomes three rows. They share
         # one extraction, because they came from one model call — that is what
         # makes "what did this run cost, and what did it produce" answerable.
-        for job in response.jobs:
-            opportunity_id = uuid.uuid4()
+        for index, job in enumerate(response.jobs):
+            opportunity_id = _opportunity_id(email_message_id, index)
             opportunity_ids.append(opportunity_id)
             await _insert_opportunity(
                 session, tenant_id, email_message_id, opportunity_id, job, source

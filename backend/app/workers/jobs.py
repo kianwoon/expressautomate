@@ -63,7 +63,7 @@ from app.workers.queue import enqueue
 log = get_logger(__name__)
 
 
-class _TransientDeliveryFailure(RuntimeError):
+class _TransientDeliveryFailure(Retry):
     """Raised by deliver_notification's transient-failure path only.
 
     That path has already moved the row back to 'pending' before raising, so
@@ -71,7 +71,23 @@ class _TransientDeliveryFailure(RuntimeError):
     type and skip its own release step — otherwise a normal transient retry
     would take a second, redundant trip through _RELEASE_CLAIM on every
     failure.
+
+    Subclasses arq's `Retry` — rather than a plain RuntimeError, which is what
+    this was before finding 3 of the pre-merge review — so the provider's own
+    `Retry-After` (already parsed into `SendResult.retry_after` by both
+    channel clients) actually reaches arq's schedule instead of being
+    discarded in favour of arq's default backoff. `fetch_email`'s
+    `GraphThrottled` handling does the equivalent thing for Graph throttling;
+    this is the delivery side's version. `retry_after=None` (the provider gave
+    no hint) defers to arq's own default, same as before this fix.
     """
+
+    def __init__(self, message: str, *, retry_after: float | None = None) -> None:
+        super().__init__(defer=retry_after)
+        self._message = message
+
+    def __str__(self) -> str:
+        return self._message
 
 
 # Only what is stored. Pulling the whole message would cost bandwidth on every
@@ -1414,4 +1430,7 @@ async def _send_claimed_delivery(tenant: uuid.UUID, delivery_id: str, claimed) -
     # subclass (rather than a plain RuntimeError) lets deliver_notification's
     # unexpected-exception guard recognise "already released, don't release
     # again" and just re-raise instead of re-running _RELEASE_CLAIM.
-    raise _TransientDeliveryFailure(f"Transient notification failure: {result.error}")
+    raise _TransientDeliveryFailure(
+        f"Transient notification failure: {result.error}",
+        retry_after=result.retry_after,
+    )

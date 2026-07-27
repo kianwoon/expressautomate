@@ -281,6 +281,84 @@ async def test_three_jobs_in_one_email_become_three_rows(admin_session, email_ro
     assert len(ids) == 3
 
 
+async def test_a_retried_extraction_produces_one_opportunity_and_one_delivery(
+    admin_session, email_row
+):
+    """Finding 1 of the final pre-merge review: `persist()` used to mint a
+    fresh uuid4 opportunity id on every run, so a retry (the worker dying
+    between `persist()`'s commit and `_FINISH_EXTRACTION`, followed by
+    `rescan_stuck` re-running `extract_email`) created a second opportunity
+    row and, because the notification dedupe index keys on `subject_id`, a
+    second notification too. The fix derives the id deterministically from
+    (email_message_id, index-within-the-run), so a retry that lands on the
+    exact same answer — the ordinary case at temperature zero — reproduces
+    the same id and both dedupes actually fire."""
+    from app.models.notification import CHANNEL_TELEGRAM, address_digest
+
+    tid, _, eid = email_row
+    user_id, dest_id = uuid.uuid4(), uuid.uuid4()
+    await admin_session.execute(
+        text(
+            "INSERT INTO users (id, tenant_id, email, role) "
+            "VALUES (:id, :tid, 'r@a.sg', 'recruiter')"
+        ),
+        {"id": user_id, "tid": tid},
+    )
+    await admin_session.execute(
+        text(
+            "INSERT INTO notification_destinations "
+            "(id, tenant_id, user_id, channel, address_encrypted, address_hash, verified_at) "
+            "VALUES (:id, :tid, :uid, :ch, 'ciphertext', :hash, now())"
+        ),
+        {
+            "id": dest_id,
+            "tid": tid,
+            "uid": user_id,
+            "ch": CHANNEL_TELEGRAM,
+            "hash": address_digest("12345"),
+        },
+    )
+    await admin_session.execute(
+        text(
+            "INSERT INTO notification_subscriptions "
+            "(id, tenant_id, destination_id, event_kind, active) "
+            "VALUES (:id, :tid, :did, :kind, true)"
+        ),
+        {"id": uuid.uuid4(), "tid": tid, "did": dest_id, "kind": "opportunity.new"},
+    )
+    await admin_session.commit()
+
+    first_ids = await persist(
+        tid, eid, _response(), LLMResult(data={}, model="test/fast"), SOURCE
+    )
+    # The worker died before _FINISH_EXTRACTION; rescan_stuck re-runs
+    # extract_email, which calls persist() again for the same email.
+    second_ids = await persist(
+        tid, eid, _response(), LLMResult(data={}, model="test/fast"), SOURCE
+    )
+
+    assert first_ids == second_ids, "same email, same position -> same id"
+
+    opportunity_count = (
+        await admin_session.execute(
+            text("SELECT count(*) FROM opportunities WHERE email_message_id = :e"),
+            {"e": eid},
+        )
+    ).scalar_one()
+    assert opportunity_count == 1
+
+    delivery_count = (
+        await admin_session.execute(
+            text(
+                "SELECT count(*) FROM notification_deliveries "
+                "WHERE subject_id = :o"
+            ),
+            {"o": first_ids[0]},
+        )
+    ).scalar_one()
+    assert delivery_count == 1
+
+
 async def test_the_prompt_version_is_stamped_on_the_run(admin_session, email_row):
     """Without it a quality regression cannot be told from a change in the mail."""
     tid, _, eid = email_row
