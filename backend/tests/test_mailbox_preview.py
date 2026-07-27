@@ -30,7 +30,7 @@ def _json(payload: dict, status: int = 200) -> httpx.Response:
 @pytest.mark.asyncio
 async def test_preview_reports_graphs_own_counts():
     """Every number shown comes from Graph, per window."""
-    counts = {7: 12, 30: 140, settings.INITIAL_SYNC_MAX_LOOKBACK_DAYS: 3905}
+    counts = {1: 3, 7: 12, 30: 140, settings.INITIAL_SYNC_MAX_LOOKBACK_DAYS: 3905}
     seen_filters = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -53,6 +53,7 @@ async def test_preview_reports_graphs_own_counts():
     assert preview.oldest_received == datetime(2024, 1, 5, 9, tzinfo=UTC)
     by_key = {w.key: w.emails for w in preview.windows}
     assert by_key["now"] is None  # nothing historical to count
+    assert by_key["1d"] == 3
     assert by_key["7d"] == 12
     assert by_key["30d"] == 140
     assert sorted(seen_filters) == sorted(counts)
@@ -120,6 +121,7 @@ def test_window_keys_resolve_to_the_dates_they_promise():
 
     now = datetime.now(UTC)
     assert abs((_resolve_window("now") - now).total_seconds()) < 5
+    assert abs((_resolve_window("1d") - (now - timedelta(days=1))).total_seconds()) < 5
     assert abs((_resolve_window("7d") - (now - timedelta(days=7))).total_seconds()) < 5
 
 

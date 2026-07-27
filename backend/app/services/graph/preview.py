@@ -56,6 +56,10 @@ def offered_windows() -> list[tuple[str, str, int | None]]:
     cap = settings.INITIAL_SYNC_MAX_LOOKBACK_DAYS
     choices: list[tuple[str, str, int | None]] = [
         ("now", "From now on", None),
+        # "Last 24 hours", not "Today": the filter is `received >= now - 1 day`,
+        # so at 9am it reaches back into yesterday evening. Calling that "today"
+        # would put a wrong number next to a real count.
+        ("1d", "Last 24 hours", 1),
         ("7d", "Last 7 days", 7),
         ("30d", "Last 30 days", 30),
     ]

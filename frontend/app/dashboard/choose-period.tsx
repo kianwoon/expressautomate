@@ -162,11 +162,21 @@ export function ChoosePeriod({ onStarted }: { onStarted: () => void }) {
         <Stat value={null} label="read so far" sub="Nothing until you press start" />
       </div>
 
-      <fieldset style={{ marginTop: 32, border: 0, padding: 0 }}>
+      <fieldset style={{ marginTop: 36, border: 0, padding: 0, margin: 0 }}>
         <legend className="eyebrow" style={{ padding: 0 }}>
           How far back?
         </legend>
-        <div style={{ marginTop: 14, display: "grid", gap: 10, maxWidth: "42ch" }}>
+        {/* Two columns on anything wider than a phone. As a single narrow
+            column under the full-width stat cards it read as an unrelated
+            fragment rather than the choice the page is asking for. */}
+        <div
+          style={{
+            marginTop: 16,
+            display: "grid",
+            gap: 12,
+            gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
+          }}
+        >
           {preview.options.map((option) => (
             <label
               key={option.key}
@@ -175,8 +185,13 @@ export function ChoosePeriod({ onStarted }: { onStarted: () => void }) {
                 display: "flex",
                 alignItems: "center",
                 gap: 12,
-                padding: "14px 16px",
+                padding: "16px 18px",
                 cursor: "pointer",
+                // The selected option should be obvious without hunting for a
+                // filled radio dot.
+                outline:
+                  chosen === option.key ? "2px solid var(--accent, #2563eb)" : "none",
+                outlineOffset: -1,
               }}
             >
               <input
@@ -187,7 +202,14 @@ export function ChoosePeriod({ onStarted }: { onStarted: () => void }) {
                 onChange={() => setChosen(option.key)}
               />
               <span style={{ fontWeight: 600 }}>{option.label}</span>
-              <span className="muted" style={{ marginLeft: "auto", fontSize: "0.875rem" }}>
+              <span
+                className="muted"
+                style={{
+                  marginLeft: "auto",
+                  fontSize: "0.875rem",
+                  whiteSpace: "nowrap",
+                }}
+              >
                 {/* An unknown count says so. Reading "0 emails" off a window
                     Microsoft simply would not count is exactly the mistake
                     this whole step exists to stop. */}
@@ -202,19 +224,29 @@ export function ChoosePeriod({ onStarted }: { onStarted: () => void }) {
         </div>
       </fieldset>
 
-      <p className="body muted" style={{ marginTop: 16, maxWidth: "62ch", fontSize: "0.875rem" }}>
-        Whichever you pick, new mail from now on is read as it arrives. This only decides how much
-        of the existing inbox we go back through, and it is asked once.
-      </p>
-
-      <button
-        className="btn btn-primary"
-        style={{ marginTop: 20 }}
-        onClick={start}
-        disabled={!chosen || starting}
+      {/* The button and the caveat belong together: the caveat is what makes
+          the button safe to press. */}
+      <div
+        style={{
+          marginTop: 24,
+          display: "flex",
+          alignItems: "center",
+          gap: 20,
+          flexWrap: "wrap",
+        }}
       >
-        {starting ? "Starting…" : "Start reading"}
-      </button>
+        <button
+          className="btn btn-primary"
+          onClick={start}
+          disabled={!chosen || starting}
+        >
+          {starting ? "Starting…" : "Start reading"}
+        </button>
+        <p className="body muted" style={{ margin: 0, maxWidth: "52ch", fontSize: "0.875rem" }}>
+          New mail is read as it arrives whichever you pick. This only decides how far back through
+          the existing inbox we go, and it is asked once.
+        </p>
+      </div>
 
       {startError && (
         <p className="body" style={{ marginTop: 12, maxWidth: "62ch" }}>

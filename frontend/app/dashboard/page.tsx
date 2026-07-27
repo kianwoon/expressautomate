@@ -269,18 +269,15 @@ function NotConnected({ me }: { me: Me }) {
 
 function Extraction({ extracted }: { extracted: number }) {
   return (
-    <div style={{ marginTop: 40, maxWidth: "72ch" }}>
+    <div style={{ marginTop: 48, maxWidth: "68ch" }}>
       <span className="eyebrow">What is not live yet</span>
       <h2 style={{ marginTop: 12 }}>Reading, not yet understanding.</h2>
       <p className="body" style={{ marginTop: 16 }}>
         Mail is collected and stored. Turning it into structured job orders — company, role,
         salary, hours, location — is the next piece and is not switched on, which is why{" "}
-        <strong>job orders found</strong> is {extracted}. That is a real count rather than a
-        placeholder: nothing has been extracted because nothing extracts yet.
-      </p>
-      <p className="body" style={{ marginTop: 12 }}>
-        Everything read in the meantime is kept, so when extraction arrives it runs over the mail
-        already collected rather than starting from that day.
+        <strong>job orders found</strong> is {extracted}: a real count, not a placeholder.
+        Everything read in the meantime is kept, so extraction will run over the mail already
+        collected rather than starting from the day it arrives.
       </p>
     </div>
   );
@@ -316,13 +313,20 @@ function Row({ k, v, empty = "Not mentioned" }: { k: string; v: string | null; e
   return (
     <div className="row">
       <span className="row-k">{k}</span>
-      <span className={v ? undefined : "muted"}>{v ?? empty}</span>
+      {/* `anywhere`, not `break-all`: an address only breaks when it genuinely
+          cannot fit, and then at the end of a line rather than mid-word in the
+          middle of one. Untreated, "wiserly@hotmail.com" split as
+          "wiserly@hotmail.co / m", which reads as a typo in the user's own
+          address. */}
+      <span className={v ? undefined : "muted"} style={{ overflowWrap: "anywhere" }}>
+        {v ?? empty}
+      </span>
     </div>
   );
 }
 
 function stateLabel(me: Me): string {
-  if (me.mailbox.awaiting_period) return "Waiting for you to choose a period";
+  if (me.mailbox.awaiting_period) return "Awaiting your choice";
   if (me.mailbox.status === null) return "No mailbox connected";
   if (me.mailbox.status === "needs_reauth") return "Needs reconnecting";
   if (me.mailbox.status === "disconnected") return "Disconnected";
