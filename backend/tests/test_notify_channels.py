@@ -1,12 +1,33 @@
 """Channel clients, against a stub transport. Nothing here touches the network."""
 
 import httpx
+import pytest
 
 from app.core.config import settings
 from app.services.notify.channels.base import SendOutcome
 from app.services.notify.channels.telegram import TelegramChannel
 from app.services.notify.channels.whatsapp import WhatsAppChannel
 from app.services.notify.render import TelegramContent, WhatsAppContent
+
+
+@pytest.fixture(autouse=True)
+def _channel_config(monkeypatch):
+    """Both channels build their send URL directly from these settings (see
+    TelegramChannel.send / WhatsAppChannel.send) with no configured() gate in
+    front — they trust the caller already checked. A blank base URL turns the
+    URL into a bare path like "/bot/sendMessage", which httpx cannot parse and
+    raises ValueError("unknown url type") on, rather than a normal HTTP
+    failure. Pinning these here means the test's pass/fail no longer depends
+    on whatever the ambient environment (a sourced .env.test locally, nothing
+    in CI) happens to supply.
+    """
+    monkeypatch.setattr(settings, "TELEGRAM_BOT_TOKEN", "test-bot-token")
+    monkeypatch.setattr(settings, "TELEGRAM_API_BASE_URL", "https://api.telegram.org")
+    monkeypatch.setattr(settings, "WHATSAPP_ACCESS_TOKEN", "test-wa-token")
+    monkeypatch.setattr(settings, "WHATSAPP_PHONE_NUMBER_ID", "100000000000000")
+    monkeypatch.setattr(
+        settings, "WHATSAPP_API_BASE_URL", "https://graph.facebook.com/v21.0"
+    )
 
 
 def _client(handler) -> httpx.AsyncClient:

@@ -106,10 +106,34 @@ async def test_settings_starts_with_no_destinations(client, signed_in) -> None:
     assert response.json()["destinations"] == []
 
 
-async def test_telegram_link_returns_a_deep_link(client, signed_in) -> None:
+async def test_telegram_link_returns_a_deep_link(client, signed_in, monkeypatch) -> None:
+    """Requires telegram_configured() to be True. Pinned explicitly rather
+    than inherited from whatever the ambient environment supplies — CI's
+    workflow env and a locally-sourced .env.test happened to agree, until CI's
+    inline env: block was added without these keys and the endpoint started
+    correctly returning 503 where this test still expected 200.
+    """
+    monkeypatch.setattr(settings, "TELEGRAM_BOT_TOKEN", "test-bot-token")
+    monkeypatch.setattr(settings, "TELEGRAM_API_BASE_URL", "https://api.telegram.org")
+    monkeypatch.setattr(settings, "TELEGRAM_BOT_USERNAME", "expressautomate_test_bot")
+
     response = await client.post("/api/notifications/destinations/telegram/link")
     assert response.status_code == 200
     assert response.json()["url"].startswith("https://t.me/")
+
+
+async def test_telegram_link_is_503_when_telegram_is_not_configured(
+    client, signed_in, monkeypatch
+) -> None:
+    """The deliberate counterpart to the test above: pins the unconfigured
+    behaviour so it is exercised on purpose, not only by accident whenever an
+    environment happens to be missing these keys (as CI's was).
+    """
+    monkeypatch.setattr(settings, "TELEGRAM_BOT_TOKEN", "")
+    monkeypatch.setattr(settings, "TELEGRAM_API_BASE_URL", "")
+
+    response = await client.post("/api/notifications/destinations/telegram/link")
+    assert response.status_code == 503
 
 
 async def test_subscriptions_reject_an_unknown_event(
@@ -227,7 +251,17 @@ async def test_unticking_a_subscription_removes_it(
 
 
 async def test_opt_in_is_rate_limited(client, signed_in, monkeypatch) -> None:
-    """Otherwise this endpoint is an OTP pump on our WABA's reputation."""
+    """Otherwise this endpoint is an OTP pump on our WABA's reputation.
+
+    Needs whatsapp_configured() to be True, or the endpoint 503s before the
+    rate limit is ever reached — pin the settings it checks explicitly rather
+    than relying on the ambient environment to supply them.
+    """
+    monkeypatch.setattr(settings, "WHATSAPP_ACCESS_TOKEN", "test-wa-token")
+    monkeypatch.setattr(settings, "WHATSAPP_PHONE_NUMBER_ID", "100000000000000")
+    monkeypatch.setattr(
+        settings, "WHATSAPP_API_BASE_URL", "https://graph.facebook.com/v21.0"
+    )
     sent: list[str] = []
 
     class FakeChannel:
@@ -249,6 +283,24 @@ async def test_opt_in_is_rate_limited(client, signed_in, monkeypatch) -> None:
         )
     assert last.status_code == 429
     assert len(sent) == settings.NOTIFY_OPT_IN_MAX_PER_HOUR
+
+
+async def test_opt_in_is_503_when_whatsapp_is_not_configured(
+    client, signed_in, monkeypatch
+) -> None:
+    """Deliberate counterpart to test_opt_in_is_rate_limited: pins the
+    unconfigured behaviour so it is asserted on purpose rather than only
+    ever observed by accident, which is exactly how CI caught the missing
+    keys and a local run sourcing .env.test did not.
+    """
+    monkeypatch.setattr(settings, "WHATSAPP_ACCESS_TOKEN", "")
+    monkeypatch.setattr(settings, "WHATSAPP_PHONE_NUMBER_ID", "")
+
+    response = await client.post(
+        "/api/notifications/destinations/whatsapp/opt-in",
+        json={"phone_number": "+6591234567"},
+    )
+    assert response.status_code == 503
 
 
 async def test_verify_is_rate_limited(client, signed_in, monkeypatch) -> None:

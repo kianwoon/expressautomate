@@ -115,6 +115,26 @@ jobs:
       # RedisSettings in its class body — so the module is unimportable without
       # a valid DSN. Nothing in the suite connects; the queue is always faked.
       REDIS_URL: redis://localhost:6379
+      # Not secrets — placeholder values matching backend/.env.test. There is
+      # no .env in CI, and telegram_configured()/whatsapp_configured() go
+      # False on an empty key, which is exactly what tests/test_notifications_api.py
+      # and tests/test_notify_channels.py exist to catch: an unset key here
+      # once turned expected-200/429 responses into 503s and the channel
+      # clients' URL-building into a bare "/bot/sendMessage" path that httpx
+      # can't parse. Kept as workflow env (not .env.test) because CI does not
+      # source that file.
+      TELEGRAM_BOT_TOKEN: ci-test-bot-token
+      TELEGRAM_BOT_USERNAME: expressautomate_ci_bot
+      TELEGRAM_API_BASE_URL: https://api.telegram.org
+      TELEGRAM_WEBHOOK_SECRET: ci-webhook-secret
+      WHATSAPP_ACCESS_TOKEN: ci-wa-token
+      WHATSAPP_PHONE_NUMBER_ID: "100000000000000"
+      WHATSAPP_API_BASE_URL: https://graph.facebook.com/v21.0
+      WHATSAPP_APP_SECRET: ci-app-secret
+      WHATSAPP_VERIFY_TOKEN: ci-verify-token
+      WHATSAPP_TEMPLATE_OPPORTUNITY_NEW: opportunity_new
+      WHATSAPP_TEMPLATE_OPPORTUNITY_REVIEW: opportunity_needs_review
+      WHATSAPP_TEMPLATE_LINK_CODE: link_verification_code
 
     steps:
       - uses: actions/checkout@v7
