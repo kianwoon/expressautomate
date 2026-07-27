@@ -45,6 +45,7 @@ def settings_the_suite_supplies(monkeypatch) -> None:
     """
     monkeypatch.setattr(settings, "INITIAL_SYNC_MAX_LOOKBACK_DAYS", 90)
     monkeypatch.setattr(settings, "LOOKBACK_EXTENSION_MIN_DAYS", 1)
+    monkeypatch.setattr(settings, "LOOKBACK_EXTENSION_MIN_FRACTION", 0.1)
 
 
 @pytest.fixture
@@ -274,3 +275,30 @@ async def test_a_few_days_further_back_is_still_offered(client, seeded) -> None:
     assert keys == ["7d", "30d", "90d"]
     # Still one-way: nothing at or later than the current start date.
     assert "1d" not in keys and "now" not in keys
+
+
+async def test_a_walk_that_gains_almost_nothing_is_not_offered(client, seeded) -> None:
+    """Found in review, and the reason a flat day count was the wrong test.
+
+    Choose 30 days, come back two months later, and the 90-day option sits one
+    day behind the stored start date. A flat one-day floor calls that an
+    extension and offers a full ninety-day re-walk of the mailbox to buy a
+    single day of older mail.
+
+    The rule is proportional instead: the gain has to be worth the window it
+    makes us re-read. Five days gained on a seven-day walk passes; one day
+    gained on a ninety-day walk does not, and the same absolute number should
+    not decide both.
+    """
+    tenant_id, user_id, _mailbox_id = await seeded("agency-a", days_back=89)
+    sign_in(client, user_id, tenant_id)
+
+    keys = [o["key"] for o in (await client.get(SETTINGS)).json()["options"]]
+
+    assert keys == [], "one more day of history is not worth re-reading ninety"
+
+    # And the refusal says which of the two reasons it is. "Not further back"
+    # would be plainly false here — it is further back, just not by enough.
+    res = await client.post(LOOKBACK, json={"window": "90d"})
+    assert res.status_code == 400
+    assert "barely reaches further back" in res.json()["detail"]

@@ -131,11 +131,20 @@ class Settings(BaseSettings):
     # One day, not seven. Seven silently removed real choices: a mailbox
     # started on the 26th could not be extended to "last 7 days" on the 28th,
     # because that reaches only five days further back — a legitimate request
-    # that simply vanished from the page with nothing to say why. The case the
-    # larger floor was written for (choosing the longest window again, weeks
-    # later) never needed it, since that candidate is *later* than the stored
-    # date and the plain comparison already rejects it.
+    # that simply vanished from the page with nothing to say why.
+    #
+    # This is only the floor for the shortest windows. The test that does the
+    # real work is the fraction below; a flat day count cannot tell "five days
+    # gained on a seven-day walk" from "one day gained on a ninety-day walk",
+    # and those deserve opposite answers.
     LOOKBACK_EXTENSION_MIN_DAYS: int = Field(default=1, gt=0)
+    # What share of the walk has to be new history for it to be worth running.
+    # A tenth: reaching 90 days must gain at least nine, reaching seven must
+    # gain at least one. Without it, a mailbox that chose 30 days two months
+    # ago would be offered a full ninety-day re-walk in exchange for a single
+    # day of older mail — technically an extension, and thousands of Graph
+    # calls for nothing anybody would notice.
+    LOOKBACK_EXTENSION_MIN_FRACTION: float = Field(default=0.1, gt=0, le=1)
 
     # --- Recovery sweeps (plan §8, §9) ---
     # Two grace periods, because a queue hop should be quick but a fetch or an

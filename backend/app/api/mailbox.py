@@ -260,12 +260,21 @@ async def extend_lookback(request: Request, body: LookbackRequest) -> dict:
             # Refused rather than quietly accepted. Writing a later date would
             # change the stored setting without removing a single email, so the
             # user would be told their history had shrunk when it had not.
+            #
+            # Two refusals, not one. A page held open long enough can offer an
+            # option that has since drifted below the threshold, and telling
+            # someone it "is not further back" when it plainly is reads as a
+            # bug in us rather than a judgement about cost.
             raise HTTPException(
                 status_code=400,
                 detail=(
                     "That period is not further back than the one you already have. "
                     "Reading more history only ever adds emails — it cannot remove "
                     "any that were already read."
+                    if since >= row.initial_sync_from
+                    else "That period barely reaches further back than the one you "
+                    "already have, and re-reading the mailbox for it would cost far "
+                    "more than it adds. Choose a longer one."
                 ),
             )
         await session.execute(
@@ -297,15 +306,35 @@ def _window_start(days: int | None) -> datetime:
 def _extends(candidate: datetime, current: datetime) -> bool:
     """Is `candidate` far enough behind `current` to be worth a re-walk?
 
-    A bare `<` is not enough. `current` is a fixed instant while every option
-    is measured from `now`, so the gap between them widens on its own: a user
-    who chose the longest window last week would be offered that same window
-    again, as an "extension" worth a week of history and a full re-walk of the
-    mailbox to get it. The floor is configuration because how much extra
-    history justifies thousands of Graph calls is an operator's judgement.
+    A bare `<` is not enough, and neither is a fixed number of days — the two
+    failures a flat floor produces are opposite and it cannot avoid both.
+
+    Too high (this was seven days) and it hides real choices: a mailbox
+    started on the 26th could not reach "last 7 days" on the 28th, because
+    that gains only five days. A legitimate request, absent from the page,
+    with nothing to explain why.
+
+    Too low (one day) and it admits an extension that gains almost nothing for
+    a walk that costs everything: choose 30 days, come back two months later,
+    and the 90-day option now sits one day behind the stored date — a full
+    ninety-day walk of the mailbox to buy a single day of older mail.
+
+    So the test is proportional: the gain has to be worth the window it makes
+    us re-read. A day gained on a seven-day walk is a fifth of it; a day
+    gained on a ninety-day walk is a rounding error, and the same absolute
+    number should not pass in both cases. `_MIN_DAYS` remains underneath as
+    the floor for the smallest windows, where a fraction alone would let an
+    hour's drift through.
     """
     gap = current - candidate
-    return gap >= timedelta(days=settings.LOOKBACK_EXTENSION_MIN_DAYS)
+    if gap < timedelta(days=settings.LOOKBACK_EXTENSION_MIN_DAYS):
+        return False
+    # How long the walk being asked for actually is. Measured from `now`
+    # because that is what the backfill will re-read.
+    span = datetime.now(UTC) - candidate
+    if span <= timedelta(0):
+        return False
+    return gap / span >= settings.LOOKBACK_EXTENSION_MIN_FRACTION
 
 
 def _resolve_window(key: str) -> datetime:
