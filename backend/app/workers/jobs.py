@@ -24,8 +24,16 @@ from arq import Retry
 from sqlalchemy import bindparam, text
 
 from app.core.config import settings
+from app.core.crypto import decrypt
 from app.core.logging import get_logger
 from app.db.rls import tenant_session
+from app.models.notification import (
+    STATUS_FAILED,
+    STATUS_PENDING,
+    STATUS_SENDING,
+    STATUS_SENT,
+    STATUS_SUPPRESSED,
+)
 from app.models.sync_event import (
     KIND_BACKFILL,
     KIND_DELTA_SYNC,
@@ -43,6 +51,10 @@ from app.services.graph.client import (
 )
 from app.services.graph.subscriptions import create_subscription, renew_subscription
 from app.services.ms_auth import MailboxNotAuthorised, access_token_for_mailbox
+from app.services.notify.channels import channel_for
+from app.services.notify.channels.base import SendOutcome
+from app.services.notify.events import OpportunityEvent
+from app.services.notify.render import render
 from app.services.storage.r2 import BodyStoreMisconfigured, R2BodyStore, body_key
 from app.workers.queue import enqueue
 
@@ -184,6 +196,79 @@ _TRIM_SYNC_EVENTS = text(
         LIMIT :keep
       )
     """
+)
+
+# allow-hardcode: SQL statements, not a phrase list.
+
+# The claim. Claiming *after* the send would double-message when the sweep and
+# the original enqueue both fire for one row, which they can and do.
+_CLAIM_DELIVERY = text(
+    """
+    UPDATE notification_deliveries
+    SET status = :sending, attempts = attempts + 1
+    WHERE id = :id AND status = :pending
+    RETURNING id, destination_id, event_kind, subject_id, attempts
+    """
+)
+
+_DELIVERY_TARGET = text(
+    """
+    SELECT d.channel, d.address_encrypted, d.failure_count
+    FROM notification_destinations d
+    WHERE d.id = :destination_id AND d.disabled_at IS NULL
+    """
+)
+
+# The event is re-read at send time rather than carried through Redis: a job
+# payload is not a place to put a job title, and the row is one join away.
+_DELIVERY_SUBJECT = text(
+    """
+    SELECT job_title_raw, company_name_raw, location_raw, salary_raw
+    FROM opportunities WHERE id = :opportunity_id
+    """
+)
+
+# Suppressed rows since this destination's last completed delivery. This is the
+# "+N more" the next message carries, and marking them accounted-for here is
+# what stops the same batch being reported twice.
+_CLAIM_ROLLUP = text(
+    """
+    UPDATE notification_deliveries
+    SET status = :failed, error = 'rolled up'
+    WHERE destination_id = :destination_id
+      AND event_kind = :event_kind
+      AND status = :suppressed
+    RETURNING id
+    """
+)
+
+# `sent_at` is computed in Python and passed as a plain boolean, rather than
+# compared against `:status` twice in SQL — asyncpg deduces a single type per
+# bind position, and reusing `:status` for both the SET and a CASE comparison
+# produced "inconsistent types deduced for parameter $1" (text vs varchar).
+_FINISH_DELIVERY = text(
+    """
+    UPDATE notification_deliveries
+    SET status = :status, provider_message_id = :provider_message_id,
+        error = :error,
+        sent_at = CASE WHEN :is_sent THEN now() ELSE NULL END
+    WHERE id = :id
+    """
+)
+
+_RECORD_FAILURE = text(
+    """
+    UPDATE notification_destinations
+    SET failure_count = failure_count + 1,
+        disabled_at = CASE
+            WHEN failure_count + 1 >= :max_failures THEN now() ELSE disabled_at
+        END
+    WHERE id = :id
+    """
+)
+
+_RESET_FAILURES = text(
+    "UPDATE notification_destinations SET failure_count = 0 WHERE id = :id"
 )
 
 
@@ -956,3 +1041,186 @@ def _parse_datetime(value: str | None) -> datetime | None:
     if not value:
         return None
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+async def deliver_notification(ctx, *, delivery_id: str, tenant_id: str) -> None:
+    """Send one outbox row.
+
+    Claims before sending. The sweep and the original enqueue can both fire for
+    the same row, and claiming afterwards would double-message; `RETURNING`
+    with a `status = 'pending'` predicate makes the claim atomic, so the loser
+    of the race gets no row and exits.
+
+    A transient failure *raises*, because arq's retry is driven by exceptions.
+    A permanent one does not — it disables the destination and returns, since
+    retrying an address that will never accept a message is throughput spent on
+    nothing.
+    """
+    tenant = uuid.UUID(tenant_id)
+
+    async with tenant_session(tenant) as session:
+        claimed = (
+            await session.execute(
+                _CLAIM_DELIVERY,
+                {"id": delivery_id, "sending": STATUS_SENDING, "pending": STATUS_PENDING},
+            )
+        ).one_or_none()
+
+    if claimed is None:
+        # Already claimed, already sent, or owned by another tenant. RLS
+        # already decided; there is nothing to do and nothing to report.
+        log.info("delivery_skipped", delivery_id=delivery_id)
+        return
+
+    async with tenant_session(tenant) as session:
+        target = (
+            await session.execute(
+                _DELIVERY_TARGET, {"destination_id": claimed.destination_id}
+            )
+        ).one_or_none()
+
+        if target is None:
+            # Disabled between emit and delivery. Not a failure of this row.
+            await session.execute(
+                _FINISH_DELIVERY,
+                {
+                    "id": delivery_id,
+                    "status": STATUS_FAILED,
+                    "provider_message_id": None,
+                    "error": "destination disabled",
+                    "is_sent": False,
+                },
+            )
+            return
+
+        subject = (
+            await session.execute(
+                _DELIVERY_SUBJECT, {"opportunity_id": claimed.subject_id}
+            )
+        ).one_or_none()
+
+        rolled = (
+            await session.execute(
+                _CLAIM_ROLLUP,
+                {
+                    "destination_id": claimed.destination_id,
+                    "event_kind": claimed.event_kind,
+                    "suppressed": STATUS_SUPPRESSED,
+                    "failed": STATUS_FAILED,
+                },
+            )
+        ).all()
+
+    if subject is None:
+        # The opportunity was deleted after emit. Nothing to say about it.
+        async with tenant_session(tenant) as session:
+            await session.execute(
+                _FINISH_DELIVERY,
+                {
+                    "id": delivery_id,
+                    "status": STATUS_FAILED,
+                    "provider_message_id": None,
+                    "error": "subject no longer exists",
+                    "is_sent": False,
+                },
+            )
+        return
+
+    event = OpportunityEvent(
+        kind=claimed.event_kind,
+        tenant_id=tenant,
+        opportunity_id=claimed.subject_id,
+        job_title=subject.job_title_raw,
+        company_name=subject.company_name_raw,
+        location=subject.location_raw,
+        salary=subject.salary_raw,
+    )
+    content = render(event, target.channel, rollup=len(rolled))
+
+    result = await channel_for(target.channel).send(
+        decrypt(target.address_encrypted), content
+    )
+
+    if result.outcome is SendOutcome.SENT:
+        async with tenant_session(tenant) as session:
+            await session.execute(
+                _FINISH_DELIVERY,
+                {
+                    "id": delivery_id,
+                    "status": STATUS_SENT,
+                    "provider_message_id": result.provider_message_id,
+                    "error": None,
+                    "is_sent": True,
+                },
+            )
+            # A success clears the count, so three failures spread over a month
+            # do not add up to a disabled destination.
+            await session.execute(_RESET_FAILURES, {"id": claimed.destination_id})
+        return
+
+    if result.outcome is SendOutcome.PERMANENT:
+        async with tenant_session(tenant) as session:
+            await session.execute(
+                _FINISH_DELIVERY,
+                {
+                    "id": delivery_id,
+                    "status": STATUS_FAILED,
+                    "provider_message_id": None,
+                    "error": result.error,
+                    "is_sent": False,
+                },
+            )
+            # Passed as 1, not the configured NOTIFY_MAX_FAILURES: a permanent
+            # outcome (bot-blocked, undeliverable) means the address is dead
+            # right now, so disabling waits for nothing further to accumulate.
+            # The configured threshold governs only the transient-exhaustion
+            # path below, where several independent failures must add up first.
+            await session.execute(
+                _RECORD_FAILURE,
+                {"id": claimed.destination_id, "max_failures": 1},
+            )
+        log.warning(
+            "delivery_permanently_failed",
+            delivery_id=delivery_id,
+            channel=target.channel,
+            error=result.error,
+        )
+        return
+
+    # Transient.
+    if claimed.attempts >= settings.NOTIFY_MAX_ATTEMPTS:
+        async with tenant_session(tenant) as session:
+            await session.execute(
+                _FINISH_DELIVERY,
+                {
+                    "id": delivery_id,
+                    "status": STATUS_FAILED,
+                    "provider_message_id": None,
+                    "error": f"gave up after {claimed.attempts} attempts: {result.error}",
+                    "is_sent": False,
+                },
+            )
+            await session.execute(
+                _RECORD_FAILURE,
+                {
+                    "id": claimed.destination_id,
+                    "max_failures": settings.NOTIFY_MAX_FAILURES,
+                },
+            )
+        return
+
+    async with tenant_session(tenant) as session:
+        await session.execute(
+            _FINISH_DELIVERY,
+            {
+                "id": delivery_id,
+                "status": STATUS_PENDING,
+                "provider_message_id": None,
+                "error": result.error,
+                "is_sent": False,
+            },
+        )
+    # arq retries on an exception and on nothing else. Releasing the claim
+    # first means the retry — or the sweep, whichever arrives — finds a row it
+    # can claim rather than one stuck in `sending`.
+    raise RuntimeError(f"Transient notification failure: {result.error}")
