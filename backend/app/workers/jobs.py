@@ -91,6 +91,10 @@ _MAILBOX_TARGET = text(
     "SELECT ms_user_id, folder_id FROM mailboxes WHERE id = :mailbox_id"
 )
 
+_BACKFILL_START = text(
+    "SELECT initial_sync_from FROM mailboxes WHERE id = :mailbox_id"
+)
+
 
 def body_store():
     """Indirection point, so tests can swap in the in-memory store."""
@@ -237,6 +241,41 @@ async def reauthorize_subscription(
         await enqueue(
             "recreate_subscription", tenant_id=tenant_id, mailbox_id=mailbox_id
         )
+    finally:
+        await client.aclose()
+
+
+async def backfill_mailbox_job(ctx, *, tenant_id: str, mailbox_id: str) -> None:
+    """The initial historical walk after a mailbox is connected (plan §6.2).
+
+    Runs as a job rather than inline in the callback so a large mailbox cannot
+    hold the user's browser on the OAuth redirect. It reads its own start date
+    from the row, which the endpoint already clamped to the configured
+    lookback.
+    """
+    from app.services.graph.delta import backfill_mailbox
+
+    tenant = uuid.UUID(tenant_id)
+    mailbox = uuid.UUID(mailbox_id)
+
+    async with tenant_session(tenant) as session:
+        since = (
+            await session.execute(_BACKFILL_START, {"mailbox_id": mailbox})
+        ).scalar_one_or_none()
+
+    if since is None:
+        # No mailbox, or no chosen start. Either way there is no window to walk.
+        log.info("backfill_skipped_no_start", mailbox_id=mailbox_id)
+        return
+
+    try:
+        client = await graph_client_for_mailbox(tenant, mailbox)
+    except MailboxNotAuthorised as exc:
+        await mark_needs_reauth(tenant, mailbox, str(exc))
+        return
+
+    try:
+        await backfill_mailbox(tenant, mailbox, client, since)
     finally:
         await client.aclose()
 

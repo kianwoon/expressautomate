@@ -13,6 +13,7 @@ not stop work already in the queue.
 
 from app.core.config import settings
 from app.workers.jobs import (
+    backfill_mailbox_job,
     delta_sync_mailbox,
     fetch_email,
     reauthorize_subscription,
@@ -36,6 +37,7 @@ class WorkerSettings:
     # `rescan_stuck` retries them — visible in the logs rather than lost.
     functions = [
         fetch_email,
+        backfill_mailbox_job,
         delta_sync_mailbox,
         recreate_subscription,
         reauthorize_subscription,

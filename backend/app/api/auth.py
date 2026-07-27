@@ -357,6 +357,34 @@ async def logout(response: Response) -> dict[str, str]:
     return {"status": "signed-out"}
 
 
+async def current_user(request: Request) -> User:
+    """The signed-in user, or 401.
+
+    Lifted out of `me()` so every authenticated route decodes the session the
+    same way — two copies of this is two places for a session-expiry bug, and
+    they would drift the first time one is touched.
+    """
+    cookie = request.cookies.get(SESSION_COOKIE)
+    if not cookie:
+        raise HTTPException(status_code=401, detail="Not signed in.")
+    try:
+        payload = _session_serializer.loads(cookie, max_age=SESSION_TTL_SECONDS)
+        tenant_uuid = uuid.UUID(payload["tid"])
+        user_uuid = uuid.UUID(payload["uid"])
+    except (BadSignature, SignatureExpired, KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(status_code=401, detail="Session is invalid or expired.") from exc
+
+    async with tenant_session(tenant_uuid) as session:
+        user = (
+            await session.execute(select(User).where(User.id == user_uuid))
+        ).scalar_one_or_none()
+
+    if user is None:
+        # A deleted user holding a live cookie must not look signed in.
+        raise HTTPException(status_code=401, detail="Not signed in.")
+    return user
+
+
 @router.get("/auth/me")
 async def me(request: Request) -> dict[str, dict]:
     """The signed-in user, their tenant, and their mailbox connection state.

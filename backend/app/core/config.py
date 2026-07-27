@@ -72,6 +72,13 @@ class Settings(BaseSettings):
     # leaked anywhere.
     MS_WEBHOOK_NOTIFICATION_URL: str = ""
     MS_WEBHOOK_LIFECYCLE_URL: str = ""
+    # A separate redirect for the mailbox consent. Sharing the sign-in callback
+    # would land the mailbox grant on a handler that creates a session instead
+    # of a mailbox. Must be registered in the Entra app registration too —
+    # Entra rejects any redirect it has not been told about.
+    MS_MAILBOX_REDIRECT_URI: str = ""
+    # How long a tenant keeps source email by default (spec: Retention).
+    DEFAULT_RETENTION_MONTHS: int = Field(default=24, gt=0)
 
     # --- Microsoft Graph ---
     GRAPH_BASE_URL: str = ""
