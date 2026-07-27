@@ -110,7 +110,7 @@ that would use it.
 
 ## Matching
 
-One service, `app/services/profile_matching.py`, called from `persist()`
+One service, `app/services/client_matching.py`, called from `persist()`
 (`app/services/ingest/persist.py:116`), which `extract_email` invokes
 (`app/workers/jobs.py:618`). For each ingested message it resolves in order and
 stops at the first hit.
