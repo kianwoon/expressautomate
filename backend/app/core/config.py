@@ -395,6 +395,10 @@ class Settings(BaseSettings):
     # code *requests* — higher than that ceiling because legitimate retries
     # (typos) are more common here than legitimate re-requests are there.
     NOTIFY_VERIFY_MAX_PER_HOUR: int = Field(default=10, gt=0)
+    # The window the counter above is measured over. Kept as its own setting
+    # rather than a literal 3600 in linking.py so the "per hour" in the name
+    # above stays true even if the window is ever tuned.
+    NOTIFY_VERIFY_WINDOW_SECONDS: int = Field(default=3600, gt=0)
     NOTIFY_SWEEP_INTERVAL_SECONDS: float = Field(default=300.0, gt=0)
     # How long a delivery may sit `pending` before the sweep assumes its
     # enqueue was lost. Must exceed the worst realistic queue latency, or the

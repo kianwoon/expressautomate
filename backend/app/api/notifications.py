@@ -26,7 +26,6 @@ from app.services.notify.linking import (
     opt_in_attempts_this_hour,
     record_verify_attempt,
     redeem_token,
-    verify_attempts_this_hour,
 )
 from app.services.notify.render import WhatsAppContent
 
@@ -248,12 +247,17 @@ async def whatsapp_verify(request: Request, payload: VerifyRequest) -> dict:
     database.
     """
     user_id, tenant_id = _require_session(request)
-    if verify_attempts_this_hour(user_id) >= settings.NOTIFY_VERIFY_MAX_PER_HOUR:
+    # Increment first, then check: the count returned is this attempt's own
+    # ordinal, so the (MAX+1)th caller is the one that gets refused, and two
+    # concurrent requests can't both read a stale count and both slip through
+    # (Redis' INCR is atomic; two overlapping reads of a Python dict was the
+    # bug the old in-process version could have had).
+    attempts = await record_verify_attempt(user_id)
+    if attempts > settings.NOTIFY_VERIFY_MAX_PER_HOUR:
         raise HTTPException(
             status_code=429,
             detail="Too many verification attempts. Try again in an hour.",
         )
-    record_verify_attempt(user_id)
 
     async with tenant_session(tenant_id) as session:
         redeemed = await redeem_token(session, payload.code, CHANNEL_WHATSAPP)
