@@ -86,19 +86,26 @@ STARTER_CODES: tuple[tuple[str, str, str | None, str | None], ...] = (
     # Second letter: F female · M male · O open.
     ("C/F", "Chinese, female", "race", "Also states gender: female."),
     ("C/M", "Chinese, male", "race", "Also states gender: male."),
-    ("C/O", "Chinese, gender open", "race", "Ambiguous — some clients write this for 'care of'."),
+    ("C/O", "Chinese, any gender", "race", "Ambiguous — some clients write this for 'care of'."),
     ("M/F", "Malay, female", "race", "Also states gender: female."),
     ("M/M", "Malay, male", "race", "The M's differ: Malay first, male second."),
-    ("M/O", "Malay, gender open", "race", None),
+    ("M/O", "Malay, any gender", "race", None),
     ("I/F", "Indian, female", "race", "Also states gender: female."),
     ("I/M", "Indian, male", "race", "Also states gender: male."),
-    ("I/O", "Indian, gender open", "race", None),
+    ("I/O", "Indian, any gender", "race", None),
     ("E/F", "Eurasian, female", "race", "Also states gender: female."),
     ("E/M", "Eurasian, male", "race", "Also states gender: male."),
-    ("E/O", "Eurasian, gender open", "race", None),
-    ("O/O", "Open — no race or gender preference", None, "The absence of a preference."),
-    ("O/F", "Race open, female", "gender", None),
-    ("O/M", "Race open, male", "gender", None),
+    ("E/O", "Eurasian, any gender", "race", None),
+    # `O` is **open**, not "Others". Singapore's CMIO convention uses O for
+    # Others — everyone outside Chinese, Malay and Indian — and the two
+    # readings are opposites: Others excludes the three largest groups, open
+    # excludes nobody. Confirmed with the agency as open. It matters because
+    # under the wrong reading a restriction would decode as its absence, and
+    # the protected-attribute flag would stay silent on the one job order that
+    # most needed it.
+    ("O/O", "Open — any race, any gender", None, "No preference stated. O is open, not 'Others'."),
+    ("O/F", "Any race, female", "gender", None),
+    ("O/M", "Any race, male", "gender", None),
     ("SC", "Singapore Citizen", "nationality", None),
     ("PR", "Singapore Permanent Resident", "nationality", None),
     ("SPR", "Singapore Permanent Resident", "nationality", None),
