@@ -363,6 +363,63 @@ Verify:
 curl localhost:8000/health/db
 ```
 
+### Postgres 16 is required locally
+
+Not a preference — the client-profiles migration
+(`20260728_1100_client_profiles.py`) declares a unique constraint `NULLS NOT
+DISTINCT`, which arrived in Postgres 15. On 14 the migration does not degrade;
+it fails outright, so the schema simply cannot be built. Homebrew's
+`postgresql@14` is the version most machines here already had, and the upgrade
+is a dump-and-restore into a separate cluster, not an in-place `pg_upgrade`.
+
+If `brew services list` shows `postgresql@16` as `none`, the server is either
+not running or was started by hand and will not survive a reboot:
+
+```bash
+brew services start postgresql@16
+```
+
+### A database the tests are allowed to destroy
+
+The suite INSERTs and DELETEs in `tenants` and `users`, and its schema-level
+tests connect as the RLS-bypassing admin role. `tests/conftest.py` therefore
+aborts collection if either `DATABASE_URL` or `DATABASE_ADMIN_URL` resolves to
+a host that is not obviously disposable — this already went wrong once, and
+the guard is what stands between a test run and production rows.
+
+That guard means the repo-root `.env` used to run the app against Koyeb cannot
+also be used to run the tests. Start the same image CI uses
+(`.github/workflows/backend.yml`):
+
+```bash
+docker run --rm -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=expressautomate --name ea-test-db postgres:16
+```
+
+That gives you the `postgres` superuser and nothing else. `DATABASE_URL`
+connects as the restricted `expressautomate_app` role, which does not exist
+yet — and you do not create it by hand. The row-level-security migration
+creates it, from `DATABASE_APP_ROLE` and `DATABASE_APP_PASSWORD`, and refuses
+to run if the password is unset. So all four variables are needed, and the
+migration must run before the suite:
+
+```bash
+export DATABASE_APP_ROLE=expressautomate_app
+export DATABASE_APP_PASSWORD=local-not-a-real-password
+export DATABASE_ADMIN_URL=postgresql://postgres:postgres@localhost:5432/expressautomate
+export DATABASE_URL=postgresql://expressautomate_app:local-not-a-real-password@localhost:5432/expressautomate
+uv run alembic upgrade head
+uv run pytest
+```
+
+The two roles are not interchangeable and the split is the point: the admin URL
+owns the schema and bypasses RLS, so isolation tests run through `DATABASE_URL`
+or they prove nothing.
+
+That container is `--rm`: stopping it deletes the database, roles and all. For
+something that survives a reboot, run Postgres 16 locally instead
+(`brew services start postgresql@16`), `createdb expressautomate_test`, and
+point the two URLs at that — the suite accepts any local host.
+
 ## Verified 2026-07-27
 
 - `alembic upgrade head` → `alembic_version`, `tenants`, `users` created,
