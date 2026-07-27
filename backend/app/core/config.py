@@ -350,6 +350,47 @@ class Settings(BaseSettings):
     ARQ_MAX_JOBS: int = 10
     ARQ_MAX_TRIES: int = 5
 
+    # --- Notifications (spec 2026-07-28) ---
+    # Blank by default. A channel with no credentials is *skipped*, not an
+    # error: the platform must boot and ingest mail before either provider is
+    # provisioned, and a missing token discovered at startup is far cheaper
+    # than one discovered inside a worker on the far side of the queue.
+    TELEGRAM_BOT_TOKEN: str = ""
+    TELEGRAM_API_BASE_URL: str = ""
+    # Telegram echoes this in `X-Telegram-Bot-Api-Secret-Token`. Without it the
+    # webhook accepts anything that can reach the URL, and the URL is public.
+    TELEGRAM_WEBHOOK_SECRET: str = ""
+
+    WHATSAPP_ACCESS_TOKEN: str = ""
+    WHATSAPP_PHONE_NUMBER_ID: str = ""
+    WHATSAPP_API_BASE_URL: str = ""
+    # Meta signs webhook bodies with this; it is the app secret, not the token.
+    WHATSAPP_APP_SECRET: str = ""
+    # Echoed back during Meta's one-time webhook verification handshake.
+    WHATSAPP_VERIFY_TOKEN: str = ""
+
+    # Template *names*, not bodies. Meta's approval cycle can rename or
+    # re-version a template with no deploy on our side; a name compiled into
+    # source would need one, and the failure is a silent non-delivery.
+    WHATSAPP_TEMPLATE_OPPORTUNITY_NEW: str = ""
+    WHATSAPP_TEMPLATE_OPPORTUNITY_REVIEW: str = ""
+    WHATSAPP_TEMPLATE_LINK_CODE: str = ""
+    WHATSAPP_TEMPLATE_LANG: str = "en"
+
+    # A forty-vacancy morning is forty billable WhatsApp messages otherwise.
+    NOTIFY_RATE_CAP_PER_HOUR: int = Field(default=6, gt=0)
+    NOTIFY_LINK_TOKEN_TTL_MINUTES: int = Field(default=15, gt=0)
+    NOTIFY_MAX_ATTEMPTS: int = Field(default=5, gt=0)
+    NOTIFY_MAX_FAILURES: int = Field(default=3, gt=0)
+    # Sending an authentication template to any number a user types is an
+    # OTP pump aimed at our WABA's reputation. This is the ceiling per user.
+    NOTIFY_OPT_IN_MAX_PER_HOUR: int = Field(default=5, gt=0)
+    NOTIFY_SWEEP_INTERVAL_SECONDS: float = Field(default=300.0, gt=0)
+    # How long a delivery may sit `pending` before the sweep assumes its
+    # enqueue was lost. Must exceed the worst realistic queue latency, or the
+    # sweep competes with a job that is merely slow.
+    NOTIFY_DELIVERY_STALE_MINUTES: int = Field(default=10, gt=0)
+
     @field_validator("MS_IDENTITY_SCOPES", "MS_MAILBOX_SCOPES")
     @classmethod
     def _non_empty_when_configured(cls, v: str) -> str:
@@ -479,6 +520,16 @@ class Settings(BaseSettings):
     def google_configured(self) -> bool:
         """Identity only — Google users have no mailbox to ingest."""
         return bool(self.GOOGLE_CLIENT_ID and self.GOOGLE_CLIENT_SECRET)
+
+    def telegram_configured(self) -> bool:
+        return bool(self.TELEGRAM_BOT_TOKEN and self.TELEGRAM_API_BASE_URL)
+
+    def whatsapp_configured(self) -> bool:
+        return bool(
+            self.WHATSAPP_ACCESS_TOKEN
+            and self.WHATSAPP_PHONE_NUMBER_ID
+            and self.WHATSAPP_API_BASE_URL
+        )
 
 
 @lru_cache
