@@ -38,8 +38,9 @@
 | `app/services/ingest/intake.py` | Insert-or-ignore an `email_messages` row, enqueue |
 | `app/api/graph_webhook.py` | `/api/graph/notifications`, `/api/graph/lifecycle` |
 | `app/api/mailboxes.py` | Connect a mailbox, choose scope and start date |
-| `app/workers/queue.py` | arq settings, Redis pool, enqueue helper |
-| `app/workers/jobs.py` | `fetch_email` |
+| `app/workers/queue.py` | Redis pool and the enqueue helper. Imports nothing from `jobs` |
+| `app/workers/jobs.py` | `fetch_email` and friends. Imports `queue.enqueue` |
+| `app/workers/settings.py` | arq `WorkerSettings`. The only module importing both |
 | `app/workers/tasks.py` | `renew_subscriptions`, `delta_sync`, `rescan_stuck` |
 
 ---
@@ -1490,7 +1491,7 @@ async def pending_row(admin_session):
 
 
 def _patch(monkeypatch, store, handler):
-    async def fake_client(mailbox_id):
+    async def fake_client(tenant_id, mailbox_id):
         return GraphClient(token="t", transport=httpx.MockTransport(handler))
 
     monkeypatch.setattr(jobs, "graph_client_for_mailbox", fake_client)
@@ -1569,10 +1570,12 @@ async def test_404_marks_the_row_unfetchable_and_does_not_retry(
     assert row.source_state == "deleted"
 
 
-async def test_throttling_leaves_the_row_pending_and_reraises(
+async def test_throttling_defers_the_job_and_leaves_the_row_pending(
     monkeypatch, admin_session, pending_row
 ):
-    from app.services.graph.client import GraphThrottled
+    """arq reschedules on Retry and only on Retry — a bare exception is a
+    failed job, and Graph's Retry-After would be thrown away."""
+    from arq import Retry
 
     _, _, eid = pending_row
     _patch(
@@ -1581,8 +1584,10 @@ async def test_throttling_leaves_the_row_pending_and_reraises(
         lambda r: httpx.Response(429, headers={"Retry-After": "5"}, json={}),
     )
 
-    with pytest.raises(GraphThrottled):
+    with pytest.raises(Retry) as excinfo:
         await jobs.fetch_email({}, email_message_id=str(eid))
+
+    assert excinfo.value.defer_score == 5000  # arq stores the defer in ms
 
     status = (
         await admin_session.execute(
@@ -1682,12 +1687,14 @@ cost another Graph round trip.
 import uuid
 from datetime import datetime
 
+from arq import Retry
 from sqlalchemy import text
 
+from app.core.config import settings
 from app.core.logging import get_logger
 from app.db.rls import tenant_session
 from app.db.session import SessionLocal
-from app.services.graph.client import GraphClient, GraphNotFound
+from app.services.graph.client import GraphClient, GraphNotFound, GraphThrottled
 from app.services.ms_auth import access_token_for_mailbox
 from app.services.storage.r2 import R2BodyStore, body_key
 from app.workers.queue import enqueue
@@ -1753,6 +1760,11 @@ async def fetch_email(ctx, email_message_id: str) -> None:
         # is gone; record it as such rather than retrying forever.
         await _mark_unfetchable(tenant_id, email_message_id)
         return
+    except GraphThrottled as exc:
+        # arq only reschedules on `Retry`; a bare exception is a failed job and
+        # `max_tries` never enters into it. Deferring by what Graph asked for is
+        # the difference between backing off and hammering a throttled tenant.
+        raise Retry(defer=exc.retry_after) from exc
     finally:
         await client.aclose()
 
@@ -1885,20 +1897,33 @@ uv run alembic upgrade head
 
 - [ ] **Step 6: Register the job**
 
-Append to `app/workers/queue.py`:
+Create `app/workers/settings.py` — a **third** module, not an addition to
+`queue.py`. `jobs.py` imports `queue.enqueue`, so a `WorkerSettings` living in
+`queue.py` and importing `jobs` makes the two modules mutually dependent, and
+whichever is imported first (in tests, `jobs`) fails on a partially initialised
+module.
 
 ```python
+"""arq entrypoint: `uv run arq app.workers.settings.WorkerSettings`.
+
+Deliberately separate from `queue.py`. Jobs import the enqueue helper, so the
+registry that imports the jobs has to sit above both or the import graph cycles.
+"""
+
+from app.core.config import settings
+from app.workers.jobs import fetch_email
+from app.workers.queue import redis_settings
+
+
 class WorkerSettings:
-    """arq entrypoint: `uv run arq app.workers.queue.WorkerSettings`."""
-
-    from app.workers.jobs import fetch_email
-
     functions = [fetch_email]
     redis_settings = redis_settings()
     poll_delay = settings.ARQ_POLL_DELAY_SECONDS
     max_jobs = settings.ARQ_MAX_JOBS
     max_tries = settings.ARQ_MAX_TRIES
 ```
+
+Later tasks append to `functions` here, never in `queue.py`.
 
 - [ ] **Step 7: Run the tests**
 
@@ -1938,7 +1963,7 @@ from datetime import UTC, datetime, timedelta
 import httpx
 
 from app.services.graph.client import GraphClient
-from app.services.graph.subscriptions import create_subscription, renewal_threshold
+from app.services.graph.subscriptions import renewal_threshold
 
 
 def test_renewal_threshold_is_half_of_the_granted_life():
@@ -2398,6 +2423,12 @@ async def sync_mailbox(
                 await enqueue("fetch_email", email_message_id=str(row_id))
 
             if max_messages is not None and seen >= max_messages:
+                # Store the page we stopped on, not nothing: without a
+                # checkpoint the next sweep re-walks from the beginning and
+                # re-caps at the same place, forever.
+                resume = page.get("@odata.nextLink") or page.get("@odata.deltaLink")
+                if resume:
+                    await _store_delta_link(tenant_id, mailbox_id, resume)
                 log.info(
                     "delta_walk_capped",
                     mailbox_id=str(mailbox_id),
@@ -2962,7 +2993,44 @@ def test_folder_scope_without_a_folder_id_is_rejected():
 Run: `uv run pytest tests/test_mailbox_onboarding.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'app.api.mailboxes'`
 
-- [ ] **Step 3: Write the endpoint**
+- [ ] **Step 3: Extract a `current_user` dependency**
+
+`app/api/auth.py` has no reusable dependency — the cookie decoding lives inline
+in `me()` at line 377. Lift it, and have `me()` use it, so there is one place
+that decides who is signed in:
+
+```python
+async def current_user(request: Request) -> User:
+    """The signed-in user, or 401.
+
+    Lifted out of `me()` so every authenticated route decodes the session the
+    same way. Two copies of this logic is two places for a session-expiry bug.
+    """
+    cookie = request.cookies.get(SESSION_COOKIE)
+    if not cookie:
+        raise HTTPException(status_code=401, detail="Not signed in.")
+    try:
+        payload = _session_serializer.loads(cookie, max_age=SESSION_TTL_SECONDS)
+        tenant_uuid = uuid.UUID(payload["tid"])
+        user_uuid = uuid.UUID(payload["uid"])
+    except (BadSignature, SignatureExpired, KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(status_code=401, detail="Session is invalid or expired.") from exc
+
+    async with tenant_session(tenant_uuid) as session:
+        user = (
+            await session.execute(select(User).where(User.id == user_uuid))
+        ).scalar_one_or_none()
+    if user is None:
+        # A deleted user with a live cookie must not look signed in.
+        raise HTTPException(status_code=401, detail="Not signed in.")
+    return user
+```
+
+Then replace the duplicated block at the top of `me()` with
+`user = await current_user(request)`, keeping the rest of that handler as is.
+Run `uv run pytest tests/test_auth.py -v` — it must still pass unchanged.
+
+- [ ] **Step 4: Write the endpoint**
 
 `app/api/mailboxes.py`:
 
@@ -3082,9 +3150,98 @@ And `.env`:
 DEFAULT_RETENTION_MONTHS=24
 ```
 
-- [ ] **Step 4: Add the two jobs**
+- [ ] **Step 5: Add the four jobs**
+
+Two of these are enqueued by the lifecycle endpoint (Task 5) and by
+`renew_subscriptions` (Task 9). Without them, arq logs an unknown-job error and
+a mailbox with a revoked grant or a dropped subscription silently stops
+ingesting — which looks exactly like a quiet week.
 
 Append to `app/workers/jobs.py`:
+
+```python
+async def recreate_subscription(ctx, mailbox_id: str) -> None:
+    """The subscription is gone or unrenewable; make a new one."""
+    from app.services.graph.subscriptions import create_subscription
+
+    tenant_id = await _tenant_of_mailbox(mailbox_id)
+    async with tenant_session(tenant_id) as session:
+        row = (
+            await session.execute(
+                text("SELECT ms_user_id, folder_id FROM mailboxes WHERE id = :i"),
+                {"i": mailbox_id},
+            )
+        ).one()
+        # Retire the old record first: subscription_id is unique, and a stale
+        # 'active' row would keep resolve_subscription pointed at a dead sub.
+        await session.execute(
+            text(
+                "UPDATE graph_subscriptions SET status = 'replaced'"
+                " WHERE mailbox_id = :i AND status = 'active'"
+            ),
+            {"i": mailbox_id},
+        )
+
+    client = await graph_client_for_mailbox(tenant_id, uuid.UUID(mailbox_id))
+    try:
+        await create_subscription(
+            tenant_id, uuid.UUID(mailbox_id), row.ms_user_id, row.folder_id, client
+        )
+    finally:
+        await client.aclose()
+    # Notifications stopped while the subscription was dead; reconcile the gap.
+    await enqueue("delta_sync_mailbox", mailbox_id=mailbox_id)
+
+
+async def reauthorize_subscription(ctx, subscription_id: str) -> None:
+    """Graph asked us to prove the grant is still good (plan §8).
+
+    A successful token refresh is the proof. If it fails, the user has revoked
+    access or let it lapse, and the honest response is to stop and tell them —
+    not to retry a grant that no longer exists.
+    """
+    async with SessionLocal() as session:
+        record = (
+            await session.execute(
+                text("SELECT * FROM resolve_subscription(:s)"), {"s": subscription_id}
+            )
+        ).one_or_none()
+    if record is None:
+        return
+
+    try:
+        await access_token_for_mailbox(record.tenant_id, record.mailbox_id)
+    except PermissionError:
+        await _mark_needs_reauth(record.tenant_id, record.mailbox_id)
+        return
+
+    client = await graph_client_for_mailbox(record.tenant_id, record.mailbox_id)
+    try:
+        from app.services.graph.subscriptions import renew_subscription
+
+        await renew_subscription(record.tenant_id, subscription_id, client)
+    finally:
+        await client.aclose()
+
+
+async def _mark_needs_reauth(tenant_id: uuid.UUID, mailbox_id: uuid.UUID) -> None:
+    async with tenant_session(tenant_id) as session:
+        await session.execute(
+            text("UPDATE mailboxes SET status = 'needs_reauth' WHERE id = :i"),
+            {"i": mailbox_id},
+        )
+        # Leaving a dead subscription 'active' would make renew_subscriptions
+        # retry it every fifteen minutes forever.
+        await session.execute(
+            text(
+                "UPDATE graph_subscriptions SET status = 'revoked'"
+                " WHERE mailbox_id = :i"
+            ),
+            {"i": mailbox_id},
+        )
+```
+
+And the two onboarding jobs:
 
 ```python
 async def backfill_mailbox_job(ctx, mailbox_id: str) -> None:
@@ -3134,16 +3291,29 @@ async def _mailbox_backfill_start(mailbox_id: str) -> tuple[uuid.UUID, datetime]
     return tenant_id, since
 ```
 
-Register them in `app/workers/queue.py`:
+Register all four in `app/workers/settings.py` (never in `queue.py` — see Task 6):
 
 ```python
-class WorkerSettings:
-    from app.workers.jobs import backfill_mailbox_job, delta_sync_mailbox, fetch_email
+from app.workers.jobs import (
+    backfill_mailbox_job,
+    delta_sync_mailbox,
+    fetch_email,
+    reauthorize_subscription,
+    recreate_subscription,
+)
 
-    functions = [fetch_email, backfill_mailbox_job, delta_sync_mailbox]
+
+class WorkerSettings:
+    functions = [
+        fetch_email,
+        backfill_mailbox_job,
+        delta_sync_mailbox,
+        recreate_subscription,
+        reauthorize_subscription,
+    ]
 ```
 
-- [ ] **Step 5: Mount the router**
+- [ ] **Step 6: Mount the router**
 
 In `app/main.py`:
 
@@ -3233,7 +3403,7 @@ the existing API entrypoint and document the alternates:
 # One image, three entrypoints — Koyeb picks per service:
 #   api        : uvicorn app.main:app --host 0.0.0.0 --port 8000
 #   supervisor : python -m app.workers.main
-#   arq        : arq app.workers.queue.WorkerSettings
+#   arq        : arq app.workers.settings.WorkerSettings
 ```
 
 - [ ] **Step 5: Document the two Koyeb settings that are not in this repo**
@@ -3247,7 +3417,7 @@ In `docs/setup.md`, extend the existing Koyeb section:
 |---|---|---|
 | `api` | `uvicorn app.main:app` | Route `/`, health check `/api/health` |
 | `worker` | `python -m app.workers.main` | Periodic recovery. No health check |
-| `arq` | `arq app.workers.queue.WorkerSettings` | Job processing. No health check |
+| `arq` | `arq app.workers.settings.WorkerSettings` | Job processing. No health check |
 
 `MS_WEBHOOK_NOTIFICATION_URL` and `MS_WEBHOOK_LIFECYCLE_URL` must be publicly
 reachable before a subscription can be created — Graph validates the endpoint

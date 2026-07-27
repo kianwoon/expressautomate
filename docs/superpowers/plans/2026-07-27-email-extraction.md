@@ -36,6 +36,7 @@
 | `app/services/ingest/evidence.py` | Offset verification, `quality_state` derivation |
 | `app/services/ingest/persist.py` | Write opportunities, extraction, evidence atomically |
 | `app/services/retention.py` | Retention horizons and purge |
+| `app/workers/settings.py` | (from the ingestion plan) the arq registry — every new job is registered here, never in `queue.py` |
 | `tests/fixtures/emails/` | Real recruitment emails as golden files |
 
 ---
@@ -893,10 +894,18 @@ def should_extract(status: str) -> bool:
     return status != "non_recruitment"
 
 
-async def classify(text: str, llm=complete_json) -> Classification:
+async def classify(text: str, llm=None) -> Classification:
+    """`llm` defaults to None, not to `complete_json`.
+
+    A default argument binds at definition time, so `llm=complete_json` would
+    capture the function object and make monkeypatching this module's
+    `complete_json` do nothing — the test would pass through to a real HTTP
+    call. Resolving at call time is what makes the fake reachable.
+    """
+    resolve = llm or complete_json
     model = settings.CLASSIFIER_MODEL
     try:
-        result = await llm(PROMPT.format(email=text), model=model, schema=SCHEMA)
+        result = await resolve(PROMPT.format(email=text), model=model, schema=SCHEMA)
         verdict = result.data.get("is_job_order")
         if not isinstance(verdict, bool):
             raise ValueError(f"missing is_job_order in {result.data!r}")
@@ -925,7 +934,10 @@ async def classify_email(ctx, email_message_id: str) -> None:
     if located is None:
         return
     tenant_id, mailbox_id, graph_message_id, status = located
-    if status != "fetched":
+    # `classifying` is accepted, not just `fetched`: a worker killed mid-classify
+    # leaves the row at `classifying`, and rescan_stuck re-enqueues exactly this
+    # job for it. Accepting only `fetched` would make that row retry forever.
+    if status not in ("fetched", "classifying"):
         return
 
     await _set_status(tenant_id, email_message_id, "classifying")
@@ -990,7 +1002,29 @@ Add the setting to `app/core/config.py` and `.env`:
 NON_RECRUITMENT_RETENTION_DAYS=7
 ```
 
-Register `classify_email` in `WorkerSettings.functions`.
+Register `classify_email` in `WorkerSettings.functions` in
+`app/workers/settings.py` — never in `queue.py`, which `jobs.py` imports from.
+
+Add a test proving the resume path works, since this is the state
+`rescan_stuck` drives:
+
+```python
+async def test_classify_resumes_a_row_left_at_classifying(monkeypatch, admin_session):
+    """A worker killed mid-classify must be recoverable, not stuck forever."""
+    # ... insert an email_messages row with processing_status = 'classifying' ...
+    monkeypatch.setattr(classify_module, "complete_json",
+                        FakeLLM({"is_job_order": True, "reason": "a vacancy"}))
+
+    await jobs.classify_email({}, email_message_id=str(eid))
+
+    status = (
+        await admin_session.execute(
+            text("SELECT processing_status FROM email_messages WHERE id = :i"),
+            {"i": eid},
+        )
+    ).scalar_one()
+    assert status != "classifying", "the row must have moved on"
+```
 
 - [ ] **Step 5: Run the tests**
 
@@ -1650,7 +1684,7 @@ EMAIL:
 """
 
 
-async def extract(source: str, *, llm=complete_json) -> tuple[ExtractionResponse, LLMResult]:
+async def extract(source: str, *, llm=None) -> tuple[ExtractionResponse, LLMResult]:
     """Extract, escalating to the strong model if the fast one cannot comply.
 
     Escalation is not a retry of the same thing: the fast model has already
@@ -1659,6 +1693,8 @@ async def extract(source: str, *, llm=complete_json) -> tuple[ExtractionResponse
     """
     import json
 
+    # Resolved at call time, not bound as a default — see the note in classify.py.
+    resolve = llm or complete_json
     prompt = PROMPT.format(
         not_mentioned=NOT_MENTIONED,
         schema=json.dumps(json_schema()),
@@ -1667,7 +1703,7 @@ async def extract(source: str, *, llm=complete_json) -> tuple[ExtractionResponse
 
     for model in (settings.EXTRACTION_MODEL_FAST, settings.EXTRACTION_MODEL_STRONG):
         try:
-            result = await llm(prompt, model=model, schema=json_schema())
+            result = await resolve(prompt, model=model, schema=json_schema())
             return ExtractionResponse.model_validate(result.data), result
         except (LLMInvalidJSON, ValueError):
             continue
@@ -1909,7 +1945,20 @@ async def _fail(tenant_id: uuid.UUID, email_message_id: str, error: str) -> None
         )
 ```
 
-Register `extract_email` in `WorkerSettings.functions`.
+Register `extract_email` in `WorkerSettings.functions` in
+`app/workers/settings.py`. The final registry is:
+
+```python
+functions = [
+    fetch_email,
+    classify_email,
+    extract_email,
+    backfill_mailbox_job,
+    delta_sync_mailbox,
+    recreate_subscription,
+    reauthorize_subscription,
+]
+```
 
 - [ ] **Step 6: Run the tests**
 
@@ -2443,8 +2492,9 @@ async def test_notification_becomes_an_opportunity(monkeypatch, admin_session, w
             LLMResult(data={}, model="test/fast"),
         )
 
+    # `extract_email` imports `extract` inside the function body, so patching
+    # the module attribute is what the job will actually resolve.
     monkeypatch.setattr(extract_module, "extract", fake_extract)
-    monkeypatch.setattr(jobs, "extract_email", jobs.extract_email)
     await jobs.extract_email({}, email_message_id=email_id)
 
     row = (
