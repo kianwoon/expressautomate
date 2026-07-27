@@ -223,7 +223,8 @@ Nothing in Stage 2 can be built without this, and only you can create it.
 1. Azure Portal → **Microsoft Entra ID** → **App registrations** → **New registration**
 2. Name `expressautomate.app`; supported accounts: **Accounts in any organizational directory and personal Microsoft accounts** (`AzureADandPersonalMicrosoftAccount`, with `api.requestedAccessTokenVersion: 2`). Work/school sign-ins make each agency a tenant; personal accounts (outlook.com, hotmail.com, live.com) all report one shared MSA tenant GUID, so each of those users gets a private tenant derived from their own `oid` — see `_tenant_for` in `backend/app/api/auth.py`. `MS_TENANT_ID=common` accordingly.
 3. Redirect URIs (Web) — **two** are needed, because consent is incremental:
-   - `http://localhost:8000/auth/microsoft/callback` — sign-in
+   - `http://localhost:8000/api/auth/microsoft/callback` — sign-in
+     (every route lives under `/api`; match what `MS_REDIRECT_URI` in `.env` says)
    - `http://localhost:8000/api/mailboxes/connect/callback` — mailbox consent
 
    Entra rejects any redirect it has not been told about, and the failure shows

@@ -174,19 +174,75 @@ def delegated_scopes(kind: str = "identity") -> list[str]:
 Update the two call sites in `begin_login` and `complete_login` to
 `delegated_scopes("identity")`.
 
-- [ ] **Step 5: Run the tests**
+- [ ] **Step 5: Migrate `tests/test_auth.py`**
+
+Sign-in *behaviour* is unchanged, but five lines in the existing suite name the
+old single-key world and will fail:
+
+| Line | Now | Change to |
+|---|---|---|
+| 66 | `monkeypatch.setattr(settings, "MS_GRAPH_SCOPES", "openid profile email User.Read Mail.Read offline_access")` | Two `setattr` calls: `MS_IDENTITY_SCOPES` = `"openid profile email User.Read offline_access"`, `MS_MAILBOX_SCOPES` = `"Mail.Read"` |
+| 81, 92 | `ms_auth.delegated_scopes()` | `ms_auth.delegated_scopes("identity")` |
+| 386 | `assert mailbox["scopes"] == ms_auth.delegated_scopes()` | `== ms_auth.delegated_scopes("identity")` — sign-in now stores identity scopes only |
+| 569-571 | `scopes = set(ms_auth.delegated_scopes())`, asserting `{"User.Read", "Mail.Read"} <= scopes` | Assert `"User.Read"` is in `delegated_scopes("identity")` and `"Mail.Read"` is in `delegated_scopes("mailbox")` |
+
+`monkeypatch.setattr` raises `AttributeError` on an attribute that no longer
+exists, so line 66 fails the whole fixture-dependent suite, not just its own
+test. Do this in the same commit as the config change.
+
+- [ ] **Step 6: Extract `_store_refresh_token`**
+
+`microsoft_callback` encrypts and upserts the refresh token inline
+(`app/api/auth.py:329-346`). Mailbox consent needs the identical write, and two
+copies of a token-encryption path is one too many. Lift it as-is:
+
+```python
+async def _store_refresh_token(session, tenant_uuid, user_id, oid, tid, result) -> None:
+    """Upsert the encrypted refresh token for one user.
+
+    Called by both consent steps. Entra's consent is cumulative per user and
+    app, so the mailbox grant's token is a superset of the identity one and
+    overwriting is correct, not lossy.
+    """
+    refresh_token = result.get("refresh_token")
+    if not refresh_token:
+        return
+    ciphertext = encrypt(refresh_token)
+    await session.execute(
+        pg_insert(MicrosoftToken)
+        .values(
+            id=uuid.uuid4(),
+            tenant_id=tenant_uuid,
+            user_id=user_id,
+            home_account_id=f"{oid}.{tid}",
+            refresh_token_encrypted=ciphertext,
+            scope=result.get("scope"),
+        )
+        .on_conflict_do_update(
+            constraint="uq_ms_tokens_tenant_user",
+            set_={
+                "refresh_token_encrypted": ciphertext,
+                "scope": result.get("scope"),
+                "updated_at": func.now(),
+            },
+        )
+    )
+```
+
+Replace the inline block in `microsoft_callback` with a call to it.
+
+- [ ] **Step 7: Run the tests**
 
 ```bash
 uv run pytest tests/test_scopes.py tests/test_auth.py -v
 ```
 
-Expected: PASS. `test_auth.py` must still pass — sign-in behaviour is unchanged,
-only the key it reads from.
+Expected: PASS — the migrated auth tests and the six new scope tests.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
-git add app/core/config.py app/services/ms_auth.py tests/test_scopes.py
+git add app/core/config.py app/services/ms_auth.py app/api/auth.py tests/test_scopes.py tests/test_auth.py
 git commit -m "Read the scope keys that .env actually declares"
 ```
 
@@ -3270,11 +3326,22 @@ the reverse order leaves a gap where it is caught by neither.
 import uuid
 from datetime import UTC, datetime, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import BaseModel, model_validator
 from sqlalchemy import text
 
-from app.api.auth import _open_flow, _seal_flow, current_user
+from app.api.auth import (
+    FLOW_TTL_SECONDS,
+    _cookie_kwargs,
+    _flow_cookie_name,
+    _frontend_url,
+    _open_flow,
+    _seal_flow,
+    _stale_flow_cookies,
+    _store_refresh_token,
+    current_user,
+)
 from app.core.config import settings
 from app.db.rls import tenant_session
 from app.services.graph.subscriptions import create_subscription
@@ -3285,7 +3352,6 @@ from app.workers.queue import enqueue
 router = APIRouter(prefix="/mailboxes", tags=["mailboxes"])
 
 WELL_KNOWN_INBOX = "inbox"
-MAILBOX_FLOW_COOKIE = "ea_mailbox_flow"
 
 
 class ConnectRequest(BaseModel):
@@ -3328,19 +3394,34 @@ async def connect(payload: ConnectRequest, user=Depends(current_user)) -> dict:
         delegated_scopes("mailbox"),
         redirect_uri=settings.MS_MAILBOX_REDIRECT_URI,
     )
-    # The user's onboarding choices ride through the OAuth round trip in the
-    # sealed flow cookie, not in the URL — a folder id in a query string is one
-    # more thing that can be tampered with on the way back.
-    return {
-        "authorize_url": flow["auth_uri"],
-        "flow": _seal_flow({**flow, "onboarding": payload.model_dump(mode="json")}),
-    }
+    # The user's onboarding choices ride through the OAuth round trip inside the
+    # sealed flow, not in the URL — a folder id in a query string is one more
+    # thing that can be tampered with on the way back.
+    sealed = _seal_flow({**flow, "onboarding": payload.model_dump(mode="json")})
+
+    response = JSONResponse({"authorize_url": flow["auth_uri"]})
+    # Named per flow, exactly as sign-in does: two tabs mid-onboarding must not
+    # overwrite each other's flow. Returning the sealed value in the body
+    # instead would leave the callback with no cookie to read at all.
+    response.set_cookie(
+        _flow_cookie_name(flow["state"]), sealed, **_cookie_kwargs(FLOW_TTL_SECONDS)
+    )
+    for stale in _stale_flow_cookies(request):
+        response.delete_cookie(stale, path="/")
+    return response
 
 
 @router.get("/connect/callback")
-async def connect_callback(request: Request, user=Depends(current_user)) -> dict:
+async def connect_callback(request: Request, user=Depends(current_user)) -> Response:
     """Finish consent, then create the mailbox, subscription, and backfill."""
-    flow = _open_flow(request.cookies[MAILBOX_FLOW_COOKIE])
+    state = request.query_params.get("state", "")
+    sealed = request.cookies.get(_flow_cookie_name(state))
+    if sealed is None:
+        # Expired, evicted, or a callback that never had a flow. 400, not the
+        # 500 a bare dict lookup would raise.
+        raise HTTPException(status_code=400, detail="Mailbox consent expired. Try again.")
+
+    flow = _open_flow(sealed)
     result = client().acquire_token_by_auth_code_flow(flow, dict(request.query_params))
     if "refresh_token" not in result:
         raise HTTPException(
@@ -3391,12 +3472,12 @@ async def connect_callback(request: Request, user=Depends(current_user)) -> dict
 
     await enqueue("backfill_mailbox_job", mailbox_id=str(mailbox_id))
 
-    return {
-        "mailbox_id": str(mailbox_id),
-        "scope": payload.scope,
-        "ingesting_from": start_from.isoformat(),
-        "max_messages": settings.INITIAL_SYNC_MAX_MESSAGES,
-    }
+    # The user arrives here from Entra's redirect, in a browser. Returning JSON
+    # would leave them staring at a raw object; sign-in redirects for the same
+    # reason.
+    response = RedirectResponse(_frontend_url(f"/mailboxes/{mailbox_id}"), status_code=303)
+    response.delete_cookie(_flow_cookie_name(state), path="/")
+    return response
 ```
 
 Add to `app/core/config.py`:
