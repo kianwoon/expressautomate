@@ -76,11 +76,24 @@ export function useNotifications() {
   // a PUT; without ordering, a poll issued before the PUT can resolve after
   // it and overwrite the just-saved state with stale data. Each call captures
   // its own generation and discards its response if a newer load has since
-  // started, so only the most recently STARTED load is ever allowed to win.
+  // started — except that a load a mutation itself awaited answers only to
+  // newer MUTATION loads (`mutationGeneration`), not to polls. A poll that
+  // starts mid-mutation-reload fetched after the PUT too, so letting both
+  // apply is safe in either completion order; discarding the mutation's own
+  // reload (the old rule) left the pre-write state on screen until the poll
+  // landed.
   const generation = useRef(0);
+  const mutationGeneration = useRef(0);
 
-  const load = useCallback((signal?: AbortSignal) => {
+  const load = useCallback((signal?: AbortSignal, afterMutation = false) => {
     const thisGeneration = ++generation.current;
+    if (afterMutation) mutationGeneration.current = thisGeneration;
+    // Which newer starts may discard this response once it arrives: any newer
+    // load for a poll, but only a newer mutation's load for a mutation.
+    const superseded = () =>
+      afterMutation
+        ? mutationGeneration.current !== thisGeneration
+        : generation.current !== thisGeneration;
     return (async () => {
       try {
         const res = await fetch(NOTIFICATIONS_SETTINGS_PATH, {
@@ -88,7 +101,7 @@ export function useNotifications() {
           headers: { Accept: "application/json" },
           signal,
         });
-        if (thisGeneration !== generation.current) return;
+        if (superseded()) return;
         if (!res.ok) {
           const message =
             res.status === 401
@@ -109,10 +122,10 @@ export function useNotifications() {
           return;
         }
         const settings = (await res.json()) as NotificationSettings;
-        if (thisGeneration !== generation.current) return;
+        if (superseded()) return;
         setState({ status: "ready", settings });
       } catch {
-        if (thisGeneration !== generation.current) return;
+        if (superseded()) return;
         if (!signal?.aborted) {
           const message = "We could not reach the server.";
           setState((prev) => (prev.status === "ready" ? { ...prev, refreshError: message } : { status: "unreadable", message }));
@@ -138,7 +151,7 @@ export function useNotifications() {
           body: JSON.stringify({ destination_id: destinationId, event_kinds: kinds }),
         });
         if (!res.ok) return "We could not save that just now.";
-        await load();
+        await load(undefined, true);
         return null;
       } catch {
         return "We could not reach the server.";
@@ -158,7 +171,7 @@ export function useNotifications() {
         // 204 on success. `res.ok` covers it; a 404 means it is already gone,
         // which is the state the caller wanted, so it is not an error.
         if (!res.ok && res.status !== 404) return "We could not unlink that just now.";
-        await load();
+        await load(undefined, true);
         return null;
       } catch {
         return "We could not reach the server.";
