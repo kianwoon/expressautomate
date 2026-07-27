@@ -580,6 +580,46 @@ async def test_me_counts_only_what_was_actually_ingested(
     assert after["oldest_received"] < after["newest_received"]
 
 
+async def test_me_surfaces_the_worst_state_across_several_mailboxes(
+    client, monkeypatch, cleanup
+) -> None:
+    """A user can own more than one mailbox — the constraint is per folder.
+
+    Reporting only the first would show a healthy dashboard while a second had
+    stopped, which is the silence this endpoint exists to break. Whatever needs
+    attention outranks whatever is working.
+    """
+    async def _enqueue(name, **kwargs):
+        return True
+
+    monkeypatch.setattr(auth_api, "enqueue", _enqueue)
+
+    tid, oid = str(uuid.uuid4()), uuid.uuid4().hex
+    cleanup.append(uuid.UUID(tid))
+    await sign_in(client, monkeypatch, token_response(tid, oid, "rachel@agency-a.sg"))
+    await connect_mailbox(
+        client,
+        monkeypatch,
+        token_response(tid, oid, "rachel@agency-a.sg", scopes=ms_auth.mailbox_scopes()),
+    )
+
+    async with tenant_session(uuid.UUID(tid)) as session:
+        user_id = (await session.execute(text("SELECT id FROM users"))).scalar_one()
+        # A second folder on the same account, which then goes bad.
+        await session.execute(
+            text(
+                "INSERT INTO mailboxes"
+                " (id, tenant_id, user_id, ms_user_id, folder_id, scope, status,"
+                "  retention_months)"
+                " VALUES (:id, :t, :u, :oid, 'jobs', 'folder', 'needs_reauth', 24)"
+            ),
+            {"id": uuid.uuid4(), "t": uuid.UUID(tid), "u": user_id, "oid": oid},
+        )
+
+    mailbox = (await client.get("/api/auth/me")).json()["mailbox"]
+    assert mailbox["status"] == "needs_reauth", "the broken one must not be hidden"
+
+
 async def test_me_reports_no_counts_before_a_mailbox_exists(
     client, monkeypatch, cleanup
 ) -> None:

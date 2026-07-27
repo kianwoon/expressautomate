@@ -74,8 +74,8 @@ function Notice({ eyebrow, heading, body }: { eyebrow: string; heading: string; 
   );
 }
 
-/** The three states a mailbox can be in, and what each needs from the user. */
-type Stage = "none" | "reconnect" | "ingesting";
+/** The states a mailbox can be in, and what each needs from the user. */
+type Stage = "none" | "reconnect" | "starting" | "ingesting";
 
 function stageOf(me: Me): Stage {
   // `needs_reauth` first: the grant is still on file, so `connected` stays
@@ -83,6 +83,10 @@ function stageOf(me: Me): Stage {
   // someone a healthy dashboard for a mailbox that stopped hours ago.
   if (me.mailbox.status === "needs_reauth") return "reconnect";
   if (me.mailbox.ingestion_active) return "ingesting";
+  // Consent landed, subscription not created yet — a real state that lasts
+  // seconds. Without it this fell through to "none" and offered Connect to
+  // someone who had just connected, inviting them to do it twice.
+  if (me.mailbox.status === "active") return "starting";
   return "none";
 }
 
@@ -100,6 +104,8 @@ function SignedIn({ me }: { me: Me }) {
         <Ingesting me={me} />
       ) : stage === "reconnect" ? (
         <Reconnect />
+      ) : stage === "starting" ? (
+        <Starting />
       ) : (
         <NotConnected me={me} />
       )}
@@ -154,8 +160,10 @@ function Ingesting({ me }: { me: Me }) {
   return (
     <>
       <p className="lede" style={{ marginTop: 18 }}>
+        {/* No delivery-time promise: Microsoft decides when a notification
+            arrives, and a stated "minute or two" would be our claim to keep. */}
         {total === 0
-          ? "Your mailbox is connected and being watched. Nothing has arrived yet — new mail shows up here within a minute or two of landing in Outlook."
+          ? "Your mailbox is connected and being watched. Nothing has arrived yet — new mail appears here shortly after it reaches Outlook."
           : `We have read ${plural(total, "email")} from your mailbox.`}
       </p>
 
@@ -174,12 +182,30 @@ function Ingesting({ me }: { me: Me }) {
   );
 }
 
+function Starting() {
+  return (
+    <>
+      <p className="lede" style={{ marginTop: 18 }}>
+        Your mailbox is connected. We are setting up the watch on it now — this takes a few
+        seconds, and mail starts arriving here once it is done.
+      </p>
+      <p className="body" style={{ marginTop: 12, maxWidth: "62ch" }}>
+        Nothing to do. Refresh in a moment.
+      </p>
+    </>
+  );
+}
+
 function Reconnect() {
   return (
     <>
       <p className="lede" style={{ marginTop: 18 }}>
+        {/* "Picks up where it left off" only holds while the delta checkpoint
+            is still valid; after a long enough outage Graph expires it and the
+            walk restarts. Promising continuity outright would be a claim we
+            cannot keep for the case that matters most. */}
         Microsoft has stopped letting us read this mailbox, so ingestion has paused. Nothing
-        already read has been lost — reconnecting picks up where it left off.
+        already read has been lost, and reconnecting resumes it.
       </p>
       <p className="body" style={{ marginTop: 12, maxWidth: "62ch" }}>
         This usually means the permission was revoked, a password changed, or the grant simply

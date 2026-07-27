@@ -557,11 +557,26 @@ async def _store_token_if_not_a_downgrade(
 _MAILBOX_STATE = text(
     """
     SELECT
-        m.status,
-        EXISTS (
-            SELECT 1 FROM graph_subscriptions s
-            WHERE s.mailbox_id = m.id AND s.status = 'active'
+        -- Across every mailbox this user owns, not just one. A user can hold
+        -- several (the constraint is per folder), and reporting only the first
+        -- would show a healthy dashboard while a second one had stopped —
+        -- exactly the silence this endpoint exists to break. Worst state wins:
+        -- something needing attention outranks something working.
+        min(
+            CASE m.status
+                WHEN 'needs_reauth' THEN 1
+                WHEN 'disconnected' THEN 2
+                ELSE 3
+            END
+        ) AS status_rank,
+        bool_or(
+            m.status = 'active'
+            AND EXISTS (
+                SELECT 1 FROM graph_subscriptions s
+                WHERE s.mailbox_id = m.id AND s.status = 'active'
+            )
         ) AS subscribed,
+        bool_or(m.status = 'active') AS any_active,
         count(e.id) AS total,
         count(*) FILTER (WHERE e.processing_status = 'extracted') AS extracted,
         count(*) FILTER (
@@ -574,11 +589,12 @@ _MAILBOX_STATE = text(
     FROM mailboxes m
     LEFT JOIN email_messages e ON e.mailbox_id = m.id
     WHERE m.user_id = :user_id
-    GROUP BY m.id, m.status
-    ORDER BY m.created_at
-    LIMIT 1
+    HAVING count(m.id) > 0
     """
 )
+
+# status_rank back to the name the API speaks.
+_STATUS_BY_RANK = {1: "needs_reauth", 2: "disconnected", 3: "active"}
 
 _UPSERT_MAILBOX = text(
     """
@@ -806,12 +822,10 @@ async def me(request: Request) -> dict[str, dict]:
             # nothing. `needs_reauth` is the one the UI must not swallow: the
             # grant is still on file, so `connected` stays true while nothing
             # is being read.
-            "status": state.status if state else None,
-            # An active mailbox with a live subscription behind it. A connected
-            # mailbox is not the same as one being ingested.
-            "ingestion_active": bool(
-                state and state.status == "active" and state.subscribed
-            ),
+            "status": _STATUS_BY_RANK.get(state.status_rank) if state else None,
+            # At least one active mailbox with a live subscription behind it. A
+            # connected mailbox is not the same as one being ingested.
+            "ingestion_active": bool(state and state.subscribed),
             "ingested": {
                 "total": state.total if state else 0,
                 "in_progress": state.in_progress if state else 0,
