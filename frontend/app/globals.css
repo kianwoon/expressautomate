@@ -177,8 +177,8 @@ h3 { font-size: 1.125rem; letter-spacing: -0.01em; font-weight: 650; }
 .hero-cta[data-resolved="no"] { visibility: hidden; }
 
 /* ---- layout ---- */
-section { padding: 88px 0; }
-.hero { padding: 88px 0 64px; background: linear-gradient(180deg, #f7fbff 0%, #ffffff 100%); }
+section { padding: 60px 0; }
+.hero { padding: 64px 0 48px; background: linear-gradient(180deg, #f7fbff 0%, #ffffff 100%); }
 .alt { background: var(--surface-alt); border-block: 1px solid var(--line); }
 
 .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 28px; }
@@ -386,8 +386,8 @@ footer { border-top: 1px solid var(--line); padding: 40px 0; color: var(--ink-50
 }
 
 @media (max-width: 860px) {
-  section { padding: 56px 0; }
-  .hero { padding: 40px 0 40px; }
+  section { padding: 40px 0; }
+  .hero { padding: 32px 0 32px; }
   .grid-3, .grid-4, .split, .hero-grid { grid-template-columns: 1fr; gap: 24px; }
   .nav-who { display: none; }
   .trust-sep { display: none; }

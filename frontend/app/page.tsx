@@ -312,7 +312,7 @@ export default function Home() {
             <HeroMock />
           </div>
 
-          <div className="wrap" style={{ marginTop: 56 }}>
+          <div className="wrap" style={{ marginTop: 40 }}>
             <div className="trustbar">
               {TRUST.map((t, i) => (
                 <span key={t.label} style={{ display: "contents" }}>
@@ -333,7 +333,7 @@ export default function Home() {
               <span className="eyebrow">Why it matters</span>
               <h2 style={{ marginTop: 12 }}>Scattered data cannot be acted on</h2>
             </div>
-            <div className="grid-3" style={{ marginTop: 44 }}>
+            <div className="grid-3" style={{ marginTop: 32 }}>
               {CAPABILITIES.map((c) => (
                 <div className="card" key={c.title}>
                   <div className="icon">
@@ -425,7 +425,7 @@ export default function Home() {
               <span className="eyebrow">What you can do</span>
               <h2 style={{ marginTop: 12 }}>From scattered work to one clear picture</h2>
             </div>
-            <div className="grid-4" style={{ marginTop: 44 }}>
+            <div className="grid-4" style={{ marginTop: 32 }}>
               {FEATURES.map((f) => (
                 <div className="card" key={f.title}>
                   <div className="icon">
@@ -445,7 +445,7 @@ export default function Home() {
           <div className="wrap">
             <span className="eyebrow">Security by design</span>
             <h2 style={{ marginTop: 12 }}>Read-only, and provably so.</h2>
-            <div className="grid-3" style={{ marginTop: 36 }}>
+            <div className="grid-3" style={{ marginTop: 28 }}>
               <div className="card">
                 <div className="icon">
                   <Icon name="shield" />
