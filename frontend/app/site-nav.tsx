@@ -54,7 +54,7 @@ export function SiteNav({ sectionLinks = false }: { sectionLinks?: boolean }) {
     <nav className="nav">
       <div className="nav-inner">
         <a className="brand" href={LANDING_PATH}>
-          <Logo size={38} />
+          <Logo size={46} />
           <span>
             <span className="brand-name">
               express<span className="gradient-text">automate</span>.app

@@ -1,0 +1,31 @@
+<!-- Source for public/apple-touch-icon.png only. Everything else uses the
+     plate-less public/icon.svg.
+
+     This one keeps a filled plate on purpose: iOS composites a home-screen
+     icon onto an opaque background of its own choosing and does not honour
+     transparency, so the plate-less mark would arrive as a gradient "e" on
+     black. It also squares off the corners, because iOS applies its own
+     rounding and a pre-rounded icon ends up double-rounded.
+
+     The mark is the same "e" as public/icon.svg at the same scale, in white,
+     inset enough to survive that rounding.
+     allow-hardcode: SVG path geometry and brand colours, not configuration. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64"
+     role="img" aria-label="expressautomate.app">
+  <defs>
+    <linearGradient id="ea-plate" x1="0" y1="0" x2="64" y2="64" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#1D4ED8"/>
+      <stop offset="1" stop-color="#14A89A"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="64" height="64" fill="url(#ea-plate)"/>
+
+  <g transform="translate(32 32) scale(1.42) translate(-38 -33.25)"
+     fill="none" stroke="#fff" stroke-width="4">
+    <path d="M24 33c0-8 6.5-14 14.5-14S52 24.2 52 30.5c0 1.6-1 2.5-2.7 2.5H24z"
+          stroke-linejoin="round"/>
+    <path d="M50 39a14 14 0 0 1-25.6 2.4" stroke-linecap="round"/>
+    <path d="M45 36.5 51.5 39 49 45.5z" fill="#fff" stroke="none"/>
+  </g>
+</svg>

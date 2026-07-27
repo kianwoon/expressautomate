@@ -1,38 +1,41 @@
-<!-- The brand mark from app/logo.tsx, standalone, for use as the site favicon.
-     Kept byte-for-byte in step with that component: the "e" whose bowl opens
-     into a circular arrow, speed lines entering from the left, blue-to-teal.
+<!-- The favicon: the "e" from app/logo.tsx and nothing else.
 
-     Two deliberate differences from the React version:
-     - a rounded filled plate behind the mark, because a favicon is rendered at
-       16px against an unknown tab colour and the bare strokes disappear on a
-       dark background;
-     - the strokes are white on the plate rather than gradient-on-transparent,
-       for the same reason.
+     It used to be the whole mark on a rounded gradient plate. The plate was
+     the wrong call — it spent most of a 16px canvas on a background, leaving
+     the "e" itself about nine pixels tall, which is why it read as a blue
+     smudge in a tab. draftproof's favicon takes the opposite approach and its
+     mark runs edge to edge; this now does the same.
+
+     Two things are deliberately dropped from the full mark:
+     - the plate, so the icon is transparent and sits on whatever the browser's
+       tab colour is, light or dark. The blue-to-teal gradient carries against
+       both; white strokes on a plate only ever worked against the plate.
+     - the three speed lines, which at 16px are sub-pixel dots and turn to mud.
+       The bowl and the circular arrow are what make the mark recognisable.
+
+     The "e" occupies roughly x 22-54, y 17-50 in app/logo.tsx's 64-unit
+     canvas. The transform recentres that box and scales it to fill this one,
+     which also scales the stroke weight up — wanted, since a hairline is the
+     other way a favicon disappears. Kept as a transform rather than rewritten
+     coordinates so it stays visibly derived from the component.
+
      allow-hardcode: SVG path geometry and brand colours, not configuration. -->
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64"
+     role="img" aria-label="expressautomate.app">
   <defs>
-    <linearGradient id="ea-plate" x1="0" y1="0" x2="64" y2="64" gradientUnits="userSpaceOnUse">
+    <linearGradient id="ea-mark" x1="6" y1="6" x2="58" y2="58" gradientUnits="userSpaceOnUse">
       <stop stop-color="#1D4ED8"/>
       <stop offset="1" stop-color="#14A89A"/>
     </linearGradient>
   </defs>
 
-  <rect width="64" height="64" rx="14" fill="url(#ea-plate)"/>
-
-  <g fill="#fff">
-    <circle cx="11" cy="24" r="2.4"/>
-    <circle cx="12" cy="32" r="2.1"/>
-    <circle cx="13.5" cy="40" r="1.8"/>
+  <g transform="translate(32 32) scale(1.78) translate(-38 -33.25)"
+     fill="none" stroke="url(#ea-mark)" stroke-width="4">
+    <!-- bowl and crossbar -->
+    <path d="M24 33c0-8 6.5-14 14.5-14S52 24.2 52 30.5c0 1.6-1 2.5-2.7 2.5H24z"
+          stroke-linejoin="round"/>
+    <!-- circular arrow closing the loop -->
+    <path d="M50 39a14 14 0 0 1-25.6 2.4" stroke-linecap="round"/>
+    <path d="M45 36.5 51.5 39 49 45.5z" fill="url(#ea-mark)" stroke="none"/>
   </g>
-  <g stroke="#fff" stroke-width="2.8" stroke-linecap="round">
-    <path d="M16.5 24h6.5"/>
-    <path d="M17.5 32h5"/>
-    <path d="M19 40h3.5"/>
-  </g>
-
-  <path d="M26 33c0-6.4 5.2-11.2 11.6-11.2S48.6 26 48.6 31c0 1.3-.8 2-2.2 2H26z"
-        fill="none" stroke="#fff" stroke-width="3.4" stroke-linejoin="round"/>
-  <path d="M47 38a11.2 11.2 0 0 1-20.5 1.9"
-        fill="none" stroke="#fff" stroke-width="3.4" stroke-linecap="round"/>
-  <path d="M43 35.8 48.2 37.8 46.2 43z" fill="#fff"/>
 </svg>

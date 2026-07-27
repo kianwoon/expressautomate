@@ -23,14 +23,19 @@ SHOT=(--headless --disable-gpu --hide-scrollbars --default-background-color=0000
 "$CHROME" "${SHOT[@]}" --window-size=1200,630 \
   --screenshot=../public/og.png "file://$PWD/og.svg"
 
-for size in 180 256; do
-  sed "s|width=\"64\" height=\"64\"|width=\"$size\" height=\"$size\"|" \
-    ../public/icon.svg > "/tmp/ea-icon-$size.svg"
-  "$CHROME" "${SHOT[@]}" --window-size="$size,$size" \
-    --screenshot="/tmp/ea-icon-$size.png" "file:///tmp/ea-icon-$size.svg"
-done
+# Two different sources, for one reason: iOS ignores transparency on a home
+# screen icon and composites it onto its own opaque background, so the
+# plate-less mark would land as a gradient "e" on black. apple-icon.svg keeps
+# a plate; everything else uses the transparent public/icon.svg.
+render_icon() {  # render_icon <source-svg> <size> <output-png>
+  sed "s|width=\"64\" height=\"64\"|width=\"$2\" height=\"$2\"|" "$1" > "/tmp/ea-src-$2.svg"
+  "$CHROME" "${SHOT[@]}" --window-size="$2,$2" \
+    --screenshot="$3" "file:///tmp/ea-src-$2.svg"
+}
 
-cp /tmp/ea-icon-180.png ../public/apple-touch-icon.png
+render_icon ../public/icon.svg 256 /tmp/ea-icon-256.png
+render_icon apple-icon.svg 180 ../public/apple-touch-icon.png
+
 magick /tmp/ea-icon-256.png -define icon:auto-resize=64,48,32,16 ../public/favicon.ico
 
 echo "rendered: og.png apple-touch-icon.png favicon.ico"
