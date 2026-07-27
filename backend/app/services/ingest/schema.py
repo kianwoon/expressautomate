@@ -42,10 +42,22 @@ class ExtractedField(BaseModel):
 
     @model_validator(mode="after")
     def _present_values_must_be_locatable(self) -> "ExtractedField":
-        """A value with no offsets cannot be verified, so it is not accepted.
+        """A value that cannot be checked against the source is not accepted.
 
-        This is the schema-level half of the no-fabrication rule; the other
-        half is checking the offsets against the source in evidence.py.
+        Three things are required together, and the third is the one that does
+        the work. Offsets alone prove nothing: `value` is legitimately allowed
+        to differ from the source text ("Up to 3500" for "Up to $3,500"), so
+        the only thing verification can compare a slice against is the model's
+        own quotation of it. With `evidence` optional, a fabricated value could
+        carry any two in-range integers and there would be nothing to check —
+        the offsets would be decoration on an invention.
+
+        So: `evidence` is required, and evidence.py asserts
+        `source[start:end] == evidence`. That makes the model commit to a claim
+        about the source that is either true or caught (§15).
+
+        `end_char` is not bounded here because this object does not know the
+        source. evidence.py has it and does the range check there.
         """
         if self.is_missing:
             return self
@@ -53,6 +65,16 @@ class ExtractedField(BaseModel):
             raise ValueError(f"{self.value!r} has no source offsets")
         if self.end_char <= self.start_char:
             raise ValueError(f"offsets out of order: {self.start_char}..{self.end_char}")
+        if not (self.evidence or "").strip():
+            raise ValueError(f"{self.value!r} quotes no source text")
+        if len(self.evidence) != self.end_char - self.start_char:
+            # Caught here rather than in evidence.py because it is a
+            # self-contradiction inside one object: a span of n characters that
+            # quotes something of another length describes no real slice.
+            raise ValueError(
+                f"{self.value!r} quotes {len(self.evidence)} characters "
+                f"but spans {self.end_char - self.start_char}"
+            )
         return self
 
 
@@ -86,7 +108,11 @@ def json_schema() -> dict:
             "end_char": {"type": "integer"},
             "confidence": {"type": "number"},
         },
-        "required": ["value"],
+        # All four, matching the validator. Asking only for `value` let the
+        # model return a bare string it could not be held to, and the parser
+        # would then reject the whole response — so the strictness landed as a
+        # failed extraction rather than as guidance the model could follow.
+        "required": ["value", "evidence", "start_char", "end_char"],
     }
     return {
         "type": "object",

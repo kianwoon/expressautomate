@@ -70,7 +70,22 @@ async def complete_json(
             json={
                 "model": model,
                 "messages": [{"role": "user", "content": prompt}],
-                "response_format": {"type": "json_object"},
+                # The caller's schema, actually sent. It was previously
+                # accepted as an argument and dropped here, so the structure
+                # extraction depends on — a value, its quotation, and the
+                # offsets that make it checkable — was never asked for; the
+                # parser then rejected responses for missing fields the model
+                # was never told about.
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "extraction",
+                        # The provider enforces the shape rather than hoping
+                        # the prose in the prompt was persuasive.
+                        "strict": True,
+                        "schema": schema,
+                    },
+                },
                 # Extraction must be reproducible: the same email replayed
                 # through the same prompt version has to give the same answer,
                 # or a corrections table can never be trusted as a baseline.

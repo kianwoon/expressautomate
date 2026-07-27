@@ -185,19 +185,26 @@ function Ingesting({ me }: { me: Me }) {
       {total > 0 && (
         <div className="grid-3" style={{ marginTop: 32 }}>
           <Stat n={total} label="emails read" sub={range(me)} />
-          {/* Two different waits, and only one of them is short. Emails still
-              being fetched clear in seconds; emails already stored are waiting
-              on a release. Showing them as one number told people their mail
-              was seconds from being understood. */}
-          {inProgress > 0 ? (
-            <Stat n={inProgress} label="being fetched" sub="Usually seconds each" />
-          ) : (
-            <Stat
-              n={awaiting}
-              label="stored, waiting to be read"
-              sub={awaiting === 0 ? "Nothing waiting" : "Until extraction ships"}
-            />
-          )}
+          {/* Two different waits, and only one of them is short. Emails being
+              fetched clear in seconds; emails already stored are waiting on a
+              release. One number for both told people their mail was seconds
+              from being understood.
+
+              Both are reported, never whichever is larger: showing only the
+              active one made 82 parked emails vanish from the page the moment
+              a single new one arrived — replacing a wrong number with no
+              number at all. */}
+          <Stat
+            n={inProgress + awaiting}
+            label={inProgress > 0 ? "being read" : "stored, not yet understood"}
+            sub={
+              inProgress > 0
+                ? `${inProgress.toLocaleString()} fetching now, ${awaiting.toLocaleString()} waiting on extraction`
+                : awaiting === 0
+                  ? "Nothing waiting"
+                  : "Waiting on extraction"
+            }
+          />
           <Stat n={extracted} label="job orders found" sub="Extraction is not live yet" />
         </div>
       )}

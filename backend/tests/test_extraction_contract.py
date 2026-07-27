@@ -86,3 +86,42 @@ def test_json_schema_declares_every_target_column():
         "skills",
     ):
         assert name in job, f"{name} missing from the model-facing schema"
+
+
+def test_a_value_that_quotes_nothing_is_rejected():
+    """Offsets alone prove nothing.
+
+    `value` is allowed to differ from the source ("Up to 3500" for
+    "Up to $3,500"), so a slice can only ever be compared against the model's
+    own quotation of it. Without `evidence`, a fabricated value could carry any
+    two in-range integers and there would be nothing to check — the offsets
+    would be decoration on an invention. This is the hole that made the
+    no-fabrication rule (§15) a suggestion rather than a mechanism.
+    """
+    with pytest.raises(ValidationError):
+        ExtractedField(value="Chief Executive", start_char=0, end_char=15)
+
+
+def test_a_quotation_that_does_not_fit_its_own_span_is_rejected():
+    """A self-contradiction inside one object: n characters quoted, m spanned.
+
+    Caught here rather than against the source, because it is wrong before you
+    even have the email — and catching it here means the source check in
+    evidence.py only ever has one way left to fail.
+    """
+    with pytest.raises(ValidationError):
+        ExtractedField(
+            value="SGD 6000", evidence="SGD 6,000", start_char=10, end_char=12
+        )
+
+
+def test_the_model_is_asked_for_everything_the_parser_requires():
+    """A schema laxer than the validator turns strictness into failed runs.
+
+    Asking only for `value` let the model return a bare string it could not be
+    held to; the parser then rejected the whole response for missing fields the
+    model was never told to send. The two must agree.
+    """
+    field = json_schema()["properties"]["jobs"]["items"]["properties"]["salary"]
+
+    assert set(field["required"]) == {"value", "evidence", "start_char", "end_char"}
