@@ -104,6 +104,16 @@ class Settings(BaseSettings):
     INITIAL_SYNC_MAX_MESSAGES: int = Field(default=5000, gt=0)
     INITIAL_SYNC_MAX_LOOKBACK_DAYS: int = Field(default=90, gt=0)
 
+    # --- Recovery sweeps (plan §8, §9) ---
+    # Two grace periods, because a queue hop should be quick but a fetch or an
+    # extraction legitimately takes longer. Sweeping both on the same clock
+    # would duplicate work that is still in flight.
+    RESCAN_PENDING_MINUTES: int = Field(default=5, gt=0)
+    RESCAN_WORKING_MINUTES: int = Field(default=15, gt=0)
+    RESCAN_INTERVAL_SECONDS: float = Field(default=300.0, gt=0)
+    RENEW_INTERVAL_SECONDS: float = Field(default=900.0, gt=0)
+    DELTA_SYNC_INTERVAL_SECONDS: float = Field(default=600.0, gt=0)
+
     # --- Google sign-in (identity only — no Gmail scope; see docs/setup.md) ---
     GOOGLE_CLIENT_ID: str = ""
     GOOGLE_CLIENT_SECRET: str = ""

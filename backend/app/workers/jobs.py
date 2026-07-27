@@ -125,7 +125,7 @@ async def fetch_email(
     try:
         client = await graph_client_for_mailbox(tenant, mailbox)
     except MailboxNotAuthorised as exc:
-        await _needs_reauth(tenant, mailbox, str(exc))
+        await mark_needs_reauth(tenant, mailbox, str(exc))
         return
 
     try:
@@ -140,7 +140,7 @@ async def fetch_email(
         return
     except GraphAuthError as exc:
         # 403 answers the same way forever. Retrying buries the cause.
-        await _needs_reauth(tenant, mailbox, str(exc))
+        await mark_needs_reauth(tenant, mailbox, str(exc))
         return
     except GraphThrottled as exc:
         # arq only reschedules on `Retry`; a bare exception is a failed job and
@@ -218,8 +218,13 @@ async def _unfetchable(tenant_id: uuid.UUID, email_message_id: str) -> None:
     log.info("fetch_source_gone", email_message_id=email_message_id)
 
 
-async def _needs_reauth(tenant_id: uuid.UUID, mailbox_id: uuid.UUID, reason: str) -> None:
+async def mark_needs_reauth(
+    tenant_id: uuid.UUID, mailbox_id: uuid.UUID, reason: str
+) -> None:
     """Stop ingesting and surface it, rather than retrying a dead grant.
+
+    Public because the renewal sweep needs the same behaviour: a grant that
+    cannot mint a token cannot renew a subscription either.
 
     The row is deliberately left `pending`: once the user reconnects,
     `rescan_stuck` picks it up and the email is fetched after all.

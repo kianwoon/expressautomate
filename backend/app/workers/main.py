@@ -32,18 +32,32 @@ class PeriodicTask:
     run: Callable[[], Awaitable[None]]
 
 
-async def _heartbeat() -> None:
-    """Placeholder until the first real task lands, so idling is visible."""
-    log.info("worker_idle", reason="no ingestion tasks registered yet")
-
-
 def build_tasks() -> list[PeriodicTask]:
-    """Registry of periodic work.
+    """Registry of periodic work (plan §8, §9).
 
-    Stage 2 adds subscription renewal (§8) and delta reconciliation (§9);
-    Stage 3 adds the queue drain (§7).
+    This process makes sure work *exists*; arq processes it. Keeping them in
+    separate processes means a wedged arq worker still gets fresh work queued,
+    and a crashed supervisor does not stop work already in the queue.
+
+    Imported inside the function so the module stays importable — and its
+    supervisor loop testable — without the ingestion stack behind it.
     """
-    return [PeriodicTask(name="heartbeat", interval_seconds=300.0, run=_heartbeat)]
+    from app.workers.tasks import delta_sync_all, renew_subscriptions, rescan_stuck
+
+    async def _rescan() -> None:
+        await rescan_stuck()
+
+    async def _renew() -> None:
+        await renew_subscriptions()
+
+    async def _delta() -> None:
+        await delta_sync_all()
+
+    return [
+        PeriodicTask("rescan_stuck", settings.RESCAN_INTERVAL_SECONDS, _rescan),
+        PeriodicTask("renew_subscriptions", settings.RENEW_INTERVAL_SECONDS, _renew),
+        PeriodicTask("delta_sync", settings.DELTA_SYNC_INTERVAL_SECONDS, _delta),
+    ]
 
 
 async def _run_periodically(task: PeriodicTask, stop: asyncio.Event) -> None:
