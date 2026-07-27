@@ -41,8 +41,11 @@ uv run ruff check .
   trust store, so `require` maps to encrypt-without-verify.
 - **Every business table carries `tenant_id`** (§18) via the `TenantScoped`
   mixin. Agency A must never read Agency B's data.
-- **Never discard the source email** (§2.3). Raw email and AI-derived data live
-  in separate tables; extractions keep evidence, confidence, and model version.
+- **Preserve source provenance while the source is legitimately retained**
+  (amends §2.3, decided 2026-07-27). Raw email and AI-derived data live in
+  separate tables; extractions keep evidence, confidence, and model version.
+  Retention is configurable per tenant rather than indefinite — see
+  [the ingestion design](docs/superpowers/specs/2026-07-27-email-ingestion-design.md).
 - **The AI must not fabricate missing values** (§15) — return `Not mentioned`.
 
 ## Auth
