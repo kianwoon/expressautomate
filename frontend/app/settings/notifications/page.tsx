@@ -33,6 +33,12 @@ export default function NotificationsSettings() {
         <p className="nt-error">{state.message}</p>
       ) : (
         <>
+          {/* A refresh failure (as opposed to the first load) never replaces
+              this branch — see notifications-data.ts. It is a non-destructive
+              notice on top of whatever was already on screen, so an outage
+              while the Telegram panel is open leaves the panel, its QR and
+              its timer untouched. */}
+          {state.refreshError ? <p className="nt-error">{state.refreshError}</p> : null}
           {state.settings.destinations.length === 0 ? (
             <p className="nt-note">
               Nothing is linked yet, so nothing is being sent.

@@ -86,7 +86,10 @@ export function TelegramLinkPanel({
   // A destination id appeared that was not present when the panel opened:
   // that is the link completing. Closing here is what makes the flow feel
   // finished. `justLinked` drives the screen-reader announcement below and
-  // is cleared as soon as the button that replaces the panel gets focus.
+  // stays true until the button that replaces the panel loses focus — the
+  // effect below moves focus there, so the earliest we can clear it without
+  // cutting off the announcement mid-read is when the user moves on (the
+  // button's onBlur, further down), not when it merely receives focus.
   useEffect(() => {
     if (panel.status === "open" && destinationIds.some((id) => !baseline.current.has(id))) {
       setPanel({ status: "closed" });
@@ -105,6 +108,13 @@ export function TelegramLinkPanel({
   // Depends on the panel's status and expiry only — see the ref above for why
   // the callback is deliberately absent from this list.
   const openUntil = panel.status === "open" ? panel.expiresAt : null;
+  // Deliberately does NOT pause while the server is unreachable: a failed
+  // poll now surfaces as a non-destructive `refreshError` one layer up
+  // (notifications-data.ts) rather than tearing this panel down, so there is
+  // nothing to protect by stopping. Stopping would also need its own state
+  // (when to resume?) for a case that self-heals — the next successful poll
+  // after the server returns picks up the completed link exactly as if
+  // nothing had happened.
   useEffect(() => {
     if (openUntil === null) return;
     const timer = setInterval(() => {
@@ -158,6 +168,7 @@ export function TelegramLinkPanel({
               ref={linkButtonRef}
               className="btn btn-primary"
               onClick={() => void open()}
+              onBlur={() => setJustLinked(false)}
             >
               Link Telegram
             </button>

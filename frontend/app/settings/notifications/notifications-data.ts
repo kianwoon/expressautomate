@@ -41,7 +41,12 @@ export type NotificationSettings = {
 
 export type NotificationsState =
   | { status: "loading" }
-  | { status: "ready"; settings: NotificationSettings }
+  // `refreshError` is set only when a load AFTER the first success fails — the
+  // Telegram panel polls this every 3s, and a transient blip there must not
+  // replace the destinations and the in-progress panel with a full-screen
+  // error. The first, un-refreshed load has nothing to fall back to, so it
+  // still goes to `unreadable` below.
+  | { status: "ready"; settings: NotificationSettings; refreshError?: string }
   | { status: "unreadable"; message: string };
 
 /**
@@ -83,13 +88,16 @@ export function useNotifications() {
         });
         if (thisGeneration !== generation.current) return;
         if (!res.ok) {
-          setState({
-            status: "unreadable",
-            message:
-              res.status === 401
-                ? "Your session has expired. Sign in again and this page will show your settings."
-                : "We could not read your notification settings just now.",
-          });
+          const message =
+            res.status === 401
+              ? "Your session has expired. Sign in again and this page will show your settings."
+              : "We could not read your notification settings just now.";
+          // A refresh failure on top of good data keeps that data on screen —
+          // see the type comment above. Only a load with nothing to fall back
+          // to becomes the full-screen `unreadable` state.
+          setState((prev) =>
+            prev.status === "ready" ? { ...prev, refreshError: message } : { status: "unreadable", message },
+          );
           return;
         }
         const settings = (await res.json()) as NotificationSettings;
@@ -98,7 +106,8 @@ export function useNotifications() {
       } catch {
         if (thisGeneration !== generation.current) return;
         if (!signal?.aborted) {
-          setState({ status: "unreadable", message: "We could not reach the server." });
+          const message = "We could not reach the server.";
+          setState((prev) => (prev.status === "ready" ? { ...prev, refreshError: message } : { status: "unreadable", message }));
         }
       }
     })();

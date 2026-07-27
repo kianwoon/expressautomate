@@ -49,14 +49,16 @@ export function SettingsShell({
   }, [auth.status]);
 
   // Once we have confirmed the user is signed in, `children` stays mounted
-  // even through a later transient `unreachable` (a blip, a 5xx). The
-  // notifications route holds live state in-tree while a Telegram link is in
-  // progress — unmounting there discards the panel and the QR while a still-
-  // valid link token becomes invisible to the recruiter. Overlaying the
-  // "could not reach the server" message on top of the mounted children is
-  // simpler than lifting that state up into `page.tsx`: every settings route
-  // gets the fix for free, and no route has to know its state might need to
-  // survive an auth hiccup it didn't cause.
+  // through a later transient `unreachable` from `useAuth` itself (a blip on
+  // the auth check, not the notifications fetch). This is a DIFFERENT outage
+  // than the one the Telegram panel cares about: that one is fixed where the
+  // panel's own data lives, in `notifications-data.ts` (a failed refresh
+  // keeps the last-good settings instead of replacing them with an error
+  // screen). This flag only stops the *shell* from unmounting every settings
+  // route's children the moment `useAuth` reports a hiccup — without it, an
+  // auth-check blip would tear down the panel regardless of what
+  // notifications-data.ts does, since children would not be in the tree at
+  // all.
   const [everSignedIn, setEverSignedIn] = useState(false);
   useEffect(() => {
     if (auth.status === "signed-in") setEverSignedIn(true);
@@ -82,22 +84,15 @@ export function SettingsShell({
                 </a>
               ))}
             </nav>
-            {auth.status === "signed-in" || (everSignedIn && auth.status === "unreachable") ? (
-              <>
-                {auth.status === "unreachable" ? (
-                  <p className="lede" style={{ marginTop: 18 }}>
-                    We could not reach the server. This is not a sign-in problem — your session is
-                    untouched. Reload the page in a moment.
-                  </p>
-                ) : null}
-                {children}
-              </>
-            ) : auth.status === "unreachable" ? (
+            {auth.status === "unreachable" ? (
               <p className="lede" style={{ marginTop: 18 }}>
                 We could not reach the server. This is not a sign-in problem — your session is
                 untouched. Reload the page in a moment.
               </p>
-            ) : (
+            ) : null}
+            {auth.status === "signed-in" || (everSignedIn && auth.status === "unreachable") ? (
+              children
+            ) : auth.status === "unreachable" ? null : (
               /* Covers both "loading" and the instant before the redirect
                  fires on "anonymous". Nothing about the account is asserted
                  before the check resolves — otherwise a signed-out visitor
