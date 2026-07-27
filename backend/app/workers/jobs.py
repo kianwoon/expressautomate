@@ -469,15 +469,16 @@ async def extract_email(
     # Asked once, before the row is touched, for the reason `classify_email`
     # gives: an unconfigured deployment must fail loudly here rather than mark
     # every email `failed` one httpx error at a time.
-    if not settings.llm_configured(
-        settings.EXTRACTION_MODEL_FAST, settings.EXTRACTION_MODEL_STRONG
-    ):
+    # `EXTRACTION_MODEL_STRONG` is not asked for: it is optional now, and
+    # `extract` falls back to the fast model at a higher reasoning effort. A
+    # guard demanding it would refuse a deployment that is perfectly able to
+    # extract.
+    if not settings.cerebras_configured(settings.EXTRACTION_MODEL_FAST):
         log.error(
             "llm_not_configured",
             job="extract_email",
             detail=(
-                "Set LLM_BASE_URL, OPENROUTER_API_KEY, EXTRACTION_MODEL_FAST"
-                " and EXTRACTION_MODEL_STRONG."
+                "Set CEREBRAS_BASE_URL, CEREBRAS_API_KEY and EXTRACTION_MODEL_FAST."
             ),
         )
         raise RuntimeError("Extraction has no model configured.")

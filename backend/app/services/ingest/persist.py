@@ -203,6 +203,11 @@ async def _insert_evidence(
     for name, field in vars(job).items():
         if not isinstance(field, ExtractedField):
             continue
+        # Before the offsets are read, not inline with them: `verify` writes
+        # the offsets it located back onto the field, and a dict literal
+        # evaluates its values in order — reading `start_char` first would
+        # store the model's arithmetic and then discover it was wrong.
+        valid = verify(field, source)
         await session.execute(
             _INSERT_EVIDENCE,
             {
@@ -216,6 +221,6 @@ async def _insert_evidence(
                 "start_char": field.start_char,
                 "end_char": field.end_char,
                 "model_confidence": field.confidence,
-                "evidence_valid": verify(field, source),
+                "evidence_valid": valid,
             },
         )

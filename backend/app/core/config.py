@@ -156,21 +156,29 @@ class Settings(BaseSettings):
     R2_REGION: str = "auto"
 
     # --- AI extraction ---
+    # Kept although nothing calls the router any more: OPENROUTER_API_KEY and
+    # LLM_BASE_URL are still what `llm_configured` answers for, and a deployment
+    # that moves extraction back to a router needs them present rather than
+    # rediscovered.
     OPENROUTER_API_KEY: str = ""
     LLM_BASE_URL: str = ""
     EXTRACTION_MODEL_FAST: str = ""
     EXTRACTION_MODEL_STRONG: str = ""
     CLASSIFIER_MODEL: str = ""
 
-    # --- Cerebras (the classifier only) ---
+    # --- Cerebras (the classifier and extraction) ---
     # The gate is the highest-volume call in the system — one per email, on
     # every email, forever — so it runs on its own provider rather than through
     # the router the extraction calls use. Measured at ~36ms round trip against
     # gpt-oss-120b, which matters because the gate sits between a fetched email
     # and everything else.
     #
-    # Extraction stays on OpenRouter: it needs the strong-model escalation path
-    # (§32), and that is what a router is for.
+    # Extraction joined it after the router path failed in production, not on
+    # principle. The escalation model (§32) rejected our twelve-field schema
+    # outright — "the compiled grammar is too large" — and every real email sat
+    # at `extracting` with nothing to show for it. The same document, sent as
+    # prompt text with a plain `json_object` response format, is answered
+    # correctly here in ~1.5s and at a fraction of the price.
     CEREBRAS_BASE_URL: str = ""
     CEREBRAS_API_KEY: str = ""
     # How many emails one classification call covers. Batching is the whole
@@ -208,6 +216,20 @@ class Settings(BaseSettings):
     # email on a strong model routinely spends a minute generating, and a
     # timeout here costs the whole extraction plus a retry's worth of tokens.
     LLM_TIMEOUT_SECONDS: float = 90.0
+    # An extraction answers for twelve fields per vacancy and quotes the email
+    # for each, so its completions are an order of magnitude longer than the
+    # gate's one-word verdicts. Too low and the response is truncated mid-JSON,
+    # which arrives as `LLMInvalidJSON` and looks like a model problem.
+    EXTRACTION_MAX_TOKENS: int = Field(default=16000, gt=0)
+    # Escalation (§32) is a change of effort, not a change of provider. The
+    # obvious escalation — a bigger model behind a router — is what broke
+    # extraction in production, and a second model is only safe once someone
+    # has verified it accepts this request. Reasoning effort needs no such
+    # verification: it is the same endpoint, the same response format, the same
+    # model that already answered, thinking longer. There is no request shape
+    # here that can 400 when the first call did not.
+    EXTRACTION_REASONING_EFFORT_FAST: str = "low"
+    EXTRACTION_REASONING_EFFORT_STRONG: str = "high"
     # Stamped onto every extraction so a prompt change is attributable — without
     # it, a quality regression cannot be told from a change in the mail itself.
     PROMPT_VERSION: str = "v1"

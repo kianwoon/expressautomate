@@ -1,13 +1,21 @@
 """Prompt construction and the extraction call (plan §12, §13, §32).
 
-The prompt insists on offsets and on `Not mentioned`, but neither is trusted:
-the schema rejects a value with no offsets, and evidence.py checks the offsets
-against the source. The prompt only makes compliance likely; the code makes
-non-compliance visible.
+The prompt asks for a quotation and for `Not mentioned`, and neither is
+trusted: the schema rejects a value that quotes nothing, and evidence.py looks
+for the quotation in the email. The prompt only makes compliance likely; the
+code makes non-compliance visible.
 
-Two models, one prompt. The fast model handles everything and the strong one is
-reached for only when the fast answer fails a check we can make ourselves —
-never on a hunch, and never as a plain retry of something that already worked.
+Runs on Cerebras, like the gate, and asks for a plain JSON object. Both of
+those are scars. Extraction was routed through OpenRouter with a strict
+`json_schema` response format, and the escalation model rejected the schema —
+"the compiled grammar is too large" — for every email, so production held four
+recruitment emails stuck at `extracting` and zero opportunities. The schema is
+now prompt text, which no provider compiles and none can refuse.
+
+Two passes, one prompt, one model. The first is cheap and handles everything;
+the second is the same model thinking harder, reached for only when the first
+answer fails a check we can make ourselves — never on a hunch, and never as a
+plain retry of something that already worked.
 """
 
 import json
@@ -25,9 +33,12 @@ PROMPT = """Extract every job vacancy described in this email.
 
 Rules:
 - One entry in `jobs` per distinct vacancy. An email may describe several, or none.
-- For each field, quote the exact text you took it from in `evidence`, and give
-  `start_char` and `end_char` — the character offsets of that quote in the EMAIL
-  text below. The quote must match the email exactly at those offsets.
+- For each field, `evidence` must be text copied VERBATIM from the EMAIL below —
+  character for character, with nothing added, shortened or paraphrased. This is
+  checked against the email; a quote that is not in it is discarded.
+- `start_char` and `end_char` are your best estimate of where that quote starts
+  and ends in the EMAIL. They are only used to tell apart two identical quotes,
+  so approximate is fine — never change the quote to fit them.
 - If the email does not state a field, set its value to "{not_mentioned}" and
   omit the offsets. Never infer, estimate, or fill in a typical value.
 - `salary_period` is one of: hour, day, month, year. Extract it separately from
@@ -58,15 +69,40 @@ def build_prompt(source: str) -> str:
     )
 
 
+def _attempts() -> tuple[tuple[str, str], ...]:
+    """The (model, reasoning effort) pairs to try, cheapest first.
+
+    `EXTRACTION_MODEL_STRONG` falls back to the fast model rather than being
+    required, so a deployment that names only one model still escalates — by
+    effort — instead of sending an empty model id the provider rejects. That is
+    the failure mode this whole change exists to remove: a second attempt whose
+    request shape was never verified is worse than no second attempt.
+    """
+    fast = settings.EXTRACTION_MODEL_FAST
+    return (
+        (fast, settings.EXTRACTION_REASONING_EFFORT_FAST),
+        (
+            settings.EXTRACTION_MODEL_STRONG or fast,
+            settings.EXTRACTION_REASONING_EFFORT_STRONG,
+        ),
+    )
+
+
 async def extract(source: str, *, llm=None) -> tuple[ExtractionResponse, LLMResult]:
-    """Extract, escalating to the strong model only when the fast one fell short.
+    """Extract, escalating only when the first pass demonstrably fell short.
 
     Escalation is not a retry of the same thing (§32). Temperature is zero, so
     re-asking the same model the same question buys a second bill and the same
-    answer. What justifies a second call is evidence that *this* model could
-    not do *this* email: either it returned something unparseable, or the spans
-    it named are not in the source. Both are decided here by code, never by the
-    model's opinion of its own work.
+    answer — which is precisely why the second attempt raises `reasoning_effort`
+    rather than repeating the request. What justifies it is evidence that the
+    first pass could not do *this* email: either it returned something
+    unparseable, or the text it quoted is not in the email. Both are decided
+    here by code, never by the model's opinion of its own work.
+
+    `schema=None` is deliberate and is the fix for the production outage: it
+    asks for a bare `json_object`. The schema itself travels in the prompt, so
+    nothing has to compile a twelve-field grammar, and there is no request here
+    that a provider can reject on shape.
 
     `llm` defaults to None rather than to `complete_json` for the reason
     classify.py gives: a default argument binds the function object at
@@ -74,29 +110,42 @@ async def extract(source: str, *, llm=None) -> tuple[ExtractionResponse, LLMResu
     """
     resolve = llm or complete_json
     prompt = build_prompt(source)
-    models = (settings.EXTRACTION_MODEL_FAST, settings.EXTRACTION_MODEL_STRONG)
     last: tuple[ExtractionResponse, LLMResult] | None = None
     failure: Exception | None = None
 
-    for model in models:
+    for model, effort in _attempts():
         try:
-            result = await resolve(prompt, model=model, schema=json_schema())
+            result = await resolve(
+                prompt,
+                model=model,
+                schema=None,
+                base_url=settings.CEREBRAS_BASE_URL,
+                api_key=settings.CEREBRAS_API_KEY,
+                extra_body={
+                    "max_tokens": settings.EXTRACTION_MAX_TOKENS,
+                    "reasoning_effort": effort,
+                },
+            )
             response = ExtractionResponse.model_validate(result.data)
         except (LLMInvalidJSON, ValueError) as exc:
             # A ValueError here is the schema refusing a value that quotes
             # nothing — indistinguishable, for routing purposes, from JSON we
             # could not parse: this model did not answer in the required shape.
             failure = exc
-            log.warning("extraction_unusable", model=model, error=repr(exc))
+            log.warning(
+                "extraction_unusable", model=model, effort=effort, error=repr(exc)
+            )
             continue
 
         last = (response, result)
         if not _needs_a_better_model(response, source):
             return last
-        log.info("extraction_escalating", model=model, jobs=len(response.jobs))
+        log.info(
+            "extraction_escalating", model=model, effort=effort, jobs=len(response.jobs)
+        )
 
     if last is not None:
-        # Both models were reached and neither produced spans that all check
+        # Both passes were made and neither produced quotations that all check
         # out. The later answer is returned rather than discarded: persist
         # records the failed checks as `needs_review`, which is a vacancy a
         # recruiter can still see and correct. Raising instead would throw away
@@ -104,7 +153,7 @@ async def extract(source: str, *, llm=None) -> tuple[ExtractionResponse, LLMResu
         return last
 
     raise LLMInvalidJSON(
-        f"neither model returned a valid extraction: {failure}"
+        f"neither extraction pass returned a valid answer: {failure}"
     ) from failure
 
 

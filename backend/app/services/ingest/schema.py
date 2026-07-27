@@ -1,9 +1,16 @@
 """The model-facing extraction contract (plan §13, §15).
 
-Every field carries its evidence *and* the character offsets that evidence came
-from. Asking for evidence alone is not verification — a model can invent a
-plausible quote as easily as a plausible salary. Offsets are checkable; prose
-is not.
+Every field carries the text it was taken from. The quote is what makes the
+no-fabrication rule mechanical: evidence.py looks for it in the email and the
+field is only trusted when it is found there.
+
+Offsets used to be part of the contract too, and that was a mistake measured
+against real responses. Models quote accurately and count characters badly, so
+a correct extraction of a long `job_description` was thrown away for offsets
+that were a few characters out. Locating a quote is something code does
+perfectly and a language model does not, so the work moved: the model quotes,
+evidence.py finds. What arrives here is a hint for disambiguating a quote that
+occurs twice, never a claim that has to be true.
 """
 
 from pydantic import BaseModel, Field, model_validator
@@ -41,40 +48,24 @@ class ExtractedField(BaseModel):
         return self.value.strip().lower() == NOT_MENTIONED.lower()
 
     @model_validator(mode="after")
-    def _present_values_must_be_locatable(self) -> "ExtractedField":
-        """A value that cannot be checked against the source is not accepted.
+    def _present_values_must_quote_something(self) -> "ExtractedField":
+        """A value with no quotation behind it is not accepted.
 
-        Three things are required together, and the third is the one that does
-        the work. Offsets alone prove nothing: `value` is legitimately allowed
-        to differ from the source text ("Up to 3500" for "Up to $3,500"), so
-        the only thing verification can compare a slice against is the model's
-        own quotation of it. With `evidence` optional, a fabricated value could
-        carry any two in-range integers and there would be nothing to check —
-        the offsets would be decoration on an invention.
+        This is the whole anti-fabrication mechanism, so it stays strict.
+        `value` is legitimately allowed to differ from the source text ("Up to
+        3500" for "Up to $3,500"), which means the only thing verification can
+        compare the email against is the model's own quotation. With `evidence`
+        optional there would be nothing to check at all.
 
-        So: `evidence` is required, and evidence.py asserts
-        `source[start:end] == evidence`. That makes the model commit to a claim
-        about the source that is either true or caught (§15).
-
-        `end_char` is not bounded here because this object does not know the
-        source. evidence.py has it and does the range check there.
+        Nothing else is required. Offsets are a hint (see the module docstring)
+        and an absent or wrong one costs the field nothing; a quote that is not
+        in the email is what costs it its trust, and only evidence.py — which
+        has the email — can decide that.
         """
         if self.is_missing:
             return self
-        if self.start_char is None or self.end_char is None:
-            raise ValueError(f"{self.value!r} has no source offsets")
-        if self.end_char <= self.start_char:
-            raise ValueError(f"offsets out of order: {self.start_char}..{self.end_char}")
         if not (self.evidence or "").strip():
             raise ValueError(f"{self.value!r} quotes no source text")
-        if len(self.evidence) != self.end_char - self.start_char:
-            # Caught here rather than in evidence.py because it is a
-            # self-contradiction inside one object: a span of n characters that
-            # quotes something of another length describes no real slice.
-            raise ValueError(
-                f"{self.value!r} quotes {len(self.evidence)} characters "
-                f"but spans {self.end_char - self.start_char}"
-            )
         return self
 
 
@@ -100,12 +91,18 @@ class ExtractionResponse(BaseModel):
 def json_schema() -> dict:
     """Schema sent to the model. Derived, so it cannot drift from the parser.
 
-    Written to satisfy **strict** structured output, which is not the same as
-    ordinary JSON Schema and fails loudly when it is treated as such: every
-    object must set `additionalProperties: false`, and `required` must name
-    *every* property — not the ones that happen to be mandatory. A schema that
-    is merely valid JSON Schema is rejected by the provider, so the first real
-    extraction call would have 400'd, uniformly, for every email.
+    Sent as *text inside the prompt* rather than as a `json_schema` response
+    format. Twelve nested objects is a large grammar, and a provider that
+    compiles the schema into one refused this exact document: "the compiled
+    grammar is too large". That failure is uniform — every email, every time —
+    so extraction asks for a plain JSON object and states the shape in prose,
+    which no provider can reject. The parser above is still the enforcement;
+    the schema here only tells the model what to aim for.
+
+    Still written to satisfy **strict** structured output: every object sets
+    `additionalProperties: false` and `required` names *every* property. That
+    costs nothing as prompt text and keeps the document usable as a real
+    response format on a provider that can compile it.
 
     Optionality is therefore expressed in the type, not by omission from
     `required`: a field the email does not mention comes back as `null`. That

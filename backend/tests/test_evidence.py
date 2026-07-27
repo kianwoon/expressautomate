@@ -1,4 +1,4 @@
-"""Offset verification and quality state (plan Task 6).
+"""Quote verification and quality state (plan Task 6).
 
 The tests that matter here are the ones where the model is confident and wrong.
 Everything else in the pipeline takes the model at its word; this module is the
@@ -36,12 +36,12 @@ def _field(**kwargs):
 
 
 def _unvalidated(**kwargs):
-    """Build a field the schema would reject.
+    """Build a field without running the validator.
 
-    `ExtractedField` already refuses a quote whose length disagrees with its
-    span, so the only way to exercise what evidence.py does about such a claim
-    is to skip validation. Without this the checks below would pass by never
-    running.
+    Used where the point of the test is what evidence.py does with a claim,
+    independent of whether the schema would have let it through — including
+    fields with no offsets at all, which are now legal but would make the
+    intent of a fixture ambiguous if built the ordinary way.
     """
     kwargs.setdefault("evidence", None)
     kwargs.setdefault("confidence", 0.0)
@@ -61,8 +61,29 @@ def test_a_real_span_verifies():
     assert verify(field, SOURCE) is True
 
 
+def test_verification_records_where_the_quote_actually_is():
+    """The stored offsets are the ones this module found, not the model's.
+
+    `extraction_evidence.start_char` is meant to point a reviewer at the words
+    in the email. Left as the model's arithmetic it points a few characters
+    off, at the middle of the previous word.
+    """
+    start = SOURCE.index("up to $3500")
+    field = _field(
+        value="3500",
+        evidence="up to $3500",
+        start_char=start + 7,
+        end_char=start + 7 + len("up to $3500"),
+        confidence=0.9,
+    )
+
+    assert verify(field, SOURCE) is True
+    assert field.start_char == start
+    assert SOURCE[field.start_char : field.end_char] == "up to $3500"
+
+
 def test_a_fabricated_quote_fails_even_when_it_sounds_right():
-    """The whole point: the model can invent the evidence, not the offsets."""
+    """The whole point: the model can invent the evidence, not the email."""
     field = _field(
         value="6000",
         evidence="salary is SGD 6,000",
@@ -93,9 +114,8 @@ def test_whitespace_differences_are_tolerated():
     assert verify(field, SOURCE) is True
 
 
-def test_offsets_past_the_end_of_the_source_fail_rather_than_raise():
-    """Python slices out of range silently, so an absurd offset would otherwise
-    compare an empty string and be indistinguishable from an empty quote."""
+def test_an_absurd_offset_on_an_invented_quote_still_fails_rather_than_raising():
+    """Offsets past the end of the source must not reach an index error."""
     field = _unvalidated(
         value="x", evidence="x", start_char=99_000, end_char=99_010, confidence=0.9
     )
@@ -103,12 +123,28 @@ def test_offsets_past_the_end_of_the_source_fail_rather_than_raise():
     assert verify(field, SOURCE) is False
 
 
-def test_a_near_miss_offset_is_a_failure_rather_than_a_fuzzy_match():
-    """Models miscount characters, and the temptation is to search nearby.
+def test_an_absurd_offset_on_a_real_quote_is_repaired():
+    """Offsets are a hint. A hint being nonsense costs the field nothing when
+    the quotation itself is verbatim — the quote is what §15 rests on."""
+    field = _unvalidated(
+        value="3500",
+        evidence="up to $3500",
+        start_char=99_000,
+        end_char=99_011,
+        confidence=0.9,
+    )
 
-    Refused: a span that lands one word over still proves nothing about where
-    the value came from, and accepting near-misses turns the one deterministic
-    check in the pipeline into a heuristic.
+    assert verify(field, SOURCE) is True
+    assert SOURCE[field.start_char : field.end_char] == "up to $3500"
+
+
+def test_a_near_miss_offset_is_repaired_rather_than_rejected():
+    """The inversion. Models quote accurately and count characters badly.
+
+    Rejecting a verbatim quotation for offsets three characters out threw away
+    whole correct extractions in production — a long, correctly quoted
+    `job_description` failed our own validator. The quote is the claim; where
+    it sits is arithmetic, and this module does the arithmetic.
     """
     start = SOURCE.index("up to $3500")
     field = _field(
@@ -119,7 +155,36 @@ def test_a_near_miss_offset_is_a_failure_rather_than_a_fuzzy_match():
         confidence=0.99,
     )
 
-    assert verify(field, SOURCE) is False
+    assert verify(field, SOURCE) is True
+    assert field.start_char == start
+
+
+def test_a_repeated_quote_resolves_to_the_occurrence_the_model_pointed_at():
+    """The one job the model's offsets still do: telling two copies apart."""
+    source = "Location: Singapore. Regards, Evelyn. ACME Pte Ltd, Singapore."
+    second = source.rindex("Singapore")
+    field = _unvalidated(
+        value="Singapore",
+        evidence="Singapore",
+        start_char=second + 2,
+        end_char=second + 2 + len("Singapore"),
+        confidence=0.9,
+    )
+
+    assert verify(field, source) is True
+    assert field.start_char == second
+
+
+def test_a_quote_found_across_collapsed_whitespace_points_at_real_characters():
+    """The offsets are into the original source, not into the normalised copy,
+    or a reviewer opening the email at `start_char` lands nowhere near it."""
+    source = "Role:\n\n   Finance   officer\n\nat KLN."
+    field = _unvalidated(
+        value="Finance officer", evidence="finance officer", confidence=0.9
+    )
+
+    assert verify(field, source) is True
+    assert source[field.start_char : field.end_char] == "Finance   officer"
 
 
 def test_a_missing_field_is_not_a_verification_failure():

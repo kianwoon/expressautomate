@@ -4,11 +4,15 @@ The rule the product depends on — "nothing invented" — is a string compariso
 here, not an instruction in a prompt. A prompt can be ignored by a model. A
 comparison against the source cannot.
 
-Nothing in this module repairs a bad claim. A span that does not hold what the
-model said it holds leaves the value untrusted and demotes the extraction to
-review; it never becomes `None` and never becomes a nearby guess. Silently
-correcting the model is how a fabrication reaches the recruiter wearing the
-verifier's stamp of approval.
+Nothing in this module repairs a bad claim. A quotation that is not in the
+email leaves the value untrusted and demotes the extraction to review; it never
+becomes `None` and never becomes a nearby guess. Silently correcting the model
+is how a fabrication reaches the recruiter wearing the verifier's stamp of
+approval.
+
+The one thing that *is* corrected is where the quote sits, because that is not
+a claim about the world — it is arithmetic, and see `locate` for why the model
+is the wrong party to do it.
 """
 
 import re
@@ -94,31 +98,102 @@ def _normalise(value: str) -> str:
     return _WHITESPACE.sub(" ", value).strip().lower()
 
 
+@lru_cache(maxsize=4)
+def _normalised_index(source: str) -> tuple[str, tuple[int, ...]]:
+    """The normalised source, plus where each of its characters came from.
+
+    Searching a normalised copy is easy; reporting an offset into the copy
+    would be useless, because `extraction_evidence` has to point at characters
+    a reviewer can actually find in the email. So the map is built alongside:
+    position i of the normalised text came from `origin[i]` of the original.
+
+    Lower-casing is done per character because a few characters lengthen when
+    folded (Turkish dotted capital I becomes two). Emitting the same origin for
+    each of the pieces keeps the map aligned instead of silently shifting every
+    offset after the first such character.
+
+    Cached because one source is asked about once per field, twelve times per
+    vacancy, and again for every field when persist records validity.
+    """
+    out: list[str] = []
+    origin: list[int] = []
+    pending_space = False
+    pending_at = 0
+    for index, char in enumerate(source):
+        if char.isspace():
+            # A run of whitespace collapses to one space, and the space is
+            # attributed to where the run started.
+            if not pending_space:
+                pending_space = True
+                pending_at = index
+            continue
+        if pending_space:
+            pending_space = False
+            if out:
+                # Leading whitespace is dropped rather than emitted: `strip()`
+                # is part of the normalisation, and doing it here keeps the map
+                # in step instead of having to shift it afterwards.
+                out.append(" ")
+                origin.append(pending_at)
+        lowered = char.lower()
+        out.extend(lowered)
+        origin.extend([index] * len(lowered))
+    # Trailing whitespace never got emitted, which is the `strip()` on that end.
+    return "".join(out), tuple(origin)
+
+
+def locate(field: ExtractedField, source: str) -> tuple[int, int] | None:
+    """Find the field's quotation in the source, or say it is not there.
+
+    This is the inversion the offset contract needed. Asking a model for
+    character offsets asked it to do arithmetic over thousands of characters,
+    which it does badly — a correct, verbatim quotation of a job description
+    came back with offsets a few characters out and the whole extraction was
+    rejected. Finding a string in a string is something code does exactly, so
+    code does it.
+
+    The model's offsets are still used, for the one thing they are good for:
+    when a quote appears more than once — "Singapore" in a signature and in the
+    location line — the occurrence nearest the claimed position is the one the
+    model meant. Wrong offsets then cost a little precision about *which* copy,
+    never the field itself.
+    """
+    quote = _normalise(field.evidence or "")
+    if not quote:
+        return None
+    haystack, origin = _normalised_index(source)
+    starts = []
+    at = haystack.find(quote)
+    while at != -1:
+        starts.append(at)
+        at = haystack.find(quote, at + 1)
+    if not starts:
+        return None
+    spans = [(origin[s], origin[s + len(quote) - 1] + 1) for s in starts]
+    if field.start_char is None:
+        return spans[0]
+    return min(spans, key=lambda span: abs(span[0] - field.start_char))
+
+
 def verify(field: ExtractedField, source: str) -> bool:
-    """Does the claimed span actually contain the claimed evidence?
+    """Is the field's quotation really in the email, and does the value follow?
 
     A missing field is vacuously valid — there is nothing to locate. Everything
-    else must match the source at the offsets it named. Deliberately exact
-    (modulo whitespace): models miscount characters often, so near-misses are
-    common, but searching nearby for the quote would mean the offsets prove
-    nothing about where the value came from — which is the entire reason the
-    contract asks for them.
+    else must be found in the source, and when it is, the offsets this module
+    found are written back over whatever the model claimed. That write is the
+    reason `start_char` in the database means something: it points at real
+    characters, located here, rather than at the model's arithmetic.
+
+    A quote that is nowhere in the email fails, and that is §15 intact — the
+    only thing that ever proved a value was not invented was the quote being
+    real, and that check is stricter here than it was, not weaker.
     """
     if field.is_missing:
         return True
-    if field.start_char is None or field.end_char is None:
+    span = locate(field, source)
+    if span is None:
         return False
-    # Python slices out of range rather than raising, so an offset past the end
-    # would otherwise compare an empty string — indistinguishable from a field
-    # that quoted nothing at all.
-    if field.start_char < 0 or field.end_char > len(source):
-        return False
-    if not field.evidence:
-        return False
-    if _normalise(source[field.start_char : field.end_char]) != _normalise(
-        field.evidence
-    ):
-        return False
+    field.start_char, field.end_char = span
     return _value_is_corroborated(field)
 
 

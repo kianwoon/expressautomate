@@ -40,10 +40,12 @@ SOURCE = "Finance officer at KLN Logistics. Salary up to $3500 per month."
 @pytest.fixture(autouse=True)
 def _configured_extraction(monkeypatch):
     """Every test gets its own models. Nothing here ever calls one."""
-    monkeypatch.setattr(settings, "LLM_BASE_URL", "https://router.test/v1")
-    monkeypatch.setattr(settings, "OPENROUTER_API_KEY", "test-key")
+    monkeypatch.setattr(settings, "CEREBRAS_BASE_URL", "https://cerebras.test/v1")
+    monkeypatch.setattr(settings, "CEREBRAS_API_KEY", "test-key")
     monkeypatch.setattr(settings, "EXTRACTION_MODEL_FAST", "test/fast")
     monkeypatch.setattr(settings, "EXTRACTION_MODEL_STRONG", "test/strong")
+    monkeypatch.setattr(settings, "EXTRACTION_REASONING_EFFORT_FAST", "low")
+    monkeypatch.setattr(settings, "EXTRACTION_REASONING_EFFORT_STRONG", "high")
 
 
 def _payload(**overrides) -> dict:
@@ -303,9 +305,11 @@ class _Spy:
     def __init__(self, *answers) -> None:
         self.answers = list(answers)
         self.models: list[str] = []
+        self.calls: list[dict] = []
 
-    async def __call__(self, prompt, *, model, schema, **_):
+    async def __call__(self, prompt, *, model, schema, **kw):
         self.models.append(model)
+        self.calls.append({"model": model, "schema": schema, **kw})
         answer = self.answers.pop(0)
         if isinstance(answer, Exception):
             raise answer
@@ -372,6 +376,60 @@ async def test_the_imperfect_answer_is_kept_when_both_models_fall_short():
 
     assert len(response.jobs) == 1
     assert result.model == settings.EXTRACTION_MODEL_STRONG
+
+
+async def test_extraction_never_asks_a_provider_to_compile_the_schema():
+    """The production outage, as an assertion.
+
+    A strict `json_schema` response format built from twelve nested fields was
+    rejected outright — "the compiled grammar is too large" — on every email,
+    forever. `schema=None` asks for a plain JSON object; the schema travels as
+    prompt text, which nothing compiles and nothing can refuse.
+    """
+    llm = _Spy(_payload())
+
+    await extract(SOURCE, llm=llm)
+
+    assert llm.calls[0]["schema"] is None
+
+
+async def test_extraction_goes_to_cerebras_with_a_token_budget():
+    llm = _Spy(_payload())
+
+    await extract(SOURCE, llm=llm)
+
+    call = llm.calls[0]
+    assert call["base_url"] == settings.CEREBRAS_BASE_URL
+    assert call["api_key"] == settings.CEREBRAS_API_KEY
+    assert call["extra_body"]["max_tokens"] == settings.EXTRACTION_MAX_TOKENS
+
+
+async def test_escalation_raises_the_reasoning_effort():
+    """§32 without a request shape that can 400.
+
+    Escalation used to mean a different, larger model, and that model is what
+    rejected the request. The same endpoint thinking harder cannot fail in a
+    way the first call did not.
+    """
+    llm = _Spy(_payload(salary=_FABRICATED), _payload())
+
+    await extract(SOURCE, llm=llm)
+
+    assert [c["extra_body"]["reasoning_effort"] for c in llm.calls] == [
+        settings.EXTRACTION_REASONING_EFFORT_FAST,
+        settings.EXTRACTION_REASONING_EFFORT_STRONG,
+    ]
+
+
+async def test_an_unset_strong_model_escalates_by_effort_on_the_fast_one(monkeypatch):
+    """Never an empty model id: that is a request the provider rejects."""
+    monkeypatch.setattr(settings, "EXTRACTION_MODEL_STRONG", "")
+    llm = _Spy(_payload(salary=_FABRICATED), _payload())
+
+    await extract(SOURCE, llm=llm)
+
+    assert llm.models == ["test/fast", "test/fast"]
+    assert llm.calls[1]["extra_body"]["reasoning_effort"] == "high"
 
 
 async def test_the_models_come_from_settings(monkeypatch):

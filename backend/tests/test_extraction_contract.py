@@ -19,16 +19,18 @@ def test_not_mentioned_is_a_value_not_a_null():
     assert field.is_missing is True
 
 
-def test_a_real_value_requires_offsets():
-    with pytest.raises(ValidationError):
-        ExtractedField(
-            value="SGD 6000", evidence="$6k", start_char=None, end_char=None, confidence=0.9
-        )
+def test_a_real_value_needs_a_quote_but_not_offsets():
+    """Offsets stopped being part of the contract because models cannot count.
 
+    A verbatim quotation with no offsets at all is a complete claim: evidence.py
+    finds it in the email, and that is what §15 rests on. Requiring offsets here
+    rejected correct extractions for arithmetic — see evidence.py's `locate`.
+    """
+    field = ExtractedField(
+        value="SGD 6000", evidence="$6k", start_char=None, end_char=None, confidence=0.9
+    )
 
-def test_offsets_must_be_ordered():
-    with pytest.raises(ValidationError):
-        ExtractedField(value="x", evidence="x", start_char=50, end_char=10, confidence=0.9)
+    assert field.evidence == "$6k"
 
 
 def test_multiple_jobs_parse():
@@ -102,17 +104,19 @@ def test_a_value_that_quotes_nothing_is_rejected():
         ExtractedField(value="Chief Executive", start_char=0, end_char=15)
 
 
-def test_a_quotation_that_does_not_fit_its_own_span_is_rejected():
-    """A self-contradiction inside one object: n characters quoted, m spanned.
+def test_a_quotation_that_does_not_fit_its_own_span_is_accepted():
+    """Offsets are a hint, so a hint disagreeing with the quote costs nothing.
 
-    Caught here rather than against the source, because it is wrong before you
-    even have the email — and catching it here means the source check in
-    evidence.py only ever has one way left to fail.
+    This used to be rejected as a self-contradiction, and that reading was
+    wrong in practice: the quote was right and the span was the model's bad
+    arithmetic, so the rule threw away good extractions. evidence.py locates
+    the quote and overwrites the span with where it really is.
     """
-    with pytest.raises(ValidationError):
-        ExtractedField(
-            value="SGD 6000", evidence="SGD 6,000", start_char=10, end_char=12
-        )
+    field = ExtractedField(
+        value="SGD 6000", evidence="SGD 6,000", start_char=10, end_char=12
+    )
+
+    assert field.evidence == "SGD 6,000"
 
 
 def test_the_model_is_asked_for_everything_the_parser_requires():
