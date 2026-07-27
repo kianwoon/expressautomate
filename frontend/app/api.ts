@@ -100,6 +100,43 @@ export const DASHBOARD_PATH = "/dashboard";
 export const SETTINGS_PATH = "/settings";
 
 /**
+ * The settings sub-routes. Site routes, so no API_BASE prefix.
+ *
+ * `/settings` itself keeps the inbox setting rather than redirecting to
+ * `/settings/inbox`: this is a static export, so a redirect would have to
+ * render something first and flash, and existing links to `/settings` still
+ * land where they always did.
+ */
+export const SETTINGS_GLOSSARY_PATH = "/settings/glossary";
+export const SETTINGS_NOTIFICATIONS_PATH = "/settings/notifications";
+
+/**
+ * Everything the notifications screen needs in one read: which channels are
+ * configured, which destinations exist with the events each is subscribed to,
+ * and the catalogue of events. One endpoint so the screen cannot show a
+ * destination and its subscriptions in disagreement.
+ */
+export const NOTIFICATIONS_SETTINGS_PATH = `${API_BASE}/api/notifications/settings`;
+
+/**
+ * Replaces one destination's subscriptions with exactly the set sent.
+ *
+ * Replace, not merge — the screen is the source of truth for which boxes are
+ * ticked, and a merge would make unticking impossible. Callers must always
+ * send the full set.
+ */
+export const NOTIFICATIONS_SUBSCRIPTIONS_PATH = `${API_BASE}/api/notifications/subscriptions`;
+
+/** Mints a single-use `t.me` deep link. The response carries its own expiry. */
+export const TELEGRAM_LINK_PATH = `${API_BASE}/api/notifications/destinations/telegram/link`;
+
+/** One destination, for DELETE. Encoded, so an id that is not the uuid we
+ *  expect cannot walk out of its own path segment. */
+export function notificationDestinationPath(id: string): string {
+  return `${API_BASE}/api/notifications/destinations/${encodeURIComponent(id)}`;
+}
+
+/**
  * The current "how far back" setting, and the periods that would extend it.
  *
  * Only periods *earlier* than the current one come back. Moving the date later

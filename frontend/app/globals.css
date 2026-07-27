@@ -1147,3 +1147,102 @@ footer { border-top: 1px solid var(--line); padding: 48px 0 40px; color: var(--i
   .brand-name { font-size: 1.4rem; }
   .brand { gap: 13px; }
 }
+
+/* Settings sub-navigation. `nt-` is the notifications/settings prefix, in the
+   same style as `gl-` (glossary) and `jo-` (job orders). */
+.nt-tabs {
+  display: flex;
+  gap: 22px;
+  margin-top: 26px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+}
+.nt-tab {
+  padding: 0 2px 10px;
+  font-size: 0.95rem;
+  text-decoration: none;
+  color: inherit;
+  opacity: 0.62;
+  border-bottom: 2px solid transparent;
+}
+.nt-tab:hover {
+  opacity: 0.9;
+}
+.nt-tab-on {
+  opacity: 1;
+  border-bottom-color: currentColor;
+}
+
+/* Notification destination cards. */
+.nt-card {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 12px;
+  padding: 20px 22px;
+  margin-top: 18px;
+}
+.nt-card-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.nt-card-title {
+  font-weight: 600;
+}
+.nt-badge {
+  font-size: 0.78rem;
+  padding: 2px 9px;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+  opacity: 0.85;
+}
+.nt-badge-off {
+  opacity: 0.55;
+}
+.nt-events {
+  border: 0;
+  padding: 0;
+  margin: 16px 0 0;
+}
+.nt-events-legend {
+  font-size: 0.82rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  opacity: 0.7;
+  padding: 0;
+}
+.nt-event {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+}
+.nt-note {
+  margin-top: 12px;
+  font-size: 0.92rem;
+  opacity: 0.75;
+  max-width: 62ch;
+}
+.nt-error {
+  margin-top: 12px;
+  font-size: 0.92rem;
+  color: #ff9b9b;
+}
+.nt-card-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 18px;
+}
+/* A destination that cannot be linked yet — present so the channel is visibly
+   planned rather than absent, but plainly not actionable. */
+.nt-card-muted {
+  opacity: 0.6;
+}
+/* White plate behind the QR: the site is dark, and a dark-on-dark QR does not
+   scan. */
+.nt-qr {
+  margin-top: 16px;
+  border-radius: 8px;
+  background: #fff;
+  padding: 10px;
+  display: block;
+}
