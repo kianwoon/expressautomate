@@ -44,7 +44,7 @@ def settings_the_suite_supplies(monkeypatch) -> None:
     these assertions are about which windows are offered.
     """
     monkeypatch.setattr(settings, "INITIAL_SYNC_MAX_LOOKBACK_DAYS", 90)
-    monkeypatch.setattr(settings, "LOOKBACK_EXTENSION_MIN_DAYS", 7)
+    monkeypatch.setattr(settings, "LOOKBACK_EXTENSION_MIN_DAYS", 1)
 
 
 @pytest.fixture
@@ -252,3 +252,25 @@ async def test_signed_out_callers_are_refused(client) -> None:
     """No session, no setting — and no hint about whether a mailbox exists."""
     assert (await client.get(SETTINGS)).status_code == 401
     assert (await client.post(LOOKBACK, json={"window": "90d"})).status_code == 401
+
+
+async def test_a_few_days_further_back_is_still_offered(client, seeded) -> None:
+    """Found in use, on a real mailbox.
+
+    A mailbox started two days ago could not be extended to "last 7 days",
+    because that reaches only five days further back and the floor demanded
+    seven. The option simply was not on the page, with nothing to explain its
+    absence — the user asked why, which is the tell that a silent filter was
+    making a decision it had no business making.
+
+    The floor exists to reject a nudge, not a working week.
+    """
+    tenant_id, user_id, _mailbox_id = await seeded("agency-a", days_back=2)
+    sign_in(client, user_id, tenant_id)
+
+    keys = [o["key"] for o in (await client.get(SETTINGS)).json()["options"]]
+
+    assert "7d" in keys, "five days of extra history is a real extension"
+    assert keys == ["7d", "30d", "90d"]
+    # Still one-way: nothing at or later than the current start date.
+    assert "1d" not in keys and "now" not in keys

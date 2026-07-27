@@ -70,9 +70,19 @@ export function ChoosePeriod({ onStarted }: { onStarted: () => void }) {
         }
         const preview = (await res.json()) as Preview;
         setState({ status: "ready", preview });
-        // Preselect the smallest commitment. The default someone accepts
-        // without reading should be the one that imports nothing.
-        setChosen(preview.options[0]?.key ?? null);
+        // A day of history, not none.
+        //
+        // "From now on" was the safest default and the wrong one: it leaves a
+        // recruiter looking at an empty dashboard until the next email
+        // happens to arrive, with nothing to tell them the thing works. A day
+        // is small enough to stay a cheap decision — the count beside it says
+        // exactly how many emails it means before anyone commits — and enough
+        // that the page has something real in it immediately.
+        //
+        // Chosen by its window rather than by position, so reordering the
+        // options cannot silently change what a new user gets by default.
+        const day = preview.options.find((option) => option.days === 1);
+        setChosen((day ?? preview.options[0])?.key ?? null);
       } catch {
         if (!controller.signal.aborted) {
           setState({
