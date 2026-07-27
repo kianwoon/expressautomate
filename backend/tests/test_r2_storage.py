@@ -19,6 +19,7 @@ from botocore.exceptions import ClientError
 from app.core.config import settings
 from app.services.storage.r2 import (
     BodyDeletionFailed,
+    BodyStoreMisconfigured,
     InMemoryBodyStore,
     R2BodyStore,
     body_key,
@@ -204,19 +205,33 @@ async def test_the_real_store_reports_a_purged_body_as_absent(monkeypatch, code)
     assert await store.get("gone") is None
 
 
-@pytest.mark.parametrize("code", ["AccessDenied", "NoSuchBucket", "InvalidAccessKeyId"])
+@pytest.mark.parametrize("code", ["AccessDenied", "InvalidAccessKeyId"])
 async def test_the_real_store_still_raises_on_a_genuine_failure(monkeypatch, code):
-    """A misconfiguration must not look identical to a purged body.
-
-    `NoSuchBucket` is the dangerous one: read as absence it would make every
-    read return None, so extraction would run on empty text and record
-    confident nothing — for every tenant at once, without a single error.
-    """
+    """A misconfiguration must not look identical to a purged body."""
     store = R2BodyStore()
     monkeypatch.setattr(store, "_client", lambda: _FakeS3(get_error=_client_error(code)))
 
     with pytest.raises(ClientError):
         await store.get("k")
+
+
+async def test_a_missing_bucket_is_named_on_the_read_path_too(monkeypatch):
+    """`NoSuchBucket` is the dangerous one: read as absence it would make every
+    read return None, so extraction would run on empty text and record
+    confident nothing — for every tenant at once, without a single error.
+
+    It raises, and raises the *named* exception rather than a bare
+    `ClientError`, so a reader gets the same one-line diagnosis a writer does.
+    """
+    store = R2BodyStore()
+    monkeypatch.setattr(
+        store, "_client", lambda: _FakeS3(get_error=_client_error("NoSuchBucket"))
+    )
+
+    with pytest.raises(BodyStoreMisconfigured) as exc:
+        await store.get("k")
+
+    assert settings.R2_BUCKET_NAME in str(exc.value)
 
 
 async def test_deletes_are_split_into_batches_the_api_accepts(monkeypatch):

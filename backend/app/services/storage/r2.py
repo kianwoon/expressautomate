@@ -153,12 +153,23 @@ class R2BodyStore:
         Absence is an expected state rather than an error: retention deletes
         the object and keeps the row, so anything reading a body has to cope
         with the body having been purged out from under it.
+
+        A missing *bucket* is emphatically not that, and gets the same named
+        exception the write path raises. It must never become `None` here:
+        extraction would read empty text and record a confident nothing for
+        every email in every tenant, without one error to show for it.
         """
         async with self._client() as s3:
             try:
                 obj = await s3.get_object(Bucket=settings.R2_BUCKET_NAME, Key=key)
             except ClientError as exc:
-                if exc.response.get("Error", {}).get("Code") in _ABSENT_CODES:
+                code = exc.response.get("Error", {}).get("Code")
+                if code == _NO_SUCH_BUCKET:
+                    raise BodyStoreMisconfigured(
+                        f"R2 bucket {settings.R2_BUCKET_NAME!r} does not exist. "
+                        "No email body can be read until it is created."
+                    ) from exc
+                if code in _ABSENT_CODES:
                     return None
                 raise
             return (await obj["Body"].read()).decode()

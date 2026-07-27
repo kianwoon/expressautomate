@@ -168,12 +168,18 @@ async def fetch_email(
     try:
         await _store(tenant, mailbox, email_message_id, row.graph_message_id, message)
     except BodyStoreMisconfigured as exc:
-        # Every email will fail here identically until an operator fixes it, so
-        # the useful thing is one line that says so — not a traceback per
-        # message. Still raised: the row must stay unfinished, and arq's retry
-        # is what picks the work back up once the bucket exists, without
-        # anybody having to replay it by hand.
-        log.error("body_store_misconfigured", mailbox_id=mailbox_id, detail=str(exc))
+        # Every email fails here identically until an operator fixes it, so the
+        # useful thing is a line naming what to fix rather than a botocore
+        # traceback per message.
+        #
+        # Re-raised, not swallowed. The row stays `pending` — the status only
+        # moves to `fetched` inside `_store` — and `rescan_stuck` re-enqueues
+        # pending rows every RESCAN_PENDING_MINUTES, so the backlog drains on
+        # its own once the bucket exists. Not `Retry`: this is not a delay
+        # anybody can name, and the sweep is the recovery path that already
+        # exists for it. Until then it costs one failed job and one line per
+        # message per sweep, which is the noise floor of a broken deployment.
+        log.error("body_store_misconfigured", mailbox_id=str(mailbox), detail=str(exc))
         raise
 
     await enqueue(

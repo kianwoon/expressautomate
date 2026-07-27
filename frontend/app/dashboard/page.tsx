@@ -333,10 +333,7 @@ function Row({ k, v, empty = "Not mentioned" }: { k: string; v: string | null; e
  * all. It inserts no character: copying the text still yields the address.
  */
 function Breakable({ text }: { text: string }) {
-  // After @ : ; , and before . / - _ — every separator an address, URL or id
-  // is likely to contain, split so the delimiter stays with the part a reader
-  // scans for.
-  const pieces = text.split(/(?<=[@:;,])|(?=[./\-_])/);
+  const pieces = splitAtSeparators(text);
   return (
     <>
       {pieces.map((piece, i) => (
@@ -378,6 +375,37 @@ function day(iso: string): string {
     month: "short",
     year: "numeric",
   });
+}
+
+/**
+ * Split after `@ : ; ,` and before `. / - _` — the separators an address, URL
+ * or id is likely to carry, cut so the delimiter stays with the part a reader
+ * scans for.
+ *
+ * A hand-written scan rather than a regex with lookbehind. Lookbehind is a
+ * *parse-time* error on Safari before 16.4, which would not degrade this
+ * component — it would throw while loading the bundle and take the whole
+ * dashboard with it. No wrapping nicety is worth that.
+ */
+function splitAtSeparators(text: string): string[] {
+  const AFTER = "@:;,";
+  const BEFORE = "./-_";
+  const pieces: string[] = [];
+  let current = "";
+
+  for (const char of text) {
+    if (current && BEFORE.includes(char)) {
+      pieces.push(current);
+      current = "";
+    }
+    current += char;
+    if (AFTER.includes(char)) {
+      pieces.push(current);
+      current = "";
+    }
+  }
+  if (current) pieces.push(current);
+  return pieces;
 }
 
 /** Absolute, not "3 minutes ago": this page does not re-render on a timer, so
