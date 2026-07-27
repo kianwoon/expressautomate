@@ -363,6 +363,42 @@ Verify:
 curl localhost:8000/health/db
 ```
 
+### Postgres 16 is required locally
+
+Not a preference — the client-profiles migration
+(`20260728_1100_client_profiles.py`) declares a unique constraint `NULLS NOT
+DISTINCT`, which arrived in Postgres 15. On 14 the migration does not degrade;
+it fails outright, so the schema simply cannot be built. Homebrew's
+`postgresql@14` is the version most machines here already had, and the upgrade
+is a dump-and-restore into a separate cluster, not an in-place `pg_upgrade`.
+
+If `brew services list` shows `postgresql@16` as `none`, the server is either
+not running or was started by hand and will not survive a reboot:
+
+```bash
+brew services start postgresql@16
+```
+
+### A database the tests are allowed to destroy
+
+The suite INSERTs and DELETEs in `tenants` and `users`, and its schema-level
+tests connect as the RLS-bypassing admin role. `tests/conftest.py` therefore
+aborts collection if either `DATABASE_URL` or `DATABASE_ADMIN_URL` resolves to
+a host that is not obviously disposable — this already went wrong once, and
+the guard is what stands between a test run and production rows.
+
+That guard means the repo-root `.env` used to run the app against Koyeb cannot
+also be used to run the tests. Point both variables at a local Postgres 16 for
+a test run — the same image CI uses (`.github/workflows/backend.yml`):
+
+```bash
+docker run --rm -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=expressautomate --name ea-test-db postgres:16
+```
+
+That container is `--rm`: stopping it deletes the database. For something that
+survives, create a throwaway database on a local server instead
+(`createdb expressautomate_test`) and point both variables at that.
+
 ## Verified 2026-07-27
 
 - `alembic upgrade head` → `alembic_version`, `tenants`, `users` created,
@@ -386,12 +422,22 @@ management, network exposure, and rotation — not the policy. Treat
 
 ## Known follow-ups
 
-- **Row-level security is not yet in place.** `tenant_id` + the FK are the only
-  isolation today. RLS policies (§18, §30) should land before the first
-  business tables (emails, opportunities) are created — retrofitting them
-  across a populated schema is far more work.
 - **TLS to Postgres is encrypt-without-verify.** Koyeb's server certificate is
   not in the system trust store, so `sslmode=require` maps to `CERT_NONE`.
   Pin Koyeb's CA and move to `verify-full` before production traffic.
-- Tests run against the shared `expressautomate` database and clean up after
-  themselves. Give CI its own database before running them concurrently.
+- **A foreign key from July 26 cannot be dropped.** `alembic downgrade base`
+  fails in `20260726_1733_add_users_tenant_id_foreign_key.py` because the
+  constraint was created without a name. Every later migration reverses
+  cleanly, so this only bites a full teardown to zero.
+
+Two entries that used to live here are now done, recorded because their
+absence would read as an oversight:
+
+- Row-level security **is** in place. Every tenant-scoped table carries
+  `ENABLE` + `FORCE ROW LEVEL SECURITY` and the `tenant_isolation` policy, and
+  `verify_rls_enforced()` refuses to boot the app on a readable table that
+  skips it. RLS is opt-in per table, so each new table repeats the block in
+  its own migration.
+- Tests no longer touch the shared `expressautomate` database. They refuse any
+  non-local host outright — see "A database the tests are allowed to destroy"
+  above — and CI provisions its own `postgres:16` service container.
