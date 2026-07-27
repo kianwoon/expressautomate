@@ -560,14 +560,21 @@ async def test_me_counts_only_what_was_actually_ingested(
     await start_ingestion(client, monkeypatch)
 
     before = (await client.get("/api/auth/me")).json()["mailbox"]
-    assert before["ingested"] == {"total": 0, "in_progress": 0, "extracted": 0}
+    assert before["ingested"] == {
+        "total": 0,
+        "in_progress": 0,
+        "awaiting_extraction": 0,
+        "extracted": 0,
+    }
     assert before["newest_received"] is None
 
     async with tenant_session(uuid.UUID(tid)) as session:
         mailbox_id = (
             await session.execute(text("SELECT id FROM mailboxes"))
         ).scalar_one()
-        for n, status in enumerate(["extracted", "fetched", "skipped"]):
+        # One per bucket, so the two waits cannot be conflated: `pending` is
+        # being fetched now, `fetched` is stored and waiting on extraction.
+        for n, status in enumerate(["extracted", "fetched", "skipped", "pending"]):
             await session.execute(
                 text(
                     "INSERT INTO email_messages"
@@ -586,7 +593,15 @@ async def test_me_counts_only_what_was_actually_ingested(
             )
 
     after = (await client.get("/api/auth/me")).json()["mailbox"]
-    assert after["ingested"] == {"total": 3, "in_progress": 1, "extracted": 1}
+    assert after["ingested"] == {
+        "total": 4,
+        # Only the `pending` row. A `fetched` row is not "processing" — that
+        # claim put "usually seconds each" under 82 emails waiting on a
+        # release that had not shipped.
+        "in_progress": 1,
+        "awaiting_extraction": 1,
+        "extracted": 1,
+    }
     assert after["newest_received"] is not None
     assert after["oldest_received"] < after["newest_received"]
 

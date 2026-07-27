@@ -165,7 +165,12 @@ function SignedIn({ me }: { me: Me }) {
 }
 
 function Ingesting({ me }: { me: Me }) {
-  const { total, in_progress: inProgress, extracted } = me.mailbox.ingested;
+  const {
+    total,
+    in_progress: inProgress,
+    awaiting_extraction: awaiting,
+    extracted,
+  } = me.mailbox.ingested;
 
   return (
     <>
@@ -180,11 +185,19 @@ function Ingesting({ me }: { me: Me }) {
       {total > 0 && (
         <div className="grid-3" style={{ marginTop: 32 }}>
           <Stat n={total} label="emails read" sub={range(me)} />
-          <Stat
-            n={inProgress}
-            label="still processing"
-            sub={inProgress === 0 ? "Nothing queued" : "Usually seconds each"}
-          />
+          {/* Two different waits, and only one of them is short. Emails still
+              being fetched clear in seconds; emails already stored are waiting
+              on a release. Showing them as one number told people their mail
+              was seconds from being understood. */}
+          {inProgress > 0 ? (
+            <Stat n={inProgress} label="being fetched" sub="Usually seconds each" />
+          ) : (
+            <Stat
+              n={awaiting}
+              label="stored, waiting to be read"
+              sub={awaiting === 0 ? "Nothing waiting" : "Until extraction ships"}
+            />
+          )}
           <Stat n={extracted} label="job orders found" sub="Extraction is not live yet" />
         </div>
       )}

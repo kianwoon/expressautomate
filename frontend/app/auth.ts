@@ -19,7 +19,18 @@ export type Me = {
     /** An active mailbox with a live Graph subscription behind it. */
     ingestion_active: boolean;
     /** Counted from the stored rows. Never estimated, never rounded. */
-    ingested: { total: number; in_progress: number; extracted: number };
+    /**
+     * `in_progress` is being fetched right now; `awaiting_extraction` is
+     * stored and waiting for a stage that is not deployed. Kept apart because
+     * calling both "processing" told people work was seconds away when it was
+     * waiting on a release.
+     */
+    ingested: {
+      total: number;
+      in_progress: number;
+      awaiting_extraction: number;
+      extracted: number;
+    };
     oldest_received: string | null;
     newest_received: string | null;
     last_activity: string | null;

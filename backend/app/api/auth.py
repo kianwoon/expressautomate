@@ -579,10 +579,15 @@ _MAILBOX_STATE = text(
         bool_or(m.status = 'active') AS any_active,
         count(e.id) AS total,
         count(*) FILTER (WHERE e.processing_status = 'extracted') AS extracted,
+        -- Two buckets, not one. "In progress" used to cover both, and the
+        -- dashboard rendered it as "still processing — usually seconds each"
+        -- while 82 emails sat at `fetched` waiting for an extraction stage
+        -- that is not deployed. Work in flight and work parked are different
+        -- facts and the difference is the whole honesty of the number.
+        count(*) FILTER (WHERE e.processing_status = 'pending') AS in_progress,
         count(*) FILTER (
-            WHERE e.processing_status IN
-                ('pending', 'fetched', 'classifying', 'extracting')
-        ) AS in_progress,
+            WHERE e.processing_status IN ('fetched', 'classifying', 'extracting')
+        ) AS awaiting_extraction,
         min(e.received_datetime) AS oldest_received,
         max(e.received_datetime) AS newest_received,
         max(e.updated_at) AS last_activity
@@ -862,7 +867,10 @@ async def me(request: Request) -> dict[str, dict]:
             "ingestion_active": bool(state and state.subscribed),
             "ingested": {
                 "total": state.total if state else 0,
+                # Being fetched right now.
                 "in_progress": state.in_progress if state else 0,
+                # Fetched and stored, with nothing yet to read them.
+                "awaiting_extraction": state.awaiting_extraction if state else 0,
                 "extracted": state.extracted if state else 0,
             },
             "oldest_received": _iso(state.oldest_received if state else None),
