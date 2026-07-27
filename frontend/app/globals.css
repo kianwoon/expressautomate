@@ -156,6 +156,16 @@ h3 { font-size: 1.125rem; letter-spacing: -0.01em; font-weight: 650; }
   white-space: nowrap;
 }
 
+/* The route back to the workspace. Styled as a nav link rather than a button:
+   it is navigation, and a second filled button beside the account trigger would
+   compete with it for the one decision this corner asks anyone to make. */
+.nav-dash {
+  display: inline-flex; align-items: center; min-height: 44px;
+  font-size: 0.9375rem; font-weight: 600; color: var(--ink-700); white-space: nowrap;
+}
+.nav-dash:hover { color: var(--ink-900); }
+.nav-dash:focus-visible { outline: 2px solid var(--blue-500); outline-offset: 2px; border-radius: 6px; }
+
 /* The account menu. `relative` is what keeps the nav still: the panel is taken
    out of flow, so opening it changes neither the nav's height nor the auth
    corner's width. */

@@ -1,8 +1,9 @@
 "use client";
 
-import { useId, useState } from "react";
+import { useEffect, useId, useState } from "react";
 
 import {
+  DASHBOARD_PATH,
   LANDING_AFTER_SIGN_OUT,
   LANDING_PATH,
   LOGOUT_PATH,
@@ -61,6 +62,17 @@ export function SiteNav({ sectionLinks = false }: { sectionLinks?: boolean }) {
   const resolved = auth.status !== "loading";
   const signInHref = useSignInHref();
 
+  // Read in an effect, not during render: this is a static export, so the
+  // server-rendered HTML has no location and reading it inline is a hydration
+  // mismatch. Starting false means the link is briefly present on the
+  // dashboard before being removed — the reverse would flash a missing link on
+  // every other page, and a control that vanishes is less alarming than one
+  // that appears late where you were looking for it.
+  const [onDashboard, setOnDashboard] = useState(false);
+  useEffect(() => {
+    setOnDashboard(window.location.pathname.replace(/\/$/, "") === DASHBOARD_PATH);
+  }, []);
+
   return (
     <nav className="nav">
       <div className="nav-inner">
@@ -93,12 +105,29 @@ export function SiteNav({ sectionLinks = false }: { sectionLinks?: boolean }) {
           aria-busy={!resolved}
         >
           {auth.status === "signed-in" ? (
-            <AccountMenu
-              name={displayNameOf(auth.me)}
-              email={auth.me.user.email}
-              signingOut={signingOut}
-              onSignOut={signOut}
-            />
+            <>
+              {/* The way back. Signing in hands someone a dashboard and then,
+                  from every other page on the site, no route to it — the
+                  wordmark goes to the landing page and the only other control
+                  is their own name. It sits in the bar rather than inside the
+                  menu because returning to your work is not an account
+                  setting, and it should not cost a hover to find.
+
+                  Hidden on the dashboard itself: a link to the page you are
+                  already on is a dead control, and this nav has room for
+                  exactly one thing beside the name. */}
+              {!onDashboard && (
+                <a className="nav-dash" href={DASHBOARD_PATH}>
+                  Dashboard
+                </a>
+              )}
+              <AccountMenu
+                name={displayNameOf(auth.me)}
+                email={auth.me.user.email}
+                signingOut={signingOut}
+                onSignOut={signOut}
+              />
+            </>
           ) : (
               /* A full page load, not a client route: the API answers with a
                  redirect to Microsoft, which a Next link would not follow.
