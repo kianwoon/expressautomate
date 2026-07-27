@@ -443,12 +443,22 @@ management, network exposure, and rotation — not the policy. Treat
 
 ## Known follow-ups
 
-- **Row-level security is not yet in place.** `tenant_id` + the FK are the only
-  isolation today. RLS policies (§18, §30) should land before the first
-  business tables (emails, opportunities) are created — retrofitting them
-  across a populated schema is far more work.
 - **TLS to Postgres is encrypt-without-verify.** Koyeb's server certificate is
   not in the system trust store, so `sslmode=require` maps to `CERT_NONE`.
   Pin Koyeb's CA and move to `verify-full` before production traffic.
-- Tests run against the shared `expressautomate` database and clean up after
-  themselves. Give CI its own database before running them concurrently.
+- **A foreign key from July 26 cannot be dropped.** `alembic downgrade base`
+  fails in `20260726_1733_add_users_tenant_id_foreign_key.py`, which created
+  the constraint unnamed and so cannot name it to drop it. Every later
+  migration reverses cleanly, so this only bites a full teardown to zero.
+
+Two entries that used to live here are done, recorded because their absence
+would otherwise read as an oversight:
+
+- Row-level security **is** in place. Every tenant-scoped table carries
+  `ENABLE` + `FORCE ROW LEVEL SECURITY` and the `tenant_isolation` policy, and
+  `verify_rls_enforced()` refuses to boot the app on a readable table that
+  skips it. RLS is opt-in per table, so each new table repeats the block in
+  its own migration.
+- Tests no longer touch the shared `expressautomate` database. They refuse any
+  non-local host outright — see "A database the tests are allowed to destroy"
+  above — and CI provisions its own `postgres:16` service container.
