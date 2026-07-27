@@ -349,8 +349,8 @@ export default function Home() {
             <div>
               <h2>What using it should feel like</h2>
               <p className="body" style={{ marginTop: 12 }}>
-                We are onboarding a small number of Singapore recruitment agencies and building the
-                product with them.
+                We are looking to work with a small number of Singapore recruitment agencies and build
+                the product alongside them.
               </p>
               {/* Said once, plainly, rather than hidden in small print. */}
               <p className="illustrative" style={{ marginTop: 16 }}>

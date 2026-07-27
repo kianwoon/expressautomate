@@ -4,9 +4,10 @@
  * says rather than how each picture is drawn.
  *
  * Every figure here is a drawing of the product, not a screenshot of it, and
- * the numbers in them are invented. That is normal for a product illustration
- * and it is why the hero panel carries a visible "Sample data" tag: a reader
- * should be able to tell at a glance that 24 is a placeholder, not a claim.
+ * every number in them is invented. That is normal for a product illustration,
+ * and it is why each one carries a visible sample tag and an image role: a
+ * reader should be able to tell at a glance that 24 roles, or a chart of the
+ * skills in demand, is a placeholder rather than a claim about the market.
  *
  * allow-hardcode: the strings below are illustration content and SVG path
  * geometry — sample values in a picture, not configuration or matching rules.
@@ -184,10 +185,22 @@ const OPPORTUNITIES = [
   },
 ] as const;
 
-/** The hero's product panel: a morning view of what the platform found. */
+/**
+ * The hero's product panel: a morning view of what the platform found.
+ *
+ * `role="img"` with a label is deliberate. Without it a screen reader walks
+ * the whole panel and announces "Time saved 6.4, hours this week" as ordinary
+ * page content, reaching the "Sample data" tag only at the very end — so the
+ * one caveat that makes the figures honest arrives after the figures. Treating
+ * it as a single labelled image says what it is before any number is read.
+ */
 export function HeroDashboard() {
   return (
-    <figure className="app">
+    <figure
+      className="app"
+      role="img"
+      aria-label="Illustration of the expressautomate dashboard, showing captured roles and a summary of the day. The figures shown are sample data."
+    >
       <div className="app-rail" aria-hidden="true">
         {["inbox", "layers", "list", "trend", "users", "shield"].map((n) => (
           <span key={n}>
@@ -246,6 +259,26 @@ export function HeroDashboard() {
   );
 }
 
+/**
+ * Wrapper for the four card figures.
+ *
+ * Same reasoning as HeroDashboard: these contain invented counts, an invented
+ * skills chart and invented names, and "Top in-demand skills" in particular
+ * reads as real market data if nothing says otherwise. The visible "Sample"
+ * tag says so to a sighted reader; role="img" plus the label says so to
+ * everyone else, before the figures are announced.
+ */
+function Inset({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="inset" role="img" aria-label={`${label}. The figures shown are sample data.`}>
+      <span className="inset-sample" aria-hidden="true">
+        Sample
+      </span>
+      {children}
+    </div>
+  );
+}
+
 const CAPTURED = [
   "New role: Treasury Support",
   "Senior Java Developer",
@@ -257,7 +290,7 @@ const CAPTURED = [
 /** Card inset: roles arriving and being recorded one after another. */
 export function CardCapture() {
   return (
-    <div className="inset">
+    <Inset label="Illustration of roles being captured as they arrive">
       <ul className="inset-feed">
         {CAPTURED.map((r, i) => (
           <li key={r} data-lead={i === 0 ? "yes" : undefined}>
@@ -266,7 +299,7 @@ export function CardCapture() {
           </li>
         ))}
       </ul>
-    </div>
+    </Inset>
   );
 }
 
@@ -280,7 +313,7 @@ const COUNTS = [
 /** Card inset: everything filed and counted in one place. */
 export function CardOrganised() {
   return (
-    <div className="inset">
+    <Inset label="Illustration of roles and clients counted in one place">
       <ul className="inset-counts">
         {COUNTS.map((c) => (
           <li key={c.k}>
@@ -292,7 +325,7 @@ export function CardOrganised() {
           </li>
         ))}
       </ul>
-    </div>
+    </Inset>
   );
 }
 
@@ -307,7 +340,7 @@ const SKILLS = [
 /** Card inset: what the accumulated data says about the market. */
 export function CardInsights() {
   return (
-    <div className="inset">
+    <Inset label="Illustration of a chart of skills in demand">
       <span className="inset-h">Top in-demand skills</span>
       <ul className="inset-bars">
         {SKILLS.map((s) => (
@@ -319,7 +352,7 @@ export function CardInsights() {
           </li>
         ))}
       </ul>
-    </div>
+    </Inset>
   );
 }
 
@@ -332,7 +365,7 @@ const ACTIVITY = [
 /** Card inset: the history of who changed what (§27). */
 export function CardTeam() {
   return (
-    <div className="inset">
+    <Inset label="Illustration of a history of changes made by a team">
       <ul className="inset-activity">
         {ACTIVITY.map((a) => (
           <li key={a.what}>
@@ -344,6 +377,6 @@ export function CardTeam() {
           </li>
         ))}
       </ul>
-    </div>
+    </Inset>
   );
 }

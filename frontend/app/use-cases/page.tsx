@@ -6,7 +6,7 @@ export default function Page() {
   return (
     <StubPage
       title="Use cases"
-      blurb="This page is not written yet. We are onboarding a small number of Singapore recruitment
+      blurb="This page is not written yet. We are setting out to work with a small number of Singapore recruitment
         agencies and building it with them, so we would rather wait and describe real use rather
         than guess at it."
       next={[

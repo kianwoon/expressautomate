@@ -1,3 +1,4 @@
+import { CONTACT_MAILTO } from "./api";
 import { Logo } from "./logo";
 
 /**
@@ -15,6 +16,7 @@ const COLUMNS = [
       { href: "/#how", label: "How it works" },
       { href: "/#what", label: "What you can do" },
       { href: "/pricing", label: "Pricing" },
+      { href: "/updates", label: "Updates" },
     ],
   },
   {
@@ -32,7 +34,7 @@ const COLUMNS = [
       { href: "/blog", label: "Blog" },
       { href: "/help", label: "Help centre" },
       { href: "/#security", label: "Security" },
-      { href: "mailto:hello@expressautomate.app", label: "Contact" },
+      { href: CONTACT_MAILTO, label: "Contact" },
     ],
   },
 ] as const;

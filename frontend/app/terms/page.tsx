@@ -1,3 +1,4 @@
+import { CONTACT_MAILTO } from "../api";
 import { StubPage, stubMetadata } from "../stub-page";
 
 export const metadata = stubMetadata("Terms");
@@ -11,7 +12,7 @@ export default function Page() {
         email us with questions."
       next={[
         { href: "/#security", label: "Read about security" },
-        { href: "mailto:hello@expressautomate.app", label: "Email us" },
+        { href: CONTACT_MAILTO, label: "Email us" },
         { href: "/", label: "Back to the home page" },
       ]}
     />

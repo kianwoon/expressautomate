@@ -6,7 +6,7 @@ export default function Page() {
   return (
     <StubPage
       title="Blog"
-      blurb="There is nothing published here yet. We are early — onboarding a small number of
+      blurb="There is nothing published here yet. We are early — setting out to work with a small number of
         agencies and building the product with them — and would rather post nothing than pad this
         space out."
       next={[

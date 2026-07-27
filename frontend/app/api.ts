@@ -24,3 +24,8 @@ export const LANDING_PATH = "/";
 
 /** The signed-in shell. A site route, not an API one — no API_BASE prefix. */
 export const DASHBOARD_PATH = "/dashboard";
+
+/** Where a visitor reaches a person. Used by the footer and every stub page,
+ *  so it lives here rather than being retyped in nine files. */
+export const CONTACT_EMAIL = "hello@expressautomate.app";
+export const CONTACT_MAILTO = `mailto:${CONTACT_EMAIL}`;
