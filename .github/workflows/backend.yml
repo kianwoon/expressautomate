@@ -115,14 +115,25 @@ jobs:
       # RedisSettings in its class body — so the module is unimportable without
       # a valid DSN. Nothing in the suite connects; the queue is always faked.
       REDIS_URL: redis://localhost:6379
-      # Not secrets — placeholder values matching backend/.env.test. There is
-      # no .env in CI, and telegram_configured()/whatsapp_configured() go
-      # False on an empty key, which is exactly what tests/test_notifications_api.py
-      # and tests/test_notify_channels.py exist to catch: an unset key here
-      # once turned expected-200/429 responses into 503s and the channel
-      # clients' URL-building into a bare "/bot/sendMessage" path that httpx
-      # can't parse. Kept as workflow env (not .env.test) because CI does not
-      # source that file.
+      # Not secrets — inert placeholders, and deliberately no longer
+      # load-bearing. These once WERE load-bearing, and that was the bug: the
+      # notification tests inherited whatever the developer had exported from
+      # backend/.env.test, which CI does not read, so an empty
+      # TELEGRAM_API_BASE_URL turned the send URL into a bare
+      # "/bot/sendMessage" that httpx cannot parse, and an empty WhatsApp key
+      # sent telegram_configured()/whatsapp_configured() False so endpoints
+      # answered 503 where the tests expected 200/429. It passed locally and
+      # failed only here.
+      #
+      # The real fix is in the tests: each one now pins the settings it
+      # depends on with monkeypatch, and the suite passes with every key below
+      # unset. These remain as a second line of defence — a test that forgets
+      # to pin runs against something realistic rather than an empty string.
+      #
+      # Nothing enforces that these stay in step with backend/.env.test, and
+      # after the fix nothing needs to: a drifted or missing key here cannot
+      # change a test outcome. Do not add a key here expecting it to make a
+      # test pass — pin it in the test instead.
       TELEGRAM_BOT_TOKEN: ci-test-bot-token
       TELEGRAM_BOT_USERNAME: expressautomate_ci_bot
       TELEGRAM_API_BASE_URL: https://api.telegram.org
