@@ -116,8 +116,11 @@ async def rate_capped(
     """Has this destination already had its hour's worth of this event?
 
     Counts the rows themselves rather than a stored counter, so the cap cannot
-    drift from what was actually sent. Suppressed rows are excluded — counting
-    them would make the first suppression permanent.
+    drift from what was actually sent. Only the statuses in `_COUNTS_TOWARD_CAP`
+    are counted: a `suppressed` row would make the first suppression permanent,
+    and a `failed` one — including a batch already rolled up into an earlier
+    message — stands for a message nobody received, so charging the recruiter's
+    hourly allowance for it would cap them on traffic that never arrived.
     """
     recent = (
         await session.execute(
