@@ -18,6 +18,7 @@ from app.api import (
     mailbox,
     notifications,
     opportunities,
+    telegram_webhook,
 )
 from app.core.config import settings
 from app.core.logging import configure_logging, get_logger
@@ -79,6 +80,7 @@ api.include_router(opportunities.router)
 api.include_router(activity.router)
 api.include_router(glossary.router)
 api.include_router(notifications.router)
+api.include_router(telegram_webhook.router)
 
 
 class EarlyAccessRequest(BaseModel):
