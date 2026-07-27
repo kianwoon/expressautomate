@@ -79,6 +79,22 @@ export const LANDING_AFTER_SIGN_OUT = `${LANDING_PATH}?${CHOOSE_ACCOUNT_PARAM}=1
 /** The signed-in shell. A site route, not an API one — no API_BASE prefix. */
 export const DASHBOARD_PATH = "/dashboard";
 
+/** Where the account menu points. A site route, so no API_BASE prefix. */
+export const SETTINGS_PATH = "/settings";
+
+/**
+ * The current "how far back" setting, and the periods that would extend it.
+ *
+ * Only periods *earlier* than the current one come back. Moving the date later
+ * removes nothing already imported, so a shorter option would read as a delete
+ * and behave as a no-op — the server decides that rather than the page, and
+ * refuses one anyway.
+ */
+export const MAILBOX_SETTINGS_PATH = `${API_BASE}/api/mailbox/settings`;
+
+/** POST a period to reach further back. Re-runs the historical walk. */
+export const MAILBOX_LOOKBACK_PATH = `${MAILBOX_SETTINGS_PATH}/lookback`;
+
 /** Where a visitor reaches a person. Used by the footer and every stub page,
  *  so it lives here rather than being retyped in nine files. */
 export const CONTACT_EMAIL = "hello@expressautomate.app";

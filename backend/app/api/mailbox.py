@@ -38,8 +38,30 @@ _EXISTING_MAILBOX = text(
 )
 
 
+# The chosen start date, and whether the walk for it has finished. Read by the
+# settings endpoints, which change that date rather than the mailbox itself.
+_MAILBOX_LOOKBACK = text(
+    "SELECT id, initial_sync_from, backfill_completed_at FROM mailboxes"
+    " WHERE user_id = :user_id AND folder_id = 'inbox'"
+)
+
+# Clearing `backfill_completed_at` is not bookkeeping — it is the whole
+# mechanism. `backfill_mailbox_job` returns immediately when that column is
+# set, so an enqueue without this update is a no-op that logs success.
+_EXTEND_LOOKBACK = text(
+    "UPDATE mailboxes SET initial_sync_from = :since, backfill_completed_at = NULL"
+    " WHERE id = :mailbox_id"
+)
+
+
 class IngestRequest(BaseModel):
     """The user's answer to "how far back?"."""
+
+    window: str
+
+
+class LookbackRequest(BaseModel):
+    """The user's answer to "reach further back than that?"."""
 
     window: str
 
@@ -173,6 +195,119 @@ async def start_ingestion(request: Request, body: IngestRequest) -> dict:
     return {"mailbox_id": str(mailbox_id), "initial_sync_from": window.isoformat()}
 
 
+@router.get("/mailbox/settings")
+async def mailbox_settings(request: Request) -> dict:
+    """What "how far back" is set to now, and what it could be changed to.
+
+    Deliberately not behind `_connected_user`: this reads one of our own rows
+    and offers to rewrite it. Nothing here touches Graph, and refusing someone
+    whose grant has since lapsed would lock them out of the one screen that
+    lets them widen the window they will want widened when they reconnect.
+    """
+    user_uuid, tenant_uuid = _require_session(request)
+
+    async with tenant_session(tenant_uuid) as session:
+        row = (
+            await session.execute(_MAILBOX_LOOKBACK, {"user_id": user_uuid})
+        ).one_or_none()
+
+    if row is None or row.initial_sync_from is None:
+        # No period has been chosen yet, so there is nothing to change. The
+        # dashboard's onboarding step is where that decision is made; sending
+        # the user here to make it a second way would give one setting two
+        # owners.
+        raise HTTPException(
+            status_code=404, detail="No mailbox is being read yet."
+        )
+
+    current = row.initial_sync_from
+    return {
+        "initial_sync_from": current.isoformat(),
+        "backfill_complete": row.backfill_completed_at is not None,
+        # Only the options that reach further back than the current setting.
+        # Offering a shorter one would be a lie: moving the date later
+        # un-imports nothing, so the control would read as a delete and behave
+        # as a no-op.
+        "options": [
+            {"key": key, "label": label, "days": days}
+            for key, label, days in offered_windows()
+            if _extends(_window_start(days), current)
+        ],
+    }
+
+
+@router.post("/mailbox/settings/lookback")
+async def extend_lookback(request: Request, body: LookbackRequest) -> dict:
+    """Reach further back through the inbox, and read what that adds.
+
+    One direction only. The re-walk overlaps everything already held, which is
+    free: `record_notification` inserts `ON CONFLICT DO NOTHING` on
+    (tenant_id, mailbox_id, graph_message_id) and returns None for a row that
+    existed, so a known message is neither stored twice nor re-enqueued for
+    extraction — and `_walk` does not count it against the message cap either,
+    so the extension's budget is spent on the mail it came for.
+    """
+    user_uuid, tenant_uuid = _require_session(request)
+    since = _resolve_window(body.window)
+
+    async with tenant_session(tenant_uuid) as session:
+        row = (
+            await session.execute(_MAILBOX_LOOKBACK, {"user_id": user_uuid})
+        ).one_or_none()
+        if row is None or row.initial_sync_from is None:
+            raise HTTPException(status_code=404, detail="No mailbox is being read yet.")
+        if not _extends(since, row.initial_sync_from):
+            # Refused rather than quietly accepted. Writing a later date would
+            # change the stored setting without removing a single email, so the
+            # user would be told their history had shrunk when it had not.
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "That period is not further back than the one you already have. "
+                    "Reading more history only ever adds emails — it cannot remove "
+                    "any that were already read."
+                ),
+            )
+        await session.execute(
+            _EXTEND_LOOKBACK, {"since": since, "mailbox_id": row.id}
+        )
+        mailbox_id = row.id
+
+    # Enqueued after the transaction commits, not inside it: a job that starts
+    # before the new start date is durable would read the old one and mark the
+    # mailbox backfilled again.
+    await enqueue("backfill_mailbox_job", tenant_id=str(tenant_uuid), mailbox_id=str(mailbox_id))
+
+    log.info(
+        "mailbox_lookback_extended",
+        tenant_id=str(tenant_uuid),
+        mailbox_id=str(mailbox_id),
+        window=body.window,
+        initial_sync_from=since.isoformat(),
+    )
+    return {"initial_sync_from": since.isoformat()}
+
+
+def _window_start(days: int | None) -> datetime:
+    """The start date an option would produce if chosen right now."""
+    now = datetime.now(UTC)
+    return now if days is None else now - timedelta(days=days)
+
+
+def _extends(candidate: datetime, current: datetime) -> bool:
+    """Is `candidate` far enough behind `current` to be worth a re-walk?
+
+    A bare `<` is not enough. `current` is a fixed instant while every option
+    is measured from `now`, so the gap between them widens on its own: a user
+    who chose the longest window last week would be offered that same window
+    again, as an "extension" worth a week of history and a full re-walk of the
+    mailbox to get it. The floor is configuration because how much extra
+    history justifies thousands of Graph calls is an operator's judgement.
+    """
+    gap = current - candidate
+    return gap >= timedelta(days=settings.LOOKBACK_EXTENSION_MIN_DAYS)
+
+
 def _resolve_window(key: str) -> datetime:
     """The chosen option, back into a start date.
 
@@ -181,12 +316,12 @@ def _resolve_window(key: str) -> datetime:
     days would otherwise get a backfill nothing can complete, and the cap in
     `preview` would be advisory rather than real.
     """
-    now = datetime.now(UTC)
     for offered_key, _label, days in offered_windows():
         if offered_key == key:
             # "From now on" is a real choice, not an absence of one: watch the
             # mailbox, import no history. Recorded as now rather than NULL so
             # the backfill sweep sees a completed decision instead of an
-            # unconfigured mailbox to retry forever.
-            return now if days is None else now - timedelta(days=days)
+            # unconfigured mailbox to retry forever — which is why
+            # `_window_start` maps it to `now` rather than returning None.
+            return _window_start(days)
     raise HTTPException(status_code=400, detail="Choose one of the offered periods.")

@@ -122,6 +122,13 @@ class Settings(BaseSettings):
     # not offer more than these allow.
     INITIAL_SYNC_MAX_MESSAGES: int = Field(default=5000, gt=0)
     INITIAL_SYNC_MAX_LOOKBACK_DAYS: int = Field(default=90, gt=0)
+    # How much further back an *extension* must reach before we will re-run the
+    # backfill for it. Without a floor, a user who chose the longest window
+    # yesterday could "extend" it by a day: every remaining option is
+    # technically earlier than a start date that is itself sliding away from
+    # `now`, so the UI would offer a re-walk of the entire mailbox in exchange
+    # for a day of extra history. Thousands of Graph calls for nothing.
+    LOOKBACK_EXTENSION_MIN_DAYS: int = Field(default=7, gt=0)
 
     # --- Recovery sweeps (plan §8, §9) ---
     # Two grace periods, because a queue hop should be quick but a fetch or an

@@ -1,11 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useId, useState } from "react";
 
 import {
   LANDING_AFTER_SIGN_OUT,
   LANDING_PATH,
   LOGOUT_PATH,
+  SETTINGS_PATH,
   SWITCH_ACCOUNT_PATH,
 } from "./api";
 import { displayNameOf, useAuth, useSignInHref } from "./auth";
@@ -92,27 +93,12 @@ export function SiteNav({ sectionLinks = false }: { sectionLinks?: boolean }) {
           aria-busy={!resolved}
         >
           {auth.status === "signed-in" ? (
-            <>
-              <span className="nav-who" title={auth.me.user.email}>
-                {displayNameOf(auth.me)}
-              </span>
-              {/* A plain link, and deliberately not "sign out, then sign in":
-                  abandoning Microsoft's picker leaves the current session
-                  untouched, whereas clearing the cookie first would strand
-                  someone who changed their mind. A completed switch overwrites
-                  the session cookie in the callback anyway. */}
-              <a className="btn btn-secondary nav-switch" rel="nofollow" href={SWITCH_ACCOUNT_PATH}>
-                Switch account
-              </a>
-              <button
-                className="btn btn-secondary"
-                type="button"
-                onClick={signOut}
-                disabled={signingOut}
-              >
-                {signingOut ? "Signing out…" : "Sign out"}
-              </button>
-            </>
+            <AccountMenu
+              name={displayNameOf(auth.me)}
+              email={auth.me.user.email}
+              signingOut={signingOut}
+              onSignOut={signOut}
+            />
           ) : (
               /* A full page load, not a client route: the API answers with a
                  redirect to Microsoft, which a Next link would not follow.
@@ -130,5 +116,122 @@ export function SiteNav({ sectionLinks = false }: { sectionLinks?: boolean }) {
         </div>
       </div>
     </nav>
+  );
+}
+
+/**
+ * The account actions, folded under the signed-in user's own name.
+ *
+ * A state hook rather than `<details>`. `<details>` opens on click only: its
+ * `open` attribute is not something CSS can set, so hover could not drive it
+ * without JS anyway, and we would still need JS for Escape and for closing
+ * when focus leaves. Having taken the hook for those, `<summary>` buys nothing
+ * and costs the ability to say `aria-expanded` on a real button — screen
+ * readers announce a disclosure widget where this is an account switcher.
+ *
+ * Three ways in, because hover alone reaches neither a phone nor a keyboard:
+ *
+ * - Pointer. `onPointerEnter` opens, but only for `pointerType === "mouse"`.
+ *   A tap synthesises a mouseenter immediately before its click, so without
+ *   that guard the tap would open the menu and the click would toggle it shut
+ *   again — the menu would be unopenable by touch.
+ * - Touch and click. The trigger is a real `<button>`, so a tap toggles.
+ * - Keyboard. Focus anywhere inside opens it; Tab moves through the items
+ *   natively; `onBlur` closes it once focus lands outside; Escape closes it
+ *   and hands focus back to the trigger, which is where the user was.
+ *
+ * No `role="menu"`: that role promises arrow-key navigation and a roving
+ * tabindex. This is three links in a box, and Tab already works on those —
+ * claiming the role without implementing it is worse than not claiming it.
+ *
+ * The panel is absolutely positioned, so opening it moves nothing: the nav's
+ * height and the auth corner's width are the same open or closed, and the
+ * corner's `min-width` (globals.css) keeps signed-out and signed-in the same
+ * width as each other.
+ *
+ * allow-hardcode: user-facing copy rendered to the page, not a list anything
+ * is matched against.
+ */
+function AccountMenu({
+  name,
+  email,
+  signingOut,
+  onSignOut,
+}: {
+  name: string;
+  email: string;
+  signingOut: boolean;
+  onSignOut: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const panelId = useId();
+
+  return (
+    <div
+      className="nav-menu"
+      onPointerEnter={(e) => {
+        if (e.pointerType === "mouse") setOpen(true);
+      }}
+      onPointerLeave={(e) => {
+        // Not while something inside is focused: a keyboard user who opened
+        // the menu should not lose it because the mouse happened to cross it.
+        if (e.pointerType !== "mouse") return;
+        if (!e.currentTarget.contains(document.activeElement)) setOpen(false);
+      }}
+      onFocus={() => setOpen(true)}
+      onBlur={(e) => {
+        // `relatedTarget` is where focus is going. Null means it left the
+        // document entirely — the menu should not stay open behind a tab
+        // switch either.
+        if (!e.currentTarget.contains(e.relatedTarget)) setOpen(false);
+      }}
+      onKeyDown={(e) => {
+        if (e.key !== "Escape" || !open) return;
+        setOpen(false);
+        // Focus goes back to the trigger, not nowhere. Dropping it to the
+        // document body would send the next Tab to the top of the page.
+        e.currentTarget.querySelector("button")?.focus();
+      }}
+    >
+      <button
+        className="btn btn-secondary nav-menu-trigger"
+        type="button"
+        aria-expanded={open}
+        aria-controls={panelId}
+        title={email}
+        onClick={() => setOpen((wasOpen) => !wasOpen)}
+      >
+        <span className="nav-who">{name}</span>
+        <span className="nav-menu-caret" aria-hidden="true">
+          ▾
+        </span>
+      </button>
+      {/* Rendered only when open. Kept in the DOM and merely hidden, its links
+          would still be in the tab order, so a keyboard user would tab into an
+          invisible menu. */}
+      {open && (
+        <div className="nav-menu-panel card" id={panelId}>
+          <a className="nav-menu-item" href={SETTINGS_PATH}>
+            Settings
+          </a>
+          {/* A plain link, and deliberately not "sign out, then sign in":
+              abandoning Microsoft's picker leaves the current session
+              untouched, whereas clearing the cookie first would strand someone
+              who changed their mind. A completed switch overwrites the session
+              cookie in the callback anyway. */}
+          <a className="nav-menu-item" rel="nofollow" href={SWITCH_ACCOUNT_PATH}>
+            Use a different account
+          </a>
+          <button
+            className="nav-menu-item"
+            type="button"
+            onClick={onSignOut}
+            disabled={signingOut}
+          >
+            {signingOut ? "Signing out…" : "Sign out"}
+          </button>
+        </div>
+      )}
+    </div>
   );
 }
