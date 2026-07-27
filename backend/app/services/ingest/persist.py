@@ -22,6 +22,12 @@ from app.services.ingest.evidence import parse_salary, quality_state, verify
 from app.services.ingest.glossary import DetectedCode, GlossaryEntry, detect
 from app.services.ingest.schema import ExtractedField, ExtractedJob, ExtractionResponse
 from app.services.llm.client import LLMResult
+from app.services.notify.dispatch import emit, enqueue_deliveries
+from app.services.notify.events import (
+    EVENT_OPPORTUNITY_NEEDS_REVIEW,
+    EVENT_OPPORTUNITY_NEW,
+    OpportunityEvent,
+)
 
 # Model field name -> the `opportunities` column that holds its raw string.
 # allow-hardcode: the target columns of a table, not configuration. A name here
@@ -129,6 +135,10 @@ async def persist(
     """
     extraction_id = uuid.uuid4()
     opportunity_ids: list[uuid.UUID] = []
+    # Every id emit() writes back, pending and rate-capped alike —
+    # enqueue_deliveries() re-reads each row's own status afterwards, so this
+    # list does not need to filter anything itself (see dispatch.py).
+    delivery_ids: list[uuid.UUID] = []
 
     async with tenant_session(tenant_id) as session:
         await session.execute(
@@ -167,6 +177,38 @@ async def persist(
             await _insert_codes(
                 session, tenant_id, opportunity_id, job, codes, len(response.jobs)
             )
+
+            # Inside the same transaction that created the opportunity, so
+            # either both commit or neither does. A notification for a job
+            # order that rolled back is a message about something that never
+            # happened.
+            state = quality_state(job, source)
+            delivery_ids.extend(
+                await emit(
+                    OpportunityEvent(
+                        kind=(
+                            EVENT_OPPORTUNITY_NEEDS_REVIEW
+                            if state == "needs_review"
+                            else EVENT_OPPORTUNITY_NEW
+                        ),
+                        tenant_id=tenant_id,
+                        opportunity_id=opportunity_id,
+                        # Raw, not normalised: this is what a recruiter
+                        # recognises, and the message is read by a person.
+                        job_title=_value(job.job_title),
+                        company_name=_value(job.company),
+                        location=_value(job.location),
+                        salary=_value(job.salary),
+                    ),
+                    session,
+                )
+            )
+
+    # Outside the transaction, deliberately. Redis cannot join it, and a job
+    # that starts before its row is committed reads nothing and exits without
+    # retrying. `enqueue` fails soft; `flush_notifications` is what turns a
+    # lost job back into a queued one.
+    await enqueue_deliveries(tenant_id, delivery_ids)
 
     return opportunity_ids
 
