@@ -70,7 +70,8 @@ def _interpret(response: httpx.Response) -> SendResult:
                 outcome=SendOutcome.TRANSIENT,
                 error="invalid or unexpected response shape",
             )
-        message_id = body.get("result", {}).get("message_id")
+        result = body.get("result")
+        message_id = result.get("message_id") if isinstance(result, dict) else None
         return SendResult(
             outcome=SendOutcome.SENT,
             provider_message_id=str(message_id) if message_id is not None else None,
