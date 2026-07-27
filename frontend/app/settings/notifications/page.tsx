@@ -57,7 +57,7 @@ export default function NotificationsSettings() {
             available={state.settings.channels.telegram}
             onRequestLink={requestTelegramLink}
             onPoll={() => void reload()}
-            linkedCount={state.settings.destinations.length}
+            destinationIds={state.settings.destinations.map((d) => d.id)}
           />
 
           <div className={`nt-card ${!state.settings.channels.whatsapp ? "nt-card-muted" : ""}`}>

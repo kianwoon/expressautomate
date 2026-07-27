@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 
 import { LANDING_PATH, SETTINGS_GLOSSARY_PATH, SETTINGS_NOTIFICATIONS_PATH, SETTINGS_PATH } from "../api";
 import { useAuth } from "../auth";
@@ -48,6 +48,20 @@ export function SettingsShell({
     if (auth.status === "anonymous") window.location.replace(LANDING_PATH);
   }, [auth.status]);
 
+  // Once we have confirmed the user is signed in, `children` stays mounted
+  // even through a later transient `unreachable` (a blip, a 5xx). The
+  // notifications route holds live state in-tree while a Telegram link is in
+  // progress — unmounting there discards the panel and the QR while a still-
+  // valid link token becomes invisible to the recruiter. Overlaying the
+  // "could not reach the server" message on top of the mounted children is
+  // simpler than lifting that state up into `page.tsx`: every settings route
+  // gets the fix for free, and no route has to know its state might need to
+  // survive an auth hiccup it didn't cause.
+  const [everSignedIn, setEverSignedIn] = useState(false);
+  useEffect(() => {
+    if (auth.status === "signed-in") setEverSignedIn(true);
+  }, [auth.status]);
+
   return (
     <>
       <SiteNav />
@@ -68,8 +82,16 @@ export function SettingsShell({
                 </a>
               ))}
             </nav>
-            {auth.status === "signed-in" ? (
-              children
+            {auth.status === "signed-in" || (everSignedIn && auth.status === "unreachable") ? (
+              <>
+                {auth.status === "unreachable" ? (
+                  <p className="lede" style={{ marginTop: 18 }}>
+                    We could not reach the server. This is not a sign-in problem — your session is
+                    untouched. Reload the page in a moment.
+                  </p>
+                ) : null}
+                {children}
+              </>
             ) : auth.status === "unreachable" ? (
               <p className="lede" style={{ marginTop: 18 }}>
                 We could not reach the server. This is not a sign-in problem — your session is

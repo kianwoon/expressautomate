@@ -34,19 +34,22 @@ export function TelegramLinkPanel({
   available,
   onRequestLink,
   onPoll,
-  linkedCount,
+  destinationIds,
 }: {
   available: boolean;
   onRequestLink: () => Promise<{ url: string; expiresInMinutes: number } | { error: string }>;
   onPoll: () => void;
-  linkedCount: number;
+  destinationIds: string[];
 }) {
   const [panel, setPanel] = useState<Panel>({ status: "closed" });
   const [qr, setQr] = useState<string | null>(null);
-  // The count at the moment the panel opened. Polling watches for it to rise
-  // rather than for a specific id, because the id is created server-side by
-  // the webhook and this page never learns it any other way.
-  const baseline = useRef(linkedCount);
+  const [justLinked, setJustLinked] = useState(false);
+  const linkButtonRef = useRef<HTMLButtonElement | null>(null);
+  // The ids present at the moment the panel opened. A count can return to its
+  // starting value mid-flow (unlink one, link a new one), which would make a
+  // ">" comparison miss a real completion — so completion is "an id exists
+  // now that was not in this set when the panel opened", not a count change.
+  const baseline = useRef<Set<string>>(new Set(destinationIds));
   // The poll callback lives in a ref, not in the effect's dependencies. The
   // parent passes an inline arrow, so its identity changes on every render; a
   // dependency on it would clear and re-create the interval each time and the
@@ -59,7 +62,8 @@ export function TelegramLinkPanel({
   const open = useCallback(async () => {
     setPanel({ status: "opening" });
     setQr(null);
-    baseline.current = linkedCount;
+    setJustLinked(false);
+    baseline.current = new Set(destinationIds);
     const result = await onRequestLink();
     if ("error" in result) {
       setPanel({ status: "failed", message: result.error });
@@ -77,16 +81,26 @@ export function TelegramLinkPanel({
       // still works, so this failure is deliberately silent on screen.
       setQr(null);
     }
-  }, [linkedCount, onRequestLink]);
+  }, [destinationIds, onRequestLink]);
 
-  // A new destination appeared while we were waiting: that is the link
-  // completing. Closing here is what makes the flow feel finished.
+  // A destination id appeared that was not present when the panel opened:
+  // that is the link completing. Closing here is what makes the flow feel
+  // finished. `justLinked` drives the screen-reader announcement below and
+  // is cleared as soon as the button that replaces the panel gets focus.
   useEffect(() => {
-    if (panel.status === "open" && linkedCount > baseline.current) {
+    if (panel.status === "open" && destinationIds.some((id) => !baseline.current.has(id))) {
       setPanel({ status: "closed" });
       setQr(null);
+      setJustLinked(true);
     }
-  }, [linkedCount, panel]);
+  }, [destinationIds, panel]);
+
+  // Move focus to the button that reappears once the panel closes on
+  // success, so a screen-reader user gets a concrete landing point rather
+  // than being left wherever focus happened to be inside the vanished panel.
+  useEffect(() => {
+    if (justLinked && panel.status === "closed") linkButtonRef.current?.focus();
+  }, [justLinked, panel.status]);
 
   // Depends on the panel's status and expiry only — see the ref above for why
   // the callback is deliberately absent from this list.
@@ -128,11 +142,23 @@ export function TelegramLinkPanel({
 
       {panel.status === "closed" ? (
         <>
+          {/* Same aria-live="polite" pattern the settings wrapper already
+              uses in settings-shell.tsx, scoped to this card so the
+              announcement fires exactly when the panel closes on success. */}
+          {justLinked ? (
+            <p className="nt-note" aria-live="polite">
+              Telegram linked.
+            </p>
+          ) : null}
           <p className="nt-note">
             Open the link on the phone you want messages on, and press Start.
           </p>
           <div className="nt-card-foot">
-            <button className="btn btn-primary" onClick={() => void open()}>
+            <button
+              ref={linkButtonRef}
+              className="btn btn-primary"
+              onClick={() => void open()}
+            >
               Link Telegram
             </button>
           </div>

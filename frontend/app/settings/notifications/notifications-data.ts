@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
   NOTIFICATIONS_SETTINGS_PATH,
@@ -64,7 +64,16 @@ export function eventLabel(kind: string): string {
 export function useNotifications() {
   const [state, setState] = useState<NotificationsState>({ status: "loading" });
 
+  // A generation counter, bumped on every `load()` call. The Telegram panel
+  // polls every 3s while a checkbox toggle also triggers its own reload after
+  // a PUT; without ordering, a poll issued before the PUT can resolve after
+  // it and overwrite the just-saved state with stale data. Each call captures
+  // its own generation and discards its response if a newer load has since
+  // started, so only the most recently STARTED load is ever allowed to win.
+  const generation = useRef(0);
+
   const load = useCallback((signal?: AbortSignal) => {
+    const thisGeneration = ++generation.current;
     return (async () => {
       try {
         const res = await fetch(NOTIFICATIONS_SETTINGS_PATH, {
@@ -72,6 +81,7 @@ export function useNotifications() {
           headers: { Accept: "application/json" },
           signal,
         });
+        if (thisGeneration !== generation.current) return;
         if (!res.ok) {
           setState({
             status: "unreadable",
@@ -82,8 +92,11 @@ export function useNotifications() {
           });
           return;
         }
-        setState({ status: "ready", settings: (await res.json()) as NotificationSettings });
+        const settings = (await res.json()) as NotificationSettings;
+        if (thisGeneration !== generation.current) return;
+        setState({ status: "ready", settings });
       } catch {
+        if (thisGeneration !== generation.current) return;
         if (!signal?.aborted) {
           setState({ status: "unreadable", message: "We could not reach the server." });
         }

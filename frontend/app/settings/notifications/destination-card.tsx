@@ -82,21 +82,28 @@ export function DestinationCard({
         </p>
       ) : null}
 
-      <fieldset className="nt-events" disabled={busy}>
-        <legend className="nt-events-legend">Tell me when</legend>
-        {events.map((e) => (
-          <label className="nt-event" key={e.kind}>
-            <input
-              type="checkbox"
-              checked={destination.event_kinds.includes(e.kind)}
-              onChange={(ev) => void toggle(e.kind, ev.target.checked)}
-            />
-            <span>{eventLabel(e.kind)}</span>
-          </label>
-        ))}
-      </fieldset>
+      {events.length === 0 ? (
+        // No event kinds to offer at all is a different situation from none
+        // being ticked (handled below) — a labelled, empty fieldset reads as
+        // broken, so this explains rather than rendering a blank box.
+        <p className="nt-note">There is nothing to subscribe to yet.</p>
+      ) : (
+        <fieldset className="nt-events" disabled={busy}>
+          <legend className="nt-events-legend">Tell me when</legend>
+          {events.map((e) => (
+            <label className="nt-event" key={e.kind}>
+              <input
+                type="checkbox"
+                checked={destination.event_kinds.includes(e.kind)}
+                onChange={(ev) => void toggle(e.kind, ev.target.checked)}
+              />
+              <span>{eventLabel(e.kind)}</span>
+            </label>
+          ))}
+        </fieldset>
+      )}
 
-      {destination.event_kinds.length === 0 ? (
+      {events.length > 0 && destination.event_kinds.length === 0 ? (
         <p className="nt-note">
           Nothing is ticked, so this destination will not receive anything.
         </p>
