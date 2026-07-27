@@ -12,6 +12,7 @@ not stop work already in the queue.
 """
 
 from app.core.config import settings
+from app.core.logging import configure_logging
 from app.services.graph.client import warn_if_unconfigured
 from app.workers.jobs import (
     backfill_mailbox_job,
@@ -24,7 +25,16 @@ from app.workers.queue import redis_settings
 
 
 async def _announce(ctx: dict) -> None:
-    """arq's startup hook. Takes the context it passes and ignores it."""
+    """arq's startup hook. Takes the context it passes and ignores it.
+
+    `configure_logging` belongs here because nothing else runs it in this
+    process: arq is launched against this class directly, so unlike `api` and
+    `worker` there is no entrypoint of ours to do it. Without it every line
+    this process emits — including the warning below — renders with structlog's
+    console defaults instead of the JSON the log pipeline expects, which is
+    precisely the sort of difference that gets a real error skimmed past.
+    """
+    configure_logging()
     warn_if_unconfigured("arq")
 
 

@@ -100,3 +100,15 @@ def test_settings_without_a_default_are_marked_required_in_the_example():
     example = ENV_EXAMPLE.read_text()
     for name in required:
         assert re.search(rf"^{name}=", example, re.M), f"{name} is required but absent"
+
+
+def test_the_queue_worker_configures_its_own_logging():
+    """arq is launched against WorkerSettings directly, so no entrypoint of
+    ours runs first. Without this its output falls back to structlog's console
+    defaults while every other process emits JSON — the kind of difference that
+    gets a real error skimmed past in a log pipeline.
+    """
+    from app.workers.settings import WorkerSettings
+
+    assert WorkerSettings.on_startup is not None
+    assert "configure_logging" in WorkerSettings.on_startup.__code__.co_names
