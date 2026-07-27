@@ -12,10 +12,12 @@ Two connection paths are deliberately available:
   the policy would otherwise hide behind an empty result set.
 """
 
+import uuid
 from collections.abc import AsyncGenerator
 from urllib.parse import urlsplit
 
 import pytest
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.core.config import settings
@@ -87,3 +89,37 @@ async def _dispose_engines() -> AsyncGenerator[None, None]:
 async def admin_session() -> AsyncGenerator[AsyncSession, None]:
     async with AdminSessionLocal() as session:
         yield session
+
+
+# allow-hardcode: fixed SQL DDL/DML teardown statements (human-written schema
+# knowledge -- FK-safe delete order), not a scoring/matching oracle.
+_CLEANUP_STATEMENTS = (
+    "DELETE FROM client_mentions WHERE tenant_id = :t",
+    # `ck_clients_merged_has_target` forbids status='merged' with a null
+    # target, so clear both together rather than orphaning a merged row.
+    "UPDATE clients SET merged_into_client_id = NULL, status = 'unconfirmed' "
+    "WHERE tenant_id = :t",
+    "DELETE FROM clients WHERE tenant_id = :t",
+    "DELETE FROM email_messages WHERE tenant_id = :t",
+    "DELETE FROM mailboxes WHERE tenant_id = :t",
+    "DELETE FROM users WHERE tenant_id = :t",
+    "DELETE FROM tenants WHERE id = :t",
+)
+
+
+async def cleanup_tenant(*tenant_ids: uuid.UUID) -> None:
+    """Delete every row a fixture may have seeded for `tenant_ids`, FK-safely.
+
+    Each statement gets its own session/transaction, so a failure partway
+    through (an unexpected constraint, a row already gone) does not abort the
+    rest -- a teardown that raises halfway must not leave every later table's
+    debris behind.
+    """
+    for tenant_id in tenant_ids:
+        for statement in _CLEANUP_STATEMENTS:
+            try:
+                async with AdminSessionLocal() as session:
+                    await session.execute(text(statement), {"t": tenant_id})
+                    await session.commit()
+            except Exception:
+                pass

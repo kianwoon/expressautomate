@@ -30,20 +30,13 @@ async def _seed_tenant(tenant_id: uuid.UUID, slug: str) -> None:
 
 @pytest.fixture
 async def two_agencies():
+    from tests.conftest import cleanup_tenant
+
     a, b = uuid.uuid4(), uuid.uuid4()
     await _seed_tenant(a, f"agency-a-{a.hex[:6]}")
     await _seed_tenant(b, f"agency-b-{b.hex[:6]}")
     yield a, b
-    from tests.conftest import AdminSessionLocal
-
-    async with AdminSessionLocal() as session:
-        for tid in (a, b):
-            await session.execute(
-                text("DELETE FROM client_mentions WHERE tenant_id = :t"), {"t": tid}
-            )
-            await session.execute(text("DELETE FROM clients WHERE tenant_id = :t"), {"t": tid})
-            await session.execute(text("DELETE FROM tenants WHERE id = :t"), {"t": tid})
-        await session.commit()
+    await cleanup_tenant(a, b)
 
 
 async def test_one_agency_cannot_read_anothers_clients(two_agencies) -> None:

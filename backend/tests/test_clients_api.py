@@ -13,7 +13,7 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 
 from app.main import app
-from tests.conftest import AdminSessionLocal
+from tests.conftest import AdminSessionLocal, cleanup_tenant
 
 # Reuse, do not redefine: this is the same session cookie the real app reads.
 from tests.test_opportunities_api import sign_in
@@ -51,21 +51,7 @@ async def agency_with_clients():
         )
         await s.commit()
     yield tid, uid, ids
-    async with AdminSessionLocal() as s:
-        await s.execute(text("DELETE FROM client_mentions WHERE tenant_id = :t"), {"t": tid})
-        await s.execute(text("DELETE FROM email_messages WHERE tenant_id = :t"), {"t": tid})
-        await s.execute(text("DELETE FROM mailboxes WHERE tenant_id = :t"), {"t": tid})
-        await s.execute(
-            text(
-                "UPDATE clients SET status = 'unconfirmed', merged_into_client_id = NULL "
-                "WHERE tenant_id = :t"
-            ),
-            {"t": tid},
-        )
-        await s.execute(text("DELETE FROM clients WHERE tenant_id = :t"), {"t": tid})
-        await s.execute(text("DELETE FROM users WHERE tenant_id = :t"), {"t": tid})
-        await s.execute(text("DELETE FROM tenants WHERE id = :t"), {"t": tid})
-        await s.commit()
+    await cleanup_tenant(tid)
 
 
 async def _client_for(tid: uuid.UUID, uid: uuid.UUID) -> AsyncClient:
@@ -338,7 +324,4 @@ async def test_one_agency_never_sees_anothers_clients(agency_with_clients) -> No
         assert body["items"] == []
         assert body["total"] == 0
     finally:
-        async with AdminSessionLocal() as s:
-            await s.execute(text("DELETE FROM users WHERE tenant_id = :t"), {"t": other_tid})
-            await s.execute(text("DELETE FROM tenants WHERE id = :t"), {"t": other_tid})
-            await s.commit()
+        await cleanup_tenant(other_tid)

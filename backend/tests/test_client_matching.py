@@ -13,7 +13,7 @@ from sqlalchemy import text
 
 from app.db.rls import tenant_session
 from app.services.client_matching import match_client
-from tests.conftest import AdminSessionLocal
+from tests.conftest import AdminSessionLocal, cleanup_tenant
 
 
 @pytest.fixture
@@ -26,21 +26,9 @@ async def agency():
         )
         await s.commit()
     yield tid
-    async with AdminSessionLocal() as s:
-        await s.execute(text("DELETE FROM client_mentions WHERE tenant_id = :t"), {"t": tid})
-        # `ck_clients_merged_has_target` forbids status='merged' with a null
-        # target, so clear both together rather than orphaning a merged row
-        # mid-teardown.
-        await s.execute(
-            text(
-                "UPDATE clients SET merged_into_client_id = NULL, status = 'unconfirmed' "
-                "WHERE tenant_id = :t"
-            ),
-            {"t": tid},
-        )
-        await s.execute(text("DELETE FROM clients WHERE tenant_id = :t"), {"t": tid})
-        await s.execute(text("DELETE FROM tenants WHERE id = :t"), {"t": tid})
-        await s.commit()
+    # `_seeded_message` (below) inserts mailboxes/email_messages behind some
+    # of these tests; cleanup_tenant clears those too, not just clients.
+    await cleanup_tenant(tid)
 
 
 async def _status_of(tenant_id: uuid.UUID, client_id: uuid.UUID) -> str:

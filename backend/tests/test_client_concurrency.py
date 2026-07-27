@@ -15,7 +15,7 @@ from sqlalchemy import text
 
 from app.db.rls import tenant_session
 from app.services.client_matching import match_client
-from tests.conftest import AdminSessionLocal
+from tests.conftest import AdminSessionLocal, cleanup_tenant
 
 
 @pytest.fixture
@@ -28,11 +28,7 @@ async def agency():
         )
         await s.commit()
     yield tid
-    async with AdminSessionLocal() as s:
-        await s.execute(text("DELETE FROM client_mentions WHERE tenant_id = :t"), {"t": tid})
-        await s.execute(text("DELETE FROM clients WHERE tenant_id = :t"), {"t": tid})
-        await s.execute(text("DELETE FROM tenants WHERE id = :t"), {"t": tid})
-        await s.commit()
+    await cleanup_tenant(tid)
 
 
 async def _match_once(tenant_id: uuid.UUID, sender: str) -> uuid.UUID | None:

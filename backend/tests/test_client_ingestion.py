@@ -16,7 +16,7 @@ from sqlalchemy import text
 from app.db.rls import tenant_session
 from app.services.ingest.schema import ExtractionResponse
 from app.services.llm.client import LLMResult
-from tests.conftest import AdminSessionLocal
+from tests.conftest import AdminSessionLocal, cleanup_tenant
 
 
 def _extraction_fixture(*, company_name: str) -> tuple[ExtractionResponse, LLMResult]:
@@ -73,11 +73,7 @@ async def agency():
         )
         await s.commit()
     yield tid
-    async with AdminSessionLocal() as s:
-        for table in ("client_mentions", "clients", "email_messages", "mailboxes"):
-            await s.execute(text(f"DELETE FROM {table} WHERE tenant_id = :t"), {"t": tid})
-        await s.execute(text("DELETE FROM tenants WHERE id = :t"), {"t": tid})
-        await s.commit()
+    await cleanup_tenant(tid)
 
 
 async def _insert_message(tenant_id: uuid.UUID, message_id: uuid.UUID) -> None:
