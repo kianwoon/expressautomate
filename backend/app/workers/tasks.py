@@ -56,6 +56,49 @@ _ACTIVE_MAILBOXES = text("SELECT * FROM active_mailboxes()")
 _MISSING_SUBSCRIPTION = text("SELECT * FROM mailboxes_without_subscription()")
 _AWAITING_BACKFILL = text("SELECT * FROM mailboxes_awaiting_backfill()")
 
+# allow-hardcode: SQL statement, not a phrase list.
+#
+# `notification_deliveries` carries FORCE ROW LEVEL SECURITY (the
+# `notifications` migration), and this sweep runs unscoped across every
+# tenant with no session tenant_id set — a raw UPDATE here would match zero
+# rows, silently, since RLS is a filter rather than an error. So this goes
+# through `flush_notification_deliveries`, a narrow SECURITY DEFINER function
+# (the `flush_notification_deliveries` migration) — the same pattern
+# `stalled_email_rows` and `claim_fetched_email_rows` use above.
+#
+# Three kinds of row, one function, because they all need the same
+# treatment: an enqueue that must happen and did not.
+#
+# `pending` past the stale window means the enqueue was lost — `enqueue`
+# fails soft after the transaction committed, so the row is durable and the
+# job is not. `suppressed` past the cap window means the rate cap ate a
+# message and no later delivery arrived to carry its "+N more", so the batch
+# would otherwise go unmentioned forever. `sending` past the stale window
+# means `deliver_notification`'s claim was never released — the worker that
+# claimed it was killed outright (SIGKILL, OOM, container eviction) before
+# any of its exception handlers ran, so nothing moved the row back to
+# `pending`. Nothing else ever looks at a `sending` row: arq's retry requires
+# `status = 'pending'` to reclaim, so without this branch the row is lost
+# silently and permanently.
+#
+# The `sending` case is gated on `updated_at`, not `created_at`, inside the
+# function: the claim UPDATE is what moves a row into `sending`, and
+# `touch_updated_at()` (bound on this table too) stamps `updated_at` on every
+# UPDATE, so it measures time-since-claimed, not time-since-created. A row can
+# sit `pending` for most of the stale window before a worker claims it —
+# gating on `created_at` there would let this sweep repromote it while the
+# worker that just claimed it is still very much alive, and a second worker
+# could then win the `status = 'pending'` claim race in `deliver_notification`
+# and double-message the recruiter. Gating on `updated_at` means the clock
+# restarts at the claim, so the same stale-minutes window used for `pending`
+# is the right one here too: a `deliver_notification` call is a single
+# outbound API request that should finish in seconds, comfortably inside a
+# window sized for the worst realistic *queue* latency. A worker merely slow,
+# not dead, should never hold a claim anywhere near this long.
+_FLUSHABLE_DELIVERIES = text(
+    "SELECT * FROM flush_notification_deliveries(:stale_minutes, :limit)"
+)
+
 
 async def rescan_stuck() -> int:
     """Re-enqueue rows no worker is going to pick up on its own.
@@ -291,3 +334,41 @@ async def delta_sync_all() -> int:
             mailbox_id=str(row.mailbox_id),
         )
     return len(mailboxes)
+
+
+async def flush_notifications() -> int:
+    """Queue notifications nothing else is going to send.
+
+    Runs unscoped, across every tenant at once, like the other sweeps here —
+    hence the raw statement rather than a tenant session. Each row carries its
+    own tenant, and the job re-reads it under that tenant's policy.
+    """
+    async with SessionLocal() as session:
+        rows = (
+            await session.execute(
+                _FLUSHABLE_DELIVERIES,
+                {
+                    "stale_minutes": settings.NOTIFY_DELIVERY_STALE_MINUTES,
+                    "limit": settings.NOTIFY_FLUSH_LIMIT,
+                },
+            )
+        ).all()
+        # The promotion is an UPDATE and only takes effect on commit. Without
+        # this the rows stay suppressed/sending and the next tick claims them
+        # again.
+        await session.commit()
+
+    queued = 0
+    for row in rows:
+        if await enqueue(
+            "deliver_notification",
+            delivery_id=str(row.id),
+            tenant_id=str(row.tenant_id),
+        ):
+            queued += 1
+
+    if queued:
+        # Worth noticing rather than silently absorbing: every row here is one
+        # the normal path should have carried and did not.
+        log.warning("notifications_flushed", count=queued)
+    return queued

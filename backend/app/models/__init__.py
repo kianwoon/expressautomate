@@ -9,6 +9,13 @@ from app.models.glossary import GlossaryCode, GlossarySeedMark
 from app.models.graph_subscription import GraphSubscription
 from app.models.mailbox import Mailbox
 from app.models.ms_token import MicrosoftToken
+from app.models.notification import (
+    NotificationDelivery,
+    NotificationDestination,
+    NotificationLinkToken,
+    NotificationSubscription,
+    WhatsAppSuppression,
+)
 from app.models.opportunity import Opportunity
 from app.models.opportunity_code import OpportunityCode
 from app.models.signup import EarlyAccessSignup
@@ -27,10 +34,15 @@ __all__ = [
     "GraphSubscription",
     "Mailbox",
     "MicrosoftToken",
+    "NotificationDelivery",
+    "NotificationDestination",
+    "NotificationLinkToken",
+    "NotificationSubscription",
     "Opportunity",
     "OpportunityCode",
     "OpportunityFieldOverride",
     "SyncEvent",
     "Tenant",
     "User",
+    "WhatsAppSuppression",
 ]

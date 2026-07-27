@@ -1,9 +1,35 @@
 """Write an extraction and its opportunities in one transaction (plan §14).
 
-Append-only with respect to history: every run inserts a new `extractions` row
-and new opportunities. Nothing is updated in place, so an email's extraction
-history is the ordered set of its rows — and a prompt upgrade replayed across a
-year of mail adds to that history rather than rewriting it.
+Append-only with respect to history: every run inserts a new `extractions` row.
+Nothing is updated in place, so an email's extraction history is the ordered
+set of its rows.
+
+Opportunities are the exception, and the asymmetry is deliberate but narrow.
+Their ids are derived deterministically from the email and the job's position
+within the extraction, so a *retry* — `rescan_stuck` re-running a job that died
+between this transaction and `_FINISH_EXTRACTION` — produces the same ids and
+inserts nothing the second time. Without that, the retry minted fresh ids, the
+notification dedupe index never fired, and the recruiter was told twice about
+one vacancy.
+
+The cost is that a deliberate *replay* under a better prompt is currently a
+no-op for opportunities: the new `extractions` row lands with its evidence, but
+the improved field values are discarded by the same `ON CONFLICT DO NOTHING`
+that makes retries safe. Nothing distinguishes the two cases today because
+nothing replays yet. Whoever builds replay must separate them — most likely by
+keying the id on the extraction rather than the email — and should not simply
+drop the conflict clause, which would restore the duplicate-notification bug.
+
+Positional keying carries a second caveat worth knowing before replay exists:
+it assumes the model returns the same jobs in the same order for the same
+email. That holds at temperature zero and does not hold across a prompt or
+model change, where job 2 of the new run may be a different vacancy from job 2
+of the old one.
+
+Human corrections live in `opportunity_field_overrides` and are never read or
+written here. That separation is what makes replay safe: this module physically
+cannot clobber a recruiter's fix, because it never issues an UPDATE against
+anything a human has touched.
 
 Human corrections live in `opportunity_field_overrides` and are never read or
 written here. That separation is what makes replay safe: this module physically
@@ -17,12 +43,21 @@ import uuid
 from sqlalchemy import ARRAY, Text, bindparam, text
 
 from app.core.config import settings
+from app.core.logging import get_logger
 from app.db.rls import tenant_session
 from app.services.client_matching import match_client
 from app.services.ingest.evidence import parse_salary, quality_state, verify
 from app.services.ingest.glossary import DetectedCode, GlossaryEntry, detect
 from app.services.ingest.schema import ExtractedField, ExtractedJob, ExtractionResponse
 from app.services.llm.client import LLMResult
+from app.services.notify.dispatch import emit, enqueue_deliveries
+from app.services.notify.events import (
+    EVENT_OPPORTUNITY_NEEDS_REVIEW,
+    EVENT_OPPORTUNITY_NEW,
+    OpportunityEvent,
+)
+
+log = get_logger(__name__)
 
 # Model field name -> the `opportunities` column that holds its raw string.
 # allow-hardcode: the target columns of a table, not configuration. A name here
@@ -54,6 +89,15 @@ _INSERT_EXTRACTION = text(
 # the same statement rather than round-tripped first. The SELECT reads under
 # the tenant policy, so an email another tenant owns yields no row and inserts
 # no opportunity — the mismatch fails closed instead of writing a headless row.
+#
+# ON CONFLICT (id) DO NOTHING: `:id` is now a deterministic uuid5 (see
+# `_opportunity_id` below), so a retried extraction — `rescan_stuck` re-running
+# `extract_email` after a worker died between `persist()`'s commit and
+# `_FINISH_EXTRACTION` — computes the SAME id for the same vacancy and lands
+# here a second time. Without the clause that would be a primary-key
+# violation; with it, the row from the first run is left exactly as it was,
+# including any human correction recorded against it, and the retry's
+# evidence/codes rows (below) still attach to the id that already exists.
 _INSERT_OPPORTUNITY = text(
     f"""
     INSERT INTO opportunities
@@ -66,8 +110,27 @@ _INSERT_OPPORTUNITY = text(
            :salary_min, :salary_max, :salary_currency, :salary_period, :salary_raw,
            :skills, :quality_state, :review_status
     FROM email_messages em WHERE em.id = :email_message_id
+    ON CONFLICT (id) DO NOTHING
     """
 ).bindparams(bindparam("skills", type_=ARRAY(Text)))
+
+# Fixed namespace for uuid5, in the same style as
+# `app.api.auth.PERSONAL_TENANT_NAMESPACE`: a constant, not a secret, so it can
+# live in source. Deriving from (email_message_id, index-within-the-run)
+# rather than from the model's output means a retry that gets a byte-for-byte
+# identical answer (the common case — extraction runs at temperature zero)
+# reproduces the same id, which is what lets the dedupe above and the
+# notification dedupe index (`notification_deliveries`'s partial unique index
+# on (destination_id, event_kind, subject_id)) both actually fire on a retry.
+# A retry whose answer differs (a prompt/model upgrade re-run over old mail)
+# still lands on the same id for the same position — that is intentional: the
+# opportunity that email describes is one thing across replays, not a new one
+# each time the model is asked again.
+_OPPORTUNITY_ID_NAMESPACE = uuid.UUID("2f6b6e4a-8a3d-5b4a-9c1e-6a2d4e8f1b7c")
+
+
+def _opportunity_id(email_message_id: uuid.UUID, index: int) -> uuid.UUID:
+    return uuid.uuid5(_OPPORTUNITY_ID_NAMESPACE, f"{email_message_id}:{index}")
 
 _INSERT_EVIDENCE = text(
     """
@@ -135,6 +198,10 @@ async def persist(
     """
     extraction_id = uuid.uuid4()
     opportunity_ids: list[uuid.UUID] = []
+    # Every id emit() writes back, pending and rate-capped alike —
+    # enqueue_deliveries() re-reads each row's own status afterwards, so this
+    # list does not need to filter anything itself (see dispatch.py).
+    delivery_ids: list[uuid.UUID] = []
 
     async with tenant_session(tenant_id) as session:
         await session.execute(
@@ -173,8 +240,8 @@ async def persist(
         # An email describing three vacancies becomes three rows. They share
         # one extraction, because they came from one model call — that is what
         # makes "what did this run cost, and what did it produce" answerable.
-        for job in response.jobs:
-            opportunity_id = uuid.uuid4()
+        for index, job in enumerate(response.jobs):
+            opportunity_id = _opportunity_id(email_message_id, index)
             opportunity_ids.append(opportunity_id)
             await _insert_opportunity(
                 session, tenant_id, email_message_id, opportunity_id, job, source
@@ -185,6 +252,68 @@ async def persist(
             await _insert_codes(
                 session, tenant_id, opportunity_id, job, codes, len(response.jobs)
             )
+
+            # Inside the same transaction that created the opportunity, so a
+            # notification for a job order that rolled back can never exist —
+            # that half of the "either both commit or neither does" reasoning
+            # holds. The reverse does not: the notification path is new and
+            # far less exercised than ingestion, and a subscriber lookup or
+            # rate-cap query failing inside emit() must not be allowed to take
+            # the extraction down with it. An opportunity that is retained is
+            # still visible in the dashboard; one that rolled back over a
+            # notification bug is gone until the email is reprocessed. So the
+            # isolation is asymmetric on purpose: wrap emit() in a SAVEPOINT
+            # (begin_nested) rather than let it share the outer transaction
+            # unguarded. If it raises, roll back only its own writes — the
+            # extraction and opportunity rows already staged in the outer
+            # transaction are untouched — and continue. Without the savepoint,
+            # a raised exception poisons the whole Postgres transaction (every
+            # later statement fails with InFailedSqlTransactionError) even if
+            # the exception itself were caught, so the savepoint is what keeps
+            # the session usable afterwards, not just the try/except.
+            state = quality_state(job, source)
+            try:
+                async with session.begin_nested():
+                    delivery_ids.extend(
+                        await emit(
+                            OpportunityEvent(
+                                kind=(
+                                    EVENT_OPPORTUNITY_NEEDS_REVIEW
+                                    if state == "needs_review"
+                                    else EVENT_OPPORTUNITY_NEW
+                                ),
+                                tenant_id=tenant_id,
+                                opportunity_id=opportunity_id,
+                                # Raw, not normalised: this is what a
+                                # recruiter recognises, and the message is
+                                # read by a person.
+                                job_title=_value(job.job_title),
+                                company_name=_value(job.company),
+                                location=_value(job.location),
+                                salary=_value(job.salary),
+                            ),
+                            session,
+                        )
+                    )
+            except Exception:
+                # Logged, not raised: a lost notification must be visible to
+                # an operator, but it must never be the reason a valid
+                # extraction disappears. Anything emit() partially wrote is
+                # already gone — the savepoint rolled it back — so nothing
+                # here is added to delivery_ids and enqueue_deliveries() will
+                # never be asked about ids that do not exist.
+                log.exception(
+                    "notify_emit_failed",
+                    tenant_id=str(tenant_id),
+                    opportunity_id=str(opportunity_id),
+                    extraction_id=str(extraction_id),
+                )
+
+    # Outside the transaction, deliberately. Redis cannot join it, and a job
+    # that starts before its row is committed reads nothing and exits without
+    # retrying. `enqueue` fails soft; `flush_notifications` is what turns a
+    # lost job back into a queued one.
+    await enqueue_deliveries(tenant_id, delivery_ids)
 
     return opportunity_ids
 
