@@ -14,6 +14,16 @@
 
 ## Global Constraints
 
+- **Every arq job carries `tenant_id` (and `mailbox_id` where relevant) in its
+  payload.** Decided while implementing Task 6, replacing the planned
+  `resolve_email_row()` function. Background work has no session tenant, and
+  the alternative is a second `SECURITY DEFINER` function widening the only
+  part of the system that bypasses RLS. Carrying the tenant is also
+  self-validating: a job naming a mismatched pair reads no row under the tenant
+  policy and quietly does nothing. **Every enqueue site must supply it** — a
+  missing kwarg fails inside the worker, on the far side of the queue, where
+  nothing is watching.
+
 - **Nothing hardcoded.** Every URL, model name, key, interval, and limit comes from the repo-root `.env` via `app.core.config.settings`. A literal in source is a defect.
 - **Every business table carries `tenant_id`** via the `TenantScoped` mixin and gets a FORCE ROW LEVEL SECURITY policy in the same migration. `verify_rls_enforced()` fails startup otherwise — it flags tables structurally, not by name.
 - **All API routes live under `/api`.** `tests/test_routing.py` fails otherwise; the static mount at `/` would shadow them.
@@ -2956,7 +2966,16 @@ async def rescan_stuck() -> int:
         job = RESUME_JOB.get(row.processing_status)
         if job is None:
             continue
-        if await enqueue(job, email_message_id=str(row.id)):
+        # Every job carries its tenant (decided in Task 6). Enqueueing only the
+        # row id would raise TypeError in the worker — silently, since the
+        # failure happens on the far side of the queue, and the recovery net
+        # would then be doing nothing at all.
+        if await enqueue(
+            job,
+            email_message_id=str(row.id),
+            tenant_id=str(row.tenant_id),
+            mailbox_id=str(row.mailbox_id),
+        ):
             requeued += 1
 
     if requeued:
@@ -3029,9 +3048,10 @@ depends_on = None
 
 FUNCTIONS = {
     "stalled_email_rows(p_pending_minutes int, p_working_minutes int)": """
-        RETURNS TABLE (id uuid, processing_status text)
+        RETURNS TABLE (id uuid, tenant_id uuid, mailbox_id uuid,
+                       processing_status text)
         LANGUAGE sql SECURITY DEFINER SET search_path = public, pg_temp AS $$
-            SELECT e.id, e.processing_status
+            SELECT e.id, e.tenant_id, e.mailbox_id, e.processing_status
             FROM email_messages e
             WHERE (e.processing_status = 'pending'
                    AND e.updated_at < now()

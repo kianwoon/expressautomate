@@ -166,7 +166,15 @@ async def notifications(request: Request) -> Response:
             # Already known. Replay is free by design, and re-queueing would
             # only duplicate work the pipeline already has in hand.
             continue
-        await enqueue("fetch_email", email_message_id=str(row_id))
+        # The tenant travels with the job: background work has no session
+        # tenant, and looking it up would need a second RLS-bypassing function.
+        # A mismatched pair simply reads no row under the tenant policy.
+        await enqueue(
+            "fetch_email",
+            email_message_id=str(row_id),
+            tenant_id=str(record.tenant_id),
+            mailbox_id=str(record.mailbox_id),
+        )
 
     return Response(status_code=202)
 
@@ -189,9 +197,21 @@ async def lifecycle(request: Request) -> Response:
             # the collision raises TypeError inside the logger.
             log.warning("lifecycle_unknown_event", lifecycle_event=event)
             continue
+        # Every job carries its tenant, for the same reason `fetch_email` does:
+        # background work has no session tenant, and the alternative is another
+        # function that bypasses RLS to look one up.
         if job == "reauthorize_subscription":
-            await enqueue(job, subscription_id=item.get("subscriptionId"))
+            await enqueue(
+                job,
+                subscription_id=item.get("subscriptionId"),
+                tenant_id=str(record.tenant_id),
+                mailbox_id=str(record.mailbox_id),
+            )
         else:
-            await enqueue(job, mailbox_id=str(record.mailbox_id))
+            await enqueue(
+                job,
+                tenant_id=str(record.tenant_id),
+                mailbox_id=str(record.mailbox_id),
+            )
 
     return Response(status_code=202)

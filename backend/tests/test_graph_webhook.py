@@ -168,8 +168,13 @@ async def test_a_valid_notification_is_recorded_and_queued(client, subscription,
     assert rows[0].mailbox_id == mailbox_id
 
     assert len(enqueued) == 1
-    assert enqueued[0][0] == "fetch_email"
-    assert uuid.UUID(enqueued[0][1]["email_message_id"])
+    name, kwargs = enqueued[0]
+    assert name == "fetch_email"
+    assert uuid.UUID(kwargs["email_message_id"])
+    # The tenant travels with the job — background work has no session tenant,
+    # and RLS validates the pair on the other end.
+    assert kwargs["tenant_id"] == str(tenant_id)
+    assert kwargs["mailbox_id"] == str(mailbox_id)
 
 
 async def test_a_forged_client_state_stores_nothing(client, subscription, enqueued):
@@ -369,7 +374,7 @@ async def test_lifecycle_events_queue_their_recovery(
     handing either the wrong key would fail at the worker where nobody is
     watching.
     """
-    _, mailbox_id = subscription
+    tenant_id, mailbox_id = subscription
 
     response = await client.post(
         "/api/graph/lifecycle",
@@ -388,9 +393,12 @@ async def test_lifecycle_events_queue_their_recovery(
     assert len(enqueued) == 1
     name, kwargs = enqueued[0]
     assert name == job
-    assert list(kwargs) == [argument]
     expected = SUBSCRIPTION_ID if argument == "subscription_id" else str(mailbox_id)
     assert kwargs[argument] == expected
+    # Every job carries its tenant — a job that has to look one up needs a
+    # function that bypasses RLS.
+    assert kwargs["tenant_id"] == str(tenant_id)
+    assert kwargs["mailbox_id"] == str(mailbox_id)
 
 
 async def test_an_unknown_lifecycle_event_is_accepted_without_action(

@@ -15,16 +15,19 @@ stored after the mailbox grant covers both sets, and it is that token the
 ingestion worker later exchanges for a mail-capable access token.
 """
 
+import asyncio
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from functools import lru_cache
 
 import msal
 from msal.authority import AZURE_PUBLIC
+from sqlalchemy import text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.core.config import settings
-from app.core.crypto import encrypt
+from app.core.crypto import decrypt, encrypt
+from app.db.rls import tenant_session
 from app.models.ms_token import MicrosoftToken
 
 # MSAL adds these itself and raises ValueError if they are passed in, even
@@ -86,12 +89,99 @@ def complete_login(flow: dict, auth_response: dict) -> dict:
     return client().acquire_token_by_auth_code_flow(flow, auth_response)
 
 
+class MailboxNotAuthorised(Exception):
+    """The stored grant can no longer read this mailbox.
+
+    Distinct from a transient failure: the fix is the user reconnecting, not a
+    retry. Callers mark the mailbox `needs_reauth` and stop.
+    """
+
+
+# allow-hardcode: SQL statements, not a phrase list — no behaviour is keyed on
+# matching these strings against anything.
+#
+# The owner is looked up separately from the token, so the lock can be taken on
+# the user *before* the token is read. Reading first and locking second would
+# leave both racers holding the same pre-rotation token.
+_MAILBOX_OWNER = text("SELECT user_id FROM mailboxes WHERE id = :mailbox_id")
+
+_LOCK_PER_USER = text("SELECT pg_advisory_xact_lock(hashtext(:key))")
+
+_GRANT_FOR_USER = text(
+    "SELECT refresh_token_encrypted FROM ms_oauth_tokens WHERE user_id = :user_id"
+)
+
+
+async def access_token_for_mailbox(tenant_id: uuid.UUID, mailbox_id: uuid.UUID) -> str:
+    """Exchange the stored refresh token for a mailbox-scoped access token.
+
+    Serialized per user with a transaction-scoped advisory lock. Entra rotates
+    refresh tokens on use, so two jobs refreshing the same user concurrently
+    would otherwise both read the pre-rotation token; the one that lost the
+    race then presents a token Entra has already replaced, and the mailbox gets
+    flagged `needs_reauth` for a grant that is perfectly healthy.
+
+    Order matters: the lock is taken **before** the token is read, so the
+    waiter re-reads whatever the winner persisted. Locking after the read would
+    serialize the refresh while still handing both racers the same stale token,
+    which is the appearance of safety without any of it.
+
+    That re-read depends on READ COMMITTED, Postgres' default, where each
+    statement takes a fresh snapshot. Under REPEATABLE READ the waiter's second
+    SELECT would still see the pre-lock snapshot and the bug returns — silently,
+    because the lock would still look correct. Anything that changes the
+    isolation level for this session has to revisit this function.
+
+    Being transaction-scoped, the lock cannot outlive a crashed worker.
+    """
+    async with tenant_session(tenant_id) as session:
+        owner = (
+            await session.execute(_MAILBOX_OWNER, {"mailbox_id": mailbox_id})
+        ).scalar_one_or_none()
+        if owner is None:
+            # The mailbox outlived the user who connected it — `user_id` is
+            # SET NULL on delete, so nobody is left who can authorise a read.
+            raise MailboxNotAuthorised(f"mailbox {mailbox_id} has no owner")
+
+        await session.execute(_LOCK_PER_USER, {"key": f"ms-refresh:{owner}"})
+
+        encrypted = (
+            await session.execute(_GRANT_FOR_USER, {"user_id": owner})
+        ).scalar_one_or_none()
+        if encrypted is None:
+            raise MailboxNotAuthorised(f"no stored grant for mailbox {mailbox_id}")
+
+        result = await asyncio.to_thread(
+            client().acquire_token_by_refresh_token,
+            decrypt(encrypted),
+            # Mailbox scopes, not identity: a token minted from a grant that
+            # only ever carried identity consent would 403 on every mail call,
+            # and it would do so at fetch time rather than here.
+            scopes=delegated_scopes("mailbox"),
+        )
+        if "access_token" not in result:
+            raise MailboxNotAuthorised(
+                result.get("error_description", "refresh token rejected")
+            )
+
+        if result.get("refresh_token"):
+            await store_refresh_token(
+                session,
+                tenant_id=tenant_id,
+                user_id=owner,
+                home_account_id=None,
+                result=result,
+                now=datetime.now(UTC),
+            )
+        return result["access_token"]
+
+
 async def store_refresh_token(
     session,
     *,
     tenant_id: uuid.UUID,
     user_id: uuid.UUID,
-    home_account_id: str,
+    home_account_id: str | None,
     result: dict,
     now: datetime,
 ) -> None:
