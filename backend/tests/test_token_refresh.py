@@ -173,11 +173,16 @@ async def test_a_rejected_refresh_token_is_reported_as_unauthorised(
         await access_token_for_mailbox(tenant_id, mailbox_id)
 
 
-async def test_the_mailbox_scopes_are_requested_not_the_identity_ones(
+async def test_the_full_mailbox_scope_set_is_requested(
     monkeypatch, mailbox_with_grant
 ):
-    """A token minted from identity-only consent 403s on every mail call, and
-    it does so at fetch time rather than here."""
+    """Mail permissions, and the identity ones alongside them.
+
+    A token minted from identity-only consent 403s on every mail call. But
+    asking for *only* the mail scope is equally wrong: incremental consent
+    returns a token for exactly what was requested, so the rotated refresh
+    token would come back narrower than the grant already stored.
+    """
     tenant_id, _, mailbox_id = mailbox_with_grant
     fake = _FakeMsal()
     seen = {}
@@ -192,4 +197,6 @@ async def test_the_mailbox_scopes_are_requested_not_the_identity_ones(
     await access_token_for_mailbox(tenant_id, mailbox_id)
 
     assert any(s.lower() == "mail.read" for s in seen["scopes"])
-    assert not any(s.lower() == "user.read" for s in seen["scopes"])
+    assert any(s.lower() == "user.read" for s in seen["scopes"]), (
+        "the identity scopes must ride along, or the rotated token narrows"
+    )

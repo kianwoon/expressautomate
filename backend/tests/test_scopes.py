@@ -15,7 +15,7 @@ because the failure mode of each is silent.
 import pytest
 
 from app.core.config import Settings, settings
-from app.services.ms_auth import delegated_scopes
+from app.services.ms_auth import identity_scopes, mailbox_scopes
 
 REQUIRED_KEYS = ("MS_IDENTITY_SCOPES", "MS_MAILBOX_SCOPES")
 
@@ -82,33 +82,30 @@ def test_mailbox_scopes_stay_read_only():
 
 
 def test_signing_in_never_asks_for_mail():
-    """The point of the split: a user who only signs in — including a
-    Google-only user's colleague — is never shown a 'read your mail' prompt for
-    a capability they have not asked for."""
-    assert _mail_permissions(delegated_scopes("identity")) == []
+    """The reason the split exists. Bundling mailbox access into sign-in locked
+    a real agency out: their tenant lets users consent only to low-impact
+    permissions, so asking for both made *signing in at all* need an admin.
+    """
+    assert _mail_permissions(identity_scopes()) == []
 
 
-def test_the_mailbox_consent_asks_for_mail_and_nothing_else():
-    mailbox = delegated_scopes("mailbox")
+def test_the_mailbox_consent_keeps_the_identity_scopes():
+    """Both sets, not just the new one.
+
+    Incremental consent returns a token for exactly what was asked, so naming
+    only the mailbox scope would hand back a token narrower than the grant
+    already held — and the stored refresh token would lose identity access.
+    """
+    mailbox = mailbox_scopes()
 
     assert _mail_permissions(mailbox)
-    assert not any(scope.lower() == "user.read" for scope in mailbox), (
-        "identity scopes are already consented; re-asking widens the prompt "
-        "for no gain"
-    )
+    assert set(identity_scopes()) <= set(mailbox)
 
 
-@pytest.mark.parametrize("kind", ["identity", "mailbox"])
-def test_reserved_scopes_are_stripped_from_every_consent(kind):
+@pytest.mark.parametrize("which", [identity_scopes, mailbox_scopes])
+def test_reserved_scopes_are_stripped_from_every_consent(which):
     """MSAL injects openid/profile/offline_access itself and errors if they are
     passed in, even though the app registration genuinely holds them."""
-    scopes = {s.lower() for s in delegated_scopes(kind)}
+    scopes = {s.lower() for s in which()}
 
     assert not scopes & {"openid", "profile", "offline_access"}
-
-
-def test_an_unknown_scope_kind_is_rejected():
-    """A typo must not silently produce an empty list — that is the exact bug
-    this file was written to catch."""
-    with pytest.raises(ValueError):
-        delegated_scopes("everything")

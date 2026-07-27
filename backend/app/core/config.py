@@ -59,17 +59,23 @@ class Settings(BaseSettings):
     # instead, which is what keeps them from reading each other's rows.
     MS_TENANT_ID: str = "common"
     MS_REDIRECT_URI: str = ""
-    # Two keys, not one: consent is incremental. Identity is requested at
-    # sign-in and mailbox access only when a mailbox is connected, so nobody is
-    # asked to hand over their mail before they have asked for mail ingestion.
-    # Entra's consent is cumulative per user and app, so the token stored after
-    # the second grant covers both.
+    # Two scope sets, not one, because they face very different consent bars
+    # (§6.1). Asking for both at sign-in is what locked a real agency out:
+    # Microsoft's recommended tenant policy lets users consent only to
+    # "low impact" permissions, and mailbox access is not one — so bundling
+    # them made *signing in at all* need an administrator.
+    #
+    # MS_IDENTITY_SCOPES is what sign-in asks for: enough to know who someone
+    # is, and nothing a cautious tenant would refuse.
+    # MS_MAILBOX_SCOPES is asked for separately, later, by someone who has
+    # chosen to connect a mailbox — and may still need an admin, which is a
+    # far better place to meet that wall than the front door.
     MS_IDENTITY_SCOPES: str = ""
     MS_MAILBOX_SCOPES: str = ""
-    # No global webhook secret: each subscription carries its own random
-    # `clientState`, generated at creation and stored on the row. One shared
-    # value would make every tenant's notifications forgeable the moment it
-    # leaked anywhere.
+    # Unused. Each subscription generates its own random `clientState` at
+    # creation and stores it on the row, so there is no shared webhook secret
+    # to leak — removing the key is a separate change from this merge.
+    MS_WEBHOOK_CLIENT_STATE: str = ""
     MS_WEBHOOK_NOTIFICATION_URL: str = ""
     MS_WEBHOOK_LIFECYCLE_URL: str = ""
     # A separate redirect for the mailbox consent. Sharing the sign-in callback
@@ -179,11 +185,25 @@ class Settings(BaseSettings):
 
     @property
     def identity_scopes(self) -> list[str]:
+        """What sign-in asks for."""
         return [s for s in self.MS_IDENTITY_SCOPES.split() if s]
 
     @property
     def mailbox_scopes(self) -> list[str]:
+        """The extra permissions mailbox ingestion needs, asked for separately."""
         return [s for s in self.MS_MAILBOX_SCOPES.split() if s]
+
+    @property
+    def graph_scopes(self) -> list[str]:
+        """Everything a fully connected user has granted.
+
+        Order matters only in that it is stable: this is what the mailbox
+        consent flow requests. It re-asks for the identity scopes too, because
+        an incremental consent that named only the new permission would return
+        a token narrower than the one already held.
+        """
+        seen = dict.fromkeys(self.identity_scopes + self.mailbox_scopes)
+        return list(seen)
 
     @property
     def is_production(self) -> bool:

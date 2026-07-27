@@ -502,6 +502,36 @@ section { padding: 60px 0; }
 }
 .stub-next a:hover { background: var(--surface-alt); }
 
+/* ---- legal pages ---- */
+/* Terms and Privacy are read, not skimmed, so the column is narrower than the
+   marketing content and the vertical rhythm is looser. 68ch is about 12 words
+   a line — long enough not to feel like a leaflet, short enough that the eye
+   finds the next line without hunting. */
+.legal { padding: 72px 0 96px; }
+.legal-body { max-width: 68ch; margin-top: 44px; }
+.legal-body h2 {
+  font-size: 1.25rem; letter-spacing: -0.01em;
+  margin-top: 44px; padding-top: 28px; border-top: 1px solid var(--line);
+}
+/* The first heading follows the summary, which is already a separator. */
+.legal-body h2:first-child { margin-top: 0; padding-top: 0; border-top: 0; }
+.legal-body p { margin-top: 14px; color: var(--ink-700); line-height: 1.7; }
+.legal-body ul { margin-top: 14px; padding-left: 22px; color: var(--ink-700); }
+.legal-body li { margin-top: 9px; line-height: 1.7; }
+.legal-body a { text-decoration: underline; text-underline-offset: 2px; }
+.legal-body strong { color: var(--ink-900); font-weight: 650; }
+.legal-body code {
+  font-size: 0.9em; padding: 1px 5px; border-radius: 5px;
+  background: var(--surface-alt); border: 1px solid var(--line);
+}
+/* Who "we" is, restated at the end of the document rather than only in the
+   footer: someone who has just read an obligation should not have to hunt for
+   whom they owe it to. */
+.legal-who {
+  margin-top: 56px; padding-top: 24px; border-top: 1px solid var(--line);
+  font-size: 0.875rem; color: var(--ink-500); line-height: 1.7;
+}
+
 /* ---- footer ---- */
 footer { border-top: 1px solid var(--line); padding: 48px 0 40px; color: var(--ink-500); font-size: 0.875rem; }
 .footer-grid {
@@ -542,6 +572,11 @@ footer { border-top: 1px solid var(--line); padding: 48px 0 40px; color: var(--i
   .nav-inner .nav-links + .nav-auth { margin-left: auto; }
   .nav-auth { margin-left: auto; min-height: 0; }
   .nav-auth .btn { padding: 9px 16px; }
+  /* Name + Switch account + Sign out is three items too many for a phone nav;
+     it pushed the auth corner off the row. Nothing is lost by dropping this
+     one: signing out here already lands on the landing page in choose-account
+     mode, so switching stays two taps away rather than one. */
+  .nav-switch { display: none; }
   /* Two rows of nav eat a real share of an 844px-tall screen, so the mark
      gives back a little — but only a little: it is the one thing identifying
      the site on a screen with no room for anything else. */

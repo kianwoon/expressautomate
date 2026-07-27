@@ -18,14 +18,16 @@ from cryptography.fernet import Fernet, InvalidToken
 from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.core.config import settings
+from app.core.crypto import encrypt
 from app.core.logging import get_logger
 from app.db.rls import tenant_session
 from app.models import MicrosoftToken, Tenant, User
 from app.services import ms_auth
+from app.workers.queue import enqueue
 
 log = get_logger(__name__)
 router = APIRouter(tags=["auth"])
@@ -76,6 +78,15 @@ MSA_CONSUMER_TENANT_ID = "9188040d-6c67-4c5b-b112-36a304b66dad"
 PERSONAL_TENANT_NAMESPACE = uuid.UUID("6f1f7f7a-6b1e-5a6d-9d2a-7c4f1c9f0b3e")
 
 SESSION_TTL_SECONDS = 14 * 24 * 60 * 60
+
+# OIDC `prompt` values this deployment will forward to Microsoft. A whitelist,
+# not a passthrough: the value lands in the authorize URL the browser is
+# redirected to, and an unchecked query parameter there is parameter injection
+# waiting to happen. Only the one value the frontend actually sends is listed —
+# `login` and `consent` are valid OIDC but nothing here asks for them, and an
+# unused entry is only extra surface. `none` would be wrong in any case: it
+# fails outright when interaction is needed, which is not a sign-in button's job.
+ALLOWED_PROMPTS = frozenset({"select_account"})
 
 # Where a completed sign-in lands. A signed-in user dropped back on the
 # marketing page has no sign that anything happened. Not configuration — it is
@@ -136,8 +147,28 @@ def _flow_cipher() -> Fernet:
     return Fernet(base64.urlsafe_b64encode(digest))
 
 
-def _seal_flow(flow: dict) -> str:
-    return _flow_cipher().encrypt(json.dumps(flow).encode()).decode()
+# The two things a round trip to Microsoft can be for. They share one redirect
+# URI — Entra registrations list them explicitly and every extra one is another
+# thing to keep in step across environments — so the purpose has to travel with
+# the flow. It rides inside the sealed cookie rather than the callback URL:
+# there it is encrypted and tamper-proof, whereas a query parameter would let
+# anyone relabel a sign-in as a mailbox consent, or the reverse.
+PURPOSE_SIGN_IN = "sign-in"
+PURPOSE_MAILBOX = "mailbox"
+
+
+def _seal_flow(flow: dict, purpose: str, session: dict | None = None) -> str:
+    """Seal the MSAL flow together with what it is for.
+
+    The MSAL dict is nested rather than merged with our own keys: it must reach
+    `complete_login` exactly as MSAL produced it, and nesting makes that
+    impossible to get wrong by accident.
+    """
+    return (
+        _flow_cipher()
+        .encrypt(json.dumps({"msal": flow, "purpose": purpose, "session": session}).encode())
+        .decode()
+    )
 
 
 def _open_flow(sealed: str) -> dict:
@@ -169,6 +200,43 @@ def _stale_flow_cookies(request: Request) -> list[str]:
     # One slot is about to be taken by the flow being started.
     excess = len(names) - (MAX_CONCURRENT_FLOWS - 1)
     return names[:excess] if excess > 0 else []
+
+
+def _require_session(request: Request) -> tuple[uuid.UUID, uuid.UUID]:
+    """(user id, tenant id) from the session cookie, or 401.
+
+    Only the cookie is checked here; whether the user still exists is a
+    database question and is left to callers that touch the database anyway.
+    """
+    cookie = request.cookies.get(SESSION_COOKIE)
+    if not cookie:
+        raise HTTPException(status_code=401, detail="Not signed in.")
+    try:
+        payload = _session_serializer.loads(cookie, max_age=SESSION_TTL_SECONDS)
+        return uuid.UUID(payload["uid"]), uuid.UUID(payload["tid"])
+    except (BadSignature, SignatureExpired, KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(status_code=401, detail="Session is invalid or expired.") from exc
+
+
+def _granted(scope: str | None) -> set[str]:
+    """The granted scopes, lowercased.
+
+    Microsoft echoes back what it actually granted, in its own casing and often
+    including the reserved scopes MSAL adds — so every comparison against it is
+    a set comparison on lowercased names, never a string match.
+    """
+    return {s.lower() for s in (scope or "").split()}
+
+
+def _covers_mailbox(scope: str | None) -> bool:
+    """Does this grant actually carry the mailbox permissions?
+
+    Compared against the configured mailbox scopes rather than a literal
+    permission name: which permissions ingestion needs is deployment config
+    (§7), and hardcoding one here would quietly lie the day that list changes.
+    """
+    wanted = {s.lower() for s in ms_auth.delegated(settings.mailbox_scopes)}
+    return bool(wanted) and wanted <= _granted(scope)
 
 
 def _slug_for(tenant_uuid: uuid.UUID, stem_source: str) -> str:
@@ -211,15 +279,58 @@ def _tenant_for(tid: str, oid: str, email: str) -> tuple[uuid.UUID, str, str, bo
 
 
 @router.get("/auth/microsoft/login")
-async def microsoft_login(request: Request) -> RedirectResponse:
-    """Send the browser to Microsoft, carrying the flow back in a sealed cookie."""
+async def microsoft_login(request: Request, prompt: str | None = None) -> RedirectResponse:
+    """Send the browser to Microsoft, carrying the flow back in a sealed cookie.
+
+    `?prompt=select_account` is how switching accounts is done. Microsoft, given
+    no prompt, reuses the browser's existing SSO session without asking — so a
+    user who has ever signed in is silently returned as the same account, and
+    signing out here (which only drops our own cookie) does not change that.
+    The frontend therefore asks for the picker whenever the user is choosing an
+    account rather than resuming one.
+    """
     _require_microsoft()
-    flow = ms_auth.begin_login()
+    if prompt is not None and prompt not in ALLOWED_PROMPTS:
+        # Rejected rather than ignored: a silently dropped prompt would send the
+        # user round the loop into the very account they were trying to leave.
+        raise HTTPException(status_code=400, detail="Unsupported prompt.")
+    flow = ms_auth.begin_login(ms_auth.identity_scopes(), prompt=prompt)
+    return _redirect_into_flow(request, flow, PURPOSE_SIGN_IN)
+
+
+@router.get("/auth/microsoft/connect-mailbox")
+async def microsoft_connect_mailbox(request: Request) -> RedirectResponse:
+    """Ask, separately, for the permissions mailbox ingestion needs.
+
+    Split out of sign-in because the two face different consent bars: a tenant
+    on Microsoft's recommended policy lets a user consent to identity scopes
+    but not to mailbox ones, and asking for both at once made signing in
+    impossible rather than making ingestion unavailable. Here the wall, if it
+    comes, arrives at the point the user asked for mail to be read — which is
+    also the point at which asking an administrator makes sense to them.
+
+    Requires a session: this consent is recorded against a specific user, so
+    there has to be one before the round trip starts, not after.
+    """
+    _require_microsoft()
+    user_id, tenant_id = _require_session(request)
+    flow = ms_auth.begin_login(ms_auth.mailbox_scopes())
+    return _redirect_into_flow(
+        request, flow, PURPOSE_MAILBOX, {"uid": str(user_id), "tid": str(tenant_id)}
+    )
+
+
+def _redirect_into_flow(
+    request: Request, flow: dict, purpose: str, session: dict | None = None
+) -> RedirectResponse:
+    """Send the browser to Microsoft, carrying the sealed flow back in a cookie."""
     response = RedirectResponse(flow["auth_uri"])
     for stale in _stale_flow_cookies(request):
         response.delete_cookie(stale, path="/")
     response.set_cookie(
-        _flow_cookie_name(flow["state"]), _seal_flow(flow), **_cookie_kwargs(FLOW_TTL_SECONDS)
+        _flow_cookie_name(flow["state"]),
+        _seal_flow(flow, purpose, session),
+        **_cookie_kwargs(FLOW_TTL_SECONDS),
     )
     return response
 
@@ -250,8 +361,9 @@ async def microsoft_callback(request: Request) -> RedirectResponse:
         )
         raise HTTPException(status_code=400, detail="Sign-in did not start here, or it expired.")
     try:
-        flow = _open_flow(sealed)
-    except (InvalidToken, ValueError) as exc:
+        envelope = _open_flow(sealed)
+        flow = envelope["msal"]
+    except (InvalidToken, ValueError, KeyError, TypeError) as exc:
         # Undecryptable: expired past FLOW_TTL_SECONDS, or sealed under a
         # different APP_SECRET_KEY (a key rotation, or a replica mid-rollout).
         log.warning("ms_callback_rejected", reason="flow_cookie_unsealable")
@@ -279,6 +391,11 @@ async def microsoft_callback(request: Request) -> RedirectResponse:
         raise HTTPException(status_code=401, detail="Microsoft returned an incomplete profile.")
 
     tenant_uuid, name, slug, is_personal = _tenant_for(str(tid), str(oid), email)
+
+    if envelope.get("purpose") == PURPOSE_MAILBOX:
+        return await _store_mailbox_consent(
+            request, envelope, result, tenant_uuid, str(oid), str(tid)
+        )
 
     async with tenant_session(tenant_uuid) as session:
         await session.execute(
@@ -325,13 +442,14 @@ async def microsoft_callback(request: Request) -> RedirectResponse:
             )
         ).scalar_one()
 
-        await ms_auth.store_refresh_token(
-            session,
-            tenant_id=tenant_uuid,
-            user_id=user_id,
-            home_account_id=f"{oid}.{tid}",
-            result=result,
-            now=now,
+        # Sign-in now asks only for identity, so the refresh token it brings
+        # back cannot mint a mailbox token. Storing it over one that can would
+        # silently disconnect a mailbox the user connected earlier — ingestion
+        # would keep a row saying "connected" and a credential that cannot
+        # read mail. So a sign-in only writes the token when it does not
+        # narrow what is already held.
+        await _store_token_if_not_a_downgrade(
+            session, result, tenant_uuid, user_id, f"{oid}.{tid}", now
         )
 
     log.info("ms_login", tenant_id=str(tenant_uuid), user_id=str(user_id))
@@ -350,39 +468,237 @@ async def microsoft_callback(request: Request) -> RedirectResponse:
     return response
 
 
+async def _store_token_if_not_a_downgrade(
+    session,
+    result: dict,
+    tenant_uuid: uuid.UUID,
+    user_id: uuid.UUID,
+    home_account_id: str,
+    now: datetime,
+    authoritative: bool = False,
+) -> bool:
+    """Upsert the refresh token unless it would narrow the stored grant.
+
+    Returns whether it was written. Read-then-write inside the caller's
+    transaction rather than a conditional `ON CONFLICT`: the comparison is a
+    set relation over scope names, which is far clearer in Python than as SQL.
+
+    `authoritative` says the caller asked for everything, so whatever came back
+    IS the current grant and replaces what is stored. The mailbox flow sets it,
+    and without it there is a dead end: if the configured mailbox scopes are
+    ever narrowed, or Microsoft grants a subset, no later consent could satisfy
+    the comparison and the refresh token could never be rotated again — leaving
+    the only recovery a hand-deleted row once it expires.
+    """
+    refresh_token = result.get("refresh_token")
+    if not refresh_token:
+        return False
+
+    scope = result.get("scope")
+    # Locked, not merely read: a sign-in racing a mailbox consent could
+    # otherwise read the pre-consent scope, judge itself not a downgrade, and
+    # overwrite the mailbox token — precisely the loss this guard exists to
+    # prevent. The row is per (tenant, user) and both flows for one user
+    # contend on it, so the lock is uncontended in the ordinary case.
+    existing = (
+        await session.execute(
+            select(MicrosoftToken.scope)
+            .where(MicrosoftToken.user_id == user_id)
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    # `existing is None` is the first grant; otherwise write only if the new
+    # grant is at least everything the old one had.
+    if not authoritative and existing is not None and not _granted(existing) <= _granted(scope):
+        log.info("ms_token_kept", user_id=str(user_id), reason="narrower_grant_offered")
+        return False
+
+    ciphertext = encrypt(refresh_token)
+    await session.execute(
+        pg_insert(MicrosoftToken)
+        .values(
+            id=uuid.uuid4(),
+            tenant_id=tenant_uuid,
+            user_id=user_id,
+            # MSAL's own account key format: "<oid>.<tid>".
+            home_account_id=home_account_id,
+            refresh_token_encrypted=ciphertext,
+            scope=scope,
+        )
+        .on_conflict_do_update(
+            constraint="uq_ms_tokens_tenant_user",
+            set_={
+                "refresh_token_encrypted": ciphertext,
+                "scope": scope,
+                "updated_at": now,
+            },
+        )
+    )
+    return True
+
+
+# allow-hardcode: SQL statements, not a phrase list.
+_INGESTION_ACTIVE = text(
+    "SELECT 1 FROM mailboxes m"
+    " JOIN graph_subscriptions s ON s.mailbox_id = m.id AND s.status = 'active'"
+    " WHERE m.user_id = :user_id AND m.status = 'active'"
+    " LIMIT 1"
+)
+
+_UPSERT_MAILBOX = text(
+    """
+    INSERT INTO mailboxes
+        (id, tenant_id, user_id, ms_user_id, scope, folder_id,
+         initial_sync_from, retention_months)
+    VALUES (:id, :tenant_id, :user_id, :ms_user_id, 'whole_inbox', 'inbox',
+            now() - make_interval(days => :lookback_days), :retention_months)
+    ON CONFLICT (tenant_id, ms_user_id, folder_id) DO UPDATE SET
+        status = 'active',
+        user_id = EXCLUDED.user_id
+    RETURNING id
+    """
+)
+
+
+async def _provision_mailbox(
+    session, tenant_uuid: uuid.UUID, user_id: uuid.UUID, ms_object_id: str
+) -> uuid.UUID:
+    """Create — or reactivate — the mailbox this consent was granted for.
+
+    Whole inbox from the configured lookback. The folder picker and a chosen
+    start date belong to the dashboard; defaulting here means a consent always
+    results in ingestion rather than a permission nothing acts on.
+
+    Reusing the row on conflict is what makes reconnection work: mail already
+    ingested stays attached to it, and flipping `status` back to active is
+    exactly what a mailbox coming out of `needs_reauth` needs.
+    `initial_sync_from` is deliberately NOT overwritten — a reconnection should
+    not silently re-walk history the user never asked for again.
+    """
+    return (
+        await session.execute(
+            _UPSERT_MAILBOX,
+            {
+                "id": uuid.uuid4(),
+                "tenant_id": tenant_uuid,
+                "user_id": user_id,
+                "ms_user_id": ms_object_id,
+                "lookback_days": settings.INITIAL_SYNC_MAX_LOOKBACK_DAYS,
+                "retention_months": settings.DEFAULT_RETENTION_MONTHS,
+            },
+        )
+    ).scalar_one()
+
+
+async def _store_mailbox_consent(
+    request: Request,
+    envelope: dict,
+    result: dict,
+    tenant_uuid: uuid.UUID,
+    oid: str,
+    tid: str,
+) -> RedirectResponse:
+    """Record a mailbox consent against the user who asked for it.
+
+    Deliberately does *not* touch the session cookie. This flow is an existing
+    user granting an extra permission, not an authentication: re-issuing the
+    session here would turn "connect my mailbox" into a silent sign-in, and any
+    account that completed the round trip could take over the session.
+
+    Which is the trap this guards. Microsoft will happily let the user sign in
+    to the consent page as somebody else — a second work account, a personal
+    one — and hand us a perfectly valid token for *that* mailbox. Storing it
+    against the session user would file one person's mail credential under
+    another person's row, across tenants. So the returned identity must be the
+    session's own, checked before anything is written.
+    """
+    stored_session = envelope.get("session") or {}
+    try:
+        user_id = uuid.UUID(stored_session["uid"])
+        session_tenant = uuid.UUID(stored_session["tid"])
+    except (KeyError, TypeError, ValueError) as exc:
+        log.warning("ms_mailbox_consent_rejected", reason="flow_missing_session")
+        raise HTTPException(status_code=400, detail="Sign-in state is invalid or expired.") from exc
+
+    if tenant_uuid != session_tenant:
+        log.warning("ms_mailbox_consent_rejected", reason="tenant_mismatch")
+        raise HTTPException(
+            status_code=400,
+            detail="That Microsoft account belongs to a different organisation than the one "
+            "you are signed in to. Sign in as that account first, then connect its mailbox.",
+        )
+
+    now = datetime.now(UTC)
+    async with tenant_session(tenant_uuid) as session:
+        user = (
+            await session.execute(select(User).where(User.id == user_id))
+        ).scalar_one_or_none()
+        if user is None:
+            raise HTTPException(status_code=401, detail="Not signed in.")
+        # The immutable object id, not the mail address: an address can be
+        # reassigned, and this check is the whole guard.
+        if user.ms_object_id != oid:
+            log.warning("ms_mailbox_consent_rejected", reason="account_mismatch")
+            raise HTTPException(
+                status_code=400,
+                detail="You approved that with a different Microsoft account than the one you "
+                "are signed in with. Connect the mailbox of the account you signed in as.",
+            )
+
+        # The Entra tenant GUID, not our tenant primary key: for a personal
+        # account those differ, and this is MSAL's account key, not ours.
+        # Authoritative: this flow asked for every scope there is, so what came
+        # back is the whole current grant — including when the user declined
+        # part of it. Storing it unconditionally is also the only way a stale
+        # refresh token can ever be rotated.
+        await _store_token_if_not_a_downgrade(
+            session, result, tenant_uuid, user_id, f"{oid}.{tid}", now, authoritative=True
+        )
+
+        mailbox_id = None
+        if _covers_mailbox(result.get("scope")):
+            # The grant is only half of connecting a mailbox — without a row to
+            # ingest into, a subscription to hear about new mail, and a walk
+            # over what is already there, the user has approved a permission
+            # nothing uses (plan §6.2).
+            mailbox_id = await _provision_mailbox(session, tenant_uuid, user_id, oid)
+
+    if mailbox_id is not None:
+        # Queued, not inline: a large mailbox must not hold the browser on the
+        # OAuth redirect. `recreate_subscription` also retires any subscription
+        # left over from a previous connection, so reconnecting is the same
+        # path as connecting.
+        await enqueue(
+            "recreate_subscription",
+            tenant_id=str(tenant_uuid),
+            mailbox_id=str(mailbox_id),
+        )
+        await enqueue(
+            "backfill_mailbox_job",
+            tenant_id=str(tenant_uuid),
+            mailbox_id=str(mailbox_id),
+        )
+
+    log.info(
+        "ms_mailbox_connected",
+        tenant_id=str(tenant_uuid),
+        user_id=str(user_id),
+        granted=_covers_mailbox(result.get("scope")),
+        mailbox_id=str(mailbox_id) if mailbox_id else None,
+    )
+
+    response = RedirectResponse(_frontend_url(DASHBOARD_PATH))
+    for name in request.cookies:
+        if name.startswith(FLOW_COOKIE_PREFIX):
+            response.delete_cookie(name, path="/")
+    return response
+
+
 @router.post("/auth/logout")
 async def logout(response: Response) -> dict[str, str]:
     """Clearing the cookie is the whole logout — no server-side session exists."""
     response.delete_cookie(SESSION_COOKIE, path="/")
     return {"status": "signed-out"}
-
-
-async def current_user(request: Request) -> User:
-    """The signed-in user, or 401.
-
-    Lifted out of `me()` so every authenticated route decodes the session the
-    same way — two copies of this is two places for a session-expiry bug, and
-    they would drift the first time one is touched.
-    """
-    cookie = request.cookies.get(SESSION_COOKIE)
-    if not cookie:
-        raise HTTPException(status_code=401, detail="Not signed in.")
-    try:
-        payload = _session_serializer.loads(cookie, max_age=SESSION_TTL_SECONDS)
-        tenant_uuid = uuid.UUID(payload["tid"])
-        user_uuid = uuid.UUID(payload["uid"])
-    except (BadSignature, SignatureExpired, KeyError, TypeError, ValueError) as exc:
-        raise HTTPException(status_code=401, detail="Session is invalid or expired.") from exc
-
-    async with tenant_session(tenant_uuid) as session:
-        user = (
-            await session.execute(select(User).where(User.id == user_uuid))
-        ).scalar_one_or_none()
-
-    if user is None:
-        # A deleted user holding a live cookie must not look signed in.
-        raise HTTPException(status_code=401, detail="Not signed in.")
-    return user
 
 
 @router.get("/auth/me")
@@ -393,15 +709,7 @@ async def me(request: Request) -> dict[str, dict]:
     a Microsoft user with no mailbox row and a personal-account user with no
     colleagues need different prompts, and both are decided here (§6.1).
     """
-    cookie = request.cookies.get(SESSION_COOKIE)
-    if not cookie:
-        raise HTTPException(status_code=401, detail="Not signed in.")
-    try:
-        payload = _session_serializer.loads(cookie, max_age=SESSION_TTL_SECONDS)
-        tenant_uuid = uuid.UUID(payload["tid"])
-        user_uuid = uuid.UUID(payload["uid"])
-    except (BadSignature, SignatureExpired, KeyError, TypeError, ValueError) as exc:
-        raise HTTPException(status_code=401, detail="Session is invalid or expired.") from exc
+    user_uuid, tenant_uuid = _require_session(request)
 
     async with tenant_session(tenant_uuid) as session:
         user = (
@@ -415,22 +723,35 @@ async def me(request: Request) -> dict[str, dict]:
             await session.execute(select(Tenant).where(Tenant.id == user.tenant_id))
         ).scalar_one()
 
-        # Only the scope is read, never the ciphertext: the row's existence is
-        # the whole signal. Decrypting would put a live refresh token in memory
-        # to answer a question its presence already answers, and a token that
-        # Entra has since revoked still decrypts fine — so decryption would not
-        # even make the answer more truthful.
-        # The id comes back too, so a row whose `scope` is null still counts as
-        # connected rather than being mistaken for a missing row.
-        token = (
+        # Only the scope is read, never the ciphertext: decrypting would put a
+        # live refresh token in memory to answer a question the scope already
+        # answers, and a token Entra has since revoked still decrypts fine — so
+        # decryption would not even make the answer more truthful.
+        #
+        # The row's existence is NOT the signal, though it used to be. Sign-in
+        # asks only for identity scopes and `offline_access` still yields a
+        # refresh token, so every signed-in user now has a row. Reading that as
+        # "mailbox connected" would tell someone their mail was hooked up when
+        # nothing had been granted to read it. What counts is the grant.
+        scope = (
             await session.execute(
-                select(MicrosoftToken.id, MicrosoftToken.scope).where(
-                    MicrosoftToken.user_id == user.id
-                )
+                select(MicrosoftToken.scope).where(MicrosoftToken.user_id == user.id)
             )
-        ).one_or_none()
-        connected = token is not None
-        scope = token.scope if token else None
+        ).scalar_one_or_none()
+        connected = _covers_mailbox(scope)
+
+        # A granted scope is a permission; ingestion is a mailbox with a live
+        # Graph subscription behind it. They come apart in both directions — a
+        # consent whose subscription creation failed, a mailbox flipped to
+        # `needs_reauth` while the grant is still on file — so this is read,
+        # never inferred.
+        ingesting = bool(
+            (
+                await session.execute(
+                    _INGESTION_ACTIVE, {"user_id": user.id}
+                )
+            ).scalar_one_or_none()
+        )
 
     return {
         "user": {
@@ -450,9 +771,9 @@ async def me(request: Request) -> dict[str, dict]:
             "provider": "microsoft",
             "connected": connected,
             "scopes": (scope or "").split(),
-            # Hardcoded until ingestion exists (§7). It must become a real read
-            # of the ingestion subscription state when that ships — a connected
-            # mailbox is not the same as one being polled.
-            "ingestion_active": False,
+            # A real read now that ingestion ships: an active mailbox with a
+            # live subscription. A connected mailbox is not the same as one
+            # being ingested.
+            "ingestion_active": ingesting,
         },
     }

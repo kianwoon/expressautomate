@@ -4,15 +4,13 @@ MSAL owns state, nonce and PKCE generation and validates the returned id_token,
 so nothing here reimplements any part of OAuth. The only job of this module is
 to feed MSAL values from settings and hand back the flow dict and token result.
 
-Identity and mailbox access arrive on **two** consents, not one. Signing in asks
-only for `MS_IDENTITY_SCOPES`; `Mail.Read` is requested separately when a user
-connects a mailbox, so nobody is asked to hand over their mail before they have
-asked for mail ingestion — and a Google-only agency's colleagues never see that
-prompt at all.
-
-Entra's consent is cumulative per user and application, so the refresh token
-stored after the mailbox grant covers both sets, and it is that token the
-ingestion worker later exchanges for a mail-capable access token.
+Identity and mailbox ingestion are two consents, not one. They were a single
+flow until a tenant with restricted user consent refused the whole thing —
+mailbox access is not a permission an ordinary user may grant there, so
+bundling it made plain sign-in need an administrator. Sign-in now asks only for
+identity; the mailbox scopes are requested later, by someone who has decided to
+connect a mailbox, and the refresh token from *that* consent is what lets the
+worker read Outlook mail.
 """
 
 import asyncio
@@ -45,22 +43,24 @@ def authority() -> str:
     return f"https://{AZURE_PUBLIC}/{settings.MS_TENANT_ID}"
 
 
-def delegated_scopes(kind: str = "identity") -> list[str]:
-    """Scopes to request for one consent step.
+def delegated(scopes: list[str]) -> list[str]:
+    """`scopes` with the ones MSAL insists on adding itself removed."""
+    return [s for s in scopes if s.lower() not in _MSAL_RESERVED_SCOPES]
 
-    Consent is incremental — identity at sign-in, mailbox access only when a
-    mailbox is connected — so which set is wanted has to be said explicitly.
-    An unknown `kind` raises rather than returning an empty list: a silent
-    empty list is exactly how the `MS_GRAPH_SCOPES` drift went unnoticed, since
-    Entra happily issues an ID token for no scopes at all.
+
+def identity_scopes() -> list[str]:
+    """Sign-in. Deliberately no mailbox permission — see config.py."""
+    return delegated(settings.identity_scopes)
+
+
+def mailbox_scopes() -> list[str]:
+    """Connecting a mailbox: the identity scopes plus the mailbox ones.
+
+    Both, not just the new one: incremental consent returns a token for exactly
+    what was asked, so naming only the mailbox scope would hand back a token
+    narrower than the one already held.
     """
-    if kind == "identity":
-        requested = settings.identity_scopes
-    elif kind == "mailbox":
-        requested = settings.mailbox_scopes
-    else:
-        raise ValueError(f"unknown scope kind: {kind!r}")
-    return [s for s in requested if s.lower() not in _MSAL_RESERVED_SCOPES]
+    return delegated(settings.graph_scopes)
 
 
 @lru_cache(maxsize=1)
@@ -73,14 +73,24 @@ def client() -> msal.ConfidentialClientApplication:
     )
 
 
-def begin_login() -> dict:
-    """Start the auth-code flow.
+def begin_login(scopes: list[str], prompt: str | None = None) -> dict:
+    """Start the auth-code flow for `scopes`.
+
+    The scope set is a parameter rather than a constant because sign-in and
+    connecting a mailbox ask for different things — see config.py.
 
     The returned dict carries the PKCE verifier, state and nonce; it must reach
     `complete_login` unmodified or MSAL rejects the response.
+
+    `prompt` is the OIDC parameter of the same name, passed straight through to
+    the authorize request. Without it Microsoft silently reuses whichever
+    account already has a browser SSO session, so someone signed in as one
+    account can never reach a second one — `select_account` is what forces the
+    picker. It is not defaulted here: paying the extra click on every ordinary
+    sign-in is a worse trade than letting the caller ask for it.
     """
     return client().initiate_auth_code_flow(
-        delegated_scopes("identity"), redirect_uri=settings.MS_REDIRECT_URI
+        delegated(scopes), redirect_uri=settings.MS_REDIRECT_URI, prompt=prompt
     )
 
 
@@ -154,10 +164,10 @@ async def access_token_for_mailbox(tenant_id: uuid.UUID, mailbox_id: uuid.UUID) 
         result = await asyncio.to_thread(
             client().acquire_token_by_refresh_token,
             decrypt(encrypted),
-            # Mailbox scopes, not identity: a token minted from a grant that
-            # only ever carried identity consent would 403 on every mail call,
-            # and it would do so at fetch time rather than here.
-            scopes=delegated_scopes("mailbox"),
+            # The full mailbox set — identity scopes included. Asking for
+            # only the new permission returns a token narrower than the grant
+            # already held, which is why `mailbox_scopes()` unions them.
+            scopes=mailbox_scopes(),
         )
         if "access_token" not in result:
             raise MailboxNotAuthorised(
@@ -185,13 +195,16 @@ async def store_refresh_token(
     result: dict,
     now: datetime,
 ) -> None:
-    """Upsert one user's encrypted refresh token.
+    """Persist a refresh token rotated during a background refresh.
 
-    Both consent steps land here — sign-in and, later, mailbox connection —
-    because a second copy of a token-encryption path is a second place to get
-    it wrong. Overwriting is correct rather than lossy: Entra's consent is
-    cumulative per user and app, so a token minted after the mailbox grant
-    covers strictly more than the one it replaces.
+    Only for the worker's own refresh cycle. The consent flows write through
+    `_store_token_if_not_a_downgrade` in `app/api/auth.py`, which compares
+    scope sets under a row lock — a plain upsert here would defeat that guard
+    and could quietly replace a mailbox-capable grant with a narrower one.
+
+    This path is safe to write unconditionally because it re-requests
+    `mailbox_scopes()`, the widest set the application ever asks for, so what
+    comes back is never narrower than what was stored.
 
     A response without a refresh token is not an error. MSAL omits it when the
     cached grant still applies, and the stored one remains valid.

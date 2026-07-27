@@ -2,8 +2,13 @@
 
 import { useState } from "react";
 
-import { LANDING_PATH, LOGOUT_PATH, SIGN_IN_PATH } from "./api";
-import { displayNameOf, useAuth } from "./auth";
+import {
+  LANDING_AFTER_SIGN_OUT,
+  LANDING_PATH,
+  LOGOUT_PATH,
+  SWITCH_ACCOUNT_PATH,
+} from "./api";
+import { displayNameOf, useAuth, useSignInHref } from "./auth";
 import { Logo } from "./logo";
 
 /** Landing-page section links; the dashboard has no sections to jump to. */
@@ -45,11 +50,15 @@ export function SiteNav({ sectionLinks = false }: { sectionLinks?: boolean }) {
       // signed-in view after the user asked to leave is the worse outcome.
     }
     // A full navigation, not a client route: it discards all in-memory auth
-    // state along with the page.
-    window.location.assign(LANDING_PATH);
+    // state along with the page. It carries the choose-account marker, because
+    // our cookie is the only thing that just got cleared — Microsoft still has
+    // a live SSO session, and a plain "Sign in" from here would drop the user
+    // straight back into the account they just left.
+    window.location.assign(LANDING_AFTER_SIGN_OUT);
   }
 
   const resolved = auth.status !== "loading";
+  const signInHref = useSignInHref();
 
   return (
     <nav className="nav">
@@ -87,6 +96,14 @@ export function SiteNav({ sectionLinks = false }: { sectionLinks?: boolean }) {
               <span className="nav-who" title={auth.me.user.email}>
                 {displayNameOf(auth.me)}
               </span>
+              {/* A plain link, and deliberately not "sign out, then sign in":
+                  abandoning Microsoft's picker leaves the current session
+                  untouched, whereas clearing the cookie first would strand
+                  someone who changed their mind. A completed switch overwrites
+                  the session cookie in the callback anyway. */}
+              <a className="btn btn-secondary nav-switch" rel="nofollow" href={SWITCH_ACCOUNT_PATH}>
+                Switch account
+              </a>
               <button
                 className="btn btn-secondary"
                 type="button"
@@ -106,7 +123,7 @@ export function SiteNav({ sectionLinks = false }: { sectionLinks?: boolean }) {
                  reliably disables preloading in every browser and setting, so
                  the backend keeps one cookie per flow (app/api/auth.py) and
                  stays correct even when two /login calls race. */
-            <a className="btn btn-primary" rel="nofollow" href={SIGN_IN_PATH}>
+            <a className="btn btn-primary" rel="nofollow" href={signInHref}>
               Sign in
             </a>
           )}
