@@ -31,6 +31,7 @@ from app.services.graph.client import (
     GraphNotFound,
     GraphThrottled,
 )
+from app.services.graph.subscriptions import create_subscription, renew_subscription
 from app.services.ms_auth import MailboxNotAuthorised, access_token_for_mailbox
 from app.services.storage.r2 import R2BodyStore, body_key
 from app.workers.queue import enqueue
@@ -80,6 +81,15 @@ _MARK_UNFETCHABLE = text(
 )
 
 _MARK_NEEDS_REAUTH = text("UPDATE mailboxes SET status = 'needs_reauth' WHERE id = :id")
+
+_RETIRE_ACTIVE = text(
+    "UPDATE graph_subscriptions SET status = 'replaced'"
+    " WHERE mailbox_id = :mailbox_id AND status = 'active'"
+)
+
+_MAILBOX_TARGET = text(
+    "SELECT ms_user_id, folder_id FROM mailboxes WHERE id = :mailbox_id"
+)
 
 
 def body_store():
@@ -156,6 +166,112 @@ async def fetch_email(
         tenant_id=tenant_id,
         mailbox_id=mailbox_id,
     )
+
+
+async def recreate_subscription(ctx, *, tenant_id: str, mailbox_id: str) -> None:
+    """Replace a subscription that is gone or unrenewable (plan §8).
+
+    The old row is retired first. Not for uniqueness — the new subscription has
+    its own id, so nothing would collide — but because `resolve_subscription`
+    routes on *active* rows: leaving the old one active would keep pointing
+    notifications at a subscription Graph no longer has, and the renewal sweep
+    would keep trying to extend it. Retiring after the create would instead
+    need `_RETIRE_ACTIVE` to exclude the row just inserted.
+
+    If the create fails after the retire commits, the mailbox is left with no
+    active subscription. arq retries the job, and `ensure_subscriptions` is the
+    backstop if those retries are exhausted.
+    """
+    tenant = uuid.UUID(tenant_id)
+    mailbox = uuid.UUID(mailbox_id)
+
+    try:
+        client = await graph_client_for_mailbox(tenant, mailbox)
+    except MailboxNotAuthorised as exc:
+        # Recreating needs the grant that just failed. Nothing to retry.
+        await mark_needs_reauth(tenant, mailbox, str(exc))
+        return
+
+    try:
+        async with tenant_session(tenant) as session:
+            target = (
+                await session.execute(_MAILBOX_TARGET, {"mailbox_id": mailbox})
+            ).one()
+            await session.execute(_RETIRE_ACTIVE, {"mailbox_id": mailbox})
+
+        await create_subscription(
+            tenant, mailbox, target.ms_user_id, target.folder_id, client
+        )
+    finally:
+        await client.aclose()
+
+    # Notifications stopped while the subscription was dead, so whatever
+    # arrived in that window is reachable only through a delta walk.
+    await enqueue("delta_sync_mailbox", tenant_id=tenant_id, mailbox_id=mailbox_id)
+
+
+async def reauthorize_subscription(
+    ctx, *, subscription_id: str, tenant_id: str, mailbox_id: str
+) -> None:
+    """Prove the grant still works, because Graph asked (plan §8).
+
+    A successful token refresh *is* the proof, and renewing in place is what
+    tells Graph so. If the grant is gone the user has to reconnect — retrying
+    a revoked grant only buries the reason.
+    """
+    tenant = uuid.UUID(tenant_id)
+    mailbox = uuid.UUID(mailbox_id)
+
+    try:
+        client = await graph_client_for_mailbox(tenant, mailbox)
+    except MailboxNotAuthorised as exc:
+        await mark_needs_reauth(tenant, mailbox, str(exc))
+        return
+
+    try:
+        await renew_subscription(tenant, subscription_id, client)
+    except GraphNotFound:
+        # Graph dropped it while we were answering. Replacing it is the same
+        # work `subscriptionRemoved` would have asked for.
+        log.warning("reauthorized_subscription_absent", subscription_id=subscription_id)
+        await enqueue(
+            "recreate_subscription", tenant_id=tenant_id, mailbox_id=mailbox_id
+        )
+    finally:
+        await client.aclose()
+
+
+async def delta_sync_mailbox(ctx, *, tenant_id: str, mailbox_id: str) -> None:
+    """Reconcile one mailbox against Graph (plan §9).
+
+    Runs on a schedule for every active mailbox and on demand after a `missed`
+    lifecycle event. A dead grant stops it quietly rather than raising: this
+    fires every ten minutes, and an exception each time would bury real
+    failures under a repeating one.
+    """
+    from app.services.graph.delta import sync_mailbox
+
+    tenant = uuid.UUID(tenant_id)
+    mailbox = uuid.UUID(mailbox_id)
+
+    try:
+        client = await graph_client_for_mailbox(tenant, mailbox)
+    except MailboxNotAuthorised as exc:
+        await mark_needs_reauth(tenant, mailbox, str(exc))
+        return
+
+    try:
+        result = await sync_mailbox(tenant, mailbox, client)
+    finally:
+        await client.aclose()
+
+    if result.recorded:
+        log.info(
+            "delta_sync_recorded",
+            mailbox_id=mailbox_id,
+            recorded=result.recorded,
+            seen=result.seen,
+        )
 
 
 def _message_path(ms_user_id: str, graph_message_id: str) -> str:

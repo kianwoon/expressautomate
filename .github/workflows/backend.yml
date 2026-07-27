@@ -110,6 +110,10 @@ jobs:
       # The Graph client builds its httpx base_url from this; an empty value
       # makes every relative request path resolve to nothing.
       GRAPH_BASE_URL: https://graph.microsoft.com/v1.0
+      # Parsed at import time by app.workers.settings, which builds arq's
+      # RedisSettings in its class body — so the module is unimportable without
+      # a valid DSN. Nothing in the suite connects; the queue is always faked.
+      REDIS_URL: redis://localhost:6379
 
     steps:
       - uses: actions/checkout@v7

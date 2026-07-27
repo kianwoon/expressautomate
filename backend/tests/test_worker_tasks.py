@@ -407,6 +407,108 @@ async def test_a_dead_grant_does_not_abort_the_rest_of_the_sweep(
     assert queued == [], "recreating needs the same dead grant, so it is not queued"
 
 
+# --- ensure_subscriptions ---------------------------------------------------
+#
+# The backstop for "active mailbox, no subscription". Nothing else detects it:
+# `renew_subscriptions` only scans rows that exist, and `delta_sync_all`
+# filters on mailbox status. A mailbox in that state looks healthy and receives
+# nothing — §8's "lapsed subscription reads as a quiet week", reached by a
+# different route.
+
+
+async def test_an_active_mailbox_with_no_subscription_gets_one(
+    admin_session, tenant, queued
+):
+    mailbox_id = await _add_mailbox(admin_session, tenant)
+    await admin_session.commit()
+
+    assert await tasks.ensure_subscriptions() == 1
+    assert queued == [
+        (
+            "recreate_subscription",
+            {"tenant_id": str(tenant), "mailbox_id": str(mailbox_id)},
+        )
+    ]
+
+
+async def test_a_mailbox_that_already_has_one_is_left_alone(
+    admin_session, tenant, queued
+):
+    mailbox_id = await _add_mailbox(admin_session, tenant)
+    await _add_subscription(
+        admin_session, tenant, mailbox_id, expires_in=1000, created_ago=1
+    )
+    await admin_session.commit()
+
+    assert await tasks.ensure_subscriptions() == 0
+    assert queued == []
+
+
+async def test_a_retired_subscription_does_not_count(admin_session, tenant, queued):
+    """The row surviving as `replaced` or `deleted` is exactly the orphan case
+    `recreate_subscription` leaves behind when its create fails."""
+    mailbox_id = await _add_mailbox(admin_session, tenant)
+    subscription_id = await _add_subscription(
+        admin_session, tenant, mailbox_id, expires_in=1000, created_ago=1
+    )
+    await admin_session.execute(
+        text(
+            "UPDATE graph_subscriptions SET status = 'replaced'"
+            " WHERE subscription_id = :s"
+        ),
+        {"s": subscription_id},
+    )
+    await admin_session.commit()
+
+    assert await tasks.ensure_subscriptions() == 1
+
+
+@pytest.mark.parametrize("status", ["needs_reauth", "disconnected"])
+async def test_a_mailbox_we_cannot_read_is_not_given_a_subscription(
+    admin_session, tenant, queued, status
+):
+    """Creating one needs a working grant, so this would fail every time."""
+    await _add_mailbox(admin_session, tenant, status=status)
+    await admin_session.commit()
+
+    assert await tasks.ensure_subscriptions() == 0
+
+
+async def test_a_reconnected_mailbox_is_resubscribed_without_manual_help(
+    admin_session, tenant, queued
+):
+    """The gap recorded during the Task 9 review.
+
+    A mailbox flagged `needs_reauth` keeps its retired subscription. When the
+    user reconnects and the mailbox goes active again, nothing previously
+    recreated the subscription — it looked healthy and ingested nothing.
+    """
+    mailbox_id = await _add_mailbox(admin_session, tenant, status="needs_reauth")
+    subscription_id = await _add_subscription(
+        admin_session, tenant, mailbox_id, expires_in=1000, created_ago=1
+    )
+    await admin_session.execute(
+        text(
+            "UPDATE graph_subscriptions SET status = 'replaced'"
+            " WHERE subscription_id = :s"
+        ),
+        {"s": subscription_id},
+    )
+    await admin_session.commit()
+
+    assert await tasks.ensure_subscriptions() == 0, "not while it needs reauth"
+
+    # The user reconnects.
+    await admin_session.execute(
+        text("UPDATE mailboxes SET status = 'active' WHERE id = :id"),
+        {"id": mailbox_id},
+    )
+    await admin_session.commit()
+
+    assert await tasks.ensure_subscriptions() == 1
+    assert queued[0][1]["mailbox_id"] == str(mailbox_id)
+
+
 # --- delta_sync_all ---------------------------------------------------------
 
 

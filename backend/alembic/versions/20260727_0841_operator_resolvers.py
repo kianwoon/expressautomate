@@ -1,9 +1,9 @@
 """operator resolvers
 
-The three periodic sweeps in `app/workers/tasks.py` run across every tenant at
-once, so they have no single tenant context to set. The alternative to these
+The periodic sweeps in `app/workers/tasks.py` run across every tenant at once,
+so they have no single tenant context to set. The alternative to these
 functions is a role that bypasses RLS, which would be a far larger exemption
-than three fixed queries returning routing columns.
+than a handful of fixed queries returning routing columns.
 
 Each is `SECURITY DEFINER` with a pinned `search_path`, mirroring
 `resolve_subscription`. None of them returns message content — only the ids a
@@ -81,6 +81,34 @@ FUNCTIONS: list[tuple[str, str, str]] = [
               AND now() >= coalesce(s.last_renewed_at, s.created_at)
                   + (s.expires_at - coalesce(s.last_renewed_at, s.created_at))
                     * p_margin
+        $$
+        """,
+    ),
+    (
+        "mailboxes_without_subscription()",
+        "",
+        """
+        RETURNS TABLE (tenant_id uuid, mailbox_id uuid)
+        LANGUAGE sql
+        SECURITY DEFINER
+        SET search_path = public, pg_temp
+        AS $$
+            -- An active mailbox with no ACTIVE subscription receives nothing
+            -- and looks perfectly healthy. Nothing else finds this state:
+            -- `subscriptions_due_for_renewal` only scans rows that exist, and
+            -- `active_mailboxes` does not care whether one does.
+            --
+            -- Two ways in. A `recreate_subscription` whose create failed after
+            -- the retire committed, and a mailbox reconnected after
+            -- `needs_reauth` — its old subscription was retired and nothing
+            -- ever made a new one.
+            SELECT m.tenant_id, m.id
+            FROM mailboxes m
+            WHERE m.status = 'active'
+              AND NOT EXISTS (
+                  SELECT 1 FROM graph_subscriptions s
+                  WHERE s.mailbox_id = m.id AND s.status = 'active'
+              )
         $$
         """,
     ),

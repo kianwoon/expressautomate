@@ -42,7 +42,12 @@ def build_tasks() -> list[PeriodicTask]:
     Imported inside the function so the module stays importable — and its
     supervisor loop testable — without the ingestion stack behind it.
     """
-    from app.workers.tasks import delta_sync_all, renew_subscriptions, rescan_stuck
+    from app.workers.tasks import (
+        delta_sync_all,
+        ensure_subscriptions,
+        renew_subscriptions,
+        rescan_stuck,
+    )
 
     async def _rescan() -> None:
         await rescan_stuck()
@@ -53,10 +58,16 @@ def build_tasks() -> list[PeriodicTask]:
     async def _delta() -> None:
         await delta_sync_all()
 
+    async def _ensure() -> None:
+        await ensure_subscriptions()
+
     return [
         PeriodicTask("rescan_stuck", settings.RESCAN_INTERVAL_SECONDS, _rescan),
         PeriodicTask("renew_subscriptions", settings.RENEW_INTERVAL_SECONDS, _renew),
         PeriodicTask("delta_sync", settings.DELTA_SYNC_INTERVAL_SECONDS, _delta),
+        PeriodicTask(
+            "ensure_subscriptions", settings.ENSURE_SUBSCRIPTIONS_INTERVAL_SECONDS, _ensure
+        ),
     ]
 
 

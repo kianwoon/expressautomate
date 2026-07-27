@@ -3169,15 +3169,17 @@ git commit -m "Recover stalled rows, expiring subscriptions, and missed mail"
 
 ### Task 10: Mailbox onboarding
 
-**Carried forward from the Task 9 review — a confirmed gap, not a nicety.**
-When a grant dies, `renew_subscriptions` marks the mailbox `needs_reauth` and
-stops. Nothing then recreates the subscription once the user reconnects: the
-renewal sweep only sees rows already due, the dead subscription keeps its stale
-expiry, and after it lapses there is no path back. **Reconnecting a mailbox must
-(re)create its subscription**, not merely store a new token — otherwise a
-reconnected mailbox looks healthy and silently ingests nothing. Retire the old
-subscription row first, as `recreate_subscription` does, so the resolver stops
-routing to it.
+**Carried forward from the Task 9 review.** When a grant dies,
+`renew_subscriptions` marks the mailbox `needs_reauth` and stops; nothing used
+to recreate the subscription once the user reconnected, so a reconnected
+mailbox looked healthy and ingested nothing.
+
+There is now a backstop: `ensure_subscriptions` sweeps hourly for active
+mailboxes with no active subscription and enqueues `recreate_subscription`.
+That closes the hole, but an hour of silence after reconnecting is a poor
+experience for something the user just did on purpose. **Reconnecting should
+still create the subscription directly**, with the sweep as the safety net
+rather than the mechanism.
 
 **Files:**
 - Create: `app/api/mailboxes.py`

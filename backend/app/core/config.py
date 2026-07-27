@@ -113,6 +113,9 @@ class Settings(BaseSettings):
     RESCAN_INTERVAL_SECONDS: float = Field(default=300.0, gt=0)
     RENEW_INTERVAL_SECONDS: float = Field(default=900.0, gt=0)
     DELTA_SYNC_INTERVAL_SECONDS: float = Field(default=600.0, gt=0)
+    # Hourly is enough: this catches a state that should never arise, and the
+    # mailbox is still reconciled by the delta sweep meanwhile.
+    ENSURE_SUBSCRIPTIONS_INTERVAL_SECONDS: float = Field(default=3600.0, gt=0)
 
     # --- Google sign-in (identity only — no Gmail scope; see docs/setup.md) ---
     GOOGLE_CLIENT_ID: str = ""

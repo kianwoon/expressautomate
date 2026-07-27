@@ -38,6 +38,7 @@ RESUME_JOB = {
 _STALLED = text("SELECT * FROM stalled_email_rows(:pending_minutes, :working_minutes)")
 _DUE_FOR_RENEWAL = text("SELECT * FROM subscriptions_due_for_renewal(:margin)")
 _ACTIVE_MAILBOXES = text("SELECT * FROM active_mailboxes()")
+_MISSING_SUBSCRIPTION = text("SELECT * FROM mailboxes_without_subscription()")
 
 
 async def rescan_stuck() -> int:
@@ -128,6 +129,37 @@ async def renew_subscriptions() -> int:
                 await client.aclose()
 
     return renewed
+
+
+async def ensure_subscriptions() -> int:
+    """Give an active mailbox a subscription if it somehow has none.
+
+    This state is invisible to everything else — `renew_subscriptions` only
+    scans subscriptions that exist, and `delta_sync_all` cares only about
+    mailbox status — and it presents as a mailbox that looks entirely healthy
+    and receives nothing. That is §8's "a lapsed subscription reads as a quiet
+    week", reached by a different route.
+
+    Two ways in, both real: a `recreate_subscription` whose create failed after
+    the retire committed and whose retries were exhausted, and a mailbox
+    reconnected after `needs_reauth`, whose old subscription was retired while
+    nothing made a new one.
+    """
+    async with SessionLocal() as session:
+        mailboxes = (await session.execute(_MISSING_SUBSCRIPTION)).all()
+
+    for row in mailboxes:
+        # `recreate_subscription` already does exactly this work, and its
+        # retire step is a no-op when there is nothing active to retire.
+        await enqueue(
+            "recreate_subscription",
+            tenant_id=str(row.tenant_id),
+            mailbox_id=str(row.mailbox_id),
+        )
+
+    if mailboxes:
+        log.warning("mailboxes_without_subscription", count=len(mailboxes))
+    return len(mailboxes)
 
 
 async def delta_sync_all() -> int:
