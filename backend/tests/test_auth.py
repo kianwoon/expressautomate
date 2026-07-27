@@ -1284,3 +1284,68 @@ async def test_sign_in_never_asks_for_the_mailbox_permission() -> None:
 async def test_login_is_503_when_microsoft_is_not_configured(client, monkeypatch) -> None:
     monkeypatch.setattr(settings, "MS_CLIENT_ID", "")
     assert (await client.get("/api/auth/microsoft/login")).status_code == 503
+
+
+async def test_the_vacancy_count_covers_the_agency_not_just_your_own_mailbox(
+    client, monkeypatch, cleanup
+) -> None:
+    """The headline must count what the table lists, and the table is agency-wide.
+
+    Found in review. The count was scoped to the signed-in user's mailboxes
+    while `GET /opportunities` returns everything the tenant has — so in an
+    agency of several recruiters a colleague's vacancy appeared in the table
+    and not in the number above it. That is the same contradiction this pair
+    of fields was introduced to remove, one tier up, and it also hid the table
+    completely from anyone whose own mailbox had found nothing.
+
+    allow-hardcode: SQL fixtures.
+    """
+    tid, oid = str(uuid.uuid4()), uuid.uuid4().hex
+    cleanup.append(uuid.UUID(tid))
+    await sign_in(client, monkeypatch, token_response(tid, oid, "rachel@agency-a.sg"))
+    await connect_mailbox(
+        client,
+        monkeypatch,
+        token_response(tid, oid, "rachel@agency-a.sg", scopes=ms_auth.mailbox_scopes()),
+    )
+    await start_ingestion(client, monkeypatch)
+
+    # A colleague in the same agency, with their own mailbox and one vacancy.
+    async with tenant_session(uuid.UUID(tid)) as session:
+        colleague, their_mailbox, their_email = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+        await session.execute(
+            text(
+                "INSERT INTO users (id, tenant_id, email, ms_object_id, role)"
+                " VALUES (:i, :t, :e, :o, 'recruiter')"
+            ),
+            {"i": colleague, "t": uuid.UUID(tid), "e": "sam@agency-a.sg", "o": uuid.uuid4().hex},
+        )
+        await session.execute(
+            text(
+                "INSERT INTO mailboxes (id, tenant_id, user_id, ms_user_id, folder_id,"
+                " scope, retention_months)"
+                " VALUES (:i, :t, :u, 'sam-ms', 'inbox', 'whole_inbox', 24)"
+            ),
+            {"i": their_mailbox, "t": uuid.UUID(tid), "u": colleague},
+        )
+        await session.execute(
+            text(
+                "INSERT INTO email_messages (id, tenant_id, mailbox_id, graph_message_id,"
+                " processing_status) VALUES (:i, :t, :m, 'MSG-SAM', 'extracted')"
+            ),
+            {"i": their_email, "t": uuid.UUID(tid), "m": their_mailbox},
+        )
+        await session.execute(
+            text(
+                "INSERT INTO opportunities (id, tenant_id, email_message_id,"
+                " job_title_raw, review_status, quality_state)"
+                " VALUES (:i, :t, :e, 'Payroll Executive', 'ready', 'verified')"
+            ),
+            {"i": uuid.uuid4(), "t": uuid.UUID(tid), "e": their_email},
+        )
+
+    mailbox = (await client.get("/api/auth/me")).json()["mailbox"]
+    # Rachel's own mailbox produced nothing, but the agency has one vacancy and
+    # the table will show it — so the number must too.
+    assert mailbox["ingested"]["emails_extracted"] == 0, "none of Rachel's own mail"
+    assert mailbox["ingested"]["opportunities"] == 1

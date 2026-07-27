@@ -589,13 +589,16 @@ _MAILBOX_STATE = text(
         -- would have inflated `total`, `awaiting_extraction` and every other
         -- count on this dashboard — fixing one wrong number by corrupting the
         -- rest.
-        (
-            SELECT count(*)
-            FROM opportunities o
-            JOIN email_messages oe ON oe.id = o.email_message_id
-            JOIN mailboxes om ON om.id = oe.mailbox_id
-            WHERE om.user_id = :user_id
-        ) AS opportunities,
+        --
+        -- Scoped by the tenant policy alone, deliberately NOT by `user_id`
+        -- like the counts above it. Those describe this user's mailboxes;
+        -- this one has to match `GET /opportunities`, which lists everything
+        -- the agency has found. Filtering by user here would put a colleague's
+        -- vacancies in the table and not in the count — the same two-numbers-
+        -- disagreeing bug this commit exists to fix, one tier up — and would
+        -- hide the table entirely from a recruiter whose own mailbox happened
+        -- to yield nothing.
+        (SELECT count(*) FROM opportunities) AS opportunities,
         -- Two buckets, not one. "In progress" used to cover both, and the
         -- dashboard rendered it as "still processing — usually seconds each"
         -- while 82 emails sat at `fetched` waiting for an extraction stage
