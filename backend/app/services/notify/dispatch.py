@@ -52,6 +52,19 @@ _COUNT_RECENT = text(
     """
 )
 
+# Re-reads status rather than trusting the caller's id list. `emit()` hands
+# back every id it wrote — pending and suppressed alike, because a caller may
+# need to look either kind up — so the only way to keep a suppressed row out
+# of the queue for good is to check the row itself here, not at the call site.
+_PENDING_AMONG = text(
+    """
+    SELECT id FROM notification_deliveries
+    WHERE tenant_id = :tenant_id
+      AND id = ANY(:ids)
+      AND status = :status
+    """
+)
+
 # ON CONFLICT DO NOTHING against the partial dedupe index: the extraction job
 # can be retried, and the recruiter must not be told twice about one vacancy.
 # The predicate here must match the index's `postgresql_where` verbatim
@@ -139,14 +152,50 @@ async def emit(event: OpportunityEvent, session: AsyncSession) -> list[uuid.UUID
 async def enqueue_deliveries(
     tenant_id: uuid.UUID, delivery_ids: list[uuid.UUID]
 ) -> int:
-    """Queue the rows the caller has now committed.
+    """Queue only the ids that are still `pending`, verified by re-reading them.
+
+    `emit()`'s contract is to return every id it wrote, suppressed rows
+    included — a caller may need to look either kind up. That means this
+    function cannot trust the id list it is handed; a caller that emits and
+    enqueues in two separate steps (as the ingestion pipeline does) would
+    otherwise queue the rate-capped rows too and defeat the cap entirely. So
+    the filter lives here, against the rows themselves, rather than at each
+    call site where it could be forgotten again.
+
+    A row could in principle flip from pending to something else between this
+    read and the `enqueue` call below, but not into a state that matters: rows
+    only ever go pending -> suppressed at insert time (never after), and
+    pending -> sent/failed happens once a worker has already picked the job
+    up — in which case queuing it again is a harmless duplicate job, the same
+    outcome the fail-soft sweep already tolerates. There is no window where
+    this check is stale in a way that lets a suppressed row through.
 
     `enqueue` never raises and returns False on failure; the sweep is what
     turns a lost job back into a queued one, exactly as `rescan_stuck` does for
     ingestion.
     """
+    if not delivery_ids:
+        return 0
+
+    async with tenant_session(tenant_id) as session:
+        pending_ids = {
+            row.id
+            for row in (
+                await session.execute(
+                    _PENDING_AMONG,
+                    {
+                        "tenant_id": tenant_id,
+                        "ids": delivery_ids,
+                        "status": STATUS_PENDING,
+                    },
+                )
+            ).all()
+        }
+
     queued = 0
     for delivery_id in delivery_ids:
+        if delivery_id not in pending_ids:
+            continue
         if await enqueue(
             "deliver_notification",
             delivery_id=str(delivery_id),

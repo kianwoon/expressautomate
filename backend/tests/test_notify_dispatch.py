@@ -14,7 +14,8 @@ from app.models.notification import (
     STATUS_SUPPRESSED,
     address_digest,
 )
-from app.services.notify.dispatch import emit, rate_capped
+from app.services.notify import dispatch
+from app.services.notify.dispatch import emit, enqueue_deliveries, rate_capped
 from app.services.notify.events import EVENT_OPPORTUNITY_NEW, OpportunityEvent
 
 
@@ -200,6 +201,52 @@ async def test_rate_cap_suppresses_past_the_hourly_ceiling(wired, admin_session)
             )
         ).scalar_one()
     assert status == STATUS_SUPPRESSED
+
+
+async def test_enqueue_deliveries_skips_a_suppressed_row_even_if_handed_its_id(
+    wired, admin_session, monkeypatch
+) -> None:
+    """The trap this closes: a caller that emits and enqueues as two separate
+    steps (rather than through `emit_and_enqueue`) must not be able to queue a
+    rate-capped row just because `emit()` handed back its id. `emit()`
+    legitimately returns every id it wrote, suppressed included — so the
+    guard has to live in `enqueue_deliveries`, checked against the row's own
+    status, not trusted from the caller's list.
+    """
+    tenant_id, _, dest_id = wired
+    for _ in range(settings.NOTIFY_RATE_CAP_PER_HOUR):
+        await admin_session.execute(
+            text(
+                "INSERT INTO notification_deliveries "
+                "(id, tenant_id, destination_id, event_kind, subject_id, status) "
+                "VALUES (:id, :tid, :did, :kind, :sub, 'sent')"
+            ),
+            {
+                "id": uuid.uuid4(),
+                "tid": tenant_id,
+                "did": dest_id,
+                "kind": EVENT_OPPORTUNITY_NEW,
+                "sub": uuid.uuid4(),
+            },
+        )
+    await admin_session.commit()
+
+    async with tenant_session(tenant_id) as session:
+        ids = await emit(_event(tenant_id), session)
+    assert len(ids) == 1  # written, but suppressed by the cap above
+
+    queued_ids: list[str] = []
+
+    async def _enqueue(job_name: str, **kwargs) -> bool:
+        queued_ids.append(kwargs["delivery_id"])
+        return True
+
+    monkeypatch.setattr(dispatch, "enqueue", _enqueue)
+
+    queued = await enqueue_deliveries(tenant_id, ids)
+
+    assert queued == 0
+    assert queued_ids == []
 
 
 async def test_rate_cap_ignores_sends_older_than_an_hour(wired, admin_session) -> None:
