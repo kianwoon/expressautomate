@@ -133,7 +133,7 @@ function SignedIn({ me }: { me: Me }) {
           which workspace, is the permission granted — and then repeated
           themselves above the fold on every visit forever. They are still
           available below, folded away. */}
-      {me.mailbox.ingested.extracted > 0 && <JobOrders />}
+      {me.mailbox.ingested.opportunities > 0 && <JobOrders />}
 
       <AccountDetails me={me} />
     </>
@@ -208,7 +208,7 @@ function Ingesting({ me }: { me: Me }) {
     total,
     in_progress: inProgress,
     awaiting_extraction: awaiting,
-    extracted,
+    opportunities,
   } = me.mailbox.ingested;
 
   return (
@@ -244,10 +244,14 @@ function Ingesting({ me }: { me: Me }) {
                   : "Waiting on extraction"
             }
           />
+          {/* Vacancies, not emails. These are counted from the same rows the
+              table renders, so the headline figure and the list underneath it
+              can no longer disagree — they did, 3 against 7, because one email
+              advertised six roles and this counted emails. */}
           <Stat
-            n={extracted}
-            label="job orders found"
-            sub={extracted === 0 ? "Nothing extracted yet" : "Listed in full below"}
+            n={opportunities}
+            label={opportunities === 1 ? "job order found" : "job orders found"}
+            sub={opportunities === 0 ? "Nothing extracted yet" : "Listed in full below"}
           />
         </div>
       )}

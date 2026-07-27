@@ -564,7 +564,8 @@ async def test_me_counts_only_what_was_actually_ingested(
         "total": 0,
         "in_progress": 0,
         "awaiting_extraction": 0,
-        "extracted": 0,
+        "emails_extracted": 0,
+        "opportunities": 0,
     }
     assert before["newest_received"] is None
 
@@ -592,15 +593,45 @@ async def test_me_counts_only_what_was_actually_ingested(
                 },
             )
 
+    # Two vacancies from the ONE extracted email — the case that broke the
+    # dashboard: it showed "3 job orders found" above a table of 7 because the
+    # headline counted emails and the table counted roles.
+    async with tenant_session(uuid.UUID(tid)) as session:
+        extracted_email = (
+            await session.execute(
+                text(
+                    "SELECT id FROM email_messages WHERE processing_status = 'extracted'"
+                )
+            )
+        ).scalar_one()
+        for title in ("Clinic Assistant", "Finance Officer"):
+            await session.execute(
+                text(
+                    "INSERT INTO opportunities (id, tenant_id, email_message_id,"
+                    " job_title_raw, review_status, quality_state)"
+                    " VALUES (:i, :t, :e, :title, 'ready', 'verified')"
+                ),
+                {
+                    "i": uuid.uuid4(),
+                    "t": uuid.UUID(tid),
+                    "e": extracted_email,
+                    "title": title,
+                },
+            )
+
     after = (await client.get("/api/auth/me")).json()["mailbox"]
     assert after["ingested"] == {
+        # Still 4. The opportunities are counted by a subquery, not a join —
+        # joining them would repeat this email once per vacancy and inflate
+        # every other figure here.
         "total": 4,
         # Only the `pending` row. A `fetched` row is not "processing" — that
         # claim put "usually seconds each" under 82 emails waiting on a
         # release that had not shipped.
         "in_progress": 1,
         "awaiting_extraction": 1,
-        "extracted": 1,
+        "emails_extracted": 1,
+        "opportunities": 2,
     }
     assert after["newest_received"] is not None
     assert after["oldest_received"] < after["newest_received"]

@@ -29,7 +29,15 @@ export type Me = {
       total: number;
       in_progress: number;
       awaiting_extraction: number;
-      extracted: number;
+      /** Emails that finished extraction — how much mail was read. */
+      emails_extracted: number;
+      /**
+       * Vacancies found in them — what the job-orders table lists. Different
+       * from `emails_extracted`: one email can advertise six roles, and one
+       * did, which is how the page showed "3 job orders found" above a table
+       * of 7. Anything labelled "job orders" must use this one.
+       */
+      opportunities: number;
     };
     oldest_received: string | null;
     newest_received: string | null;

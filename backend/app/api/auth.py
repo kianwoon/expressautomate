@@ -578,7 +578,24 @@ _MAILBOX_STATE = text(
         ) AS subscribed,
         bool_or(m.status = 'active') AS any_active,
         count(e.id) AS total,
-        count(*) FILTER (WHERE e.processing_status = 'extracted') AS extracted,
+        -- Emails that finished extraction. NOT the number of vacancies: one
+        -- email can carry six, and it did. Labelling this "job orders found"
+        -- put 3 above a table listing 7, which is the dashboard contradicting
+        -- itself about the only figure on it anyone cares about. The vacancy
+        -- count is `opportunities` below, read from the table the page renders.
+        count(*) FILTER (WHERE e.processing_status = 'extracted') AS emails_extracted,
+        -- A subquery, not a join. Joining `opportunities` here would repeat an
+        -- email row once per vacancy it produced, so the six-vacancy email
+        -- would have inflated `total`, `awaiting_extraction` and every other
+        -- count on this dashboard — fixing one wrong number by corrupting the
+        -- rest.
+        (
+            SELECT count(*)
+            FROM opportunities o
+            JOIN email_messages oe ON oe.id = o.email_message_id
+            JOIN mailboxes om ON om.id = oe.mailbox_id
+            WHERE om.user_id = :user_id
+        ) AS opportunities,
         -- Two buckets, not one. "In progress" used to cover both, and the
         -- dashboard rendered it as "still processing — usually seconds each"
         -- while 82 emails sat at `fetched` waiting for an extraction stage
@@ -876,7 +893,13 @@ async def me(request: Request) -> dict[str, dict]:
                 "in_progress": state.in_progress if state else 0,
                 # Fetched and stored, with nothing yet to read them.
                 "awaiting_extraction": state.awaiting_extraction if state else 0,
-                "extracted": state.extracted if state else 0,
+                # Emails that finished extraction — how much mail was read.
+                "emails_extracted": state.emails_extracted if state else 0,
+                # Vacancies found in them — what the table lists. One email can
+                # advertise six roles, so these two are different numbers and
+                # naming them the same thing is how the page came to show "3
+                # job orders found" above a table of 7.
+                "opportunities": state.opportunities if state else 0,
             },
             "oldest_received": _iso(state.oldest_received if state else None),
             "newest_received": _iso(state.newest_received if state else None),
