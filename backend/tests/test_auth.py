@@ -60,11 +60,17 @@ def microsoft_configured(monkeypatch) -> None:
     monkeypatch.setattr(
         settings, "MS_REDIRECT_URI", "https://testserver/api/auth/microsoft/callback"
     )
-    # Unset in CI, so the reserved-scope filter would otherwise be tested
-    # against an empty list — vacuously true.
+    # Set explicitly rather than relying on the environment: these tests assert
+    # on what sign-in requests, and reading that from ambient config would make
+    # them pass or fail for reasons unrelated to the code under test.
+    # tests/test_scopes.py is where the deployed values are checked.
+    #
+    # Two keys, because consent is incremental: sign-in asks for identity,
+    # connecting a mailbox asks for mail.
     monkeypatch.setattr(
-        settings, "MS_GRAPH_SCOPES", "openid profile email User.Read Mail.Read offline_access"
+        settings, "MS_IDENTITY_SCOPES", "openid profile email User.Read offline_access"
     )
+    monkeypatch.setattr(settings, "MS_MAILBOX_SCOPES", "Mail.Read")
 
 
 @pytest.fixture(autouse=True)
@@ -78,7 +84,7 @@ def fake_msal(monkeypatch) -> None:
             "code_verifier": uuid.uuid4().hex,
             "nonce": uuid.uuid4().hex,
             "redirect_uri": settings.MS_REDIRECT_URI,
-            "scope": ms_auth.delegated_scopes(),
+            "scope": ms_auth.delegated_scopes("identity"),
             "auth_uri": f"{AUTHORIZE_HOST}/organizations/oauth2/v2.0/authorize?state={state}",
         }
 
@@ -89,7 +95,7 @@ def token_response(tid: str, oid: str, email: str, name: str = "Rachel Tan") -> 
     return {
         "access_token": "access-token-value",
         "refresh_token": "refresh-token-value",
-        "scope": " ".join(ms_auth.delegated_scopes()),
+        "scope": " ".join(ms_auth.delegated_scopes("identity")),
         "id_token_claims": {"tid": tid, "oid": oid, "preferred_username": email, "name": name},
     }
 
@@ -383,7 +389,9 @@ async def test_me_reports_a_connected_mailbox_with_its_scopes(
     mailbox = (await client.get("/api/auth/me")).json()["mailbox"]
     assert mailbox["provider"] == "microsoft"
     assert mailbox["connected"] is True
-    assert mailbox["scopes"] == ms_auth.delegated_scopes()
+    # Sign-in stores identity scopes only; mail access is consented separately
+    # when a mailbox is connected.
+    assert mailbox["scopes"] == ms_auth.delegated_scopes("identity")
     # No ingestion exists yet (§7); claiming otherwise would be a lie to the UI.
     assert mailbox["ingestion_active"] is False
 
@@ -566,10 +574,12 @@ async def test_a_callback_with_an_unknown_state_is_rejected(client) -> None:
 
 async def test_reserved_scopes_are_not_passed_to_msal() -> None:
     """MSAL adds openid/profile/offline_access itself and errors if given them."""
-    scopes = set(ms_auth.delegated_scopes())
+    identity = set(ms_auth.delegated_scopes("identity"))
+    mailbox = set(ms_auth.delegated_scopes("mailbox"))
     # Assert what survives too, or an empty list would satisfy the filter check.
-    assert {"User.Read", "Mail.Read"} <= scopes
-    assert not {"openid", "profile", "offline_access"} & scopes
+    assert "User.Read" in identity
+    assert "Mail.Read" in mailbox
+    assert not {"openid", "profile", "offline_access"} & (identity | mailbox)
 
 
 async def test_login_is_503_when_microsoft_is_not_configured(client, monkeypatch) -> None:

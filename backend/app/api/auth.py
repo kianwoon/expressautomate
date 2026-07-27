@@ -22,7 +22,6 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.core.config import settings
-from app.core.crypto import encrypt
 from app.core.logging import get_logger
 from app.db.rls import tenant_session
 from app.models import MicrosoftToken, Tenant, User
@@ -326,29 +325,14 @@ async def microsoft_callback(request: Request) -> RedirectResponse:
             )
         ).scalar_one()
 
-        refresh_token = result.get("refresh_token")
-        if refresh_token:
-            ciphertext = encrypt(refresh_token)
-            await session.execute(
-                pg_insert(MicrosoftToken)
-                .values(
-                    id=uuid.uuid4(),
-                    tenant_id=tenant_uuid,
-                    user_id=user_id,
-                    # MSAL's own account key format: "<oid>.<tid>".
-                    home_account_id=f"{oid}.{tid}",
-                    refresh_token_encrypted=ciphertext,
-                    scope=result.get("scope"),
-                )
-                .on_conflict_do_update(
-                    constraint="uq_ms_tokens_tenant_user",
-                    set_={
-                        "refresh_token_encrypted": ciphertext,
-                        "scope": result.get("scope"),
-                        "updated_at": now,
-                    },
-                )
-            )
+        await ms_auth.store_refresh_token(
+            session,
+            tenant_id=tenant_uuid,
+            user_id=user_id,
+            home_account_id=f"{oid}.{tid}",
+            result=result,
+            now=now,
+        )
 
     log.info("ms_login", tenant_id=str(tenant_uuid), user_id=str(user_id))
 

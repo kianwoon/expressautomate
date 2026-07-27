@@ -101,6 +101,12 @@ jobs:
       DATABASE_APP_PASSWORD: ci-app-password
       DATABASE_ADMIN_URL: postgresql://postgres:postgres@localhost:5432/expressautomate
       DATABASE_URL: postgresql://expressautomate_app:ci-app-password@localhost:5432/expressautomate
+      # Not secrets — these are public Graph permission names, and the real
+      # values, so CI exercises the same consent split production does. There
+      # is no .env in CI, and an unset key silently yields an empty scope list:
+      # exactly the failure tests/test_scopes.py exists to catch.
+      MS_IDENTITY_SCOPES: openid profile email User.Read offline_access
+      MS_MAILBOX_SCOPES: Mail.Read
 
     steps:
       - uses: actions/checkout@v7

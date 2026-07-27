@@ -59,7 +59,13 @@ class Settings(BaseSettings):
     # instead, which is what keeps them from reading each other's rows.
     MS_TENANT_ID: str = "common"
     MS_REDIRECT_URI: str = ""
-    MS_GRAPH_SCOPES: str = ""
+    # Two keys, not one: consent is incremental. Identity is requested at
+    # sign-in and mailbox access only when a mailbox is connected, so nobody is
+    # asked to hand over their mail before they have asked for mail ingestion.
+    # Entra's consent is cumulative per user and app, so the token stored after
+    # the second grant covers both.
+    MS_IDENTITY_SCOPES: str = ""
+    MS_MAILBOX_SCOPES: str = ""
     MS_WEBHOOK_CLIENT_STATE: str = ""
     MS_WEBHOOK_NOTIFICATION_URL: str = ""
 
@@ -77,7 +83,7 @@ class Settings(BaseSettings):
     # --- Queue ---
     REDIS_URL: str = ""
 
-    @field_validator("MS_GRAPH_SCOPES")
+    @field_validator("MS_IDENTITY_SCOPES", "MS_MAILBOX_SCOPES")
     @classmethod
     def _non_empty_when_configured(cls, v: str) -> str:
         return v.strip()
@@ -97,8 +103,12 @@ class Settings(BaseSettings):
         return f"/{v}" if v else ""
 
     @property
-    def graph_scopes(self) -> list[str]:
-        return [s for s in self.MS_GRAPH_SCOPES.split() if s]
+    def identity_scopes(self) -> list[str]:
+        return [s for s in self.MS_IDENTITY_SCOPES.split() if s]
+
+    @property
+    def mailbox_scopes(self) -> list[str]:
+        return [s for s in self.MS_MAILBOX_SCOPES.split() if s]
 
     @property
     def is_production(self) -> bool:
