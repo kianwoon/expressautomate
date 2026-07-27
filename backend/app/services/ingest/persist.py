@@ -30,11 +30,6 @@ Human corrections live in `opportunity_field_overrides` and are never read or
 written here. That separation is what makes replay safe: this module physically
 cannot clobber a recruiter's fix, because it never issues an UPDATE against
 anything a human has touched.
-
-Human corrections live in `opportunity_field_overrides` and are never read or
-written here. That separation is what makes replay safe: this module physically
-cannot clobber a recruiter's fix, because it never issues an UPDATE against
-anything a human has touched.
 """
 
 import json
