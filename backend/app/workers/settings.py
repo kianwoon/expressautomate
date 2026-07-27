@@ -16,6 +16,8 @@ from app.core.logging import configure_logging
 from app.services.graph.client import warn_if_unconfigured
 from app.workers.jobs import (
     backfill_mailbox_job,
+    classify_batch,
+    classify_email,
     delta_sync_mailbox,
     fetch_email,
     reauthorize_subscription,
@@ -48,18 +50,26 @@ class WorkerSettings:
     # error inside arq, on the far side of the queue, where the producer sees
     # success and nothing surfaces.
     #
-    # `classify_email` and `extract_email` are deliberately absent: they belong
-    # to the extraction plan. Until it lands, fetched rows accumulate and
-    # `rescan_stuck` retries them — visible in the logs rather than lost.
+    # `classify_batch` is the normal path — the `classify_fetched` sweep
+    # enqueues it, one job per batch. `classify_email` stays because
+    # `rescan_stuck` still names it: a row stranded at `fetched` or
+    # `classifying` is recovered one email at a time, deliberately, since a
+    # batch that died may have died because of one of its members.
+    #
+    # `extract_email` is still absent: it belongs to the rest of the extraction
+    # plan. Until it lands, classified rows accumulate and `rescan_stuck`
+    # retries them — visible in the logs rather than lost.
     functions = [
         fetch_email,
+        classify_batch,
+        classify_email,
         backfill_mailbox_job,
         delta_sync_mailbox,
         recreate_subscription,
         reauthorize_subscription,
     ]
-    # Every function above ends in a Graph call. Said once here rather than
-    # discovered one failed job at a time.
+    # Every function above but the two classification jobs ends in a Graph call. Said once
+    # here rather than discovered one failed job at a time.
     on_startup = staticmethod(_announce)
     redis_settings = redis_settings()
     poll_delay = settings.ARQ_POLL_DELAY_SECONDS

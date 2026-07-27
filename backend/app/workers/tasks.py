@@ -36,6 +36,7 @@ RESUME_JOB = {
 
 # allow-hardcode: SQL statements, not a phrase list.
 _STALLED = text("SELECT * FROM stalled_email_rows(:pending_minutes, :working_minutes)")
+_CLAIM_FETCHED = text("SELECT * FROM claim_fetched_email_rows(:limit)")
 _DUE_FOR_RENEWAL = text("SELECT * FROM subscriptions_due_for_renewal(:margin)")
 _ACTIVE_MAILBOXES = text("SELECT * FROM active_mailboxes()")
 _MISSING_SUBSCRIPTION = text("SELECT * FROM mailboxes_without_subscription()")
@@ -82,6 +83,54 @@ async def rescan_stuck() -> int:
         # the normal path should have carried and did not.
         log.warning("rescan_stuck_requeued", count=requeued)
     return requeued
+
+
+async def classify_fetched() -> int:
+    """Group fetched mail into batches and hand each one to the gate.
+
+    This is what replaced `fetch_email` enqueueing a classification per email.
+    The gate is the highest-volume model call in the system, and most of what a
+    single-email call pays for is the instructions repeated in front of it, so
+    the saving is real and it only exists if the emails arrive together.
+
+    Batches never span tenants. Every job carries one tenant and reads its rows
+    under that tenant's policy; a mixed batch would silently read none of the
+    rows belonging to the others — the correct outcome under RLS, and a
+    completely invisible way to lose mail.
+
+    The claim writes: `claim_fetched_email_rows` moves the rows to
+    `classifying` in the statement that selects them, so the next tick cannot
+    re-claim work already in flight and bill for it twice.
+    """
+    async with SessionLocal() as session:
+        rows = (
+            await session.execute(
+                _CLAIM_FETCHED, {"limit": settings.CLASSIFY_SWEEP_LIMIT}
+            )
+        ).all()
+        # The claim is an UPDATE, so it only takes effect on commit. Without
+        # this the rows stay `fetched`, the next sweep claims them again, and
+        # the batching saves nothing because every email is classified twice.
+        await session.commit()
+
+    by_tenant: dict[str, list[str]] = {}
+    for row in rows:
+        by_tenant.setdefault(str(row.tenant_id), []).append(str(row.id))
+
+    size = settings.CLASSIFIER_BATCH_SIZE
+    batches = 0
+    for tenant_id, ids in by_tenant.items():
+        for start in range(0, len(ids), size):
+            await enqueue(
+                "classify_batch",
+                tenant_id=tenant_id,
+                email_message_ids=ids[start : start + size],
+            )
+            batches += 1
+
+    if rows:
+        log.info("classify_batches_enqueued", emails=len(rows), batches=batches)
+    return batches
 
 
 async def renew_subscriptions() -> int:

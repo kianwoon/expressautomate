@@ -132,11 +132,10 @@ async def test_the_message_and_its_body_are_stored(monkeypatch, pending):
     assert store.objects[body_key(tenant_id, mailbox_id, "MSG-1", "html")] == (
         "<p>Up to $3500</p>"
     )
-    assert queued == [("classify_email", {
-        "email_message_id": str(row_id),
-        "tenant_id": str(tenant_id),
-        "mailbox_id": str(mailbox_id),
-    })]
+    # No classification job. The gate is batched, so the row is left at
+    # `fetched` for the `classify_fetched` sweep to claim with its neighbours —
+    # enqueueing one job per email is the cost batching exists to avoid.
+    assert queued == []
 
 
 async def test_the_received_date_is_recorded(monkeypatch, pending):

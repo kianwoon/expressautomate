@@ -161,6 +161,49 @@ class Settings(BaseSettings):
     EXTRACTION_MODEL_FAST: str = ""
     EXTRACTION_MODEL_STRONG: str = ""
     CLASSIFIER_MODEL: str = ""
+
+    # --- Cerebras (the classifier only) ---
+    # The gate is the highest-volume call in the system — one per email, on
+    # every email, forever — so it runs on its own provider rather than through
+    # the router the extraction calls use. Measured at ~36ms round trip against
+    # gpt-oss-120b, which matters because the gate sits between a fetched email
+    # and everything else.
+    #
+    # Extraction stays on OpenRouter: it needs the strong-model escalation path
+    # (§32), and that is what a router is for.
+    CEREBRAS_BASE_URL: str = ""
+    CEREBRAS_API_KEY: str = ""
+    # How many emails one classification call covers. Batching is the whole
+    # cost saving here: the per-call overhead (system prompt, instructions) is
+    # paid once for the batch rather than once per email.
+    #
+    # Bounded because a batch is also a blast radius: one malformed response
+    # costs every email in it a retry, and a long prompt is likelier to have
+    # the model lose track of which verdict belongs to which message.
+    CLASSIFIER_BATCH_SIZE: int = Field(default=20, gt=0, le=100)
+    # Characters of each email shown to the gate. It answers "is this a job
+    # order", which the opening of a message settles; sending the whole body
+    # would multiply the cost of the cheap stage for no better answer.
+    CLASSIFIER_CHARS_PER_EMAIL: int = Field(default=1200, gt=0)
+    # Reasoning models spend this budget before emitting anything. Set too low,
+    # `gpt-oss-120b` returns a `reasoning` field and no `content` at all —
+    # verified, not theorised — so this must leave room for both.
+    CLASSIFIER_MAX_TOKENS: int = Field(default=4000, gt=0)
+    # How often the supervisor sweeps for `fetched` rows to classify. This is
+    # the latency an email waits before the gate sees it at all, now that
+    # `fetch_email` no longer enqueues a per-email job: batching trades a
+    # little delay for the per-call overhead paid once instead of once each.
+    # `gpt-oss-120b` reasons before it answers, and at the default effort it
+    # spends the whole budget doing so and returns no content — verified
+    # against the live API, not theorised. Configurable because the right
+    # answer is a property of the model, and the model is configurable.
+    CLASSIFIER_REASONING_EFFORT: str = "low"
+    CLASSIFY_SWEEP_INTERVAL_SECONDS: float = Field(default=30.0, gt=0)
+    # Ceiling on how many rows one sweep claims, across every tenant. Without
+    # it a backfill of ten thousand messages would be claimed in a single tick
+    # and enqueued as hundreds of batches at once, and every one of them would
+    # be in flight — at `classifying` — before the first had answered.
+    CLASSIFY_SWEEP_LIMIT: int = Field(default=200, gt=0)
     # Generous next to GRAPH_TIMEOUT_SECONDS on purpose: a long recruitment
     # email on a strong model routinely spends a minute generating, and a
     # timeout here costs the whole extraction plus a retry's worth of tokens.
@@ -168,6 +211,11 @@ class Settings(BaseSettings):
     # Stamped onto every extraction so a prompt change is attributable — without
     # it, a quality regression cannot be told from a change in the mail itself.
     PROMPT_VERSION: str = "v1"
+    # A message the gate rejected yields nothing, so keeping it for the full
+    # tenant horizon is stored personal data with no purpose left to justify it
+    # (spec: Retention). Short rather than zero: an operator disputing a wrong
+    # verdict needs the source still there to look at.
+    NON_RECRUITMENT_RETENTION_DAYS: int = Field(default=7, gt=0)
 
     # --- Queue (Upstash Redis) ---
     REDIS_URL: str = ""
@@ -265,15 +313,34 @@ class Settings(BaseSettings):
         """Identity *and* the only path to mailbox ingestion (§6.1)."""
         return bool(self.MS_CLIENT_ID and self.MS_CLIENT_SECRET)
 
-    def llm_configured(self) -> bool:
-        """Can this process actually reach a model?
+    def llm_configured(self, *models: str) -> bool:
+        """Can this process actually reach the named models?
 
         Same shape as `graph_configured`, and for the same reason: an empty
-        base URL makes httpx build a hostless URL and raise
-        `unknown url type` deep in the stack, naming nothing. Extraction asks
-        this before it starts rather than discovering it one email at a time.
+        base URL makes httpx build a hostless URL and raise `unknown url type`
+        deep in the stack, naming nothing.
+
+        The model ids are checked too, and that is not fussiness. They default
+        to `""`, and an empty model id is not a missing argument — it is a
+        request the provider rejects, per email, with a message about the model
+        rather than about the configuration. This deployment reached the point
+        of classifying real mail with `CLASSIFIER_MODEL` set nowhere at all.
         """
-        return bool(self.LLM_BASE_URL and self.OPENROUTER_API_KEY)
+        if not (self.LLM_BASE_URL and self.OPENROUTER_API_KEY):
+            return False
+        return all(models)
+
+    def cerebras_configured(self, *models: str) -> bool:
+        """The same question as `llm_configured`, asked of the gate's provider.
+
+        Kept separate rather than adding a flag to `llm_configured`: the two
+        answer for different credentials, and a single function returning True
+        because the *other* provider was configured is exactly how the gate
+        would end up classifying real mail against a hostless URL.
+        """
+        if not (self.CEREBRAS_BASE_URL and self.CEREBRAS_API_KEY):
+            return False
+        return all(models)
 
     def graph_configured(self) -> bool:
         """Can this process actually reach Graph?

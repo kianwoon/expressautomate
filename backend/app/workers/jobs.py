@@ -21,8 +21,9 @@ from datetime import datetime
 from urllib.parse import quote
 
 from arq import Retry
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 
+from app.core.config import settings
 from app.core.logging import get_logger
 from app.db.rls import tenant_session
 from app.services.graph.client import (
@@ -91,6 +92,39 @@ _RETIRE_ACTIVE = text(
 _MAILBOX_TARGET = text(
     "SELECT ms_user_id, folder_id FROM mailboxes WHERE id = :mailbox_id"
 )
+
+_CLASSIFY_CLAIM = text(
+    "SELECT processing_status, body_html_r2_key, subject, sender_email"
+    " FROM email_messages WHERE id = :id AND mailbox_id = :mailbox_id"
+)
+
+_START_CLASSIFYING = text(
+    "UPDATE email_messages SET processing_status = 'classifying' WHERE id = :id"
+)
+
+_RECORD_CLASSIFICATION = text(
+    """
+    UPDATE email_messages SET
+        classification_status = :status,
+        classification_reason = :reason,
+        classification_model = :model,
+        classification_version = :version,
+        processing_status = CASE WHEN :extract THEN 'classifying' ELSE 'skipped' END,
+        retention_until = CASE WHEN :extract THEN retention_until
+                               ELSE now() + make_interval(days => :short) END
+    WHERE id = :id
+    """
+)
+
+# allow-hardcode: a SQL statement, not a phrase list.
+_BATCH_CLAIM = text(
+    "SELECT id, mailbox_id, processing_status, body_html_r2_key, subject, sender_email"
+    " FROM email_messages"
+    " WHERE id IN :ids AND processing_status IN ('fetched', 'classifying')"
+    # Deterministic, so a batch replayed after a crash sends its emails to the
+    # model in the same order and the prompt is comparable across runs.
+    " ORDER BY id"
+).bindparams(bindparam("ids", expanding=True))
 
 _BACKFILL_START = text(
     "SELECT initial_sync_from, backfill_completed_at"
@@ -182,12 +216,187 @@ async def fetch_email(
         log.error("body_store_misconfigured", mailbox_id=str(mailbox), detail=str(exc))
         raise
 
-    await enqueue(
-        "classify_email",
-        email_message_id=email_message_id,
-        tenant_id=tenant_id,
-        mailbox_id=mailbox_id,
-    )
+    # No classification job is enqueued here on purpose. The gate is batched —
+    # one model call covers CLASSIFIER_BATCH_SIZE emails — so the row is left
+    # at `fetched` for the `classify_fetched` sweep to claim alongside its
+    # neighbours. Enqueueing per email is what batching exists to stop paying
+    # for. The row is not stranded by this: `fetched` is a status both that
+    # sweep and `rescan_stuck` pick up.
+
+
+async def classify_email(
+    ctx, *, email_message_id: str, tenant_id: str, mailbox_id: str
+) -> None:
+    """Decide whether this email is worth an extraction call (spec: Architecture).
+
+    Failure discipline mirrors `fetch_email`: the gate itself never raises — it
+    fails open to `uncertain` — so anything that escapes here is infrastructure
+    (Postgres, R2), where no delay is worth naming and `Retry` would only burn
+    arq attempts. The status is moved to `classifying` *before* the model call
+    for that reason: a bare exception is a permanently failed job, and
+    `rescan_stuck` re-enqueues `classifying` rows once the outage ends.
+    """
+    from app.services.ingest.classify import classify, should_extract
+    from app.services.ingest.preprocess import to_text
+
+    # Asked once, before the row is touched. The gate fails open by design, so
+    # without this an unconfigured deployment would classify every email as
+    # `uncertain`, pass all of them to extraction, and look like a working
+    # system with a suspiciously indecisive model — the failure mode this
+    # codebase keeps meeting, where a missing setting produces plausible
+    # output instead of an error.
+    if not settings.cerebras_configured(settings.CLASSIFIER_MODEL):
+        log.error(
+            "llm_not_configured",
+            job="classify_email",
+            detail="Set CEREBRAS_BASE_URL, CEREBRAS_API_KEY and CLASSIFIER_MODEL.",
+        )
+        raise RuntimeError("The classifier has no model configured.")
+
+    tenant = uuid.UUID(tenant_id)
+    mailbox = uuid.UUID(mailbox_id)
+
+    async with tenant_session(tenant) as session:
+        row = (
+            await session.execute(
+                _CLASSIFY_CLAIM, {"id": email_message_id, "mailbox_id": mailbox}
+            )
+        ).one_or_none()
+
+    if row is None:
+        # Unknown row, or a job whose tenant does not own it. RLS already
+        # decided; there is nothing to do and nothing to report.
+        log.info("classify_skipped_unknown_row", email_message_id=email_message_id)
+        return
+    # `classifying` is accepted, not just `fetched`: a worker killed mid-classify
+    # leaves the row at `classifying`, and `rescan_stuck` re-enqueues exactly
+    # this job for it. Accepting only `fetched` would make that row retry
+    # forever, which is the failure this recovery path exists to prevent.
+    if row.processing_status not in ("fetched", "classifying"):
+        log.info(
+            "classify_skipped_not_fetched",
+            email_message_id=email_message_id,
+            status=row.processing_status,
+        )
+        return
+
+    async with tenant_session(tenant) as session:
+        await session.execute(_START_CLASSIFYING, {"id": email_message_id})
+
+    html = await body_store().get(row.body_html_r2_key) or ""
+    # `to_text` and not the raw HTML: it is the single source of truth for the
+    # text extraction offsets index into, so the gate must judge the same
+    # document the extractor will later quote from.
+    body = to_text(html, subject=row.subject, sender=row.sender_email)
+    verdict = await classify(body)
+
+    async with tenant_session(tenant) as session:
+        await session.execute(
+            _RECORD_CLASSIFICATION,
+            {
+                "status": verdict.status,
+                "reason": verdict.reason,
+                "model": verdict.model,
+                "version": settings.PROMPT_VERSION,
+                "extract": should_extract(verdict.status),
+                "short": settings.NON_RECRUITMENT_RETENTION_DAYS,
+                "id": email_message_id,
+            },
+        )
+
+    if should_extract(verdict.status):
+        await enqueue(
+            "extract_email",
+            email_message_id=email_message_id,
+            tenant_id=tenant_id,
+            mailbox_id=mailbox_id,
+        )
+
+
+async def classify_batch(ctx, *, tenant_id: str, email_message_ids: list[str]) -> None:
+    """Classify a claimed batch of emails in a single model call.
+
+    The rows arrive already at `classifying`: `claim_fetched_email_rows` moved
+    them there in the same statement that selected them, so a second sweep
+    cannot hand the same emails to a second batch and pay for them twice. That
+    also makes this job crash-safe without anything extra — a worker killed
+    anywhere between the claim and the writes leaves its rows at `classifying`,
+    which is exactly what `rescan_stuck` re-enqueues (as single-email
+    `classify_email` jobs, so a batch that dies is retried email by email
+    rather than as a batch that may be dying *because* of one of its members).
+
+    Nothing here raises for a model failure: `classify_many` fails open, per
+    email. What does escape is infrastructure — Postgres, R2 — where the rows
+    stay at `classifying` and the sweep is the recovery path, the same
+    discipline `classify_email` follows.
+    """
+    from app.services.ingest.classify import classify_many, should_extract
+    from app.services.ingest.preprocess import to_text
+
+    # Asked once, before any row is touched, for the reason `classify_email`
+    # gives: the gate fails open, so an unconfigured deployment would mark
+    # every email `uncertain`, send all of them to extraction, and look like a
+    # working system with an indecisive model.
+    if not settings.cerebras_configured(settings.CLASSIFIER_MODEL):
+        log.error(
+            "llm_not_configured",
+            job="classify_batch",
+            detail="Set CEREBRAS_BASE_URL, CEREBRAS_API_KEY and CLASSIFIER_MODEL.",
+        )
+        raise RuntimeError("The classifier has no model configured.")
+
+    if not email_message_ids:
+        return
+
+    tenant = uuid.UUID(tenant_id)
+    ids = [uuid.UUID(i) for i in email_message_ids]
+
+    async with tenant_session(tenant) as session:
+        rows = (await session.execute(_BATCH_CLAIM, {"ids": ids})).all()
+
+    if not rows:
+        # Every row was claimed by someone else, already finished, or belongs
+        # to another tenant — RLS has already decided. Nothing to do.
+        log.info("classify_batch_no_rows", tenant_id=tenant_id, asked=len(ids))
+        return
+
+    store = body_store()
+    texts: list[str] = []
+    for row in rows:
+        html = await store.get(row.body_html_r2_key) or ""
+        # `to_text`, not the raw HTML: it is the single source of truth for the
+        # text extraction offsets index into, so the gate must judge the same
+        # document the extractor will later quote from.
+        texts.append(to_text(html, subject=row.subject, sender=row.sender_email))
+
+    verdicts = await classify_many(texts)
+
+    async with tenant_session(tenant) as session:
+        for row, verdict in zip(rows, verdicts, strict=True):
+            await session.execute(
+                _RECORD_CLASSIFICATION,
+                {
+                    "status": verdict.status,
+                    "reason": verdict.reason,
+                    "model": verdict.model,
+                    "version": settings.PROMPT_VERSION,
+                    "extract": should_extract(verdict.status),
+                    "short": settings.NON_RECRUITMENT_RETENTION_DAYS,
+                    "id": row.id,
+                },
+            )
+
+    # Enqueued after the writes commit, and only then: a job that started
+    # before the status moved could read the row mid-flight, and one enqueued
+    # for a row whose write failed would extract from an unclassified email.
+    for row, verdict in zip(rows, verdicts, strict=True):
+        if should_extract(verdict.status):
+            await enqueue(
+                "extract_email",
+                email_message_id=str(row.id),
+                tenant_id=tenant_id,
+                mailbox_id=str(row.mailbox_id),
+            )
 
 
 async def recreate_subscription(ctx, *, tenant_id: str, mailbox_id: str) -> None:

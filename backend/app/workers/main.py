@@ -44,6 +44,7 @@ def build_tasks() -> list[PeriodicTask]:
     supervisor loop testable — without the ingestion stack behind it.
     """
     from app.workers.tasks import (
+        classify_fetched,
         delta_sync_all,
         ensure_backfills,
         ensure_subscriptions,
@@ -53,6 +54,12 @@ def build_tasks() -> list[PeriodicTask]:
 
     async def _rescan() -> None:
         await rescan_stuck()
+
+    async def _classify() -> None:
+        # On its own clock, and a fast one: this is the only thing that starts
+        # classification now that `fetch_email` enqueues nothing, so its
+        # interval is the latency every email waits before the gate sees it.
+        await classify_fetched()
 
     async def _renew() -> None:
         await renew_subscriptions()
@@ -68,6 +75,9 @@ def build_tasks() -> list[PeriodicTask]:
 
     return [
         PeriodicTask("rescan_stuck", settings.RESCAN_INTERVAL_SECONDS, _rescan),
+        PeriodicTask(
+            "classify_fetched", settings.CLASSIFY_SWEEP_INTERVAL_SECONDS, _classify
+        ),
         PeriodicTask("renew_subscriptions", settings.RENEW_INTERVAL_SECONDS, _renew),
         PeriodicTask("delta_sync", settings.DELTA_SYNC_INTERVAL_SECONDS, _delta),
         PeriodicTask(

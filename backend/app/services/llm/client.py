@@ -50,52 +50,80 @@ async def complete_json(
     prompt: str,
     *,
     model: str,
-    schema: dict,
+    schema: dict | None,
     transport: httpx.AsyncBaseTransport | None = None,
+    base_url: str | None = None,
+    api_key: str | None = None,
+    extra_body: dict | None = None,
 ) -> LLMResult:
     """Ask `model` for one JSON object.
 
     `transport` is the seam tests use; nothing in production passes it, and it
     is what keeps the suite from ever spending money on a real completion.
+
+    `base_url` and `api_key` default to OpenRouter's, so extraction is
+    unchanged. They exist because the relevance gate runs on Cerebras — a
+    second provider, not a second client: the wire format is the same
+    OpenAI-compatible one, and duplicating this module to change two strings
+    would mean the next fix to response handling landing in only one of them.
+
+    `schema=None` asks for a bare JSON object instead of a named JSON schema.
+    Not every provider implements `json_schema`, and a request rejected for an
+    unsupported `response_format` fails every email identically.
+
+    `extra_body` is merged last so a caller can send provider-specific
+    parameters — `reasoning_effort` for the gate's model, which without it
+    spends its whole token budget reasoning and returns no content at all.
     """
     started = time.monotonic()
+    payload: dict = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        # The caller's schema, actually sent. It was previously accepted as an
+        # argument and dropped here, so the structure extraction depends on —
+        # a value, its quotation, and the offsets that make it checkable — was
+        # never asked for; the parser then rejected responses for missing
+        # fields the model was never told about.
+        "response_format": (
+            {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "extraction",
+                    # The provider enforces the shape rather than hoping the
+                    # prose in the prompt was persuasive.
+                    "strict": True,
+                    "schema": schema,
+                },
+            }
+            if schema
+            else {"type": "json_object"}
+        ),
+        # Extraction must be reproducible: the same email replayed through the
+        # same prompt version has to give the same answer, or a corrections
+        # table can never be trusted as a baseline.
+        "temperature": 0,
+    }
+    payload.update(extra_body or {})
+
     async with httpx.AsyncClient(
-        base_url=settings.LLM_BASE_URL,
+        base_url=base_url or settings.LLM_BASE_URL,
         timeout=settings.LLM_TIMEOUT_SECONDS,
         transport=transport,
-        headers={"Authorization": f"Bearer {settings.OPENROUTER_API_KEY}"},
+        headers={"Authorization": f"Bearer {api_key or settings.OPENROUTER_API_KEY}"},
     ) as client:
-        response = await client.post(
-            "/chat/completions",
-            json={
-                "model": model,
-                "messages": [{"role": "user", "content": prompt}],
-                # The caller's schema, actually sent. It was previously
-                # accepted as an argument and dropped here, so the structure
-                # extraction depends on — a value, its quotation, and the
-                # offsets that make it checkable — was never asked for; the
-                # parser then rejected responses for missing fields the model
-                # was never told about.
-                "response_format": {
-                    "type": "json_schema",
-                    "json_schema": {
-                        "name": "extraction",
-                        # The provider enforces the shape rather than hoping
-                        # the prose in the prompt was persuasive.
-                        "strict": True,
-                        "schema": schema,
-                    },
-                },
-                # Extraction must be reproducible: the same email replayed
-                # through the same prompt version has to give the same answer,
-                # or a corrections table can never be trusted as a baseline.
-                "temperature": 0,
-            },
-        )
+        response = await client.post("/chat/completions", json=payload)
         response.raise_for_status()
         body = response.json()
 
-    content = body["choices"][0]["message"]["content"]
+    # Every hop is optional, because every one of them has been absent from a
+    # real response: a reasoning model that spent its budget thinking returns
+    # a message with a `reasoning` key and no `content` at all. Indexing would
+    # raise KeyError, which reads as a bug in this module rather than as the
+    # unusable answer it is — and the gate's caller only handles the latter.
+    choices = body.get("choices") or [{}]
+    content = (choices[0].get("message") or {}).get("content")
+    if not content:
+        raise LLMInvalidJSON("the model returned no content")
     usage = body.get("usage") or {}
     return LLMResult(
         data=_parse(content),
