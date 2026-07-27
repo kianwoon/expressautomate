@@ -46,7 +46,16 @@ def test_empty_input_normalizes_to_empty() -> None:
         (None, None),                       # sender_email is nullable
         ("not-an-email", None),
         ("", None),
+        ("<jane@acme.com>", "acme.com"),               # header form, no display name
+        ("Jane Doe <jane@acme.com>", "acme.com"),      # header form, with display name
+        ("  jane@acme.com  ", "acme.com"),             # surrounding whitespace
+        ("jane@doe@acme.com", None),                    # ambiguous: more than one "@"
+        ("jane@", None),                                # ambiguous: address ends in "@"
     ],
 )
 def test_domain_of_rejects_free_providers_and_junk(email: str | None, expected: str | None) -> None:
     assert domain_of(email) == expected
+
+
+def test_normalize_company_name_handles_non_ascii() -> None:
+    assert normalize_company_name("Société Générale") == "société générale"
