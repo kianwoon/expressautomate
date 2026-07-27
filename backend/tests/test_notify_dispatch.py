@@ -273,3 +273,37 @@ async def test_rate_cap_ignores_sends_older_than_an_hour(wired, admin_session) -
 
     async with tenant_session(tenant_id) as session:
         assert await rate_capped(session, dest_id, EVENT_OPPORTUNITY_NEW) is False
+
+
+async def test_enqueue_deliveries_returns_zero_if_pending_status_check_fails(
+    wired, monkeypatch
+) -> None:
+    """Guard the query: a transient database error must not propagate, only log.
+
+    The pending-status query is called after the row is already committed, so it
+    is the step allowed to fail without harming the producer. A lost enqueue is
+    recovered by `rescan_stuck`, but an exception here fails the extraction job
+    and makes it retry work that already succeeded — the same recovery path,
+    unneeded.
+    """
+    tenant_id, _, _ = wired
+    delivery_id = uuid.uuid4()
+
+    # Make tenant_session return a session that raises on execute.
+    class FailingAsyncContext:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+        async def execute(self, *args, **kwargs):
+            raise RuntimeError("database connection lost")
+
+    def failing_session(*args, **kwargs):
+        return FailingAsyncContext()
+
+    monkeypatch.setattr("app.services.notify.dispatch.tenant_session", failing_session)
+
+    result = await enqueue_deliveries(tenant_id, [delivery_id])
+    assert result == 0

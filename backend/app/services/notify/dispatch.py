@@ -164,11 +164,11 @@ async def enqueue_deliveries(
 
     A row could in principle flip from pending to something else between this
     read and the `enqueue` call below, but not into a state that matters: rows
-    only ever go pending -> suppressed at insert time (never after), and
-    pending -> sent/failed happens once a worker has already picked the job
-    up — in which case queuing it again is a harmless duplicate job, the same
-    outcome the fail-soft sweep already tolerates. There is no window where
-    this check is stale in a way that lets a suppressed row through.
+    are only marked suppressed at insert time (never after), and pending ->
+    sent/failed happens once a worker has already picked the job up — in which
+    case queuing it again is a harmless duplicate job, the same outcome the
+    fail-soft sweep already tolerates. A row promoted back to pending by a
+    recovery sweep is simply missed this round and picked up next.
 
     `enqueue` never raises and returns False on failure; the sweep is what
     turns a lost job back into a queued one, exactly as `rescan_stuck` does for
@@ -177,20 +177,24 @@ async def enqueue_deliveries(
     if not delivery_ids:
         return 0
 
-    async with tenant_session(tenant_id) as session:
-        pending_ids = {
-            row.id
-            for row in (
-                await session.execute(
-                    _PENDING_AMONG,
-                    {
-                        "tenant_id": tenant_id,
-                        "ids": delivery_ids,
-                        "status": STATUS_PENDING,
-                    },
-                )
-            ).all()
-        }
+    try:
+        async with tenant_session(tenant_id) as session:
+            pending_ids = {
+                row.id
+                for row in (
+                    await session.execute(
+                        _PENDING_AMONG,
+                        {
+                            "tenant_id": tenant_id,
+                            "ids": delivery_ids,
+                            "status": STATUS_PENDING,
+                        },
+                    )
+                ).all()
+            }
+    except Exception:
+        log.exception("pending_status_check_failed", tenant_id=str(tenant_id))
+        return 0
 
     queued = 0
     for delivery_id in delivery_ids:
