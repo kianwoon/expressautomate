@@ -97,6 +97,13 @@ class Settings(BaseSettings):
     # lapses silently — so the bound is enforced rather than assumed.
     GRAPH_SUBSCRIPTION_RENEW_MARGIN: float = Field(default=0.5, gt=0, le=1)
 
+    # --- Initial sync limits (plan §6.2) ---
+    # Graph delta filtered by receivedDateTime is not a bulk export mechanism.
+    # Whichever limit is hit first stops the walk, and the onboarding UI must
+    # not offer more than these allow.
+    INITIAL_SYNC_MAX_MESSAGES: int = Field(default=5000, gt=0)
+    INITIAL_SYNC_MAX_LOOKBACK_DAYS: int = Field(default=90, gt=0)
+
     # --- Google sign-in (identity only — no Gmail scope; see docs/setup.md) ---
     GOOGLE_CLIENT_ID: str = ""
     GOOGLE_CLIENT_SECRET: str = ""
