@@ -30,7 +30,12 @@ log = get_logger(__name__)
 RESUME_JOB = {
     "pending": "fetch_email",
     "fetched": "classify_email",
+    # `classifying` means the gate was interrupted mid-call, so it resumes at
+    # the gate. `classified` means the gate already answered and only the
+    # extraction is missing — resuming *that* at the gate is what re-billed the
+    # same email every RESCAN_WORKING_MINUTES for as long as extraction lagged.
     "classifying": "classify_email",
+    "classified": "extract_email",
     "extracting": "extract_email",
 }
 

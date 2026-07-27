@@ -123,6 +123,9 @@ def queued(monkeypatch) -> list[tuple[str, dict]]:
         ("pending", "fetch_email"),
         ("fetched", "classify_email"),
         ("classifying", "classify_email"),
+        # Not `classify_email`: this row has a verdict already, and resuming it
+        # at the gate paid for that verdict again on every sweep.
+        ("classified", "extract_email"),
         ("extracting", "extract_email"),
     ],
 )

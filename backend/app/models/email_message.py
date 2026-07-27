@@ -33,7 +33,13 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TenantScoped, Timestamps, UUIDPrimaryKey
 
-# pending → fetched → classifying → extracting → one of the terminals below.
+# pending → fetched → classifying → classified → extracting → a terminal below.
+#
+# `classified` is not decoration. Leaving a verdicted row at `classifying`
+# makes "the gate is running" and "the gate has answered, extraction has not
+# started" the same state, and `rescan_stuck` resolves that ambiguity the
+# expensive way: it re-enqueues `classify_email`, which pays the gate again for
+# a row that already has an answer, every RESCAN_WORKING_MINUTES, forever.
 PROCESSING_TERMINAL = frozenset(
     {"extracted", "no_opportunity", "skipped", "unfetchable", "failed"}
 )
@@ -68,7 +74,8 @@ class EmailMessage(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
             "processing_status",
             "updated_at",
             postgresql_where=text(
-                "processing_status IN ('pending', 'fetched', 'classifying', 'extracting')"
+                "processing_status IN ('pending', 'fetched', 'classifying',"
+                " 'classified', 'extracting')"
             ),
         ),
     )

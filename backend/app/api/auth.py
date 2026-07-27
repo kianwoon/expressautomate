@@ -586,7 +586,12 @@ _MAILBOX_STATE = text(
         -- facts and the difference is the whole honesty of the number.
         count(*) FILTER (WHERE e.processing_status = 'pending') AS in_progress,
         count(*) FILTER (
-            WHERE e.processing_status IN ('fetched', 'classifying', 'extracting')
+            -- `classified` belongs here for the same reason the bucket exists:
+            -- a verdicted email whose extraction has not run is parked work,
+            -- and omitting it would drop those emails out of every count on
+            -- the dashboard while the row still sat in the table.
+            WHERE e.processing_status IN ('fetched', 'classifying', 'classified',
+                                          'extracting')
         ) AS awaiting_extraction,
         min(e.received_datetime) AS oldest_received,
         max(e.received_datetime) AS newest_received,

@@ -273,7 +273,7 @@ async def test_the_job_writes_a_verdict_for_every_email_in_one_call(
 
     first, second = [await _row(tenant_id, i) for i in row_ids]
     assert first.classification_status == "recruitment"
-    assert first.processing_status == "classifying"
+    assert first.processing_status == "classified"
     assert second.classification_status == "non_recruitment"
     assert second.processing_status == "skipped"
     assert len(llm.prompts) == 1, "two emails must cost one model call"
@@ -333,6 +333,31 @@ async def test_a_body_store_outage_leaves_the_batch_recoverable(monkeypatch, bat
         )
 
     assert (await _row(tenant_id, row_ids[0])).processing_status == "classifying"
+
+
+async def test_a_verdicted_member_is_never_re_billed_at_the_gate(monkeypatch, batch):
+    """A replayed batch must not pay for the members it already answered.
+
+    Both rows carry a verdict and sit at `classifying`, which is what the live
+    rows looked like. One model call for them is one call too many.
+    """
+    tenant_id, _, row_ids = batch
+    _, queued, llm = _wire(monkeypatch)  # no responses: a call would raise
+    async with tenant_session(tenant_id) as session:
+        await session.execute(
+            text(
+                "UPDATE email_messages SET classification_status = 'recruitment'"
+                " WHERE id = ANY(:ids)"
+            ),
+            {"ids": list(row_ids)},
+        )
+
+    await jobs.classify_batch(
+        {}, tenant_id=str(tenant_id), email_message_ids=[str(i) for i in row_ids]
+    )
+
+    assert llm.prompts == []
+    assert queued == []
 
 
 async def test_a_row_belonging_to_another_tenant_is_not_touched(monkeypatch, batch):

@@ -57,8 +57,10 @@ class WorkerSettings:
     # batch that died may have died because of one of its members.
     #
     # `extract_email` is still absent: it belongs to the rest of the extraction
-    # plan. Until it lands, classified rows accumulate and `rescan_stuck`
-    # retries them — visible in the logs rather than lost.
+    # plan. Until it lands, rows park at `classified` and `rescan_stuck` keeps
+    # naming a job arq does not have — an error line per sweep, which is loud
+    # and free. What it must never do again is re-run the gate on them: that
+    # was the same visible-retry story costing a model call per row per sweep.
     functions = [
         fetch_email,
         classify_batch,

@@ -197,6 +197,9 @@ async def test_a_recruitment_email_goes_on_to_extraction(monkeypatch, fetched):
 
     row = await _row(tenant_id, row_id)
     assert row.classification_status == "recruitment"
+    # Not `classifying`: that status says the gate is still running, and
+    # `rescan_stuck` acts on it by running the gate again.
+    assert row.processing_status == "classified"
     assert row.classification_model == settings.CLASSIFIER_MODEL
     assert row.classification_version == settings.PROMPT_VERSION
     assert queued == [
@@ -295,6 +298,30 @@ async def test_an_already_classified_row_is_not_reclassified(monkeypatch, fetche
 
     assert llm.prompts == []
     assert queued == []
+
+
+async def test_a_verdicted_row_is_never_re_billed_at_the_gate(monkeypatch, fetched):
+    """The production bug: a recorded verdict re-classified every 15 minutes.
+
+    The row is left at `classifying` with an answer already stored — the exact
+    shape two live rows were in. Whatever routes the job, the verdict is the
+    authority, so nothing may reach the model and nothing may be enqueued.
+    """
+    tenant_id, mailbox_id, row_id = fetched
+    _, queued, llm = _wire(monkeypatch)  # no responses: a call would raise
+    async with tenant_session(tenant_id) as session:
+        await session.execute(
+            text(
+                "UPDATE email_messages SET processing_status = 'classifying',"
+                " classification_status = 'recruitment' WHERE id = :i"
+            ),
+            {"i": row_id},
+        )
+
+    await _run(fetched)
+
+    assert llm.prompts == [], "an answered email must never be paid for twice"
+    assert queued == [], "and must not enqueue a second extraction"
 
 
 async def test_a_body_store_outage_leaves_the_row_recoverable(monkeypatch, fetched):

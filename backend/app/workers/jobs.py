@@ -94,7 +94,8 @@ _MAILBOX_TARGET = text(
 )
 
 _CLASSIFY_CLAIM = text(
-    "SELECT processing_status, body_html_r2_key, subject, sender_email"
+    "SELECT processing_status, classification_status, body_html_r2_key, subject,"
+    " sender_email"
     " FROM email_messages WHERE id = :id AND mailbox_id = :mailbox_id"
 )
 
@@ -109,7 +110,11 @@ _RECORD_CLASSIFICATION = text(
         classification_reason = :reason,
         classification_model = :model,
         classification_version = :version,
-        processing_status = CASE WHEN :extract THEN 'classifying' ELSE 'skipped' END,
+        -- `classified`, never back to `classifying`: the verdict is in, and
+        -- only extraction is outstanding. Parking it at `classifying` is what
+        -- made `rescan_stuck` re-run the gate on an already-answered row every
+        -- fifteen minutes and enqueue a second extraction alongside it.
+        processing_status = CASE WHEN :extract THEN 'classified' ELSE 'skipped' END,
         retention_until = CASE WHEN :extract THEN retention_until
                                ELSE now() + make_interval(days => :short) END
     WHERE id = :id
@@ -118,7 +123,8 @@ _RECORD_CLASSIFICATION = text(
 
 # allow-hardcode: a SQL statement, not a phrase list.
 _BATCH_CLAIM = text(
-    "SELECT id, mailbox_id, processing_status, body_html_r2_key, subject, sender_email"
+    "SELECT id, mailbox_id, processing_status, classification_status,"
+    " body_html_r2_key, subject, sender_email"
     " FROM email_messages"
     " WHERE id IN :ids AND processing_status IN ('fetched', 'classifying')"
     # Deterministic, so a batch replayed after a crash sends its emails to the
@@ -279,6 +285,17 @@ async def classify_email(
             status=row.processing_status,
         )
         return
+    # The verdict, not the pipeline status, is the authority on whether the
+    # gate has already been paid for. Routing can be changed by a later edit —
+    # this cannot: a row that has an answer is never worth asking about again,
+    # and re-asking bills a model call for a result already stored.
+    if row.classification_status != "unknown":
+        log.info(
+            "classify_skipped_already_classified",
+            email_message_id=email_message_id,
+            classification_status=row.classification_status,
+        )
+        return
 
     async with tenant_session(tenant) as session:
         await session.execute(_START_CLASSIFYING, {"id": email_message_id})
@@ -353,6 +370,19 @@ async def classify_batch(ctx, *, tenant_id: str, email_message_ids: list[str]) -
 
     async with tenant_session(tenant) as session:
         rows = (await session.execute(_BATCH_CLAIM, {"ids": ids})).all()
+
+    # Same authority as in `classify_email`, applied per member: one already
+    # answered row in a replayed batch would otherwise be re-billed at the gate
+    # and enqueued for a second extraction. Dropped here rather than in the
+    # claim's WHERE so the skip is visible instead of silently narrowing.
+    settled = [r for r in rows if r.classification_status != "unknown"]
+    if settled:
+        log.info(
+            "classify_batch_skipped_already_classified",
+            tenant_id=tenant_id,
+            count=len(settled),
+        )
+        rows = [r for r in rows if r.classification_status == "unknown"]
 
     if not rows:
         # Every row was claimed by someone else, already finished, or belongs
