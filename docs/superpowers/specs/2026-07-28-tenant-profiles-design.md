@@ -121,8 +121,9 @@ collapse every unrelated client into one record. The set is a setting on
 `app.core.config.settings`, not a literal in source. On a hit, `email_domain` is
 stored as NULL and matching falls through to the name proposal.
 
-Multi-entity groups that genuinely share one domain are handled by the merge and
-split path rather than by the key.
+Multi-entity groups that genuinely share one domain collapse into a single
+client. That is accepted for v1: a recruiter can archive the wrong one and
+create the sibling by hand. No split operation ships.
 
 The matcher never fabricates a field: an absent value stays NULL rather than
 being inferred (§15).
