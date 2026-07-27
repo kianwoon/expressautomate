@@ -91,6 +91,12 @@ def _payload(row: Opportunity) -> dict:
         "salary_period": row.salary_period,
         "working_hours_raw": row.working_hours_raw,
         "requirements": row.requirements,
+        # The body of the posting, not a summary of it. Withheld from the
+        # payload the table renders, a recruiter has to open the email to
+        # answer "what is the job", which is the question the whole row is
+        # about — and it is the field the free-text search is least able to
+        # do without.
+        "job_description": row.job_description,
         "duration_raw": row.duration_raw,
         "location_raw": row.location_raw,
         "quality_state": row.quality_state,

@@ -207,8 +207,31 @@ async def test_a_field_the_email_did_not_mention_stays_null(client, seeded) -> N
         "duration_raw",
         "location_raw",
         "job_title_raw",
+        "job_description",
     ):
         assert row[field] is None, f"{field} was filled in with {row[field]!r}"
+
+
+async def test_the_job_description_reaches_the_screen(client, seeded) -> None:
+    """The table has a column for it, so the payload has to carry it.
+
+    Asserted separately from the null case because the two failures look
+    nothing alike: a missing key 404s the column for every row, while a
+    substituted "" would render as a job with no description written.
+    """
+    make_tenant, make_opportunity = seeded
+    tenant_id, user_id, mailbox_id = await make_tenant("agency-a")
+    await make_opportunity(
+        tenant_id,
+        mailbox_id,
+        company_name_raw="Acme Pte Ltd",
+        job_description="Manage the front desk and greet visitors.",
+    )
+
+    sign_in(client, user_id, tenant_id)
+    row = (await client.get("/api/opportunities")).json()["opportunities"][0]
+
+    assert row["job_description"] == "Manage the front desk and greet visitors."
 
 
 async def test_an_anonymous_caller_gets_nothing(client) -> None:
