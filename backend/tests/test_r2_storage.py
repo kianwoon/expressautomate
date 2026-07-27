@@ -309,3 +309,37 @@ async def test_the_real_store_batches_deletes_into_one_call(monkeypatch):
 
     assert len(fake.deleted) == 1, "one round trip, not one per key"
     assert fake.deleted[0]["Delete"]["Objects"] == [{"Key": "a"}, {"Key": "b"}]
+
+
+async def test_a_missing_bucket_is_named_not_retried_blindly():
+    """Found in production: the bucket had never been created, so every email
+    failed at the body store with a raw NoSuchBucket traceback that read as a
+    transient storage error being retried.
+
+    A bucket that does not exist answers the same way forever. Saying so is the
+    only thing that shortens the outage.
+    """
+    from botocore.exceptions import ClientError
+
+    from app.services.storage.r2 import BodyStoreMisconfigured, R2BodyStore
+
+    store = R2BodyStore()
+
+    class _Missing:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def put_object(self, **kwargs):
+            raise ClientError(
+                {"Error": {"Code": "NoSuchBucket", "Message": "no"}}, "PutObject"
+            )
+
+    store._client = lambda: _Missing()
+
+    with pytest.raises(BodyStoreMisconfigured) as exc:
+        await store.put("k", "body")
+
+    assert settings.R2_BUCKET_NAME in str(exc.value)

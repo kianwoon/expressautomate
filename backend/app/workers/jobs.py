@@ -34,7 +34,7 @@ from app.services.graph.client import (
 )
 from app.services.graph.subscriptions import create_subscription, renew_subscription
 from app.services.ms_auth import MailboxNotAuthorised, access_token_for_mailbox
-from app.services.storage.r2 import R2BodyStore, body_key
+from app.services.storage.r2 import BodyStoreMisconfigured, R2BodyStore, body_key
 from app.workers.queue import enqueue
 
 log = get_logger(__name__)
@@ -165,7 +165,17 @@ async def fetch_email(
     finally:
         await client.aclose()
 
-    await _store(tenant, mailbox, email_message_id, row.graph_message_id, message)
+    try:
+        await _store(tenant, mailbox, email_message_id, row.graph_message_id, message)
+    except BodyStoreMisconfigured as exc:
+        # Every email will fail here identically until an operator fixes it, so
+        # the useful thing is one line that says so — not a traceback per
+        # message. Still raised: the row must stay unfinished, and arq's retry
+        # is what picks the work back up once the bucket exists, without
+        # anybody having to replay it by hand.
+        log.error("body_store_misconfigured", mailbox_id=mailbox_id, detail=str(exc))
+        raise
+
     await enqueue(
         "classify_email",
         email_message_id=email_message_id,

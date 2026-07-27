@@ -201,8 +201,17 @@ to drop the `www` CNAME entirely and add a Cloudflare Redirect Rule sending
 | Cloudflare | account `019aea60…`, API token | reused |
 | Container registry | GHCR (`GHCR_USERNAME` / `GHCR_PAT`) | reused |
 | AI | OpenRouter key + base URL | reused |
-| Object storage | Cloudflare R2, bucket `expressautomate` | endpoint reused, **bucket not yet created** |
+| Object storage | Cloudflare R2, bucket `expressautomate` | created 2026-07-27 |
 | Redis | Upstash `current-boar-109865` | reused, shared |
+
+That bucket row read "**not yet created**" for a day while the ingestion
+pipeline shipped around it. Nothing enforced it, so the gap surfaced as a
+`NoSuchBucket` traceback per email in the arq worker — indistinguishable, at a
+glance, from a transient storage error being retried. `R2BodyStore.put` now
+raises `BodyStoreMisconfigured` naming the bucket instead. **A prerequisite
+recorded here is not a prerequisite anything checks**: when this table says
+something is not created, it is an outage waiting for the first feature that
+needs it.
 
 `pgvector` 0.8.0, `pg_trgm`, and `uuid-ossp` are all available on the instance
 for the Phase 2 semantic-search work (§20) — no extension is enabled yet.

@@ -30,6 +30,18 @@ from app.core.config import settings
 # nothing, across every tenant at once, without a single error.
 _ABSENT_CODES = frozenset({"NoSuchKey", "404"})
 
+# The same distinction, given a name so `put` can act on it too.
+_NO_SUCH_BUCKET = "NoSuchBucket"
+
+
+class BodyStoreMisconfigured(Exception):
+    """The body store cannot work until an operator changes something.
+
+    Distinct from a transient storage failure because it answers the same way
+    forever: retrying spends attempts on a state no amount of patience fixes,
+    and buries the one line that says what to do.
+    """
+
 # S3 caps a batch delete at 1000 keys. Tenant deletion and a backlogged
 # retention sweep both exceed that, and the API rejects the whole request rather
 # than trimming it.
@@ -114,10 +126,26 @@ class R2BodyStore:
         )
 
     async def put(self, key: str, content: str) -> None:
+        """Store a body, naming a missing bucket for what it is.
+
+        A bucket that does not exist is a deployment gap, not a bad moment:
+        every write will fail identically until somebody creates it. Left as a
+        raw `NoSuchBucket`, it arrived as an arq traceback per email and looked
+        like a transient storage error being retried — which is exactly what
+        happened here, with the bucket having never been created at all.
+        """
         async with self._client() as s3:
-            await s3.put_object(
-                Bucket=settings.R2_BUCKET_NAME, Key=key, Body=content.encode()
-            )
+            try:
+                await s3.put_object(
+                    Bucket=settings.R2_BUCKET_NAME, Key=key, Body=content.encode()
+                )
+            except ClientError as exc:
+                if exc.response.get("Error", {}).get("Code") == _NO_SUCH_BUCKET:
+                    raise BodyStoreMisconfigured(
+                        f"R2 bucket {settings.R2_BUCKET_NAME!r} does not exist. "
+                        "No email body can be stored until it is created."
+                    ) from exc
+                raise
 
     async def get(self, key: str) -> str | None:
         """Fetch a body, or None if it is no longer stored.
