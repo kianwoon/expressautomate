@@ -107,6 +107,9 @@ jobs:
       # exactly the failure tests/test_scopes.py exists to catch.
       MS_IDENTITY_SCOPES: openid profile email User.Read offline_access
       MS_MAILBOX_SCOPES: Mail.Read
+      # The Graph client builds its httpx base_url from this; an empty value
+      # makes every relative request path resolve to nothing.
+      GRAPH_BASE_URL: https://graph.microsoft.com/v1.0
 
     steps:
       - uses: actions/checkout@v7

@@ -69,6 +69,13 @@ class Settings(BaseSettings):
     MS_WEBHOOK_CLIENT_STATE: str = ""
     MS_WEBHOOK_NOTIFICATION_URL: str = ""
 
+    # --- Microsoft Graph ---
+    GRAPH_BASE_URL: str = ""
+    GRAPH_TIMEOUT_SECONDS: float = 30.0
+    # Used only when Graph throttles without a parseable Retry-After. It sends
+    # one nearly always; this keeps the absence from becoming an exception.
+    GRAPH_DEFAULT_RETRY_AFTER_SECONDS: float = 10.0
+
     # --- Google sign-in (identity only — no Gmail scope; see docs/setup.md) ---
     GOOGLE_CLIENT_ID: str = ""
     GOOGLE_CLIENT_SECRET: str = ""
