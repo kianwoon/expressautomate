@@ -188,9 +188,9 @@ export function ChoosePeriod({ onStarted }: { onStarted: () => void }) {
                 padding: "16px 18px",
                 cursor: "pointer",
                 // The selected option should be obvious without hunting for a
-                // filled radio dot.
-                outline:
-                  chosen === option.key ? "2px solid var(--accent, #2563eb)" : "none",
+                // filled radio dot. The design token, not its value: a literal
+                // here would silently stop matching the day the palette moves.
+                outline: chosen === option.key ? "2px solid var(--blue-500)" : "none",
                 outlineOffset: -1,
               }}
             >

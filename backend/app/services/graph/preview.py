@@ -81,6 +81,12 @@ async def preview_inbox(client: GraphClient, ms_user_id: str) -> InboxPreview:
     folder = await client.get(base, params={"$select": "displayName,totalItemCount"})
     oldest = await _oldest_received(client, base)
 
+    # Sequential, deliberately. Five round trips is roughly a second, which is
+    # slow enough to notice on a page someone is waiting at — but `gather` here
+    # would fire four `$count`s at once, and Graph throttles per user. A
+    # throttled count is not a slow count: `_count_since` swallows it and the
+    # option renders "count unavailable", which is precisely the number the
+    # user needs to choose. Latency is the better thing to spend.
     windows = []
     for key, label, days in offered_windows():
         emails = None if days is None else await _count_since(client, base, days)
