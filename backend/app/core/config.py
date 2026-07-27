@@ -289,6 +289,29 @@ class Settings(BaseSettings):
     # the endpoint. Newest first, so the cap trims the oldest.
     OPPORTUNITIES_PAGE_LIMIT: int = Field(default=200, gt=0)
 
+    CLIENTS_PAGE_LIMIT: int = Field(default=200, gt=0)
+
+    # Which domains may never key a client. A hiring manager writing from
+    # gmail.com identifies a person, not a company, and matching on that
+    # domain would file every unrelated agency's clients under one row.
+    # Stored as a comma-separated string in the environment and split here so
+    # the operator can extend it without a code change.
+    FREE_EMAIL_DOMAINS_RAW: str = Field(
+        default="gmail.com,googlemail.com,hotmail.com,outlook.com,live.com,"
+        "yahoo.com,yahoo.com.sg,icloud.com,me.com,proton.me,protonmail.com,"
+        "aol.com,qq.com,163.com",
+        alias="FREE_EMAIL_DOMAINS",
+    )
+
+    @property
+    def FREE_EMAIL_DOMAINS(self) -> frozenset[str]:
+        """Parsed once per access; the raw string is what the environment sets."""
+        return frozenset(
+            part.strip().lower()
+            for part in self.FREE_EMAIL_DOMAINS_RAW.split(",")
+            if part.strip()
+        )
+
     # --- Client shorthand glossary ---
     # Whether a tenant reading its glossary for the first time is offered the
     # shipped starter codes. On by default, because an empty glossary on day
