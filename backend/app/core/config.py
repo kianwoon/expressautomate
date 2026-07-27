@@ -101,8 +101,14 @@ class Settings(BaseSettings):
     EXTRACTION_MODEL_FAST: str = ""
     EXTRACTION_MODEL_STRONG: str = ""
 
-    # --- Queue ---
+    # --- Queue (Upstash Redis) ---
     REDIS_URL: str = ""
+    # arq polls, and Upstash bills per command — a tight loop costs money every
+    # second the system is idle. A couple of seconds of latency is the cheaper
+    # trade for a pipeline whose slowest step is an LLM call.
+    ARQ_POLL_DELAY_SECONDS: float = 2.0
+    ARQ_MAX_JOBS: int = 10
+    ARQ_MAX_TRIES: int = 5
 
     @field_validator("MS_IDENTITY_SCOPES", "MS_MAILBOX_SCOPES")
     @classmethod
