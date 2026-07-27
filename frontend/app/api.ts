@@ -131,5 +131,5 @@ export function glossaryEntryPath(id: string): string {
 
 /** Where a visitor reaches a person. Used by the footer and every stub page,
  *  so it lives here rather than being retyped in nine files. */
-export const CONTACT_EMAIL = "hello@expressautomate.app";
+export const CONTACT_EMAIL = "support@expressautomate.app";
 export const CONTACT_MAILTO = `mailto:${CONTACT_EMAIL}`;
