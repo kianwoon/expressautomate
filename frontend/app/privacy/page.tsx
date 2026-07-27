@@ -24,8 +24,9 @@ export default function Page() {
     >
       <h2>Who we are</h2>
       <p>
-        {PROVIDER.name}, of {PROVIDER.address.join(", ")}, operates expressautomate.app. We are the
-        organisation responsible for the personal data described here. Reach us at{" "}
+        {PROVIDER.name} (UEN {PROVIDER.uen}), of {PROVIDER.address.join(", ")}, a company
+        incorporated in Singapore, operates expressautomate.app. We are the organisation
+        responsible for the personal data described here. Reach us at{" "}
         <a href={CONTACT_MAILTO}>{CONTACT_EMAIL}</a> about anything on this page, including a
         request to see, correct or delete your data.
       </p>

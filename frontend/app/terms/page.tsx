@@ -22,8 +22,9 @@ export default function Page() {
     >
       <h2>Who you are agreeing with</h2>
       <p>
-        These terms are between you, and {PROVIDER.name} of {PROVIDER.address.join(", ")}. They
-        apply when you sign in to or use expressautomate.app. If you are using it for an agency, you
+        These terms are between you, and {PROVIDER.name} (UEN {PROVIDER.uen}), a company
+        incorporated in Singapore, of {PROVIDER.address.join(", ")}. They apply when you sign in to
+        or use expressautomate.app. If you are using it for an agency, you
         confirm you may accept these terms on that agency&rsquo;s behalf.
       </p>
 

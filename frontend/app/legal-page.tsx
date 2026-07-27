@@ -17,6 +17,10 @@ import { SiteNav } from "./site-nav";
  */
 export const PROVIDER = {
   name: "K2LAB PTE. LTD.",
+  // The registration number matters more than it looks: it is what lets a
+  // customer's administrator confirm, against Singapore's public register,
+  // that the company asking for their mailbox is the one it claims to be.
+  uen: "202020387G",
   address: ["138 Robinson Road", "#26-01 Oxley Tower", "Singapore 068906"],
 } as const;
 
@@ -45,7 +49,7 @@ export function LegalPage({
           </p>
           <div className="legal-body">{children}</div>
           <p className="legal-who">
-            {PROVIDER.name}
+            {PROVIDER.name} (UEN {PROVIDER.uen})
             <br />
             {PROVIDER.address.join(", ")}
           </p>
