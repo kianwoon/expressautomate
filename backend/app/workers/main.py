@@ -44,6 +44,7 @@ def build_tasks() -> list[PeriodicTask]:
     """
     from app.workers.tasks import (
         delta_sync_all,
+        ensure_backfills,
         ensure_subscriptions,
         renew_subscriptions,
         rescan_stuck,
@@ -59,7 +60,10 @@ def build_tasks() -> list[PeriodicTask]:
         await delta_sync_all()
 
     async def _ensure() -> None:
+        # Both backstops for a lost enqueue, on the same clock: a mailbox with
+        # no subscription, and one whose history was never walked.
         await ensure_subscriptions()
+        await ensure_backfills()
 
     return [
         PeriodicTask("rescan_stuck", settings.RESCAN_INTERVAL_SECONDS, _rescan),

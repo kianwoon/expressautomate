@@ -509,6 +509,51 @@ async def test_a_reconnected_mailbox_is_resubscribed_without_manual_help(
     assert queued[0][1]["mailbox_id"] == str(mailbox_id)
 
 
+# --- ensure_backfills -------------------------------------------------------
+#
+# `enqueue` never raises, so a Redis outage at consent time loses the backfill
+# job silently. `ensure_subscriptions` recovers the subscription, so new mail
+# arrives and the mailbox looks healthy — while the historical window it was
+# connected for is never walked. Nothing else detects that: `rescan_stuck`
+# only knows about email rows.
+
+
+async def test_a_mailbox_that_never_backfilled_is_queued(admin_session, tenant, queued):
+    mailbox_id = await _add_mailbox(admin_session, tenant)
+    await admin_session.commit()
+
+    assert await tasks.ensure_backfills() == 1
+    assert queued == [
+        (
+            "backfill_mailbox_job",
+            {"tenant_id": str(tenant), "mailbox_id": str(mailbox_id)},
+        )
+    ]
+
+
+async def test_a_completed_backfill_is_not_repeated(admin_session, tenant, queued):
+    mailbox_id = await _add_mailbox(admin_session, tenant)
+    await admin_session.execute(
+        text("UPDATE mailboxes SET backfill_completed_at = now() WHERE id = :id"),
+        {"id": mailbox_id},
+    )
+    await admin_session.commit()
+
+    assert await tasks.ensure_backfills() == 0
+    assert queued == []
+
+
+@pytest.mark.parametrize("status", ["needs_reauth", "disconnected"])
+async def test_a_mailbox_we_cannot_read_is_not_backfilled(
+    admin_session, tenant, queued, status
+):
+    """Walking it needs a working grant, so it would fail every hour."""
+    await _add_mailbox(admin_session, tenant, status=status)
+    await admin_session.commit()
+
+    assert await tasks.ensure_backfills() == 0
+
+
 # --- delta_sync_all ---------------------------------------------------------
 
 

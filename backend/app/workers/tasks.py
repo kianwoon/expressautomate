@@ -39,6 +39,7 @@ _STALLED = text("SELECT * FROM stalled_email_rows(:pending_minutes, :working_min
 _DUE_FOR_RENEWAL = text("SELECT * FROM subscriptions_due_for_renewal(:margin)")
 _ACTIVE_MAILBOXES = text("SELECT * FROM active_mailboxes()")
 _MISSING_SUBSCRIPTION = text("SELECT * FROM mailboxes_without_subscription()")
+_AWAITING_BACKFILL = text("SELECT * FROM mailboxes_awaiting_backfill()")
 
 
 async def rescan_stuck() -> int:
@@ -159,6 +160,32 @@ async def ensure_subscriptions() -> int:
 
     if mailboxes:
         log.warning("mailboxes_without_subscription", count=len(mailboxes))
+    return len(mailboxes)
+
+
+async def ensure_backfills() -> int:
+    """Walk the history of any mailbox that never got its initial sync.
+
+    `enqueue` never raises, so a Redis outage while someone is connecting a
+    mailbox loses the backfill job and reports success. `ensure_subscriptions`
+    then restores the subscription — new mail arrives, the mailbox looks
+    entirely healthy — and the history they connected it *for* is never walked.
+
+    Re-walking is safe: the dedup indexes make anything already held a no-op,
+    and `backfill_mailbox` marks the mailbox once it finishes.
+    """
+    async with SessionLocal() as session:
+        mailboxes = (await session.execute(_AWAITING_BACKFILL)).all()
+
+    for row in mailboxes:
+        await enqueue(
+            "backfill_mailbox_job",
+            tenant_id=str(row.tenant_id),
+            mailbox_id=str(row.mailbox_id),
+        )
+
+    if mailboxes:
+        log.info("mailboxes_awaiting_backfill", count=len(mailboxes))
     return len(mailboxes)
 
 

@@ -92,7 +92,8 @@ _MAILBOX_TARGET = text(
 )
 
 _BACKFILL_START = text(
-    "SELECT initial_sync_from FROM mailboxes WHERE id = :mailbox_id"
+    "SELECT initial_sync_from, backfill_completed_at"
+    " FROM mailboxes WHERE id = :mailbox_id"
 )
 
 
@@ -259,14 +260,23 @@ async def backfill_mailbox_job(ctx, *, tenant_id: str, mailbox_id: str) -> None:
     mailbox = uuid.UUID(mailbox_id)
 
     async with tenant_session(tenant) as session:
-        since = (
+        row = (
             await session.execute(_BACKFILL_START, {"mailbox_id": mailbox})
-        ).scalar_one_or_none()
+        ).one_or_none()
 
-    if since is None:
+    if row is None or row.initial_sync_from is None:
         # No mailbox, or no chosen start. Either way there is no window to walk.
         log.info("backfill_skipped_no_start", mailbox_id=mailbox_id)
         return
+
+    if row.backfill_completed_at is not None:
+        # Already walked. Reconnecting re-enqueues this, and re-walking the
+        # whole lookback would be thousands of Graph calls for messages already
+        # held — the delta sweep covers anything that arrived since.
+        log.info("backfill_skipped_already_done", mailbox_id=mailbox_id)
+        return
+
+    since = row.initial_sync_from
 
     try:
         client = await graph_client_for_mailbox(tenant, mailbox)
