@@ -7,7 +7,20 @@ matcher does — and it has to be a setting, because which providers count is
 an operator's judgement and changes without a deploy.
 """
 
-from app.core.config import settings
+from app.core.config import Settings, settings
+
+
+def test_free_email_domains_env_var_is_the_one_pydantic_actually_binds(monkeypatch) -> None:
+    """`FREE_EMAIL_DOMAINS` is the alias pydantic-settings reads.
+
+    `.env.example` used to document `FREE_EMAIL_DOMAINS_RAW`, which the field
+    name would suggest but which the `alias=` binding silently ignores. A
+    fresh `Settings()` proves the documented key actually changes the parsed
+    value, rather than mutating the module-level singleton other tests share.
+    """
+    monkeypatch.setenv("FREE_EMAIL_DOMAINS", "onlythis.com")
+    fresh = Settings()
+    assert fresh.FREE_EMAIL_DOMAINS == frozenset({"onlythis.com"})
 
 
 def test_free_email_domains_covers_the_common_providers() -> None:

@@ -69,17 +69,21 @@ becomes impossible. `archived` deliberately stays *inside* the index — see
 
 ### `client_mentions`
 
-`(tenant_id, client_id, email_message_id, matched_by, confidence, created_at)`,
-where `matched_by` is CHECK constrained to `email_domain | name | human`.
+`(tenant_id, client_id, email_message_id, matched_by, created_at)`, where
+`matched_by` is CHECK constrained to `email_domain | name | human`.
 
 Unique on `(tenant_id, client_id, email_message_id)`. Extraction re-runs on the
 same message after a crash, and replay appends; without this constraint every
 rerun duplicates the mention.
 
+No `confidence` column. `matched_by` already encodes match strength honestly —
+a domain match is a fact about where the mail came from, a name match is a
+resemblance. A per-mention numeric score would be a fabricated probability,
+which this codebase deliberately avoids (see the module docstring in
+`app/api/opportunities.py` on never rendering `model_confidence` as one).
+
 Provenance lives here, never on the profile row — the profile is the
-human-facing record, the mentions are the evidence trail. This follows the
-convention that AI-derived data keeps evidence, confidence, and model version
-separate from the record it produced.
+human-facing record, the mentions are the evidence trail.
 
 `email_message_id` is `ON DELETE SET NULL`, not CASCADE, so purging an email body
 cannot silently erase the reason a profile exists.

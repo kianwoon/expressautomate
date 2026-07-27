@@ -94,7 +94,6 @@ def upgrade() -> None:
         sa.Column('client_id', sa.UUID(), nullable=False),
         sa.Column('email_message_id', sa.UUID(), nullable=True),
         sa.Column('matched_by', sa.String(length=16), nullable=False),
-        sa.Column('confidence', sa.Numeric(4, 3), nullable=True),
         sa.Column(
             'created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False
         ),

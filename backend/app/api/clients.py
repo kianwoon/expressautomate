@@ -62,12 +62,16 @@ async def list_clients(
     async with tenant_session(tenant_uuid) as session:
         # Counted over the whole tenant, before any filter or window. A count
         # that moved with the page would answer a different question than the
-        # chip appears to ask.
+        # chip appears to ask. "all" agrees with what the unfiltered list
+        # shows — a merged row is no longer a client, so it is excluded from
+        # "all" exactly as it is excluded from the default listing below,
+        # while still being counted (and reachable) under its own status.
         counts = {"all": 0}
         for stored, n in await session.execute(
             select(Client.status, func.count()).group_by(Client.status)
         ):
-            counts["all"] += n
+            if stored != Client.MERGED:
+                counts["all"] += n
             counts[stored] = counts.get(stored, 0) + n
 
         base = select(Client)
@@ -174,12 +178,14 @@ async def merge_client(request: Request, client_id: uuid.UUID, body: MergeReques
         # A real (non-null) message id collision means one message mentioning
         # one company only needs one mention on the surviving client — the
         # weaker of the two is redundant and is dropped. Strength is judged
-        # by matched_by first (email_domain is a firmer claim than a
-        # normalised-name match, so it outranks it regardless of confidence),
-        # then by confidence, with NULL confidence ranked as the weakest
-        # score: an unscored match is not evidence that it is at least
-        # middling, and ranking it low avoids letting a missing score beat an
-        # explicit weak one.
+        # by matched_by alone (email_domain is a firmer claim than a
+        # normalised-name match, so it outranks it): there is no confidence
+        # column to break a tie on, and matched_by never ties between two
+        # different values by construction. Two mentions that share the same
+        # matched_by are equally strong evidence, so on that genuine tie the
+        # target's existing mention is kept and the loser's is dropped as
+        # redundant — which side wins doesn't matter, since neither claim is
+        # stronger than the other.
         #
         # A NULL message id collision is different: the constraint permits
         # only one NULL-message mention per client, but a NULL id does not
@@ -191,12 +197,8 @@ async def merge_client(request: Request, client_id: uuid.UUID, body: MergeReques
         # a merge (status just becomes `merged`), it stays reachable by id,
         # and its mentions survive there — "the source is gone" stays true
         # without ever becoming "this never happened" on either row.
-        def _strength(mention: ClientMention) -> tuple[int, float]:
-            matched_by_rank = {"email_domain": 2, "name": 1}.get(mention.matched_by, 0)
-            confidence_rank = (
-                float(mention.confidence) if mention.confidence is not None else -1.0
-            )
-            return (matched_by_rank, confidence_rank)
+        def _strength(mention: ClientMention) -> int:
+            return {"email_domain": 2, "name": 1}.get(mention.matched_by, 0)
 
         target_mentions = (
             (

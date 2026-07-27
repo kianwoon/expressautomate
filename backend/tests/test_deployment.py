@@ -78,11 +78,22 @@ def test_the_dockerfile_documents_how_each_process_starts(command):
 def test_every_setting_is_discoverable_in_the_env_example():
     """An operator configures from `.env.example`; anything absent from it is a
     setting they will never know to set, running on a default nobody chose.
-    """
-    declared = set(Settings.model_fields)
-    example = ENV_EXAMPLE.read_text()
 
-    missing = sorted(name for name in declared if not re.search(rf"^{name}=", example, re.M))
+    A field with an `alias=` is only ever populated from that alias — the
+    Python field name is dead as an env key (see `FREE_EMAIL_DOMAINS_RAW`,
+    aliased to `FREE_EMAIL_DOMAINS`) — so the alias, not the field name, is
+    the key that must actually appear in `.env.example`.
+    """
+    example = ENV_EXAMPLE.read_text()
+    env_names = {
+        (field.alias or name): name for name, field in Settings.model_fields.items()
+    }
+
+    missing = sorted(
+        field_name
+        for env_name, field_name in env_names.items()
+        if not re.search(rf"^{env_name}=", example, re.M)
+    )
 
     assert missing == [], f"settings absent from .env.example: {missing}"
 

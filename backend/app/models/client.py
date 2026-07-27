@@ -23,7 +23,6 @@ from sqlalchemy import (
     ForeignKey,
     ForeignKeyConstraint,
     Index,
-    Numeric,
     String,
     Text,
     UniqueConstraint,
@@ -102,8 +101,12 @@ class ClientMention(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
     email_message_id: Mapped[uuid.UUID | None] = mapped_column(
         PgUUID(as_uuid=True), ForeignKey("email_messages.id", ondelete="SET NULL"), index=True
     )
+    # No confidence column: `matched_by` already encodes match strength
+    # honestly — a domain match is a fact about where the mail came from, a
+    # name match is a resemblance. A per-mention numeric score would be a
+    # fabricated probability (see the docstring in app/api/opportunities.py
+    # on never rendering `model_confidence` as one).
     matched_by: Mapped[str] = mapped_column(String(16), nullable=False)
-    confidence: Mapped[float | None] = mapped_column(Numeric(4, 3))
 
     __table_args__ = (
         ForeignKeyConstraint(

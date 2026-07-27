@@ -67,6 +67,28 @@ async def test_the_list_hides_merged_rows_by_default(agency_with_clients) -> Non
     assert [row["id"] for row in body["items"]] == [str(ids["live"])]
 
 
+async def test_the_all_count_excludes_merged_rows_like_the_default_list(
+    agency_with_clients,
+) -> None:
+    """The chip cannot promise more rows than the unfiltered list can show.
+
+    The fixture has one live client and one merged one. "all" must equal the
+    length of the default (merged-excluding) listing, not the whole-tenant
+    row count — otherwise the chip shows 2 while the list under it shows 1.
+    """
+    tid, uid, ids = agency_with_clients
+    async with await _client_for(tid, uid) as http:
+        body = (await http.get("/api/clients")).json()
+    assert body["counts"]["all"] == len(body["items"])
+    assert body["counts"]["all"] == 1
+    # The merged row is still counted under its own status and reachable
+    # via the explicit filter.
+    assert body["counts"]["merged"] == 1
+    async with await _client_for(tid, uid) as http:
+        merged_body = (await http.get("/api/clients?status=merged")).json()
+    assert [row["id"] for row in merged_body["items"]] == [str(ids["merged"])]
+
+
 async def test_the_status_filter_is_the_review_queue(agency_with_clients) -> None:
     tid, uid, ids = agency_with_clients
     async with await _client_for(tid, uid) as http:
@@ -121,7 +143,7 @@ async def test_merge_keeps_both_null_message_mentions_after_a_collision(
         await s.execute(
             text(
                 "INSERT INTO client_mentions (id, tenant_id, client_id, email_message_id, "
-                "matched_by, confidence) VALUES (:i, :t, :c, NULL, 'name', 0.2)"
+                "matched_by) VALUES (:i, :t, :c, NULL, 'name')"
             ),
             {"i": uuid.uuid4(), "t": tid, "c": ids["live"]},
         )
@@ -138,7 +160,7 @@ async def test_merge_keeps_both_null_message_mentions_after_a_collision(
         await s.execute(
             text(
                 "INSERT INTO client_mentions (id, tenant_id, client_id, email_message_id, "
-                "matched_by, confidence) VALUES (:i, :t, :c, NULL, 'email_domain', 0.9)"
+                "matched_by) VALUES (:i, :t, :c, NULL, 'email_domain')"
             ),
             {"i": uuid.uuid4(), "t": tid, "c": ids["merged"]},
         )
@@ -161,8 +183,8 @@ async def test_merge_keeps_both_null_message_mentions_after_a_collision(
             )
         ).fetchall()
     # Both no-message mentions survive: one on each row. No evidence is lost,
-    # even though the stronger (email_domain, 0.9) one stayed on the now-
-    # merged loser rather than moving to the surviving client.
+    # even though the stronger (email_domain) one stayed on the now-merged
+    # loser rather than moving to the surviving client.
     assert sorted(row[0] for row in rows) == sorted([ids["live"], ids["merged"]])
 
 
@@ -172,9 +194,10 @@ async def test_merge_keeps_the_stronger_mention_on_a_real_message_collision(
     """On a genuine same-message collision, the better evidence must win.
 
     Both clients hold a mention for the same real message id. The loser's
-    mention is the stronger claim (email_domain, high confidence) against the
-    target's weaker one (name, low confidence). The merge must not simply
-    keep whichever happened to already be on the target.
+    mention is the stronger claim (email_domain) against the target's weaker
+    one (name) — matched_by alone ranks them, since there is no confidence
+    column to fall back on. The merge must not simply keep whichever
+    happened to already be on the target.
     """
     tid, uid, ids = agency_with_clients
     message_id = uuid.uuid4()
@@ -200,7 +223,7 @@ async def test_merge_keeps_the_stronger_mention_on_a_real_message_collision(
         await s.execute(
             text(
                 "INSERT INTO client_mentions (id, tenant_id, client_id, email_message_id, "
-                "matched_by, confidence) VALUES (:i, :t, :c, :m, 'name', 0.2)"
+                "matched_by) VALUES (:i, :t, :c, :m, 'name')"
             ),
             {"i": uuid.uuid4(), "t": tid, "c": ids["live"], "m": message_id},
         )
@@ -216,7 +239,7 @@ async def test_merge_keeps_the_stronger_mention_on_a_real_message_collision(
         await s.execute(
             text(
                 "INSERT INTO client_mentions (id, tenant_id, client_id, email_message_id, "
-                "matched_by, confidence) VALUES (:i, :t, :c, :m, 'email_domain', 0.9)"
+                "matched_by) VALUES (:i, :t, :c, :m, 'email_domain')"
             ),
             {"i": loser_mention_id, "t": tid, "c": ids["merged"], "m": message_id},
         )
@@ -232,7 +255,7 @@ async def test_merge_keeps_the_stronger_mention_on_a_real_message_collision(
         rows = (
             await s.execute(
                 text(
-                    "SELECT id, client_id, matched_by, confidence FROM client_mentions "
+                    "SELECT id, client_id, matched_by FROM client_mentions "
                     "WHERE tenant_id = :t AND email_message_id = :m"
                 ),
                 {"t": tid, "m": message_id},
