@@ -18,6 +18,7 @@ from sqlalchemy import ARRAY, Text, bindparam, text
 
 from app.core.config import settings
 from app.db.rls import tenant_session
+from app.services.client_matching import match_client
 from app.services.ingest.evidence import parse_salary, quality_state, verify
 from app.services.ingest.glossary import DetectedCode, GlossaryEntry, detect
 from app.services.ingest.schema import ExtractedField, ExtractedJob, ExtractionResponse
@@ -90,6 +91,11 @@ _SELECT_GLOSSARY = text(
     "SELECT code, meaning, attribute FROM glossary_codes ORDER BY code"
 )
 
+# The matcher needs the sender, which lives on the message rather than in the
+# extraction. Read inside the same transaction so it cannot disagree with what
+# the rest of this write assumes.
+_SENDER = text("SELECT sender_email FROM email_messages WHERE id = :id")
+
 _INSERT_CODE = text(
     """
     INSERT INTO opportunity_codes
@@ -151,6 +157,18 @@ async def persist(
         # and lost its shorthand would leave a row that reads as though the
         # client stated no requirement at all.
         codes = detect(source, await _glossary(session))
+
+        # One client per email, not per vacancy: three vacancies in one mail
+        # come from one company, and proposing three identical clients would
+        # make the review queue unusable on the first busy day.
+        sender_email = (
+            await session.execute(_SENDER, {"id": email_message_id})
+        ).scalar_one_or_none()
+        first_company = next(
+            (_value(job.company) for job in response.jobs if _value(job.company)),
+            None,
+        )
+        await match_client(session, tenant_id, email_message_id, sender_email, first_company)
 
         # An email describing three vacancies becomes three rows. They share
         # one extraction, because they came from one model call — that is what
