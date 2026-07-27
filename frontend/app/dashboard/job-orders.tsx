@@ -70,7 +70,7 @@ export function JobOrders({ me, heading = "h2" }: { me: Me; heading?: "h1" | "h2
   const filtered = visible.length !== items.length;
 
   return (
-    <section className="jo-workspace">
+    <section className="jo-workspace" data-lead={heading === "h1" ? "yes" : undefined}>
       <StatCards me={me} counts={counts} />
 
       <div className="jo-head">

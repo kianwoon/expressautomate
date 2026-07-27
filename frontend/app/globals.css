@@ -602,7 +602,15 @@ section { padding: 60px 0; }
 }
 
 /* ---- dashboard workspace ---- */
-.jo-workspace { margin-top: 44px; }
+/* `section { padding: 60px 0 }` is a page-level rule, and this is a section
+   nested inside one — it was quietly collecting 60px of padding meant for
+   full-width bands. That, plus the margin below, plus the hero's own padding,
+   is how three separate rules stacked into a gap nobody had chosen. */
+.jo-workspace { padding: 0; margin-top: 44px; }
+/* When the workspace leads the page there is nothing above it to be separated
+   from, so the margin is space with no job. The hero's padding alone sets the
+   distance from the nav. */
+.jo-workspace[data-lead="yes"] { margin-top: 0; }
 .jo-stats { margin-bottom: 40px; }
 .jo-stat {
   display: flex; flex-direction: column; gap: 4px;
