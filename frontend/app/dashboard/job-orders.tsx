@@ -291,8 +291,8 @@ export function JobOrders() {
 
           <p className="body muted" style={{ marginTop: 14, fontSize: "0.8125rem" }}>
             Every value here was written by the sender, not by us. Long requirements and
-            descriptions are shortened to keep the rows scannable — hover a cell to read it in
-            full, and on a narrow screen scroll the table sideways to reach every column.
+            descriptions are shortened to keep the rows scannable — click one to read it in full,
+            and on a narrow screen scroll the table sideways to reach every column.
           </p>
         </>
       )}
@@ -325,6 +325,13 @@ function haystack(row: Opportunity): string {
     row.location_raw,
     row.requirements,
     row.job_description,
+    // The bare digits too. `salaryRange` formats through `toLocaleString`, so
+    // the rendered text is "263,000" here and "263.000" on a German browser —
+    // searching for either would miss on the other, and nobody types the
+    // separator they were not shown. These are unformatted, so "263000"
+    // matches everywhere.
+    row.salary_min == null ? null : String(row.salary_min),
+    row.salary_max == null ? null : String(row.salary_max),
   ]
     .filter((value): value is string => value != null)
     .join("   ")
@@ -350,7 +357,7 @@ function sortValue(row: Opportunity, key: SortKey): string | number | null {
       // `??`, not `||`: a genuine 0 is an extracted value, and treating it as
       // absent would sink an unpaid posting to the bottom as though the email
       // had said nothing about pay at all.
-      return row.salary_min ?? row.salary_max ?? null;
+      return monthly(row.salary_min ?? row.salary_max ?? null, row.salary_period);
     case "company":
       return lower(row.company_name_raw);
     case "position":
@@ -372,6 +379,37 @@ function sortValue(row: Opportunity, key: SortKey): string | number | null {
  *  uppercase-first ordering files them pages apart. */
 function lower(value: string | null): string | null {
   return value == null ? null : value.toLowerCase();
+}
+
+// How many of each period make a month. Extraction stores the period beside
+// the figure precisely so this is possible (see `salary_period` on the
+// opportunities table).
+const PER_MONTH: Record<string, number> = {
+  hour: 1 / (40 * 4.35),
+  day: 1 / 21.75,
+  week: 1 / 4.35,
+  month: 1,
+  year: 12,
+};
+
+/**
+ * A salary on one scale, so the column sorts by what a job actually pays.
+ *
+ * Comparing the raw figures put "SGD 30,000 per year" above "SGD 5,000 per
+ * month", which is 60,000 a year — the higher-paying role ranked lower, in a
+ * product whose users sort by salary to find the better job. The period is
+ * stored next to the amount for exactly this reason, so use it.
+ *
+ * An unrecognised or missing period returns null rather than assuming
+ * monthly: a wrong position in the ordering is indistinguishable from a right
+ * one, whereas an unsortable row sinks to the bottom where its absence is
+ * visible. Currency is still not normalised — that needs live rates, and
+ * inventing one is the kind of guess §15 exists to forbid.
+ */
+function monthly(amount: number | null, period: string | null): number | null {
+  if (amount == null) return null;
+  const factor = period == null ? null : PER_MONTH[period.trim().toLowerCase()];
+  return factor == null ? null : amount / factor;
 }
 
 function compare(a: Opportunity, b: Opportunity, sort: Sort): number {
@@ -516,13 +554,26 @@ function Td({
       }}
     >
       {/* Clamping hides the tail of a paragraph, so the tail has to stay
-          reachable somewhere, and the title is that somewhere. Only set where
-          there is text: a tooltip reading "Not mentioned" just repeats the
-          cell under the cursor. */}
+          reachable — and a `title` alone is not reachable. It needs a mouse,
+          which rules out every keyboard user and every phone, and phones are
+          exactly where the clamp bites hardest. So the cell expands on click
+          or Enter, and keeps the tooltip as a convenience for the pointer.
+
+          `<details>` rather than a state hook: this is one disclosure per
+          cell, the browser already makes it keyboard-operable and
+          findable-in-page, and it works before hydration. */}
       {clamp && plain ? (
-        <span className="jo-clamp" title={plain}>
-          <Breakable text={plain} />
-        </span>
+        <details className="jo-more">
+          {/* The text lives in the summary, once. Putting a full copy in the
+              body as well would duplicate it for a screen reader and give
+              find-in-page two hits for one job description. Opening simply
+              stops the clamp. */}
+          <summary title={plain}>
+            <span className="jo-clamp">
+              <Breakable text={plain} />
+            </span>
+          </summary>
+        </details>
       ) : plain !== undefined ? (
         <Value text={plain} />
       ) : (

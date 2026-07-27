@@ -592,6 +592,17 @@ section { padding: 60px 0; }
   display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 4;
   overflow: hidden;
 }
+/* The clamped cell is a disclosure. The marker is hidden because a triangle
+   in every long cell is visual noise across nine columns, but the summary
+   stays a real focusable control — removing the marker must not remove the
+   affordance, so the cursor and the focus ring carry it instead. */
+.jo-more > summary { cursor: pointer; list-style: none; }
+.jo-more > summary::-webkit-details-marker { display: none; }
+.jo-more > summary:focus-visible { outline: 2px solid var(--blue-500); outline-offset: 2px; }
+/* Once open, the clamp has to stop clamping or expanding would change
+   nothing — which is how a disclosure comes to look broken. */
+.jo-more[open] > summary .jo-clamp { -webkit-line-clamp: unset; display: block; }
+.jo-more[open] > summary { cursor: default; }
 /* The whole header cell is the target, not just the label: a 40px-wide word
    is a frustrating thing to hit, and a sortable column that looks like plain
    text does not get clicked at all. */
