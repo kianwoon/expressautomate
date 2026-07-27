@@ -127,7 +127,41 @@ function SignedIn({ me }: { me: Me }) {
         <NotConnected me={me} />
       )}
 
-      <div className="grid-3" style={{ marginTop: 40 }}>
+      {/* Job orders come before the account details, because they are what
+          someone opened this page for. The three cards that used to sit here
+          answer questions asked once during setup — who am I signed in as,
+          which workspace, is the permission granted — and then repeated
+          themselves above the fold on every visit forever. They are still
+          available below, folded away. */}
+      {me.mailbox.ingested.extracted > 0 && <JobOrders />}
+
+      <AccountDetails me={me} />
+    </>
+  );
+}
+
+/**
+ * Setup facts, folded away.
+ *
+ * Not deleted: when a mailbox misbehaves these are the first things anyone
+ * needs, and "where do I see which account this is?" is a real question. But
+ * they are reference material — read once, then noise — so they cost a click
+ * rather than a third of the page.
+ *
+ * `<details>` rather than a state hook deliberately: it works before hydration
+ * and is what a browser already knows how to open, close and find-in-page.
+ */
+function AccountDetails({ me }: { me: Me }) {
+  return (
+    <details style={{ marginTop: 48 }}>
+      <summary
+        className="eyebrow"
+        style={{ cursor: "pointer", listStyle: "revert", padding: "4px 0" }}
+      >
+        Account and mailbox details
+      </summary>
+
+      <div className="grid-3" style={{ marginTop: 20 }}>
         <div className="card">
           <h3>Account</h3>
           <div className="rows" style={{ marginTop: 12 }}>
@@ -165,14 +199,7 @@ function SignedIn({ me }: { me: Me }) {
           </p>
         </div>
       </div>
-
-      {/* Only once there is something to show. The "extraction is not live
-          yet" explainer that used to sit here is gone: extraction is live, so
-          it had become a page telling the reader the opposite of the truth.
-          An empty table would be its own kind of lie, hence nothing at all —
-          the stat card above already reports the count. */}
-      {me.mailbox.ingested.extracted > 0 && <JobOrders />}
-    </>
+    </details>
   );
 }
 
