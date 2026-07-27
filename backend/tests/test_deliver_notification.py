@@ -265,3 +265,47 @@ def test_the_job_is_registered_with_arq() -> None:
     from app.workers.settings import WorkerSettings
 
     assert jobs.deliver_notification in WorkerSettings.functions
+
+
+async def test_an_opted_out_number_is_never_messaged(
+    delivery, admin_session, monkeypatch
+) -> None:
+    """One agency's opt-out must stop every agency's sends — the reputation
+    being spent belongs to a number they all share."""
+    from app.core.crypto import encrypt
+    from app.models.notification import CHANNEL_WHATSAPP, address_digest
+
+    tenant_id, dest_id, delivery_id = delivery
+    await admin_session.execute(
+        text(
+            "UPDATE notification_destinations "
+            "SET channel = :ch, address_encrypted = :enc, address_hash = :hash "
+            "WHERE id = :id"
+        ),
+        {
+            "ch": CHANNEL_WHATSAPP,
+            "enc": encrypt("+6591234567"),
+            "hash": address_digest("+6591234567"),
+            "id": dest_id,
+        },
+    )
+    await admin_session.execute(
+        text(
+            "INSERT INTO whatsapp_suppressions (id, address_hash, reason) "
+            "VALUES (gen_random_uuid(), :hash, 'user_stop')"
+        ),
+        {"hash": address_digest("+6591234567")},
+    )
+    await admin_session.commit()
+
+    fake = FakeChannel(SendResult(outcome=SendOutcome.SENT))
+    monkeypatch.setattr(jobs, "channel_for", lambda name: fake)
+
+    await jobs.deliver_notification(
+        {}, delivery_id=str(delivery_id), tenant_id=str(tenant_id)
+    )
+    assert fake.sends == []
+    assert await _status(tenant_id, delivery_id) == STATUS_FAILED
+
+    await admin_session.execute(text("DELETE FROM whatsapp_suppressions"))
+    await admin_session.commit()

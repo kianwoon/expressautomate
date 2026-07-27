@@ -28,11 +28,13 @@ from app.core.crypto import decrypt
 from app.core.logging import get_logger
 from app.db.rls import tenant_session
 from app.models.notification import (
+    CHANNEL_WHATSAPP,
     STATUS_FAILED,
     STATUS_PENDING,
     STATUS_SENDING,
     STATUS_SENT,
     STATUS_SUPPRESSED,
+    address_digest,
 )
 from app.models.sync_event import (
     KIND_BACKFILL,
@@ -281,6 +283,16 @@ _RECORD_FAILURE = text(
 
 _RESET_FAILURES = text(
     "UPDATE notification_destinations SET failure_count = 0 WHERE id = :id"
+)
+
+# `whatsapp_suppressions` carries no tenant_id by design (see its model
+# docstring) — an opt-out is a fact about our shared WhatsApp number, not
+# about one agency — so this reads through the caller's own tenant_session
+# rather than needing a SECURITY DEFINER function: the table's `global_read`
+# policy (`USING (true)`) already permits the read regardless of which
+# tenant is set.
+_IS_SUPPRESSED = text(
+    "SELECT 1 FROM whatsapp_suppressions WHERE address_hash = :address_hash"
 )
 
 # Used only by the unexpected-exception guard in deliver_notification. The
@@ -1214,10 +1226,34 @@ async def _send_claimed_delivery(tenant: uuid.UUID, delivery_id: str, claimed) -
         salary=subject.salary_raw,
     )
     content = render(event, target.channel, rollup=len(rolled))
+    address = decrypt(target.address_encrypted)
 
-    result = await channel_for(target.channel).send(
-        decrypt(target.address_encrypted), content
-    )
+    if target.channel == CHANNEL_WHATSAPP:
+        # Global by design: this person opted out of our *number*, which
+        # every tenant shares. Messaging them again through a different
+        # agency is exactly what Meta counts against the number, and the
+        # quality rating it moves belongs to everyone, not just this tenant.
+        async with tenant_session(tenant) as session:
+            suppressed = (
+                await session.execute(
+                    _IS_SUPPRESSED, {"address_hash": address_digest(address)}
+                )
+            ).one_or_none()
+        if suppressed is not None:
+            async with tenant_session(tenant) as session:
+                await session.execute(
+                    _FINISH_DELIVERY,
+                    {
+                        "id": delivery_id,
+                        "status": STATUS_FAILED,
+                        "provider_message_id": None,
+                        "error": "recipient opted out of WhatsApp messages",
+                        "is_sent": False,
+                    },
+                )
+            return
+
+    result = await channel_for(target.channel).send(address, content)
 
     if result.outcome is SendOutcome.SENT:
         async with tenant_session(tenant) as session:
