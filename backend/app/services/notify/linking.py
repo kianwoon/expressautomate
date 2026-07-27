@@ -51,13 +51,26 @@ _CONSUME_TOKEN = text(
     """
 )
 
+# `user_id` is in the DO UPDATE set on purpose: ownership follows the most
+# recent proof, not the first claimant. A phone number or Telegram chat is
+# one physical device, so a second user verifying the same address means the
+# device changed hands and the person holding it now is the one who just
+# proved it — leaving the row attributed to whoever verified it first would
+# silently keep sending a colleague's job orders to someone else's phone.
+# This is deliberately symmetric across the nullable boundary too: verifying
+# with a specific `user_id` claims a previously tenant-shared address as
+# personal, and verifying with `user_id=NULL` (the agency re-registering its
+# shared feed) surrenders a previously personal claim back to the tenant.
+# Both are "most recent proof wins" — the same rule, just written as an
+# unconditional assignment rather than a conditional one, since that is what
+# keeps it a single obvious rule instead of two special cases to maintain.
 _UPSERT_DESTINATION = text(
     """
     INSERT INTO notification_destinations
         (id, tenant_id, user_id, channel, address_encrypted, address_hash, verified_at)
     VALUES (:id, :tenant_id, :user_id, :channel, :address_encrypted, :address_hash, now())
     ON CONFLICT (tenant_id, channel, address_hash) DO UPDATE
-      SET verified_at = now(), disabled_at = NULL, failure_count = 0
+      SET user_id = EXCLUDED.user_id, verified_at = now(), disabled_at = NULL, failure_count = 0
     RETURNING id
     """
 )

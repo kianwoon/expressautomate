@@ -142,6 +142,81 @@ async def test_relinking_the_same_address_reuses_the_destination(account) -> Non
     assert first == second
 
 
+async def test_relinking_by_a_different_user_transfers_ownership(
+    account, admin_session
+) -> None:
+    """A phone or Telegram chat is one physical device: when a second
+    colleague verifies the address A already held, the device has changed
+    hands and A's copy is stale. Ownership must follow whoever just proved
+    control, not stay with whoever proved it first — otherwise B is handed
+    an id they believe is theirs while every later read still attributes it
+    to A, silently sending A's job orders to B's phone.
+    """
+    tenant_id, user_a = account
+    user_b = uuid.uuid4()
+    await admin_session.execute(
+        text(
+            "INSERT INTO users (id, tenant_id, email, role) "
+            "VALUES (:id, :tid, 'b@a.sg', 'recruiter')"
+        ),
+        {"id": user_b, "tid": tenant_id},
+    )
+    await admin_session.commit()
+
+    async with tenant_session(tenant_id) as session:
+        first = await create_destination(
+            session, tenant_id, user_a, CHANNEL_TELEGRAM, "12345"
+        )
+    async with tenant_session(tenant_id) as session:
+        second = await create_destination(
+            session, tenant_id, user_b, CHANNEL_TELEGRAM, "12345"
+        )
+    assert first == second
+
+    async with tenant_session(tenant_id) as session:
+        row = (
+            await session.execute(
+                text(
+                    "SELECT user_id FROM notification_destinations WHERE id = :id"
+                ),
+                {"id": first},
+            )
+        ).one()
+    assert row.user_id == user_b
+
+
+async def test_relinking_a_shared_destination_to_a_user_claims_it(
+    account,
+) -> None:
+    """`user_id IS NULL` means the agency's shared feed, not nobody's
+    destination. The same 'most recent proof wins' rule applies across that
+    boundary: a recruiter who personally verifies the number the tenant-wide
+    feed was using has just as much claim as one who verifies it away from a
+    named colleague, so the row becomes theirs rather than staying shared.
+    """
+    tenant_id, user_id = account
+    async with tenant_session(tenant_id) as session:
+        first = await create_destination(
+            session, tenant_id, None, CHANNEL_TELEGRAM, "12345"
+        )
+    async with tenant_session(tenant_id) as session:
+        second = await create_destination(
+            session, tenant_id, user_id, CHANNEL_TELEGRAM, "12345"
+        )
+    assert first == second
+
+    async with tenant_session(tenant_id) as session:
+        row = (
+            await session.execute(
+                text(
+                    "SELECT user_id FROM notification_destinations WHERE id = :id"
+                ),
+                {"id": first},
+            )
+        ).one()
+    assert row.user_id == user_id
+
+
 def test_the_code_is_six_digits() -> None:
     code = generate_code()
     assert len(code) == 6
