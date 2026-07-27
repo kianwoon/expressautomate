@@ -8,6 +8,7 @@ by a code that only reaches the number typed.
 
 import secrets
 import uuid
+from collections import defaultdict
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
@@ -83,6 +84,39 @@ _OPT_IN_ATTEMPTS = text(
       AND created_at > now() - interval '1 hour'
     """
 )
+
+
+# Verify attempts, not opt-in requests: opt_in_attempts_this_hour above counts
+# rows in notification_link_tokens because *issuing* a code is a write we
+# already make. *Guessing* one is not — redeem_token's UPDATE matches zero
+# rows on a wrong guess, so there is nothing to count in the database without
+# adding a table or a column purely to log failed guesses. An in-process
+# counter is the lightweight alternative: it is keyed by user_id (known from
+# the caller's session before the code is even looked at), it self-expires
+# via the same one-hour window as the opt-in cap, and it costs nothing to add
+# or remove later if delivery moves to multiple worker processes — at which
+# point this would need to move to something shared (Redis, or a real table)
+# since counts would no longer be visible across processes. Single-process
+# deployment today makes that gap theoretical, not absent.
+_verify_attempts: dict[uuid.UUID, list[datetime]] = defaultdict(list)
+
+
+def record_verify_attempt(user_id: uuid.UUID) -> None:
+    """Log one attempt to redeem a WhatsApp verification code."""
+    _verify_attempts[user_id].append(datetime.now(UTC))
+
+
+def verify_attempts_this_hour(user_id: uuid.UUID) -> int:
+    """How many redemption attempts this user has made in the last hour.
+
+    Prunes older entries on read rather than on a timer, so the structure
+    never grows past one hour of attempts for a given user and needs no
+    separate sweep.
+    """
+    cutoff = datetime.now(UTC) - timedelta(hours=1)
+    recent = [t for t in _verify_attempts[user_id] if t > cutoff]
+    _verify_attempts[user_id] = recent
+    return len(recent)
 
 
 @dataclass(frozen=True)

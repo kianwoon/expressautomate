@@ -356,6 +356,9 @@ class Settings(BaseSettings):
     # provisioned, and a missing token discovered at startup is far cheaper
     # than one discovered inside a worker on the far side of the queue.
     TELEGRAM_BOT_TOKEN: str = ""
+    # The public @name, used to build the t.me deep link. Not derivable from
+    # the token, and a wrong one produces a link to somebody else's bot.
+    TELEGRAM_BOT_USERNAME: str = ""
     TELEGRAM_API_BASE_URL: str = ""
     # Telegram echoes this in `X-Telegram-Bot-Api-Secret-Token`. Without it the
     # webhook accepts anything that can reach the URL, and the URL is public.
@@ -385,6 +388,13 @@ class Settings(BaseSettings):
     # Sending an authentication template to any number a user types is an
     # OTP pump aimed at our WABA's reputation. This is the ceiling per user.
     NOTIFY_OPT_IN_MAX_PER_HOUR: int = Field(default=5, gt=0)
+    # The six-digit WhatsApp code is guessable in ~1e6 tries; RLS keeps a
+    # guess from reaching another tenant's code, but a same-tenant actor can
+    # still brute-force a colleague's live code within its TTL. This caps
+    # verify *attempts* per user the way NOTIFY_OPT_IN_MAX_PER_HOUR caps
+    # code *requests* — higher than that ceiling because legitimate retries
+    # (typos) are more common here than legitimate re-requests are there.
+    NOTIFY_VERIFY_MAX_PER_HOUR: int = Field(default=10, gt=0)
     NOTIFY_SWEEP_INTERVAL_SECONDS: float = Field(default=300.0, gt=0)
     # How long a delivery may sit `pending` before the sweep assumes its
     # enqueue was lost. Must exceed the worst realistic queue latency, or the
