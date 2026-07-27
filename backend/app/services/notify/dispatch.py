@@ -1,0 +1,168 @@
+"""Event in, outbox rows out.
+
+`emit` takes the caller's session rather than opening its own, so the
+notification rows land in the *same* transaction that created the opportunity.
+Either both commit or neither does — an opportunity with no notification row is
+recoverable, but a notification for an opportunity that rolled back is a
+message about something that never happened.
+
+Enqueueing is deliberately separate and happens after that commit. A job that
+starts before its row is visible reads nothing and exits, and would then never
+be retried.
+"""
+
+import uuid
+
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.config import settings
+from app.core.logging import get_logger
+from app.db.rls import tenant_session
+from app.models.notification import STATUS_PENDING, STATUS_SUPPRESSED
+from app.services.notify.events import OpportunityEvent
+from app.workers.queue import enqueue
+
+log = get_logger(__name__)
+
+# allow-hardcode: SQL statements, not a phrase list.
+
+# A destination only receives if it is verified, not disabled, and actively
+# subscribed. All three in one statement so there is no window between the
+# check and the insert.
+_SUBSCRIBERS = text(
+    """
+    SELECT d.id AS destination_id, d.channel
+    FROM notification_destinations d
+    JOIN notification_subscriptions s ON s.destination_id = d.id
+    WHERE s.event_kind = :event_kind
+      AND s.active
+      AND d.verified_at IS NOT NULL
+      AND d.disabled_at IS NULL
+    """
+)
+
+_COUNT_RECENT = text(
+    """
+    SELECT count(*) FROM notification_deliveries
+    WHERE destination_id = :destination_id
+      AND event_kind = :event_kind
+      AND created_at > now() - interval '1 hour'
+      AND status <> 'suppressed'
+    """
+)
+
+# ON CONFLICT DO NOTHING against the partial dedupe index: the extraction job
+# can be retried, and the recruiter must not be told twice about one vacancy.
+# The predicate here must match the index's `postgresql_where` verbatim
+# (app/models/notification.py::ix_deliveries_dedupe) or Postgres rejects the
+# clause as not matching any unique/exclusion constraint.
+_INSERT_DELIVERY = text(
+    """
+    INSERT INTO notification_deliveries
+        (id, tenant_id, destination_id, event_kind, subject_id, status)
+    VALUES (:id, :tenant_id, :destination_id, :event_kind, :subject_id, :status)
+    ON CONFLICT (destination_id, event_kind, subject_id)
+      WHERE subject_id IS NOT NULL
+      DO NOTHING
+    RETURNING id
+    """
+)
+
+
+async def rate_capped(
+    session: AsyncSession, destination_id: uuid.UUID, event_kind: str
+) -> bool:
+    """Has this destination already had its hour's worth of this event?
+
+    Counts the rows themselves rather than a stored counter, so the cap cannot
+    drift from what was actually sent. Suppressed rows are excluded — counting
+    them would make the first suppression permanent.
+    """
+    recent = (
+        await session.execute(
+            _COUNT_RECENT,
+            {"destination_id": destination_id, "event_kind": event_kind},
+        )
+    ).scalar_one()
+    return recent >= settings.NOTIFY_RATE_CAP_PER_HOUR
+
+
+async def _write_rows(
+    event: OpportunityEvent, session: AsyncSession
+) -> list[tuple[uuid.UUID, bool]]:
+    """Insert one row per subscriber. Returns (delivery_id, capped) pairs for
+    every row actually written — suppressed rows included, since a caller
+    needs to tell "wrote nothing" (dedupe hit) apart from "wrote it, but
+    suppressed" (rate cap hit).
+    """
+    subscribers = (
+        await session.execute(_SUBSCRIBERS, {"event_kind": event.kind})
+    ).all()
+
+    written: list[tuple[uuid.UUID, bool]] = []
+    for row in subscribers:
+        capped = await rate_capped(session, row.destination_id, event.kind)
+        delivery_id = (
+            await session.execute(
+                _INSERT_DELIVERY,
+                {
+                    "id": uuid.uuid4(),
+                    "tenant_id": event.tenant_id,
+                    "destination_id": row.destination_id,
+                    "event_kind": event.kind,
+                    "subject_id": event.opportunity_id,
+                    "status": STATUS_SUPPRESSED if capped else STATUS_PENDING,
+                },
+            )
+        ).scalar_one_or_none()
+
+        # None means the dedupe index rejected it — already told, nothing to do.
+        if delivery_id is not None:
+            written.append((delivery_id, capped))
+
+    return written
+
+
+async def emit(event: OpportunityEvent, session: AsyncSession) -> list[uuid.UUID]:
+    """Write one outbox row per subscriber. Returns every id actually written.
+
+    A row over the rate cap is written as `suppressed` rather than skipped: the
+    next delivery counts them to say "and N more", and the sweep flushes them
+    if no next delivery ever comes. Its id is still returned here — the caller
+    (or a test) may need to look the row up — but `emit_and_enqueue` below
+    knows not to queue a send job for it.
+    """
+    return [delivery_id for delivery_id, _ in await _write_rows(event, session)]
+
+
+async def enqueue_deliveries(
+    tenant_id: uuid.UUID, delivery_ids: list[uuid.UUID]
+) -> int:
+    """Queue the rows the caller has now committed.
+
+    `enqueue` never raises and returns False on failure; the sweep is what
+    turns a lost job back into a queued one, exactly as `rescan_stuck` does for
+    ingestion.
+    """
+    queued = 0
+    for delivery_id in delivery_ids:
+        if await enqueue(
+            "deliver_notification",
+            delivery_id=str(delivery_id),
+            tenant_id=str(tenant_id),
+        ):
+            queued += 1
+    return queued
+
+
+async def emit_and_enqueue(event: OpportunityEvent) -> int:
+    """For callers with no transaction of their own. Opens, commits, enqueues.
+
+    Only the non-suppressed ids go to the queue — a suppressed row has nothing
+    to send yet, so queuing it would just make a worker fetch it and no-op.
+    """
+    async with tenant_session(event.tenant_id) as session:
+        written = await _write_rows(event, session)
+    to_enqueue = [delivery_id for delivery_id, capped in written if not capped]
+    return await enqueue_deliveries(event.tenant_id, to_enqueue)
