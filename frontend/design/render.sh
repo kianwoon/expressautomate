@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Regenerates the raster brand assets in ../public from their SVG sources.
 #
-# Run this after editing design/og.svg or public/icon.svg. The rasters are
+# Run this after editing design/og.svg, design/apple-icon.svg or
+# public/icon.svg, and bump ASSET_VERSION in app/layout.tsx so the CDN serves
+# the new bytes rather than four more hours of the old ones. The rasters are
 # committed rather than generated at build time: they are needed by link-preview
 # crawlers and by browsers that will not take an SVG, and neither of those can
 # wait for a build step.
@@ -28,7 +30,13 @@ SHOT=(--headless --disable-gpu --hide-scrollbars --default-background-color=0000
 # plate-less mark would land as a gradient "e" on black. apple-icon.svg keeps
 # a plate; everything else uses the transparent public/icon.svg.
 render_icon() {  # render_icon <source-svg> <size> <output-png>
-  sed "s|width=\"64\" height=\"64\"|width=\"$2\" height=\"$2\"|" "$1" > "/tmp/ea-src-$2.svg"
+  # Anchored to the viewBox so it can only match the <svg> root. Matching on
+  # width/height alone also rewrote apple-icon.svg's 64x64 background rect,
+  # which happens to survive being resized to 180x180 only because it sits at
+  # the origin and the viewport clips the overflow — an offset or rounded
+  # plate would have broken silently.
+  sed "s|viewBox=\"0 0 64 64\" width=\"64\" height=\"64\"|viewBox=\"0 0 64 64\" width=\"$2\" height=\"$2\"|" \
+    "$1" > "/tmp/ea-src-$2.svg"
   "$CHROME" "${SHOT[@]}" --window-size="$2,$2" \
     --screenshot="$3" "file:///tmp/ea-src-$2.svg"
 }

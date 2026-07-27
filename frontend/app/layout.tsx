@@ -3,9 +3,13 @@ import "./globals.css";
 
 const TITLE = "expressautomate.app — AI recruitment operations";
 
-/** Bump when any file in public/ that this page links as an icon is redrawn.
- *  See the note on `icons` below for why this exists. */
-const ICON_VERSION = "2";
+/**
+ * Bump when any raster in public/ that this page links is redrawn — the three
+ * icons or og.png. See the note on `icons` below for the measurement behind it.
+ */
+const ASSET_VERSION = "2";
+
+const OG_IMAGE = `/og.png?v=${ASSET_VERSION}`;
 
 /* The one line a link preview gets. WhatsApp truncates the title at roughly
    two lines and the description at two more, so this says what the product
@@ -36,7 +40,7 @@ export const metadata: Metadata = {
     locale: "en_SG",
     images: [
       {
-        url: "/og.png",
+        url: OG_IMAGE,
         width: 1200,
         height: 630,
         alt: "expressautomate.app — your agency knows more than any one person can see. Put it in one place.",
@@ -47,7 +51,7 @@ export const metadata: Metadata = {
     card: "summary_large_image",
     title: TITLE,
     description: PREVIEW_DESCRIPTION,
-    images: ["/og.png"],
+    images: [OG_IMAGE],
   },
   icons: {
     /* SVG first for browsers that take it (sharp at any size), .ico second as
@@ -60,14 +64,15 @@ export const metadata: Metadata = {
        after the deploy that replaced the plated favicon, /icon.svg returned
        `cf-cache-status: HIT, age: 1546` with the old file while
        /icon.svg?cb=99 returned the new one. Browsers cache favicons harder
-       still. Bump ICON_VERSION whenever public/icon.svg, favicon.ico or
-       apple-touch-icon.png changes; the new URL is a different cache key and
-       takes effect at once, with no cache purge to remember. */
+       still. og.png is on the same clock and carries the same parameter.
+       Bump ASSET_VERSION whenever one of those four files is redrawn; the new
+       URL is a different cache key and takes effect at once, with no cache
+       purge for anyone to remember. */
     icon: [
-      { url: `/icon.svg?v=${ICON_VERSION}`, type: "image/svg+xml" },
-      { url: `/favicon.ico?v=${ICON_VERSION}`, sizes: "any" },
+      { url: `/icon.svg?v=${ASSET_VERSION}`, type: "image/svg+xml" },
+      { url: `/favicon.ico?v=${ASSET_VERSION}`, sizes: "any" },
     ],
-    apple: `/apple-touch-icon.png?v=${ICON_VERSION}`,
+    apple: `/apple-touch-icon.png?v=${ASSET_VERSION}`,
   },
 };
 

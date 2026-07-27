@@ -29,7 +29,9 @@
   <rect width="1200" height="630" fill="url(#bg)"/>
   <rect x="0" y="606" width="1200" height="24" fill="url(#brand)"/>
 
-  <!-- the mark, matching public/icon.svg -->
+  <!-- The full mark on its plate, as the nav shows it — deliberately NOT
+       public/icon.svg, which is stripped down to the bare "e" for legibility
+       at 16px. There is room for the whole mark at 120px in a link preview. -->
   <g transform="translate(96 96) scale(1.875)">
     <rect width="64" height="64" rx="14" fill="url(#plate)"/>
     <g fill="#fff">
