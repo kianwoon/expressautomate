@@ -1,0 +1,131 @@
+"""OpenRouter JSON completion (plan §32).
+
+Returns parsed data or raises. It never repairs a malformed response beyond
+stripping a code fence, and never falls back to a default value — a silent
+default here becomes a fabricated salary in someone's database.
+
+Like the Graph client, it classifies rather than retries: `LLMInvalidJSON` says
+"this response is unusable", and everything else is left as the httpx error it
+already is. The job layer is the only place that knows whether re-asking a model
+is worth the tokens, so it owns retry and escalation to the strong model.
+"""
+
+import json
+import re
+import time
+from dataclasses import dataclass, field
+
+import httpx
+
+from app.core.config import settings
+
+# Anchored to the whole string: a fence is a wrapper the model added around its
+# answer, not a thing to go hunting for mid-document. Matching loosely would let
+# prose *containing* a fenced example pass as the answer itself.
+_FENCE = re.compile(r"^\s*```(?:json)?\s*(.*?)\s*```\s*$", re.DOTALL)
+
+
+class LLMInvalidJSON(Exception):
+    """The model did not return parseable JSON.
+
+    Separate from a transport error because the caller's answer differs: a
+    timeout is worth retrying unchanged, this is worth re-asking a stronger
+    model — or giving up and flagging the email for a human.
+    """
+
+
+@dataclass
+class LLMResult:
+    data: dict
+    model: str
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    latency_ms: int = 0
+    # The untouched response body. Kept so a bad extraction can be diagnosed
+    # from what the model actually said, not from our summary of it.
+    raw: dict = field(default_factory=dict)
+
+
+async def complete_json(
+    prompt: str,
+    *,
+    model: str,
+    schema: dict,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> LLMResult:
+    """Ask `model` for one JSON object.
+
+    `transport` is the seam tests use; nothing in production passes it, and it
+    is what keeps the suite from ever spending money on a real completion.
+    """
+    started = time.monotonic()
+    async with httpx.AsyncClient(
+        base_url=settings.LLM_BASE_URL,
+        timeout=settings.LLM_TIMEOUT_SECONDS,
+        transport=transport,
+        headers={"Authorization": f"Bearer {settings.OPENROUTER_API_KEY}"},
+    ) as client:
+        response = await client.post(
+            "/chat/completions",
+            json={
+                "model": model,
+                "messages": [{"role": "user", "content": prompt}],
+                "response_format": {"type": "json_object"},
+                # Extraction must be reproducible: the same email replayed
+                # through the same prompt version has to give the same answer,
+                # or a corrections table can never be trusted as a baseline.
+                "temperature": 0,
+            },
+        )
+        response.raise_for_status()
+        body = response.json()
+
+    content = body["choices"][0]["message"]["content"]
+    usage = body.get("usage") or {}
+    return LLMResult(
+        data=_parse(content),
+        # OpenRouter may route to a different model than the one requested.
+        # Recording what answered, not what we asked for, is what makes a
+        # per-model quality comparison mean anything.
+        model=body.get("model", model),
+        prompt_tokens=usage.get("prompt_tokens"),
+        completion_tokens=usage.get("completion_tokens"),
+        latency_ms=int((time.monotonic() - started) * 1000),
+        raw=body,
+    )
+
+
+def _parse(content: str) -> dict:
+    if match := _FENCE.match(content or ""):
+        content = match.group(1)
+    try:
+        parsed = json.loads(content)
+    except (json.JSONDecodeError, TypeError) as exc:
+        # Truncated: the message ends up in logs, and a runaway completion would
+        # otherwise put a whole email body there.
+        raise LLMInvalidJSON(content[:500]) from exc
+    if not isinstance(parsed, dict):
+        # A bare list or number parses fine and would then fail far downstream
+        # on an attribute the caller assumed. Reject it where it happened.
+        raise LLMInvalidJSON(f"expected an object, got {type(parsed).__name__}")
+    return parsed
+
+
+class FakeLLM:
+    """Test double. Queue responses; assert on the prompts it received.
+
+    Substitutable for `complete_json` because it is callable with the same
+    signature — a test swaps it in without the code under test knowing.
+    """
+
+    def __init__(self, *responses: dict) -> None:
+        self.responses = list(responses)
+        self.prompts: list[str] = []
+
+    async def __call__(self, prompt: str, *, model: str, schema: dict, **_) -> LLMResult:
+        self.prompts.append(prompt)
+        if not self.responses:
+            # Loud rather than returning an empty dict: a silently-empty
+            # extraction looks exactly like an email with no job in it.
+            raise AssertionError("FakeLLM ran out of queued responses")
+        return LLMResult(data=self.responses.pop(0), model=model)

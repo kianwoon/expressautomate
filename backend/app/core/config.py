@@ -160,6 +160,14 @@ class Settings(BaseSettings):
     LLM_BASE_URL: str = ""
     EXTRACTION_MODEL_FAST: str = ""
     EXTRACTION_MODEL_STRONG: str = ""
+    CLASSIFIER_MODEL: str = ""
+    # Generous next to GRAPH_TIMEOUT_SECONDS on purpose: a long recruitment
+    # email on a strong model routinely spends a minute generating, and a
+    # timeout here costs the whole extraction plus a retry's worth of tokens.
+    LLM_TIMEOUT_SECONDS: float = 90.0
+    # Stamped onto every extraction so a prompt change is attributable — without
+    # it, a quality regression cannot be told from a change in the mail itself.
+    PROMPT_VERSION: str = "v1"
 
     # --- Queue (Upstash Redis) ---
     REDIS_URL: str = ""
