@@ -184,7 +184,13 @@ for the Phase 2 semantic-search work (§20) — no extension is enabled yet.
 
 Secrets generated fresh for this project (not shared with draftproof):
 `APP_SECRET_KEY`, `TOKEN_ENCRYPTION_KEY` (32-byte, Fernet-compatible, encrypts
-stored OAuth refresh tokens per §30), `MS_WEBHOOK_CLIENT_STATE`.
+stored OAuth refresh tokens per §30).
+
+There is deliberately **no shared webhook secret**. Each Graph subscription
+generates its own random `clientState` when it is created and stores it on the
+row; the webhook compares incoming notifications against that. One shared value
+would make every tenant's notifications forgeable the moment it leaked
+anywhere — per-subscription limits that to a single mailbox.
 
 ## Blocked — needs you
 

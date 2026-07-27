@@ -52,8 +52,18 @@ async def enqueued(monkeypatch) -> list[tuple[str, dict]]:
 
 @pytest.fixture
 async def subscription(admin_session):
-    """A tenant, mailbox and active subscription, torn down by cascade."""
+    """A tenant, mailbox and active subscription, torn down by cascade.
+
+    `subscription_id` is globally unique, and this fixture uses a fixed value
+    so the payload helpers can name it. A row stranded by an earlier failure
+    would therefore break every later run, so it is cleared first — the suite
+    should be recoverable without hand-deleting rows.
+    """
     tenant_id, mailbox_id = uuid.uuid4(), uuid.uuid4()
+    await admin_session.execute(
+        text("DELETE FROM graph_subscriptions WHERE subscription_id = :sub"),
+        {"sub": SUBSCRIPTION_ID},
+    )
     await admin_session.execute(
         text("INSERT INTO tenants (id, name, slug) VALUES (:id, 'A', :slug)"),
         {"id": tenant_id, "slug": f"a-{tenant_id.hex[:8]}"},
@@ -223,25 +233,21 @@ async def test_a_non_ascii_client_state_is_rejected_not_crashed(
     assert enqueued == []
 
 
-async def test_an_empty_stored_secret_authorises_nothing(
-    client, subscription, admin_session, enqueued
-):
-    """Nothing writes an empty client_state today. If anything ever did, an
-    omitted clientState would compare equal and authorise anonymous inserts.
+@pytest.mark.parametrize("stored", ["", None])
+def test_an_empty_stored_secret_authorises_nothing(stored):
+    """An omitted clientState would otherwise compare equal to an empty stored
+    secret and authorise anonymous inserts.
+
+    Asserted against the comparison directly rather than through a row: since
+    Task 7 a CHECK constraint makes an empty `client_state` impossible to
+    store, so the database can no longer be put into this state. The guard
+    stays because the comparison is the enforcement point, and a defence that
+    only works while a constraint holds is one deployment away from not
+    working.
     """
-    tenant_id, _ = subscription
-    await admin_session.execute(
-        text("UPDATE graph_subscriptions SET client_state = '' WHERE subscription_id = :s"),
-        {"s": SUBSCRIPTION_ID},
-    )
-    await admin_session.commit()
-
-    payload = _notification("MSG-1")
-    payload["value"][0]["clientState"] = ""
-    response = await client.post("/api/graph/notifications", json=payload)
-
-    assert response.status_code == 202
-    assert await _rows(tenant_id) == []
+    assert graph_webhook._client_state_matches("", stored) is False
+    assert graph_webhook._client_state_matches(None, stored) is False
+    assert graph_webhook._client_state_matches("anything", stored) is False
 
 
 async def test_the_echoed_token_cannot_be_sniffed_into_another_type(client):

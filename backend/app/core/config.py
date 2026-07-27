@@ -10,7 +10,7 @@ from functools import lru_cache
 from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from pydantic import PostgresDsn, field_validator
+from pydantic import Field, PostgresDsn, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -66,8 +66,12 @@ class Settings(BaseSettings):
     # the second grant covers both.
     MS_IDENTITY_SCOPES: str = ""
     MS_MAILBOX_SCOPES: str = ""
-    MS_WEBHOOK_CLIENT_STATE: str = ""
+    # No global webhook secret: each subscription carries its own random
+    # `clientState`, generated at creation and stored on the row. One shared
+    # value would make every tenant's notifications forgeable the moment it
+    # leaked anywhere.
     MS_WEBHOOK_NOTIFICATION_URL: str = ""
+    MS_WEBHOOK_LIFECYCLE_URL: str = ""
 
     # --- Microsoft Graph ---
     GRAPH_BASE_URL: str = ""
@@ -79,6 +83,19 @@ class Settings(BaseSettings):
     # one request could demand a database round trip per element for as long as
     # the caller cared to make the list. Graph's own batches are far smaller.
     GRAPH_MAX_NOTIFICATIONS_PER_REQUEST: int = 200
+    # What to ask for. Graph is free to grant less, and the documented maximum
+    # has changed more than once — which is why nothing downstream assumes this
+    # value and the renewal point is derived from what came back.
+    GRAPH_SUBSCRIPTION_REQUEST_MINUTES: int = 4230
+    # Renew this far into the granted lifetime. Half leaves a full half-life of
+    # slack for a failed attempt and the sweep that retries it.
+    #
+    # Bounded to (0, 1] because `renewal_threshold` is a weighted midpoint of
+    # (granted_at, expires_at): at or below 1 the renewal point always falls
+    # before expiry, which is what makes a stale basis merely wasteful rather
+    # than dangerous. Above 1 it lands *after* expiry and every subscription
+    # lapses silently — so the bound is enforced rather than assumed.
+    GRAPH_SUBSCRIPTION_RENEW_MARGIN: float = Field(default=0.5, gt=0, le=1)
 
     # --- Google sign-in (identity only — no Gmail scope; see docs/setup.md) ---
     GOOGLE_CLIENT_ID: str = ""

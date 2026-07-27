@@ -162,13 +162,18 @@ async def test_delete_tolerates_an_already_deleted_subscription():
         seen["path"] = request.url.path
         return httpx.Response(404, json={})
 
-    await _client(handler).delete("/subscriptions/gone")
+    existed = await _client(handler).delete("/subscriptions/gone")
 
     # Assert the call happened: a `delete` that never issued a request would
     # also raise nothing, and would pass a bare no-exception check. The path is
     # matched by suffix because base_url carries the API version prefix.
     assert seen["method"] == "DELETE"
     assert seen["path"].endswith("/subscriptions/gone")
+    assert existed is False, "callers distinguish 'removed it' from 'already gone'"
+
+
+async def test_delete_reports_that_the_resource_was_there():
+    assert await _client(_responds(204)).delete("/subscriptions/x") is True
 
 
 async def test_delete_still_raises_on_a_real_failure():

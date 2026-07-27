@@ -90,16 +90,24 @@ class GraphClient:
     async def patch(self, path: str, json: dict) -> dict:
         return self._unwrap(await self._client.patch(path, json=json))
 
-    async def delete(self, path: str) -> None:
+    async def delete(self, path: str) -> bool:
         """Delete, treating "already absent" as success.
 
         Subscription cleanup runs on paths that race — a recreate that beat us,
-        a lifecycle event we handled twice — and in every one of them a 404
-        means the desired state already holds. A real failure still raises.
+        a lifecycle event handled twice — and in every one of them a 404 means
+        the desired state already holds. A real failure still raises.
+
+        Returns whether the resource was actually there. Callers that only care
+        about the end state can ignore it; the distinction exists because
+        "we removed it" and "it was already gone" are worth different log
+        lines when a subscription disappears unexpectedly.
         """
         response = await self._client.delete(path)
-        if response.status_code not in (200, 204, 404):
+        if response.status_code == 404:
+            return False
+        if response.status_code not in (200, 204):
             self._unwrap(response)
+        return True
 
     @staticmethod
     def _unwrap(response: httpx.Response) -> dict:

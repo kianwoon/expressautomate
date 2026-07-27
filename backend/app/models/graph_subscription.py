@@ -14,7 +14,7 @@ argument in, three routing columns out.
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, String, Text
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, String, Text
 from sqlalchemy.dialects.postgresql import UUID as PgUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -23,6 +23,13 @@ from app.db.base import Base, TenantScoped, Timestamps, UUIDPrimaryKey
 
 class GraphSubscription(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
     __tablename__ = "graph_subscriptions"
+    __table_args__ = (
+        # The webhook refuses an empty secret, and that is the enforcement
+        # point. This makes such a row impossible to create in the first place.
+        CheckConstraint(
+            "client_state <> ''", name="ck_graph_subscriptions_client_state_not_empty"
+        ),
+    )
 
     mailbox_id: Mapped[uuid.UUID] = mapped_column(
         PgUUID(as_uuid=True),
