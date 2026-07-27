@@ -95,6 +95,16 @@ ALLOWED_PROMPTS = frozenset({"select_account"})
 DASHBOARD_PATH = "/dashboard"
 
 
+def _iso(value: datetime | None) -> str | None:
+    """Timestamps cross the wire as ISO strings or not at all.
+
+    None is meaningful here and must survive: "no mail yet" and "the oldest is
+    from January" are different answers, and a zero or an epoch would read as
+    the second.
+    """
+    return value.isoformat() if value else None
+
+
 def _frontend_url(path: str) -> str:
     """A URL under FRONTEND_ORIGIN, tolerating a configured trailing slash."""
     return f"{settings.FRONTEND_ORIGIN.rstrip('/')}{path}"
@@ -538,11 +548,36 @@ async def _store_token_if_not_a_downgrade(
 
 
 # allow-hardcode: SQL statements, not a phrase list.
-_INGESTION_ACTIVE = text(
-    "SELECT 1 FROM mailboxes m"
-    " JOIN graph_subscriptions s ON s.mailbox_id = m.id AND s.status = 'active'"
-    " WHERE m.user_id = :user_id AND m.status = 'active'"
-    " LIMIT 1"
+# One round trip for everything the dashboard shows about a mailbox.
+#
+# Counted from the rows, never inferred. "142 emails" that came from anywhere
+# but `email_messages` would be exactly the invented figure this product
+# promises not to produce (§15) — and a dashboard claiming ingestion is running
+# with nothing behind the claim is the same failure in a smaller font.
+_MAILBOX_STATE = text(
+    """
+    SELECT
+        m.status,
+        EXISTS (
+            SELECT 1 FROM graph_subscriptions s
+            WHERE s.mailbox_id = m.id AND s.status = 'active'
+        ) AS subscribed,
+        count(e.id) AS total,
+        count(*) FILTER (WHERE e.processing_status = 'extracted') AS extracted,
+        count(*) FILTER (
+            WHERE e.processing_status IN
+                ('pending', 'fetched', 'classifying', 'extracting')
+        ) AS in_progress,
+        min(e.received_datetime) AS oldest_received,
+        max(e.received_datetime) AS newest_received,
+        max(e.updated_at) AS last_activity
+    FROM mailboxes m
+    LEFT JOIN email_messages e ON e.mailbox_id = m.id
+    WHERE m.user_id = :user_id
+    GROUP BY m.id, m.status
+    ORDER BY m.created_at
+    LIMIT 1
+    """
 )
 
 _UPSERT_MAILBOX = text(
@@ -745,13 +780,9 @@ async def me(request: Request) -> dict[str, dict]:
         # consent whose subscription creation failed, a mailbox flipped to
         # `needs_reauth` while the grant is still on file — so this is read,
         # never inferred.
-        ingesting = bool(
-            (
-                await session.execute(
-                    _INGESTION_ACTIVE, {"user_id": user.id}
-                )
-            ).scalar_one_or_none()
-        )
+        state = (
+            await session.execute(_MAILBOX_STATE, {"user_id": user.id})
+        ).one_or_none()
 
     return {
         "user": {
@@ -771,9 +802,23 @@ async def me(request: Request) -> dict[str, dict]:
             "provider": "microsoft",
             "connected": connected,
             "scopes": (scope or "").split(),
-            # A real read now that ingestion ships: an active mailbox with a
-            # live subscription. A connected mailbox is not the same as one
-            # being ingested.
-            "ingestion_active": ingesting,
+            # None until a mailbox row exists — signing in alone provisions
+            # nothing. `needs_reauth` is the one the UI must not swallow: the
+            # grant is still on file, so `connected` stays true while nothing
+            # is being read.
+            "status": state.status if state else None,
+            # An active mailbox with a live subscription behind it. A connected
+            # mailbox is not the same as one being ingested.
+            "ingestion_active": bool(
+                state and state.status == "active" and state.subscribed
+            ),
+            "ingested": {
+                "total": state.total if state else 0,
+                "in_progress": state.in_progress if state else 0,
+                "extracted": state.extracted if state else 0,
+            },
+            "oldest_received": _iso(state.oldest_received if state else None),
+            "newest_received": _iso(state.newest_received if state else None),
+            "last_activity": _iso(state.last_activity if state else None),
         },
     }

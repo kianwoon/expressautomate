@@ -7,10 +7,18 @@ import { displayNameOf, useAuth, type Me } from "../auth";
 import { SiteNav } from "../site-nav";
 
 /**
- * The signed-in shell. Ingestion and AI extraction do not exist yet, so this
- * page deliberately shows no job data and no counts — there is nothing true to
- * put there, and an invented number would be the one thing the product
- * promises not to do.
+ * The signed-in shell.
+ *
+ * Ingestion is live, so this page reports what actually happened rather than
+ * explaining that nothing has. Every number on it is counted from stored rows;
+ * none is estimated, and where there is nothing to say it says so.
+ *
+ * Organised around one question — is this mailbox reading mail? — because that
+ * is the only thing a recruiter opening it wants to know, and the three
+ * answers need three different actions.
+ *
+ * allow-hardcode: the strings below are user-facing copy rendered to the page,
+ * not a list anything is matched against.
  */
 export default function Dashboard() {
   const auth = useAuth();
@@ -66,21 +74,35 @@ function Notice({ eyebrow, heading, body }: { eyebrow: string; heading: string; 
   );
 }
 
+/** The three states a mailbox can be in, and what each needs from the user. */
+type Stage = "none" | "reconnect" | "ingesting";
+
+function stageOf(me: Me): Stage {
+  // `needs_reauth` first: the grant is still on file, so `connected` stays
+  // true while nothing is being read. Checking connection first would show
+  // someone a healthy dashboard for a mailbox that stopped hours ago.
+  if (me.mailbox.status === "needs_reauth") return "reconnect";
+  if (me.mailbox.ingestion_active) return "ingesting";
+  return "none";
+}
+
 function SignedIn({ me }: { me: Me }) {
-  const personal = me.tenant.is_personal_account;
-  const connected = me.mailbox.connected;
+  const stage = stageOf(me);
 
   return (
     <>
       <span className="eyebrow">Your account</span>
       <h1 style={{ marginTop: 14, fontSize: "clamp(1.75rem, 3.4vw, 2.5rem)" }}>
-        Signed in as{" "}
-        <span className="gradient-text">{displayNameOf(me)}</span>
+        Signed in as <span className="gradient-text">{displayNameOf(me)}</span>
       </h1>
-      <p className="lede" style={{ marginTop: 18 }}>
-        Setup is done. There is nothing to look at yet — ingestion is not switched on, so no
-        email has been read and no job records exist.
-      </p>
+
+      {stage === "ingesting" ? (
+        <Ingesting me={me} />
+      ) : stage === "reconnect" ? (
+        <Reconnect />
+      ) : (
+        <NotConnected me={me} />
+      )}
 
       <div className="grid-3" style={{ marginTop: 40 }}>
         <div className="card">
@@ -93,14 +115,17 @@ function SignedIn({ me }: { me: Me }) {
         </div>
 
         <div className="card">
-          <h3>Agency</h3>
+          <h3>Workspace</h3>
           <div className="rows" style={{ marginTop: 12 }}>
-            <Row k="Tenant" v={me.tenant.name} />
-            <Row k="Type" v={personal ? "Personal Microsoft account" : "Work or school account"} />
+            <Row k="Name" v={me.tenant.name} />
+            <Row
+              k="Account type"
+              v={me.tenant.is_personal_account ? "Personal Microsoft" : "Work or school"}
+            />
           </div>
           <p className="body" style={{ marginTop: 14, fontSize: "0.875rem" }}>
-            {personal
-              ? "This is your own private workspace. Colleagues signing in with the same personal account type do not join it."
+            {me.tenant.is_personal_account
+              ? "A workspace of one. Personal Microsoft accounts each get their own, so nobody else can join this one — a work account is what lets colleagues share an agency."
               : "Colleagues who sign in with the same work account share this agency and its data."}
           </p>
         </div>
@@ -108,85 +133,196 @@ function SignedIn({ me }: { me: Me }) {
         <div className="card">
           <h3>Mailbox</h3>
           <div className="rows" style={{ marginTop: 12 }}>
-            <Row k="Provider" v={me.mailbox.provider} />
-            <Row k="Connected" v={connected ? "Yes" : "No"} />
-            <Row k="Ingestion" v={me.mailbox.ingestion_active ? "Running" : "Not running"} />
+            <Row k="Permission" v={me.mailbox.connected ? "Granted" : "Not granted"} />
+            <Row k="State" v={stateLabel(me)} />
+            <Row k="Last activity" v={when(me.mailbox.last_activity)} empty="Nothing yet" />
           </div>
           <p className="body" style={{ marginTop: 14, fontSize: "0.875rem" }}>
-            {connected
-              ? "We hold read-only access to this mailbox. Nothing is being read from it yet."
-              : "No mailbox is connected, so there is nothing for us to read. Reading mail is a "
-                + "separate permission from signing in, and we only ask for it when you say so."}
+            Read-only. We never send, reply to, or delete anything.
           </p>
-          {/* Only offered to a work account. A personal account has no agency
-              mailbox behind it, so this button would send someone through a
-              consent screen to connect something that cannot be ingested —
-              the card below tells them that instead. */}
-          {!connected && !personal && (
-            <a
-              className="btn btn-primary"
-              rel="nofollow"
-              href={CONNECT_MAILBOX_PATH}
-              style={{ marginTop: 16 }}
-            >
-              Connect your mailbox
-            </a>
-          )}
         </div>
       </div>
 
-      {personal && (
-        <div className="card" style={{ marginTop: 28, maxWidth: "72ch" }}>
-          <h3>A personal account has no agency mailbox behind it</h3>
-          <p className="body" style={{ marginTop: 8, fontSize: "0.9375rem" }}>
-            You signed in with a personal Microsoft account, so you can use the site, but there is
-            no shared agency mailbox to ingest — the recruitment mail this product reads arrives in
-            a work or school Microsoft 365 mailbox. To set an agency up, sign in with your work
-            account instead. We would rather say this than show you an empty dashboard and let you
-            wonder.
-          </p>
-          {/* The paragraph above tells them to sign in with their work
-              account; without this button that instruction is unfollowable.
-              Microsoft would reuse this personal session and hand the same
-              account straight back, so the picker has to be forced. */}
-          <a
-            className="btn btn-primary"
-            rel="nofollow"
-            href={SWITCH_ACCOUNT_PATH}
-            style={{ marginTop: 18 }}
-          >
-            Sign in with a work account
-          </a>
-        </div>
-      )}
-
-      <div style={{ marginTop: 40, maxWidth: "72ch" }}>
-        <span className="eyebrow">What happens next</span>
-        <h2 style={{ marginTop: 12 }}>Honestly: not much, yet.</h2>
-        <ol className="steps" style={{ marginTop: 24 }}>
-          {[
-            "Mailbox ingestion is not live. No email has been read, and none will be until we switch it on for your agency.",
-            "AI extraction is not live either. There are no job records, no review queue and no export — not empty ones, none at all.",
-            "When ingestion is ready we will ask you to choose how far back to start, and this page will begin showing what was actually read.",
-          ].map((s, i) => (
-            <li className="step" key={s}>
-              <span className="step-n">{i + 1}</span>
-              <p className="body" style={{ fontSize: "0.9375rem" }}>
-                {s}
-              </p>
-            </li>
-          ))}
-        </ol>
-      </div>
+      <Extraction extracted={me.mailbox.ingested.extracted} />
     </>
   );
 }
 
-function Row({ k, v }: { k: string; v: string | null }) {
+function Ingesting({ me }: { me: Me }) {
+  const { total, in_progress: inProgress, extracted } = me.mailbox.ingested;
+
+  return (
+    <>
+      <p className="lede" style={{ marginTop: 18 }}>
+        {total === 0
+          ? "Your mailbox is connected and being watched. Nothing has arrived yet — new mail shows up here within a minute or two of landing in Outlook."
+          : `We have read ${plural(total, "email")} from your mailbox.`}
+      </p>
+
+      {total > 0 && (
+        <div className="grid-3" style={{ marginTop: 32 }}>
+          <Stat n={total} label="emails read" sub={range(me)} />
+          <Stat
+            n={inProgress}
+            label="still processing"
+            sub={inProgress === 0 ? "Nothing queued" : "Usually seconds each"}
+          />
+          <Stat n={extracted} label="job orders found" sub="Extraction is not live yet" />
+        </div>
+      )}
+    </>
+  );
+}
+
+function Reconnect() {
+  return (
+    <>
+      <p className="lede" style={{ marginTop: 18 }}>
+        Microsoft has stopped letting us read this mailbox, so ingestion has paused. Nothing
+        already read has been lost — reconnecting picks up where it left off.
+      </p>
+      <p className="body" style={{ marginTop: 12, maxWidth: "62ch" }}>
+        This usually means the permission was revoked, a password changed, or the grant simply
+        aged out.
+      </p>
+      <a
+        className="btn btn-primary"
+        rel="nofollow"
+        style={{ marginTop: 20, display: "inline-block" }}
+        href={CONNECT_MAILBOX_PATH}
+      >
+        Reconnect your mailbox
+      </a>
+    </>
+  );
+}
+
+function NotConnected({ me }: { me: Me }) {
+  return (
+    <>
+      <p className="lede" style={{ marginTop: 18 }}>
+        Your account is set up. Connect a mailbox and we will start reading the recruitment mail
+        that arrives in it.
+      </p>
+      <p className="body" style={{ marginTop: 12, maxWidth: "62ch" }}>
+        Microsoft will ask you to approve read-only access. Some organisations require an
+        administrator to approve it — if that happens the request goes to them, and signing in is
+        unaffected either way.
+      </p>
+      <div style={{ marginTop: 20, display: "flex", gap: 12, flexWrap: "wrap" }}>
+        <a className="btn btn-primary" rel="nofollow" href={CONNECT_MAILBOX_PATH}>
+          Connect your mailbox
+        </a>
+        {/* Offered to everyone, not only personal accounts: the account someone
+            signs in with and the mailbox they want read are often different,
+            and Microsoft reuses the browser session unless the picker is
+            forced. */}
+        <a className="btn" rel="nofollow" href={SWITCH_ACCOUNT_PATH}>
+          Use a different account
+        </a>
+      </div>
+      {me.tenant.is_personal_account && (
+        <p className="body muted" style={{ marginTop: 16, maxWidth: "62ch", fontSize: "0.875rem" }}>
+          You are on a personal Microsoft account. Its mailbox connects like any other — this is
+          simply a workspace of one, so colleagues cannot join it.
+        </p>
+      )}
+    </>
+  );
+}
+
+function Extraction({ extracted }: { extracted: number }) {
+  return (
+    <div style={{ marginTop: 40, maxWidth: "72ch" }}>
+      <span className="eyebrow">What is not live yet</span>
+      <h2 style={{ marginTop: 12 }}>Reading, not yet understanding.</h2>
+      <p className="body" style={{ marginTop: 16 }}>
+        Mail is collected and stored. Turning it into structured job orders — company, role,
+        salary, hours, location — is the next piece and is not switched on, which is why{" "}
+        <strong>job orders found</strong> is {extracted}. That is a real count rather than a
+        placeholder: nothing has been extracted because nothing extracts yet.
+      </p>
+      <p className="body" style={{ marginTop: 12 }}>
+        Everything read in the meantime is kept, so when extraction arrives it runs over the mail
+        already collected rather than starting from that day.
+      </p>
+    </div>
+  );
+}
+
+function Stat({ n, label, sub }: { n: number; label: string; sub: string | null }) {
+  return (
+    <div className="card">
+      <div
+        className="gradient-text"
+        style={{ fontSize: "2.5rem", fontWeight: 700, lineHeight: 1.1 }}
+      >
+        {n.toLocaleString()}
+      </div>
+      <div style={{ marginTop: 6, fontWeight: 600 }}>{label}</div>
+      {sub && (
+        <p className="body muted" style={{ marginTop: 8, fontSize: "0.8125rem" }}>
+          {sub}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/**
+ * `empty` is deliberately per-row rather than one shared fallback.
+ *
+ * "Not mentioned" is extraction vocabulary — it means the AI read the email and
+ * the field was not in it (§15). Reusing it for a mailbox that has simply never
+ * done anything says something quite different and slightly wrong.
+ */
+function Row({ k, v, empty = "Not mentioned" }: { k: string; v: string | null; empty?: string }) {
   return (
     <div className="row">
       <span className="row-k">{k}</span>
-      <span className={v ? undefined : "muted"}>{v ?? "Not mentioned"}</span>
+      <span className={v ? undefined : "muted"}>{v ?? empty}</span>
     </div>
   );
+}
+
+function stateLabel(me: Me): string {
+  if (me.mailbox.status === null) return "No mailbox connected";
+  if (me.mailbox.status === "needs_reauth") return "Needs reconnecting";
+  if (me.mailbox.status === "disconnected") return "Disconnected";
+  // Active but not yet subscribed: the consent landed and the subscription is
+  // still being created. A brief, real state — not worth calling an error.
+  return me.mailbox.ingestion_active ? "Reading new mail" : "Starting up";
+}
+
+/** "1 email" / "2 emails" — a plural s on a count of one reads as a bug. */
+function plural(n: number, noun: string): string {
+  return `${n.toLocaleString()} ${noun}${n === 1 ? "" : "s"}`;
+}
+
+function range(me: Me): string | null {
+  const { oldest_received: oldest, newest_received: newest } = me.mailbox;
+  if (!oldest || !newest) return null;
+  const from = day(oldest);
+  const to = day(newest);
+  return from === to ? from : `${from} to ${to}`;
+}
+
+function day(iso: string): string {
+  return new Date(iso).toLocaleDateString(undefined, {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
+}
+
+/** Absolute, not "3 minutes ago": this page does not re-render on a timer, so
+ *  a relative time would quietly age into a lie while someone reads it. */
+function when(iso: string | null): string | null {
+  if (!iso) return null;
+  return new Date(iso).toLocaleString(undefined, {
+    day: "numeric",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }

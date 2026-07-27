@@ -9,9 +9,18 @@ export type Me = {
   tenant: { id: string; name: string; is_personal_account: boolean };
   mailbox: {
     provider: string;
+    /** The grant. Survives the mailbox going bad, so never show it alone. */
     connected: boolean;
     scopes: string[];
+    /** null until a mailbox exists; "needs_reauth" is the one to surface. */
+    status: "active" | "needs_reauth" | "disconnected" | null;
+    /** An active mailbox with a live Graph subscription behind it. */
     ingestion_active: boolean;
+    /** Counted from the stored rows. Never estimated, never rounded. */
+    ingested: { total: number; in_progress: number; extracted: number };
+    oldest_received: string | null;
+    newest_received: string | null;
+    last_activity: string | null;
   };
 };
 

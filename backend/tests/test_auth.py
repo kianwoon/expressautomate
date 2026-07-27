@@ -492,6 +492,107 @@ async def test_me_reports_a_connected_mailbox_with_its_scopes(
     assert mailbox["ingestion_active"] is False
 
 
+async def test_me_reports_a_dead_grant_instead_of_claiming_connected(
+    client, monkeypatch, cleanup
+) -> None:
+    """A mailbox in `needs_reauth` must not read as connected.
+
+    `connected` comes from the stored token's scope, which survives the grant
+    going bad — so on its own it would tell someone their mail was flowing
+    while ingestion had stopped. That is the failure the whole recovery layer
+    exists to surface; the dashboard must not hide it.
+    """
+    async def _enqueue(name, **kwargs):
+        return True
+
+    monkeypatch.setattr(auth_api, "enqueue", _enqueue)
+
+    tid, oid = str(uuid.uuid4()), uuid.uuid4().hex
+    cleanup.append(uuid.UUID(tid))
+    await sign_in(client, monkeypatch, token_response(tid, oid, "rachel@agency-a.sg"))
+    await connect_mailbox(
+        client,
+        monkeypatch,
+        token_response(tid, oid, "rachel@agency-a.sg", scopes=ms_auth.mailbox_scopes()),
+    )
+
+    async with tenant_session(uuid.UUID(tid)) as session:
+        await session.execute(
+            text("UPDATE mailboxes SET status = 'needs_reauth'")
+        )
+
+    mailbox = (await client.get("/api/auth/me")).json()["mailbox"]
+    assert mailbox["status"] == "needs_reauth"
+    assert mailbox["ingestion_active"] is False
+
+
+async def test_me_counts_only_what_was_actually_ingested(
+    client, monkeypatch, cleanup
+) -> None:
+    """Numbers on the dashboard are read, never inferred (§15).
+
+    A count that came from anywhere but the rows themselves would be the one
+    thing this product promises not to do.
+    """
+    async def _enqueue(name, **kwargs):
+        return True
+
+    monkeypatch.setattr(auth_api, "enqueue", _enqueue)
+
+    tid, oid = str(uuid.uuid4()), uuid.uuid4().hex
+    cleanup.append(uuid.UUID(tid))
+    await sign_in(client, monkeypatch, token_response(tid, oid, "rachel@agency-a.sg"))
+    await connect_mailbox(
+        client,
+        monkeypatch,
+        token_response(tid, oid, "rachel@agency-a.sg", scopes=ms_auth.mailbox_scopes()),
+    )
+
+    before = (await client.get("/api/auth/me")).json()["mailbox"]
+    assert before["ingested"] == {"total": 0, "in_progress": 0, "extracted": 0}
+    assert before["newest_received"] is None
+
+    async with tenant_session(uuid.UUID(tid)) as session:
+        mailbox_id = (
+            await session.execute(text("SELECT id FROM mailboxes"))
+        ).scalar_one()
+        for n, status in enumerate(["extracted", "fetched", "skipped"]):
+            await session.execute(
+                text(
+                    "INSERT INTO email_messages"
+                    " (id, tenant_id, mailbox_id, graph_message_id, processing_status,"
+                    "  received_datetime)"
+                    " VALUES (:id, :t, :m, :g, :s, now() - make_interval(days => :d))"
+                ),
+                {
+                    "id": uuid.uuid4(),
+                    "t": uuid.UUID(tid),
+                    "m": mailbox_id,
+                    "g": f"MSG-{n}",
+                    "s": status,
+                    "d": n,
+                },
+            )
+
+    after = (await client.get("/api/auth/me")).json()["mailbox"]
+    assert after["ingested"] == {"total": 3, "in_progress": 1, "extracted": 1}
+    assert after["newest_received"] is not None
+    assert after["oldest_received"] < after["newest_received"]
+
+
+async def test_me_reports_no_counts_before_a_mailbox_exists(
+    client, monkeypatch, cleanup
+) -> None:
+    """Signing in alone provisions nothing, so there is nothing to count."""
+    tid = str(uuid.uuid4())
+    cleanup.append(uuid.UUID(tid))
+    await sign_in(client, monkeypatch, token_response(tid, uuid.uuid4().hex, "r@a.sg"))
+
+    mailbox = (await client.get("/api/auth/me")).json()["mailbox"]
+    assert mailbox["status"] is None
+    assert mailbox["ingested"]["total"] == 0
+
+
 async def test_connecting_a_mailbox_provisions_it_for_ingestion(
     client, monkeypatch, cleanup
 ) -> None:
