@@ -373,10 +373,193 @@ section { padding: 60px 0; }
    shared letter-spacing; it fits on one at this size. */
 .mock .row-k { font-size: 0.625rem; letter-spacing: 0.03em; }
 
-footer { border-top: 1px solid var(--line); padding: 40px 0; color: var(--ink-500); font-size: 0.875rem; }
-.footer-inner { display: flex; gap: 20px; flex-wrap: wrap; justify-content: space-between; align-items: center; }
-.footer-links { display: flex; gap: 24px; flex-wrap: wrap; }
-.footer-links a:hover { color: var(--ink-900); }
+/* ---- hero ticks ---- */
+.ticks { list-style: none; display: grid; gap: 10px; margin-top: 22px; }
+.ticks li {
+  display: flex; align-items: center; gap: 10px;
+  font-size: 0.9375rem; font-weight: 550; color: var(--ink-700);
+}
+.ticks svg { color: var(--teal-500); flex: none; }
+
+/* ---- hero product panel ---- */
+/* A drawing of the product, not a screenshot. The numbers in it are invented,
+   which is what .app-sample says out loud. */
+.app {
+  display: grid; grid-template-columns: 44px minmax(0, 1fr);
+  border: 1px solid var(--line); border-radius: 16px; overflow: hidden;
+  background: var(--surface); margin: 0;
+  box-shadow: 0 30px 60px -40px rgba(11, 18, 32, 0.55);
+}
+.app-rail {
+  display: grid; gap: 14px; align-content: start; justify-items: center;
+  padding: 16px 0; background: var(--surface-alt); border-right: 1px solid var(--line);
+}
+.app-rail span { color: var(--ink-300); display: grid; place-items: center; }
+.app-rail span:first-child { color: var(--blue-600); }
+.app-rail svg { width: 17px; height: 17px; }
+.app-body { padding: 16px; min-width: 0; }
+.app-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.app-top strong { font-size: 0.9375rem; display: block; }
+.app-sub { font-size: 0.75rem; color: var(--ink-500); }
+.app-count {
+  font-size: 0.6875rem; color: var(--ink-500); white-space: nowrap;
+  background: var(--surface-alt); border-radius: 999px; padding: 5px 10px;
+}
+.app-count b { color: var(--teal-500); }
+
+.app-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-top: 14px; }
+.app-stat {
+  border: 1px solid var(--line); border-radius: 9px; padding: 9px;
+  display: grid; gap: 1px; min-width: 0;
+}
+.app-stat-k { font-size: 0.625rem; color: var(--ink-500); overflow-wrap: anywhere; }
+.app-stat-v { font-size: 1.25rem; font-weight: 700; line-height: 1.1; }
+.app-stat-n { font-size: 0.5625rem; color: var(--ink-300); overflow-wrap: anywhere; }
+
+.app-list-h { font-size: 0.75rem; font-weight: 650; margin: 16px 0 6px; }
+.app-list { list-style: none; display: grid; gap: 6px; }
+.app-list li {
+  display: grid; grid-template-columns: 26px minmax(0, 1.4fr) repeat(3, minmax(0, 1fr)) auto;
+  gap: 8px; align-items: center;
+  border: 1px solid var(--line); border-radius: 9px; padding: 8px 10px;
+  font-size: 0.6875rem; min-width: 0;
+}
+.app-list li > * { min-width: 0; overflow-wrap: anywhere; }
+.app-avatar {
+  width: 26px; height: 26px; border-radius: 7px; background: var(--surface-alt);
+  display: grid; place-items: center; color: var(--ink-500);
+}
+.app-avatar svg { width: 14px; height: 14px; }
+.app-role strong { display: block; font-size: 0.75rem; }
+.app-role span { color: var(--ink-500); }
+.app-meta { color: var(--ink-500); }
+.app-tag { font-size: 0.5625rem; font-weight: 700; padding: 3px 7px; border-radius: 999px; white-space: nowrap; }
+.app-tag-new { background: #e7f7f4; color: var(--teal-500); }
+.app-tag-updated { background: #fef3e2; color: #9a6412; }
+.app-foot {
+  display: flex; justify-content: space-between; align-items: center; gap: 10px;
+  margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line);
+  font-size: 0.6875rem; color: var(--blue-600); font-weight: 600;
+}
+.app-sample {
+  color: var(--ink-300); font-weight: 600; letter-spacing: 0.06em;
+  text-transform: uppercase; font-size: 0.5625rem;
+}
+
+/* ---- pillar cards ---- */
+.pillars .card { display: flex; flex-direction: column; }
+.pillar[data-tone="blue"] { background: linear-gradient(180deg, #f6faff 0%, #fff 60%); }
+.pillar[data-tone="teal"] { background: linear-gradient(180deg, #f3fbf9 0%, #fff 60%); }
+.pillar[data-tone="indigo"] { background: linear-gradient(180deg, #f7f8ff 0%, #fff 60%); }
+.pillar[data-tone="amber"] { background: linear-gradient(180deg, #fffaf2 0%, #fff 60%); }
+
+/* The inset is a small picture of the claim above it. It sits at the bottom of
+   the card whatever the body length, so the four cards line up. */
+.inset {
+  margin-top: auto; padding: 12px; border: 1px solid var(--line);
+  border-radius: 10px; background: var(--surface); font-size: 0.75rem;
+}
+.inset > * + * { margin-top: 8px; }
+.inset-h { font-size: 0.6875rem; font-weight: 650; color: var(--ink-700); display: block; }
+.inset ul { list-style: none; display: grid; gap: 7px; }
+
+.inset-feed li { display: flex; align-items: center; gap: 8px; color: var(--ink-300); }
+.inset-feed li[data-lead="yes"] { color: var(--ink-900); font-weight: 600; }
+.inset-dot { width: 6px; height: 6px; border-radius: 999px; background: currentColor; flex: none; }
+.inset-feed li[data-lead="yes"] .inset-dot { background: var(--teal-500); }
+
+.inset-counts li { display: flex; align-items: center; gap: 8px; color: var(--ink-700); }
+.inset-counts b { margin-left: auto; }
+.inset-ico { color: var(--blue-600); display: grid; place-items: center; }
+.inset-ico svg { width: 14px; height: 14px; }
+
+.inset-bars li { display: grid; grid-template-columns: 62px minmax(0, 1fr); gap: 8px; align-items: center; color: var(--ink-700); }
+.inset-bar { height: 6px; border-radius: 999px; background: var(--surface-alt); overflow: hidden; }
+.inset-bar > span { display: block; height: 100%; background: var(--brand-gradient); }
+
+.inset-activity li { display: flex; align-items: center; gap: 8px; color: var(--ink-700); }
+.inset-who {
+  width: 20px; height: 20px; border-radius: 999px; flex: none;
+  background: var(--brand-gradient); color: #fff;
+  display: grid; place-items: center; font-size: 0.625rem; font-weight: 700;
+}
+.inset-when { margin-left: auto; color: var(--ink-300); }
+
+/* ---- impact strip ---- */
+.impact {
+  list-style: none;
+  display: grid; grid-template-columns: repeat(5, minmax(0, 1fr));
+  border: 1px solid var(--line); border-radius: 16px; overflow: hidden;
+}
+.impact li {
+  padding: 26px 20px; text-align: center; display: grid; gap: 4px; align-content: start;
+  border-left: 1px solid var(--line);
+}
+.impact li:first-child { border-left: none; }
+.impact-ico {
+  width: 44px; height: 44px; border-radius: 999px; margin: 0 auto 10px;
+  display: grid; place-items: center;
+  background: var(--surface-alt); color: var(--blue-600);
+}
+.impact strong { font-size: 0.9375rem; }
+.impact-lead { font-size: 0.875rem; color: var(--ink-700); }
+.impact-body { font-size: 0.8125rem; color: var(--ink-500); margin-top: 6px; }
+
+/* ---- voices ---- */
+.voices-grid { display: grid; grid-template-columns: 0.8fr 2fr; gap: 40px; align-items: start; }
+.voices { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; }
+.voice {
+  margin: 0; padding: 20px; background: var(--surface);
+  border: 1px solid var(--line); border-radius: 14px;
+  display: grid; align-content: start; gap: 12px;
+}
+.voice-mark { font-size: 2rem; line-height: 0.6; color: var(--ink-300); font-family: Georgia, serif; }
+.voice blockquote { margin: 0; font-size: 0.9375rem; color: var(--ink-900); }
+.voice figcaption { font-size: 0.8125rem; color: var(--ink-500); display: grid; gap: 8px; justify-items: start; }
+.voice-tag {
+  font-size: 0.5625rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+  background: var(--surface-alt); color: var(--ink-500); padding: 3px 8px; border-radius: 999px;
+}
+/* The label that keeps the section honest — styled to be read, not skipped. */
+.illustrative {
+  display: flex; gap: 10px; align-items: flex-start;
+  font-size: 0.8125rem; color: var(--ink-700);
+  background: var(--surface); border: 1px dashed var(--line);
+  border-radius: 10px; padding: 12px 14px;
+}
+.illustrative svg { flex: none; color: var(--ink-500); margin-top: 2px; }
+
+/* ---- stub pages ---- */
+.stub { padding: 88px 0 96px; min-height: 52vh; }
+.stub-next { margin-top: 32px; }
+.stub-next-k {
+  font-size: 0.75rem; font-weight: 650; letter-spacing: 0.12em;
+  text-transform: uppercase; color: var(--ink-500);
+}
+.stub-next ul { list-style: none; display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
+.stub-next a {
+  display: inline-flex; align-items: center; min-height: 44px; padding: 0 18px;
+  border: 1px solid var(--line); border-radius: var(--radius);
+  font-size: 0.9375rem; font-weight: 600; background: var(--surface);
+}
+.stub-next a:hover { background: var(--surface-alt); }
+
+/* ---- footer ---- */
+footer { border-top: 1px solid var(--line); padding: 48px 0 40px; color: var(--ink-500); font-size: 0.875rem; }
+.footer-grid {
+  display: grid; grid-template-columns: 1.6fr repeat(3, 1fr) 1.1fr; gap: 32px;
+  align-items: start;
+}
+.footer-mark { display: flex; align-items: center; gap: 9px; color: var(--ink-900); }
+.footer-brand p { margin-top: 12px; max-width: 30ch; }
+.footer-h {
+  font-size: 0.8125rem; font-weight: 650; color: var(--ink-900);
+  letter-spacing: 0; text-transform: none;
+}
+.footer-col ul { list-style: none; display: grid; gap: 4px; margin-top: 12px; }
+.footer-col a { display: inline-flex; align-items: center; min-height: 32px; }
+.footer-col a:hover { color: var(--ink-900); }
+.footer-where { text-align: right; }
 
 @media (max-width: 980px) {
   /* Below this the two mock panels are too narrow to read side by side, so
@@ -428,10 +611,53 @@ footer { border-top: 1px solid var(--line); padding: 40px 0; color: var(--ink-50
   .row-k, .mock .row-k { font-size: 0.75rem; }
   .connector-detail { font-size: 0.8125rem; }
 
-  /* Footer links were a 22px-tall row of small text sitting 20px apart. */
-  .footer-inner { gap: 8px 20px; }
-  .footer-links { gap: 4px 20px; }
-  .footer-links a { display: inline-flex; align-items: center; min-height: 44px; }
+  /* The product panel's six-column opportunity rows cannot survive a phone.
+     Each row becomes a small stacked card: role and client on one line, the
+     rest wrapping under it, tag pinned right. */
+  .app { grid-template-columns: 1fr; }
+  .app-rail {
+    grid-auto-flow: column; justify-content: start; gap: 18px;
+    padding: 10px 14px; border-right: none; border-bottom: 1px solid var(--line);
+  }
+  .app-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  /* The panel has the full width to itself here, so the type that had to be
+     tiny in a half-width hero column can come back up to a readable size.
+     9px sample text is a picture of text, not text. */
+  .app-stat-k { font-size: 0.75rem; }
+  .app-stat-n { font-size: 0.6875rem; }
+  .app-list li, .app-foot, .app-count { font-size: 0.75rem; }
+  .app-role strong { font-size: 0.8125rem; }
+  .app-tag, .app-sample { font-size: 0.625rem; }
+  .app-list li {
+    grid-template-columns: 26px minmax(0, 1fr) auto;
+    row-gap: 2px;
+  }
+  .app-role { grid-column: 2; }
+  .app-tag { grid-column: 3; grid-row: 1; }
+  .app-meta { grid-column: 2 / -1; }
+
+  .impact { grid-template-columns: 1fr; }
+  .impact li { border-left: none; border-top: 1px solid var(--line); text-align: left; padding: 20px; }
+  .impact li:first-child { border-top: none; }
+  .impact-ico { margin: 0 0 8px; }
+
+  .voices-grid, .voices { grid-template-columns: 1fr; gap: 20px; }
+
+  .stub { padding: 48px 0 56px; }
+
+  .footer-grid { grid-template-columns: repeat(2, 1fr); gap: 28px; }
+  .footer-brand, .footer-where { grid-column: 1 / -1; }
+  .footer-where { text-align: left; }
+  .footer-col a { min-height: 44px; }
+}
+
+@media (max-width: 1080px) and (min-width: 861px) {
+  /* Five impact columns and four pillars both go too narrow to read here. */
+  .impact { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .impact li:nth-child(4) { border-left: none; }
+  .impact li { border-top: 1px solid var(--line); }
+  .impact li:nth-child(-n + 3) { border-top: none; }
+  .voices-grid { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 1080px) and (min-width: 861px) {

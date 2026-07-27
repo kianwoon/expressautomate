@@ -8,10 +8,11 @@ import { Logo } from "./logo";
 
 /** Landing-page section links; the dashboard has no sections to jump to. */
 const SECTION_LINKS = [
-  { href: "/#what", label: "What it does" },
+  { href: "/use-cases", label: "Use cases" },
+  { href: "/#what", label: "Benefits" },
   { href: "/#how", label: "How it works" },
-  { href: "/#features", label: "What you can do" },
   { href: "/#security", label: "Security" },
+  { href: "/pricing", label: "Pricing" },
 ] as const;
 
 /**
