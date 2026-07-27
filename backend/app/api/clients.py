@@ -15,7 +15,7 @@ from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
 
 from app.api.auth import _require_session
 from app.core.config import settings
@@ -165,11 +165,51 @@ async def merge_client(request: Request, client_id: uuid.UUID, body: MergeReques
         # Mentions move, because they are evidence about a company and the
         # company is now the target. Leaving them behind would make the
         # surviving row look newly discovered.
-        await session.execute(
-            update(ClientMention)
-            .where(ClientMention.client_id == client_id)
-            .values(client_id=body.target_id)
+        #
+        # A mention cannot simply be repointed with a bare UPDATE: if the
+        # target already has a mention for the same email_message_id (e.g.
+        # the loser was unmerged and re-attached to the same message by a
+        # later reprocess), repointing would collide with
+        # uq_client_mentions_once_per_message. That collision is not an
+        # error — one message mentioning one company only needs one mention
+        # on the surviving client — so the colliding loser mentions are
+        # dropped as redundant evidence and only the non-colliding ones move.
+        target_message_ids = set(
+            (
+                await session.execute(
+                    select(ClientMention.email_message_id).where(
+                        ClientMention.client_id == body.target_id
+                    )
+                )
+            )
+            .scalars()
+            .all()
         )
+        loser_mentions = (
+            (
+                await session.execute(
+                    select(ClientMention).where(ClientMention.client_id == client_id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        movable_ids = [
+            m.id for m in loser_mentions if m.email_message_id not in target_message_ids
+        ]
+        redundant_ids = [
+            m.id for m in loser_mentions if m.email_message_id in target_message_ids
+        ]
+        if movable_ids:
+            await session.execute(
+                update(ClientMention)
+                .where(ClientMention.id.in_(movable_ids))
+                .values(client_id=body.target_id)
+            )
+        if redundant_ids:
+            await session.execute(
+                delete(ClientMention).where(ClientMention.id.in_(redundant_ids))
+            )
         await session.execute(
             update(Client)
             .where(Client.id == client_id)
@@ -193,6 +233,40 @@ async def unmerge_client(request: Request, client_id: uuid.UUID) -> dict:
         client = await _load(session, client_id)
         if client.status != Client.MERGED:
             raise HTTPException(status_code=400, detail="Client is not merged")
+
+        # The merge freed client.email_domain (uq_clients_tenant_domain
+        # excludes merged rows), and something else may since have claimed
+        # it: a new client created from a later email, or another client
+        # merged and unmerged in between. Resurrecting the row unchanged
+        # would put two live rows on the same domain and hit that index.
+        #
+        # Refuse with 409 rather than silently clearing email_domain. A
+        # cleared domain is a trap: the recruiter asked to undo a merge and
+        # would get back a row that looks restored but has quietly lost the
+        # one fact (its domain) that made it identifiable and made future
+        # emails match it. A 409 naming the client that now holds the domain
+        # is something a recruiter can act on directly — archive or rename
+        # that other client, or leave the unmerge undone — with no silent
+        # data loss either way.
+        if client.email_domain is not None:
+            holder = (
+                await session.execute(
+                    select(Client).where(
+                        Client.email_domain == client.email_domain,
+                        Client.status != Client.MERGED,
+                        Client.id != client_id,
+                    )
+                )
+            ).scalar_one_or_none()
+            if holder is not None:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"Cannot unmerge: {holder.name} ({holder.id}) now holds "
+                        f"the domain {client.email_domain}"
+                    ),
+                )
+
         await session.execute(
             update(Client)
             .where(Client.id == client_id)
