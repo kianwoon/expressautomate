@@ -388,16 +388,37 @@ a host that is not obviously disposable — this already went wrong once, and
 the guard is what stands between a test run and production rows.
 
 That guard means the repo-root `.env` used to run the app against Koyeb cannot
-also be used to run the tests. Point both variables at a local Postgres 16 for
-a test run — the same image CI uses (`.github/workflows/backend.yml`):
+also be used to run the tests. Start the same image CI uses
+(`.github/workflows/backend.yml`):
 
 ```bash
 docker run --rm -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=expressautomate --name ea-test-db postgres:16
 ```
 
-That container is `--rm`: stopping it deletes the database. For something that
-survives, create a throwaway database on a local server instead
-(`createdb expressautomate_test`) and point both variables at that.
+That gives you the `postgres` superuser and nothing else. `DATABASE_URL`
+connects as the restricted `expressautomate_app` role, which does not exist
+yet — and you do not create it by hand. The row-level-security migration
+creates it, from `DATABASE_APP_ROLE` and `DATABASE_APP_PASSWORD`, and refuses
+to run if the password is unset. So all four variables are needed, and the
+migration must run before the suite:
+
+```bash
+export DATABASE_APP_ROLE=expressautomate_app
+export DATABASE_APP_PASSWORD=local-not-a-real-password
+export DATABASE_ADMIN_URL=postgresql://postgres:postgres@localhost:5432/expressautomate
+export DATABASE_URL=postgresql://expressautomate_app:local-not-a-real-password@localhost:5432/expressautomate
+uv run alembic upgrade head
+uv run pytest
+```
+
+The two roles are not interchangeable and the split is the point: the admin URL
+owns the schema and bypasses RLS, so isolation tests run through `DATABASE_URL`
+or they prove nothing.
+
+That container is `--rm`: stopping it deletes the database, roles and all. For
+something that survives a reboot, run Postgres 16 locally instead
+(`brew services start postgresql@16`), `createdb expressautomate_test`, and
+point the two URLs at that — the suite accepts any local host.
 
 ## Verified 2026-07-27
 
