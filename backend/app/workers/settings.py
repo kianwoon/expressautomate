@@ -18,6 +18,7 @@ from app.workers.jobs import (
     backfill_mailbox_job,
     classify_batch,
     classify_email,
+    deliver_notification,
     delta_sync_mailbox,
     extract_email,
     fetch_email,
@@ -72,6 +73,9 @@ class WorkerSettings:
         delta_sync_mailbox,
         recreate_subscription,
         reauthorize_subscription,
+        # Notifications. Enqueued by `emit_and_enqueue` after the opportunity
+        # commits, and by `flush_notifications` for rows whose enqueue was lost.
+        deliver_notification,
     ]
     # Every function above but the two classification jobs ends in a Graph call. Said once
     # here rather than discovered one failed job at a time.
