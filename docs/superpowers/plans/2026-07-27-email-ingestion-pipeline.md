@@ -2149,7 +2149,15 @@ git commit -m "Fetch each notified message and store its source"
 
 **Files:**
 - Create: `app/services/graph/subscriptions.py`
+- Create: `alembic/versions/*_client_state_not_empty.py`
 - Test: `tests/test_subscriptions.py`
+
+**Carried forward from the Task 5 review:** add
+`CHECK (client_state <> '')` to `graph_subscriptions` in a migration here.
+`_client_state_matches` in the webhook already refuses an empty secret, and
+that is the enforcement point — but this is the task that *writes* the column,
+and a row with an empty secret should be impossible to create, not merely
+harmless to receive.
 
 **Interfaces:**
 - Consumes: `GraphClient`, `tenant_session`, `settings`
