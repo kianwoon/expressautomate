@@ -124,4 +124,7 @@ def test_the_model_is_asked_for_everything_the_parser_requires():
     """
     field = json_schema()["properties"]["jobs"]["items"]["properties"]["salary"]
 
-    assert set(field["required"]) == {"value", "evidence", "start_char", "end_char"}
+    # `confidence` joins them because strict mode requires every property, not
+    # only the ones the parser insists on. The four the validator enforces are
+    # what matters here; all five are what the provider demands.
+    assert {"value", "evidence", "start_char", "end_char"} <= set(field["required"])

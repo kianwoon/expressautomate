@@ -98,7 +98,21 @@ class ExtractionResponse(BaseModel):
 
 
 def json_schema() -> dict:
-    """Schema sent to the model. Derived, so it cannot drift from the parser."""
+    """Schema sent to the model. Derived, so it cannot drift from the parser.
+
+    Written to satisfy **strict** structured output, which is not the same as
+    ordinary JSON Schema and fails loudly when it is treated as such: every
+    object must set `additionalProperties: false`, and `required` must name
+    *every* property — not the ones that happen to be mandatory. A schema that
+    is merely valid JSON Schema is rejected by the provider, so the first real
+    extraction call would have 400'd, uniformly, for every email.
+
+    Optionality is therefore expressed in the type, not by omission from
+    `required`: a field the email does not mention comes back as `null`. That
+    is a better contract anyway — the model answers for all twelve fields
+    every time, so "not mentioned" is a statement rather than a silence that
+    could equally mean the model forgot.
+    """
     field_schema = {
         "type": "object",
         "properties": {
@@ -108,12 +122,17 @@ def json_schema() -> dict:
             "end_char": {"type": "integer"},
             "confidence": {"type": "number"},
         },
-        # All four, matching the validator. Asking only for `value` let the
-        # model return a bare string it could not be held to, and the parser
-        # would then reject the whole response — so the strictness landed as a
-        # failed extraction rather than as guidance the model could follow.
-        "required": ["value", "evidence", "start_char", "end_char"],
+        # Every key, because strict mode allows nothing less. Asking only for
+        # `value` let the model return a bare string it could not be held to,
+        # and the parser then rejected the whole response — strictness landing
+        # as a failed extraction rather than as guidance the model could follow.
+        "required": ["value", "evidence", "start_char", "end_char", "confidence"],
+        "additionalProperties": False,
     }
+    # A field may be absent from an email; it may never be absent from the
+    # answer. `["object", "null"]` is how strict mode says that.
+    nullable_field = {**field_schema, "type": ["object", "null"]}
+
     return {
         "type": "object",
         "properties": {
@@ -121,9 +140,12 @@ def json_schema() -> dict:
                 "type": "array",
                 "items": {
                     "type": "object",
-                    "properties": dict.fromkeys(FIELDS, field_schema),
+                    "properties": dict.fromkeys(FIELDS, nullable_field),
+                    "required": list(FIELDS),
+                    "additionalProperties": False,
                 },
             }
         },
         "required": ["jobs"],
+        "additionalProperties": False,
     }
