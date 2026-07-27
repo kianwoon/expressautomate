@@ -109,10 +109,9 @@ def test_consent_alone_provisions_nothing():
 
     called = auth._store_mailbox_consent.__code__.co_names
     assert "_provision_mailbox" not in called
-    assert "enqueue" not in called
-    # And the whole module: consent is the only path that ran these, so nothing
-    # in `auth` should still be able to queue ingestion work.
-    assert not hasattr(auth, "enqueue")
+    # It may still revive an existing mailbox — that is a reconnection, where
+    # the period was chosen long ago — but it must never create one.
+    assert "_REVIVE_MAILBOX" in called
 
 
 def test_window_keys_resolve_to_the_dates_they_promise():

@@ -716,6 +716,80 @@ async def test_choosing_a_period_provisions_the_mailbox(client, monkeypatch, cle
     assert (await client.post("/api/mailbox/ingest", json={"window": "30d"})).status_code == 409
 
 
+async def test_reconnecting_revives_a_broken_mailbox(client, monkeypatch, cleanup) -> None:
+    """A `needs_reauth` mailbox must come back when the user reconnects.
+
+    Found in review. Once consent stopped provisioning, nothing flipped the row
+    back to active: `/mailbox/ingest` refuses a mailbox that already exists, so
+    re-consenting stored a working token beside a row no sweep would ever look
+    at again — the dashboard offering "Reconnect" forever to someone who just
+    had.
+
+    The window is not re-asked and the backfill is not re-run: the user chose
+    that once, and history has not moved.
+    """
+    queued: list[tuple[str, dict]] = []
+
+    async def _enqueue(name, **kwargs):
+        queued.append((name, kwargs))
+        return True
+
+    monkeypatch.setattr(auth_api, "enqueue", _enqueue)
+
+    tid, oid = str(uuid.uuid4()), uuid.uuid4().hex
+    cleanup.append(uuid.UUID(tid))
+    await sign_in(client, monkeypatch, token_response(tid, oid, "rachel@agency-a.sg"))
+    grant = token_response(tid, oid, "rachel@agency-a.sg", scopes=ms_auth.mailbox_scopes())
+    await connect_mailbox(client, monkeypatch, grant)
+    await start_ingestion(client, monkeypatch, window="7d")
+
+    async with tenant_session(uuid.UUID(tid)) as session:
+        await session.execute(text("UPDATE mailboxes SET status = 'needs_reauth'"))
+        chosen = (
+            await session.execute(text("SELECT initial_sync_from FROM mailboxes"))
+        ).scalar_one()
+    assert (await client.get("/api/auth/me")).json()["mailbox"]["status"] == "needs_reauth"
+
+    queued.clear()
+    await connect_mailbox(client, monkeypatch, grant)
+
+    async with tenant_session(uuid.UUID(tid)) as session:
+        row = (
+            await session.execute(text("SELECT status, initial_sync_from FROM mailboxes"))
+        ).one()
+    assert row.status == "active"
+    assert row.initial_sync_from == chosen, "reconnecting must not re-walk history"
+    assert [name for name, _ in queued] == ["recreate_subscription"]
+
+    after = (await client.get("/api/auth/me")).json()["mailbox"]
+    assert after["status"] == "active"
+    assert after["awaiting_period"] is False, "the period was chosen the first time"
+
+
+async def test_reconnecting_a_healthy_mailbox_changes_nothing(
+    client, monkeypatch, cleanup
+) -> None:
+    """Re-consenting when nothing is wrong must not churn a live subscription."""
+    queued: list[tuple[str, dict]] = []
+
+    async def _enqueue(name, **kwargs):
+        queued.append((name, kwargs))
+        return True
+
+    monkeypatch.setattr(auth_api, "enqueue", _enqueue)
+
+    tid, oid = str(uuid.uuid4()), uuid.uuid4().hex
+    cleanup.append(uuid.UUID(tid))
+    await sign_in(client, monkeypatch, token_response(tid, oid, "rachel@agency-a.sg"))
+    grant = token_response(tid, oid, "rachel@agency-a.sg", scopes=ms_auth.mailbox_scopes())
+    await connect_mailbox(client, monkeypatch, grant)
+    await start_ingestion(client, monkeypatch)
+
+    queued.clear()
+    await connect_mailbox(client, monkeypatch, grant)
+    assert queued == []
+
+
 async def test_ingestion_is_refused_without_the_mailbox_grant(
     client, monkeypatch, cleanup
 ) -> None:

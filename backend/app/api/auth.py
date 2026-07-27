@@ -27,6 +27,7 @@ from app.core.logging import get_logger
 from app.db.rls import tenant_session
 from app.models import MicrosoftToken, Tenant, User
 from app.services import ms_auth
+from app.workers.queue import enqueue
 
 log = get_logger(__name__)
 router = APIRouter(tags=["auth"])
@@ -610,6 +611,20 @@ _UPSERT_MAILBOX = text(
 )
 
 
+# Bring a mailbox back after a reconnection. `initial_sync_from` is untouched:
+# the user chose that window once, and re-walking it would re-read history they
+# did not ask for a second time. Returns nothing when the row was already
+# active, so a re-consent by someone whose mailbox is fine does not churn a
+# healthy subscription.
+_REVIVE_MAILBOX = text(
+    """
+    UPDATE mailboxes SET status = 'active'
+    WHERE user_id = :user_id AND status IN ('needs_reauth', 'disconnected')
+    RETURNING id
+    """
+)
+
+
 async def _provision_mailbox(
     session,
     tenant_uuid: uuid.UUID,
@@ -710,17 +725,36 @@ async def _store_mailbox_consent(
             session, result, tenant_uuid, user_id, f"{oid}.{tid}", now, authoritative=True
         )
 
-    # Nothing is provisioned here, on purpose. Consent grants permission to
-    # read the mailbox; it does not say which of it to read. Ingestion starts
-    # only when the user has seen what is in there and chosen a period —
-    # `POST /mailbox/ingest` (§6.2). Until then we hold a token and nothing
-    # else, which is also the state that costs the user nothing if they change
-    # their mind and disconnect.
+        # Nothing is *provisioned* here, on purpose. Consent grants permission
+        # to read the mailbox; it does not say which of it to read. A first
+        # connection therefore ends with a token and nothing else, and the
+        # period is chosen at `POST /mailbox/ingest` (§6.2).
+        #
+        # A reconnection is the other case, and it must not be confused with
+        # the first. The period was already chosen; what broke was the grant.
+        # So an existing mailbox is revived here rather than being sent back
+        # through the chooser — which it could not pass anyway, since
+        # `/mailbox/ingest` refuses a mailbox that already exists. Without this
+        # a `needs_reauth` mailbox stayed stuck forever: re-consenting stored a
+        # working token beside a row nothing would look at again.
+        revived = (
+            await session.execute(_REVIVE_MAILBOX, {"user_id": user_id})
+        ).scalar_one_or_none() if _covers_mailbox(result.get("scope")) else None
+
+    if revived is not None:
+        # The subscription died with the grant, so recreating it is the whole
+        # of resuming. The backfill is deliberately not re-run: its window was
+        # settled at connect time and history has not moved.
+        await enqueue(
+            "recreate_subscription", tenant_id=str(tenant_uuid), mailbox_id=str(revived)
+        )
+
     log.info(
         "ms_mailbox_consent_stored",
         tenant_id=str(tenant_uuid),
         user_id=str(user_id),
         granted=_covers_mailbox(result.get("scope")),
+        revived=str(revived) if revived else None,
     )
 
     response = RedirectResponse(_frontend_url(DASHBOARD_PATH))

@@ -14,6 +14,7 @@ saw.
 import uuid
 from datetime import UTC, datetime, timedelta
 
+import httpx
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy import select, text
@@ -23,7 +24,7 @@ from app.core.logging import get_logger
 from app.db.rls import tenant_session
 from app.models import MicrosoftToken, User
 from app.services import ms_auth
-from app.services.graph.client import GraphClient, GraphError
+from app.services.graph.client import GraphAuthError, GraphClient, GraphError
 from app.services.graph.preview import offered_windows, preview_inbox
 from app.workers.queue import enqueue
 
@@ -88,7 +89,14 @@ async def mailbox_preview(request: Request) -> dict:
     async with GraphClient(token) as client:
         try:
             preview = await preview_inbox(client, ms_user_id)
-        except GraphError as exc:
+        except GraphAuthError as exc:
+            # A grant that refreshed fine but that Graph itself refuses —
+            # revoked between the refresh and the read, or an admin policy.
+            # Reported as 403 like the other dead-grant case, because
+            # "reconnect" is the fix; a 502 would blame our own uptime for it.
+            log.info("mailbox_preview_refused", user_id=str(user_id), error=repr(exc))
+            raise HTTPException(status_code=403, detail="Reconnect your mailbox.") from exc
+        except (GraphError, httpx.HTTPStatusError) as exc:
             log.warning("mailbox_preview_failed", user_id=str(user_id), error=repr(exc))
             raise HTTPException(
                 status_code=502, detail="Microsoft could not be reached just now."
