@@ -138,3 +138,31 @@ async def test_send_url_is_built_from_config() -> None:
     await WhatsAppChannel(client=_client(handler)).send("+6591234567", _wa_content())
     assert seen["url"].startswith(settings.WHATSAPP_API_BASE_URL)
     assert settings.WHATSAPP_PHONE_NUMBER_ID in seen["url"]
+
+
+async def test_telegram_200_with_invalid_json_is_transient() -> None:
+    """Gateway returned 200 with unparseable body (e.g., HTML error page).
+    Cannot determine if the message sent, so transient is the safe default."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text="<html>gateway error</html>")
+
+    result = await TelegramChannel(client=_client(handler)).send(
+        "12345", TelegramContent(text="hello")
+    )
+    assert result.outcome is SendOutcome.TRANSIENT
+    assert result.error is not None
+
+
+async def test_whatsapp_200_with_invalid_json_is_transient() -> None:
+    """Gateway returned 200 with unparseable body (e.g., HTML error page).
+    Cannot determine if the message sent, so transient is the safe default."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text="<html>gateway error</html>")
+
+    result = await WhatsAppChannel(client=_client(handler)).send(
+        "+6591234567", _wa_content()
+    )
+    assert result.outcome is SendOutcome.TRANSIENT
+    assert result.error is not None

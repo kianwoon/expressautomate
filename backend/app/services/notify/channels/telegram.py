@@ -50,7 +50,15 @@ class TelegramChannel:
 
 def _interpret(response: httpx.Response) -> SendResult:
     if response.status_code == 200:
-        body = response.json()
+        try:
+            body = response.json()
+        except ValueError as exc:
+            # Gateway returned 200 with unparseable body (e.g., HTML error page).
+            # Transient because we cannot determine if the message sent, so retry is safe.
+            return SendResult(
+                outcome=SendOutcome.TRANSIENT,
+                error=f"invalid response: {str(exc)[:500]}"
+            )
         message_id = body.get("result", {}).get("message_id")
         return SendResult(
             outcome=SendOutcome.SENT,
