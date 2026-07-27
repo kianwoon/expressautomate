@@ -87,6 +87,16 @@ the service is ever recreated — both caused outages when they drifted:
 | Route | `/` (not `/api`) |
 | Health check | `/api/health` (not `/health` — a 404 there leaves the deploy `PENDING` until CI times out) |
 
+**Per-service env vars are also not in this repo.** The workflow deploys the
+image; the variables were set by hand, so they drift per service. `GRAPH_BASE_URL`
+was missing on `api` for a day — harmless until the inbox preview became the
+first web-service code to call Graph, then every preview 500ed. Anything that
+adds a Graph call to a service that had none needs its env checked:
+
+```bash
+koyeb deployment get $(koyeb deployments list --service <id> -o json | jq -r '.deployments[0].id') -o json | jq -r '.deployment.definition.env[].key'
+```
+
 Live: https://expressautomate.app · repo: `kianwoon/expressautomate` (private)
 
 ## Status

@@ -31,7 +31,15 @@ async def lifespan(app: FastAPI):
         env=settings.APP_ENV,
         microsoft_configured=settings.microsoft_configured(),
         google_configured=settings.google_configured(),
+        graph_configured=settings.graph_configured(),
     )
+    # Not fatal — the site, sign-in and the webhook all work without it, and
+    # taking the whole service down over one broken feature would be worse.
+    # But it is stated once, loudly, at the only moment anyone is watching:
+    # this exact gap shipped to production and stayed invisible because the
+    # web service had never needed Graph before.
+    if settings.microsoft_configured() and not settings.graph_configured():
+        log.error("graph_base_url_missing", detail="Mailbox reads will fail (GRAPH_BASE_URL).")
     yield
     await engine.dispose()
     log.info("shutdown")

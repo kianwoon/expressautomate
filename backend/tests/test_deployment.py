@@ -51,6 +51,21 @@ def test_every_process_the_system_needs_is_deployed(service):
     )
 
 
+def test_a_missing_graph_url_is_answerable_rather_than_a_crash():
+    """Found in production, on the day the web service first called Graph.
+
+    `GRAPH_BASE_URL` was set on both workers and not on `api`. Empty, it makes
+    httpx build a URL with no host, which fails deep in the transport — past
+    every `except` clause that could name the cause — so the endpoint returned
+    a bare 500 for what was a one-line deployment gap.
+
+    The empty default stays (three services share one image and only some need
+    Graph), so what has to hold is that the emptiness is *detectable*.
+    """
+    assert not Settings(GRAPH_BASE_URL="").graph_configured()
+    assert Settings(GRAPH_BASE_URL="https://graph.microsoft.com/v1.0").graph_configured()
+
+
 @pytest.mark.parametrize("command", sorted(SERVICES.values()))
 def test_the_dockerfile_documents_how_each_process_starts(command):
     """One image, three commands. Whoever recreates a Koyeb service by hand

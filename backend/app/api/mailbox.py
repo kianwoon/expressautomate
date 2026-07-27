@@ -20,6 +20,7 @@ from pydantic import BaseModel
 from sqlalchemy import select, text
 
 from app.api.auth import _covers_mailbox, _provision_mailbox, _require_session
+from app.core.config import settings
 from app.core.logging import get_logger
 from app.db.rls import tenant_session
 from app.models import MicrosoftToken, User
@@ -51,6 +52,16 @@ async def _connected_user(request: Request) -> tuple[uuid.UUID, uuid.UUID, str]:
     otherwise reach Graph and get an opaque 403 back, when the real answer is
     "you have not connected a mailbox yet".
     """
+    # A missing Graph URL is an operator problem, and 503 says so. Letting it
+    # through produced a 500 that read as a code fault for a deployment that
+    # had simply never been given the setting.
+    if not settings.graph_configured():
+        raise HTTPException(
+            status_code=503,
+            detail="Mailbox access is not configured on this deployment "
+            "(GRAPH_BASE_URL). See docs/setup.md.",
+        )
+
     user_uuid, tenant_uuid = _require_session(request)
 
     async with tenant_session(tenant_uuid) as session:
@@ -96,7 +107,12 @@ async def mailbox_preview(request: Request) -> dict:
             # "reconnect" is the fix; a 502 would blame our own uptime for it.
             log.info("mailbox_preview_refused", user_id=str(user_id), error=repr(exc))
             raise HTTPException(status_code=403, detail="Reconnect your mailbox.") from exc
-        except (GraphError, httpx.HTTPStatusError) as exc:
+        except (GraphError, httpx.HTTPStatusError, httpx.RequestError) as exc:
+            # `RequestError` covers everything that fails before a response
+            # exists — DNS, connect, timeout, a base URL with no host. None of
+            # it reaches `_unwrap`, so without this arm it surfaced as a bare
+            # 500 with the cause buried in a traceback. `repr` is deliberate:
+            # the exception class is the whole diagnosis for this family.
             log.warning("mailbox_preview_failed", user_id=str(user_id), error=repr(exc))
             raise HTTPException(
                 status_code=502, detail="Microsoft could not be reached just now."

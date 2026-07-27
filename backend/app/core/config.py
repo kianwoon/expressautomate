@@ -87,6 +87,12 @@ class Settings(BaseSettings):
     DEFAULT_RETENTION_MONTHS: int = Field(default=24, gt=0)
 
     # --- Microsoft Graph ---
+    # Empty is a real deployment state, not a default worth using: httpx then
+    # builds a URL with no host and fails deep inside the transport, long past
+    # anything that could explain it. That is precisely how this shipped — the
+    # web service went live without it because, until the inbox preview, only
+    # the workers ever called Graph. `graph_configured()` is what makes the
+    # absence answerable at the edge instead of a 500 in a traceback.
     GRAPH_BASE_URL: str = ""
     GRAPH_TIMEOUT_SECONDS: float = 30.0
     # Used only when Graph throttles without a parseable Retry-After. It sends
@@ -250,6 +256,16 @@ class Settings(BaseSettings):
     def microsoft_configured(self) -> bool:
         """Identity *and* the only path to mailbox ingestion (§6.1)."""
         return bool(self.MS_CLIENT_ID and self.MS_CLIENT_SECRET)
+
+    def graph_configured(self) -> bool:
+        """Can this process actually reach Graph?
+
+        Separate from `microsoft_configured` because they drifted apart in
+        production: the web service held the client credentials but not the
+        Graph URL, so sign-in worked perfectly while every Graph call 500ed.
+        Anything that talks to Graph asks this first.
+        """
+        return bool(self.GRAPH_BASE_URL)
 
     def google_configured(self) -> bool:
         """Identity only — Google users have no mailbox to ingest."""
