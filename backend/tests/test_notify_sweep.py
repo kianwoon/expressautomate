@@ -190,6 +190,25 @@ async def test_a_fresh_sending_row_is_left_alone(scene, admin_session, monkeypat
     assert queued == []
 
 
+async def test_the_function_clamps_an_abusive_stale_window(
+    scene, admin_session
+) -> None:
+    """`flush_notification_deliveries` is SECURITY DEFINER and bypasses RLS, so
+    it must not trust `p_stale_minutes` just because today's only caller
+    passes a fixed, sane value from settings. Call it directly with 0 — what
+    a careless or malicious caller might pass — and confirm a 'sending' row
+    claimed a second ago is still not promoted: the function clamps the
+    window to a 1-minute floor internally rather than trusting the argument."""
+    tenant_id, dest_id = scene
+    row_id = await _insert(admin_session, tenant_id, dest_id, "sending", 0)
+
+    result = await admin_session.execute(
+        text("SELECT id FROM flush_notification_deliveries(0, 500)")
+    )
+    promoted = {row.id for row in result}
+    assert row_id not in promoted
+
+
 def test_the_sweep_is_registered_in_the_supervisor() -> None:
     from app.workers.main import build_tasks
 

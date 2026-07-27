@@ -49,20 +49,36 @@ LANGUAGE sql
 SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $$
-    -- SKIP LOCKED so two supervisors split a backlog instead of one blocking
-    -- on the other's claim. ORDER BY created_at drains oldest-first.
+    -- This is SECURITY DEFINER and runs with RLS bypassed, so it must not
+    -- trust its own arguments just because today's only caller (the
+    -- supervisor in app/workers/tasks.py) passes fixed, sane values. EXECUTE
+    -- is granted to the application role, which is the same role a web
+    -- request handler runs as — a future handler that forwards a caller-
+    -- supplied value here must not be able to turn it into an incident.
+    --
+    -- Floor the stale window at 1 minute: `p_stale_minutes => 0` (or a
+    -- negative value) would make every 'sending' row stale immediately,
+    -- including one a live worker claimed microseconds ago, and arq would
+    -- then redeliver it — a duplicate message to a recruiter. One minute is
+    -- comfortably longer than a single claim-to-ack round trip.
+    --
+    -- Cap the limit at 500: the worker's real batches are far smaller, but
+    -- an unbounded LIMIT would let one call UPDATE the entire table under a
+    -- single FOR UPDATE SKIP LOCKED lock, holding it for as long as that
+    -- takes. 500 rows is enough headroom for a large backlog to drain in a
+    -- few ticks without turning one call into a table-wide lock.
     UPDATE notification_deliveries d
     SET status = 'pending'
     WHERE d.id IN (
         SELECT c.id FROM notification_deliveries c
         WHERE (c.status = 'pending'
-               AND c.created_at < now() - make_interval(mins => p_stale_minutes))
+               AND c.created_at < now() - make_interval(mins => GREATEST(p_stale_minutes, 1)))
            OR (c.status = 'suppressed'
                AND c.created_at < now() - interval '1 hour')
            OR (c.status = 'sending'
-               AND c.updated_at < now() - make_interval(mins => p_stale_minutes))
+               AND c.updated_at < now() - make_interval(mins => GREATEST(p_stale_minutes, 1)))
         ORDER BY c.created_at
-        LIMIT p_limit
+        LIMIT LEAST(GREATEST(p_limit, 1), 500)
         FOR UPDATE SKIP LOCKED
     )
     RETURNING d.id, d.tenant_id
