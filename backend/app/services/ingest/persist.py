@@ -17,6 +17,7 @@ import uuid
 from sqlalchemy import ARRAY, Text, bindparam, text
 
 from app.core.config import settings
+from app.core.logging import get_logger
 from app.db.rls import tenant_session
 from app.services.ingest.evidence import parse_salary, quality_state, verify
 from app.services.ingest.glossary import DetectedCode, GlossaryEntry, detect
@@ -28,6 +29,8 @@ from app.services.notify.events import (
     EVENT_OPPORTUNITY_NEW,
     OpportunityEvent,
 )
+
+log = get_logger(__name__)
 
 # Model field name -> the `opportunities` column that holds its raw string.
 # allow-hardcode: the target columns of a table, not configuration. A name here
@@ -178,31 +181,61 @@ async def persist(
                 session, tenant_id, opportunity_id, job, codes, len(response.jobs)
             )
 
-            # Inside the same transaction that created the opportunity, so
-            # either both commit or neither does. A notification for a job
-            # order that rolled back is a message about something that never
-            # happened.
+            # Inside the same transaction that created the opportunity, so a
+            # notification for a job order that rolled back can never exist —
+            # that half of the "either both commit or neither does" reasoning
+            # holds. The reverse does not: the notification path is new and
+            # far less exercised than ingestion, and a subscriber lookup or
+            # rate-cap query failing inside emit() must not be allowed to take
+            # the extraction down with it. An opportunity that is retained is
+            # still visible in the dashboard; one that rolled back over a
+            # notification bug is gone until the email is reprocessed. So the
+            # isolation is asymmetric on purpose: wrap emit() in a SAVEPOINT
+            # (begin_nested) rather than let it share the outer transaction
+            # unguarded. If it raises, roll back only its own writes — the
+            # extraction and opportunity rows already staged in the outer
+            # transaction are untouched — and continue. Without the savepoint,
+            # a raised exception poisons the whole Postgres transaction (every
+            # later statement fails with InFailedSqlTransactionError) even if
+            # the exception itself were caught, so the savepoint is what keeps
+            # the session usable afterwards, not just the try/except.
             state = quality_state(job, source)
-            delivery_ids.extend(
-                await emit(
-                    OpportunityEvent(
-                        kind=(
-                            EVENT_OPPORTUNITY_NEEDS_REVIEW
-                            if state == "needs_review"
-                            else EVENT_OPPORTUNITY_NEW
-                        ),
-                        tenant_id=tenant_id,
-                        opportunity_id=opportunity_id,
-                        # Raw, not normalised: this is what a recruiter
-                        # recognises, and the message is read by a person.
-                        job_title=_value(job.job_title),
-                        company_name=_value(job.company),
-                        location=_value(job.location),
-                        salary=_value(job.salary),
-                    ),
-                    session,
+            try:
+                async with session.begin_nested():
+                    delivery_ids.extend(
+                        await emit(
+                            OpportunityEvent(
+                                kind=(
+                                    EVENT_OPPORTUNITY_NEEDS_REVIEW
+                                    if state == "needs_review"
+                                    else EVENT_OPPORTUNITY_NEW
+                                ),
+                                tenant_id=tenant_id,
+                                opportunity_id=opportunity_id,
+                                # Raw, not normalised: this is what a
+                                # recruiter recognises, and the message is
+                                # read by a person.
+                                job_title=_value(job.job_title),
+                                company_name=_value(job.company),
+                                location=_value(job.location),
+                                salary=_value(job.salary),
+                            ),
+                            session,
+                        )
+                    )
+            except Exception:
+                # Logged, not raised: a lost notification must be visible to
+                # an operator, but it must never be the reason a valid
+                # extraction disappears. Anything emit() partially wrote is
+                # already gone — the savepoint rolled it back — so nothing
+                # here is added to delivery_ids and enqueue_deliveries() will
+                # never be asked about ids that do not exist.
+                log.exception(
+                    "notify_emit_failed",
+                    tenant_id=str(tenant_id),
+                    opportunity_id=str(opportunity_id),
+                    extraction_id=str(extraction_id),
                 )
-            )
 
     # Outside the transaction, deliberately. Redis cannot join it, and a job
     # that starts before its row is committed reads nothing and exits without

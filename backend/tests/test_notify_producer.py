@@ -216,6 +216,70 @@ async def test_no_destination_means_no_outbox_row_and_no_error(
     assert await _outbox_row(admin_session, tenant_id, ids[0]) is None
 
 
+async def test_a_failing_emit_does_not_lose_the_extraction(
+    admin_session, email_row, subscribed, monkeypatch
+) -> None:
+    """emit() blowing up (a bad subscriber query, a bug in the notify code)
+    must not roll back the opportunity and extraction it runs alongside — the
+    savepoint around emit() in persist() isolates exactly that failure."""
+
+    async def _boom(*args, **kwargs):
+        raise RuntimeError("simulated notify failure")
+
+    monkeypatch.setattr(persist, "emit", _boom)
+
+    tenant_id, _, eid = email_row
+    ids = await persist_fn(
+        tenant_id, eid, _response(), LLMResult(data={}, model="test/fast"), SOURCE
+    )
+    assert len(ids) == 1
+
+    opp = (
+        await admin_session.execute(
+            text("SELECT id FROM opportunities WHERE id = :i"), {"i": ids[0]}
+        )
+    ).one_or_none()
+    assert opp is not None
+
+    extraction = (
+        await admin_session.execute(
+            text(
+                "SELECT ex.id FROM extractions ex "
+                "JOIN extraction_evidence e ON e.extraction_id = ex.id "
+                "WHERE e.opportunity_id = :i"
+            ),
+            {"i": ids[0]},
+        )
+    ).first()
+    assert extraction is not None
+
+
+async def test_a_failing_emit_enqueues_nothing(
+    admin_session, email_row, subscribed, monkeypatch
+) -> None:
+    """Whatever emit() partially wrote before raising is rolled back by the
+    savepoint, so persist() must never hand those ids to enqueue_deliveries."""
+    enqueued: list[uuid.UUID] = []
+
+    async def _capture(tenant_id, delivery_ids):
+        enqueued.extend(delivery_ids)
+
+    monkeypatch.setattr(persist, "enqueue_deliveries", _capture)
+
+    async def _boom(*args, **kwargs):
+        raise RuntimeError("simulated notify failure")
+
+    monkeypatch.setattr(persist, "emit", _boom)
+
+    tenant_id, _, eid = email_row
+    ids = await persist_fn(
+        tenant_id, eid, _response(), LLMResult(data={}, model="test/fast"), SOURCE
+    )
+    assert len(ids) == 1
+    assert enqueued == []
+    assert await _outbox_row(admin_session, tenant_id, ids[0]) is None
+
+
 def test_persist_does_not_know_about_channels() -> None:
     """If this fails, the abstraction has leaked into ingestion and adding a
     third channel means editing the extraction pipeline."""
