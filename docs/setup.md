@@ -15,26 +15,33 @@ one replica, region `was`, the cheapest tier Koyeb offers.
 Both public services sit behind the one domain, so the landing page calls the
 API same-origin and needs no CORS.
 
-### Route prefixes are stripped
+### Nothing strips a prefix — routes carry `/api` themselves
 
-**Koyeb removes the matched route prefix before forwarding.** A request to
-`/api/health` reaches FastAPI as `/health`. So:
+This is the reverse of what it once was, and the old arrangement is described
+below because it is the thing someone will otherwise re-derive and reinstate.
 
-- API routes are declared **unprefixed** (`/health`, `/early-access`).
-- `API_ROOT_PATH=/api` is set on the service so `/docs` and the OpenAPI schema
-  advertise the public prefix.
-- The service has exactly **one** route, `/api`. Several prefixes cannot share
-  a single `root_path` — an earlier attempt with `/health`, `/docs` and
-  `/openapi.json` as separate routes had each stripped differently and 404'd.
+One service now owns route `/`: FastAPI serves the Next.js static export at
+`/`, and every API route lives under an `/api` router
+(`app/main.py:68`, `APIRouter(prefix="/api")`). Nothing removes a prefix, so:
 
-`backend/tests/test_routing.py` fails CI if a route is ever declared with the
-`/api` prefix again.
+- API routes are declared **with** `/api` — `/api/health`, `/api/early-access`.
+- `API_ROOT_PATH` is **empty**. There is no prefix to advertise, because none
+  is stripped.
+- A route that escapes `/api` is shadowed by the static mount and becomes
+  unreachable — the site is served from `/`, so it answers first.
 
-**Running the frontend against a local backend:** the browser calls
-`/api/early-access`, but locally nothing strips the prefix, so set
-`API_ROOT_PATH=/api` in the repo-root `.env`. Starlette then strips it itself
-and the paths line up with production. Leave it empty when running the API
-alone.
+Three assertions hold this in place, and they contradict the old advice
+directly: `tests/test_routing.py:24` fails if any route is declared **outside**
+`/api`, and `:38` fails if `API_ROOT_PATH` is anything but empty.
+
+**Previously:** Koyeb owned route `/api` and removed the matched prefix before
+forwarding, so routes were declared unprefixed and `API_ROOT_PATH=/api` existed
+to make `/docs` advertise the public path. That is no longer true, and setting
+`API_ROOT_PATH` today breaks the paths rather than fixing them.
+
+**Running the frontend against a local backend** needs no special handling now.
+The browser calls `/api/early-access` and the route is genuinely at
+`/api/early-access`.
 
 ### CI/CD
 
@@ -360,8 +367,11 @@ uv run uvicorn app.main:app --reload
 Verify:
 
 ```bash
-curl localhost:8000/health/db
+curl localhost:8000/api/health/db
 ```
+
+`/api` is part of the path, not a prefix something strips — see "Nothing strips
+a prefix" above. `curl localhost:8000/health/db` returns the site, not JSON.
 
 ### Postgres 16 is required locally
 
@@ -402,7 +412,15 @@ creates it, from `DATABASE_APP_ROLE` and `DATABASE_APP_PASSWORD`, and refuses
 to run if the password is unset. So all four variables are needed, and the
 migration must run before the suite:
 
+These four exports override only the database variables. They are not a
+complete configuration on their own: `APP_SECRET_KEY`, `TOKEN_ENCRYPTION_KEY`
+and `FRONTEND_ORIGIN` have no defaults (`app/core/config.py:39-41`), and
+`REDIS_URL` must be a valid DSN or `app.workers.settings` fails at import —
+before Alembic runs, with an error that names Redis and not the missing file.
+So start from the template:
+
 ```bash
+cp .env.example .env          # repo root; fill the non-database values
 export DATABASE_APP_ROLE=expressautomate_app
 export DATABASE_APP_PASSWORD=local-not-a-real-password
 export DATABASE_ADMIN_URL=postgresql://postgres:postgres@localhost:5432/expressautomate
