@@ -44,8 +44,10 @@ export type NotificationsState =
   // `refreshError` is set only when a load AFTER the first success fails — the
   // Telegram panel polls this every 3s, and a transient blip there must not
   // replace the destinations and the in-progress panel with a full-screen
-  // error. The first, un-refreshed load has nothing to fall back to, so it
-  // still goes to `unreadable` below.
+  // error. Exception: a 401 (expired session) is non-recoverable, so it always
+  // collapses to `unreadable` to stop the polling and show the sign-in prompt.
+  // The first, un-refreshed load has nothing to fall back to, so it still goes
+  // to `unreadable` below.
   | { status: "ready"; settings: NotificationSettings; refreshError?: string }
   | { status: "unreadable"; message: string };
 
@@ -92,11 +94,17 @@ export function useNotifications() {
             res.status === 401
               ? "Your session has expired. Sign in again and this page will show your settings."
               : "We could not read your notification settings just now.";
-          // A refresh failure on top of good data keeps that data on screen —
-          // see the type comment above. Only a load with nothing to fall back
-          // to becomes the full-screen `unreadable` state.
+          // A 401 is non-recoverable — an expired session will never succeed, and the
+          // polling panel would produce a stream of failures with no way to complete.
+          // All other failures (network, 5xx) keep the last-good data on screen since
+          // they genuinely are transient. But 401 must collapse to the full-screen
+          // unreadable state so the expired-session message is all the recruiter sees.
           setState((prev) =>
-            prev.status === "ready" ? { ...prev, refreshError: message } : { status: "unreadable", message },
+            res.status === 401
+              ? { status: "unreadable", message }
+              : prev.status === "ready"
+                ? { ...prev, refreshError: message }
+                : { status: "unreadable", message },
           );
           return;
         }
