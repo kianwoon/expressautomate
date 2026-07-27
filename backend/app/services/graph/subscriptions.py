@@ -23,7 +23,7 @@ from sqlalchemy import text
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.db.rls import tenant_session
-from app.services.graph.client import GraphClient
+from app.services.graph.client import MAILBOX_ROOT, GraphClient
 
 log = get_logger(__name__)
 
@@ -85,10 +85,10 @@ def build_subscription_payload(ms_user_id: str, folder_id: str) -> dict:
         # are opaque and may contain `/` or `?`. This one travels in a JSON
         # body rather than a URL, so a stray character would not misroute a
         # request — it would silently subscribe to something else.
-        "resource": (
-            f"/users/{quote(ms_user_id, safe='')}"
-            f"/mailFolders/{quote(folder_id, safe='')}/messages"
-        ),
+        # `MAILBOX_ROOT` rather than `/users/{id}`: Graph resolves it from the
+        # delegated token that creates the subscription, and `/users/{id}` is
+        # rejected outright for personal accounts.
+        "resource": f"{MAILBOX_ROOT}/mailFolders/{quote(folder_id, safe='')}/messages",
         "clientState": secrets.token_urlsafe(_CLIENT_STATE_BYTES),
         "expirationDateTime": _requested_expiry(),
         # The message is fetched over an authenticated channel instead. Trusting

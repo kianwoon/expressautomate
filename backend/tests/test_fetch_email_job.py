@@ -174,8 +174,17 @@ async def test_the_attempt_is_counted(monkeypatch, pending):
     assert (await _row(tenant_id, row_id)).attempt_count == 1
 
 
-async def test_the_request_targets_the_mailbox_and_message(monkeypatch, pending):
-    """The mailbox is addressed by its Graph user id, not the tenant's."""
+async def test_the_request_targets_the_message_through_the_owners_token(
+    monkeypatch, pending
+):
+    """The mailbox is addressed as `/me`, never `/users/{id}`.
+
+    Graph rejects `/users/{id}` for personal Microsoft accounts — with a 503,
+    which this client reads as a throttle, so it retried forever instead of
+    saying the path was wrong. The token is the mailbox owner's by
+    construction, so `/me` names the same mailbox and works for both account
+    types.
+    """
     seen = {}
 
     def _capture(request):
@@ -186,7 +195,8 @@ async def test_the_request_targets_the_mailbox_and_message(monkeypatch, pending)
 
     await _run(pending)
 
-    assert seen["path"].endswith("/users/ms-user-1/messages/MSG-1")
+    assert seen["path"].endswith("/me/messages/MSG-1")
+    assert "/users/" not in seen["path"]
 
 
 def test_a_message_id_containing_a_slash_stays_one_path_segment():
@@ -198,7 +208,7 @@ def test_a_message_id_containing_a_slash_stays_one_path_segment():
     """
     path = jobs._message_path("user@example.com", "AAkAL/g+w==")
 
-    assert path.count("/") == 4, "users/<id>/messages/<id> and nothing more"
+    assert path.count("/") == 3, "/me/messages/<id> and nothing more"
     assert "%2F" in path
     assert path.endswith("AAkAL%2Fg%2Bw%3D%3D")
 

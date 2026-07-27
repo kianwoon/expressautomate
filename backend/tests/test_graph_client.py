@@ -9,6 +9,8 @@ Every test here drives a `MockTransport`, so the suite never reaches the
 network.
 """
 
+from pathlib import Path
+
 import httpx
 import pytest
 
@@ -205,3 +207,26 @@ def test_the_graph_base_url_is_configured():
     assert settings.GRAPH_BASE_URL.startswith("https://"), (
         "GRAPH_BASE_URL must be set (see .env.example and the workflow env block)"
     )
+
+
+def test_no_graph_path_addresses_the_mailbox_by_user_id():
+    """`/users/{id}` is rejected for personal Microsoft accounts.
+
+    Every token this application holds is delegated for the mailbox's own
+    owner, so `/me` names the same mailbox and works for both account types.
+    Asserted across the whole package rather than per call site because the
+    four paths were written at different times and one was missed — the miss
+    surfaced as Graph 503s, which this client reads as a throttle, so it
+    retried forever instead of reporting an unsupported path.
+
+    allow-hardcode: a source-level grep for one forbidden URL prefix, not a
+    phrase list any behaviour keys on.
+    """
+    root = Path(__file__).resolve().parents[1] / "app"
+    offenders = [
+        path.relative_to(root).as_posix()
+        for path in root.rglob("*.py")
+        if '"/users/' in path.read_text() or "f\"/users/" in path.read_text()
+    ]
+
+    assert offenders == [], f"these build Graph paths as /users/<id>: {offenders}"

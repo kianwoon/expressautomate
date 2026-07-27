@@ -18,7 +18,7 @@ import httpx
 
 from app.core.config import settings
 from app.core.logging import get_logger
-from app.services.graph.client import GraphClient, GraphError
+from app.services.graph.client import MAILBOX_ROOT, GraphClient, GraphError
 
 log = get_logger(__name__)
 
@@ -65,8 +65,14 @@ def offered_windows() -> list[tuple[str, str, int | None]]:
 
 
 async def preview_inbox(client: GraphClient, ms_user_id: str) -> InboxPreview:
-    """Size the inbox and price each import option."""
-    base = f"/users/{ms_user_id}/mailFolders/{INBOX}"
+    """Size the inbox and price each import option.
+
+    `ms_user_id` is taken but not put in the path: the token already names the
+    user, and `/users/{id}` is unsupported for personal accounts. It stays in
+    the signature because the caller has it and a shared-mailbox path would
+    need it — see `MAILBOX_ROOT`.
+    """
+    base = f"{MAILBOX_ROOT}/mailFolders/{INBOX}"
 
     folder = await client.get(base, params={"$select": "displayName,totalItemCount"})
     oldest = await _oldest_received(client, base)

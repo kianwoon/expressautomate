@@ -20,6 +20,20 @@ from app.core.logging import get_logger
 log = get_logger(__name__)
 
 
+# Every token this application holds is a *delegated* token belonging to the
+# mailbox's own owner, so `/me` and `/users/{that owner}` name the same mailbox.
+# They are not equally supported, though: Graph rejects `/users/{id}` for
+# personal Microsoft accounts, which is most of the intended user base here.
+# That failure cost a production afternoon — Graph answered 503, so it read as
+# an outage and retried forever instead of naming the unsupported path.
+#
+# `/me` works for both account types, and it takes the identity from the token
+# rather than from a string we carry alongside it — one fewer way for the two
+# to disagree. `ms_user_id` stays on the row: it is what the webhook matches a
+# notification against, and what a future shared-mailbox path would need.
+MAILBOX_ROOT = "/me"
+
+
 def warn_if_unconfigured(process: str) -> bool:
     """Say once, at startup, that this process cannot reach Graph.
 

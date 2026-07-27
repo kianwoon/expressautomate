@@ -23,7 +23,7 @@ from sqlalchemy import text
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.db.rls import tenant_session
-from app.services.graph.client import GraphClient, GraphResyncRequired
+from app.services.graph.client import MAILBOX_ROOT, GraphClient, GraphResyncRequired
 from app.services.ingest.intake import record_notification
 from app.workers.queue import enqueue
 
@@ -220,10 +220,10 @@ async def _walk_start(
     if row.delta_link and since is None:
         return row.delta_link
 
-    base = (
-        f"/users/{quote(row.ms_user_id, safe='')}"
-        f"/mailFolders/{quote(row.folder_id, safe='')}/messages/delta"
-    )
+    # `MAILBOX_ROOT`, not `/users/{ms_user_id}`: the token belongs to this
+    # mailbox's owner already, and `/users/{id}` is unsupported for personal
+    # accounts.
+    base = f"{MAILBOX_ROOT}/mailFolders/{quote(row.folder_id, safe='')}/messages/delta"
     if since is None:
         return base
     stamp = since.isoformat().replace("+00:00", "Z")

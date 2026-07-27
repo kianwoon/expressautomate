@@ -170,8 +170,22 @@ def test_a_renew_margin_outside_the_safe_range_is_rejected(bad):
 def test_the_payload_targets_the_configured_folder():
     payload = build_subscription_payload("ms-user", "jobs-folder")
 
-    assert payload["resource"] == "/users/ms-user/mailFolders/jobs-folder/messages"
+    assert payload["resource"] == "/me/mailFolders/jobs-folder/messages"
     assert payload["changeType"] == "created"
+
+
+def test_the_resource_never_names_the_user():
+    """`/users/{id}` is rejected for personal Microsoft accounts, which most of
+    this product's users have. Graph answered 503 for it — so it read as an
+    outage and retried forever rather than naming an unsupported path.
+
+    `/me` is resolved from the delegated token that creates the subscription,
+    which is the mailbox owner's by construction.
+    """
+    payload = build_subscription_payload("00000000-0000-0000-62ed-a3030ac2ada2", "inbox")
+
+    assert "/users/" not in payload["resource"]
+    assert payload["resource"].startswith("/me/")
 
 
 def test_the_payload_registers_both_notification_urls():
@@ -189,9 +203,7 @@ def test_folder_ids_are_encoded_into_the_resource():
     other than the folder the user chose."""
     payload = build_subscription_payload("user@x.com", "AAkAL/g+w==")
 
-    assert payload["resource"] == (
-        "/users/user%40x.com/mailFolders/AAkAL%2Fg%2Bw%3D%3D/messages"
-    )
+    assert payload["resource"] == "/me/mailFolders/AAkAL%2Fg%2Bw%3D%3D/messages"
 
 
 def test_the_payload_never_asks_for_resource_data():

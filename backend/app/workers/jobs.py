@@ -26,6 +26,7 @@ from sqlalchemy import text
 from app.core.logging import get_logger
 from app.db.rls import tenant_session
 from app.services.graph.client import (
+    MAILBOX_ROOT,
     GraphAuthError,
     GraphClient,
     GraphNotFound,
@@ -329,8 +330,11 @@ def _message_path(ms_user_id: str, graph_message_id: str) -> str:
     Graph ids are base64-derived and can contain `/` and `+`. Interpolated
     raw, a `/` would split into extra path segments and the request would 404
     on a message that exists.
+
+    Rooted at `MAILBOX_ROOT`, not `/users/{ms_user_id}`: the token is already
+    this owner's, and `/users/{id}` does not work for personal accounts.
     """
-    return f"/users/{quote(ms_user_id, safe='')}/messages/{quote(graph_message_id, safe='')}"
+    return f"{MAILBOX_ROOT}/messages/{quote(graph_message_id, safe='')}"
 
 
 async def _store(
