@@ -390,6 +390,9 @@ class Settings(BaseSettings):
     # enqueue was lost. Must exceed the worst realistic queue latency, or the
     # sweep competes with a job that is merely slow.
     NOTIFY_DELIVERY_STALE_MINUTES: int = Field(default=10, gt=0)
+    # Bounds one tick's work, so a backlog drains steadily instead of queueing
+    # ten thousand jobs in a single sweep.
+    NOTIFY_FLUSH_LIMIT: int = Field(default=200, gt=0)
 
     @field_validator("MS_IDENTITY_SCOPES", "MS_MAILBOX_SCOPES")
     @classmethod

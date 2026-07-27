@@ -48,6 +48,7 @@ def build_tasks() -> list[PeriodicTask]:
         delta_sync_all,
         ensure_backfills,
         ensure_subscriptions,
+        flush_notifications,
         renew_subscriptions,
         rescan_stuck,
     )
@@ -73,6 +74,13 @@ def build_tasks() -> list[PeriodicTask]:
         await ensure_subscriptions()
         await ensure_backfills()
 
+    async def _flush_notifications() -> None:
+        # Three duties on one clock: a delivery whose enqueue was lost, a
+        # rate-capped batch with no later message to carry its "+N more", and
+        # a claim never released because the worker holding it was killed
+        # outright before any exception handler could run.
+        await flush_notifications()
+
     return [
         PeriodicTask("rescan_stuck", settings.RESCAN_INTERVAL_SECONDS, _rescan),
         PeriodicTask(
@@ -82,6 +90,11 @@ def build_tasks() -> list[PeriodicTask]:
         PeriodicTask("delta_sync", settings.DELTA_SYNC_INTERVAL_SECONDS, _delta),
         PeriodicTask(
             "ensure_subscriptions", settings.ENSURE_SUBSCRIPTIONS_INTERVAL_SECONDS, _ensure
+        ),
+        PeriodicTask(
+            "flush_notifications",
+            settings.NOTIFY_SWEEP_INTERVAL_SECONDS,
+            _flush_notifications,
         ),
     ]
 
