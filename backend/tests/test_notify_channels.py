@@ -166,3 +166,32 @@ async def test_whatsapp_200_with_invalid_json_is_transient() -> None:
     )
     assert result.outcome is SendOutcome.TRANSIENT
     assert result.error is not None
+
+
+async def test_telegram_200_with_non_object_json_is_transient() -> None:
+    """`json=null` parses without error to Python None, so the ValueError guard
+    around response.json() never fires. The .get() call that follows would then
+    raise AttributeError and escape the channel, which must never raise."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=None)
+
+    result = await TelegramChannel(client=_client(handler)).send(
+        "12345", TelegramContent(text="hello")
+    )
+    assert result.outcome is SendOutcome.TRANSIENT
+    assert result.error is not None
+
+
+async def test_whatsapp_200_with_non_object_json_is_transient() -> None:
+    """Same class of gap as Telegram: `json=null` parses cleanly, so body.get()
+    on a non-dict body must be guarded rather than left to raise AttributeError."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=None)
+
+    result = await WhatsAppChannel(client=_client(handler)).send(
+        "+6591234567", _wa_content()
+    )
+    assert result.outcome is SendOutcome.TRANSIENT
+    assert result.error is not None

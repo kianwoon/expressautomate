@@ -88,10 +88,27 @@ def _interpret(response: httpx.Response) -> SendResult:
                 outcome=SendOutcome.TRANSIENT,
                 error=f"invalid response: {str(exc)[:500]}"
             )
+        if not isinstance(body, dict):
+            # `json=null`, `json=[]`, `json="x"` all parse without raising, but
+            # are not the Cloud API response shape we expect. Same treatment as
+            # an unparseable body: retry is the cheap way to be wrong here.
+            return SendResult(
+                outcome=SendOutcome.TRANSIENT,
+                error=f"unexpected response shape: {type(body).__name__}",
+            )
         messages = body.get("messages") or []
+        if not isinstance(messages, list):
+            # "messages" present but not a list (e.g. a string or object) would
+            # make messages[0] raise. Treat it the same as the shape mismatch
+            # above rather than trusting the field to be well-formed.
+            return SendResult(
+                outcome=SendOutcome.TRANSIENT,
+                error=f"unexpected 'messages' shape: {type(messages).__name__}",
+            )
+        first = messages[0] if messages else None
         return SendResult(
             outcome=SendOutcome.SENT,
-            provider_message_id=messages[0].get("id") if messages else None,
+            provider_message_id=first.get("id") if isinstance(first, dict) else None,
         )
 
     try:

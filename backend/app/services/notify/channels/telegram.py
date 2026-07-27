@@ -59,6 +59,15 @@ def _interpret(response: httpx.Response) -> SendResult:
                 outcome=SendOutcome.TRANSIENT,
                 error=f"invalid response: {str(exc)[:500]}"
             )
+        if not isinstance(body, dict):
+            # `json=null`, `json=[]`, `json="x"` all parse without raising, but
+            # are not the Telegram response shape we expect. Treat the same as
+            # an unparseable body: we cannot tell if the message sent, so a
+            # retry costs one extra call rather than losing the row forever.
+            return SendResult(
+                outcome=SendOutcome.TRANSIENT,
+                error=f"unexpected response shape: {type(body).__name__}",
+            )
         message_id = body.get("result", {}).get("message_id")
         return SendResult(
             outcome=SendOutcome.SENT,
