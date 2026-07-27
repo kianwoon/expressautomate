@@ -2,7 +2,7 @@
 
 import { useEffect } from "react";
 
-import { LANDING_PATH } from "../api";
+import { LANDING_PATH, SWITCH_ACCOUNT_PATH } from "../api";
 import { displayNameOf, useAuth, type Me } from "../auth";
 import { SiteNav } from "../site-nav";
 
@@ -130,6 +130,18 @@ function SignedIn({ me }: { me: Me }) {
             account instead. We would rather say this than show you an empty dashboard and let you
             wonder.
           </p>
+          {/* The paragraph above tells them to sign in with their work
+              account; without this button that instruction is unfollowable.
+              Microsoft would reuse this personal session and hand the same
+              account straight back, so the picker has to be forced. */}
+          <a
+            className="btn btn-primary"
+            rel="nofollow"
+            href={SWITCH_ACCOUNT_PATH}
+            style={{ marginTop: 18 }}
+          >
+            Sign in with a work account
+          </a>
         </div>
       )}
 

@@ -45,14 +45,21 @@ def client() -> msal.ConfidentialClientApplication:
     )
 
 
-def begin_login() -> dict:
+def begin_login(prompt: str | None = None) -> dict:
     """Start the auth-code flow.
 
     The returned dict carries the PKCE verifier, state and nonce; it must reach
     `complete_login` unmodified or MSAL rejects the response.
+
+    `prompt` is the OIDC parameter of the same name, passed straight through to
+    the authorize request. Without it Microsoft silently reuses whichever
+    account already has a browser SSO session, so someone signed in as one
+    account can never reach a second one — `select_account` is what forces the
+    picker. It is not defaulted here: paying the extra click on every ordinary
+    sign-in is a worse trade than letting the caller ask for it.
     """
     return client().initiate_auth_code_flow(
-        delegated_scopes(), redirect_uri=settings.MS_REDIRECT_URI
+        delegated_scopes(), redirect_uri=settings.MS_REDIRECT_URI, prompt=prompt
     )
 
 

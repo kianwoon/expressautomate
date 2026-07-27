@@ -78,6 +78,15 @@ PERSONAL_TENANT_NAMESPACE = uuid.UUID("6f1f7f7a-6b1e-5a6d-9d2a-7c4f1c9f0b3e")
 
 SESSION_TTL_SECONDS = 14 * 24 * 60 * 60
 
+# OIDC `prompt` values this deployment will forward to Microsoft. A whitelist,
+# not a passthrough: the value lands in the authorize URL the browser is
+# redirected to, and an unchecked query parameter there is parameter injection
+# waiting to happen. Only the one value the frontend actually sends is listed —
+# `login` and `consent` are valid OIDC but nothing here asks for them, and an
+# unused entry is only extra surface. `none` would be wrong in any case: it
+# fails outright when interaction is needed, which is not a sign-in button's job.
+ALLOWED_PROMPTS = frozenset({"select_account"})
+
 # Where a completed sign-in lands. A signed-in user dropped back on the
 # marketing page has no sign that anything happened. Not configuration — it is
 # a route the frontend owns, so it must stay in step with `frontend/app/
@@ -212,10 +221,22 @@ def _tenant_for(tid: str, oid: str, email: str) -> tuple[uuid.UUID, str, str, bo
 
 
 @router.get("/auth/microsoft/login")
-async def microsoft_login(request: Request) -> RedirectResponse:
-    """Send the browser to Microsoft, carrying the flow back in a sealed cookie."""
+async def microsoft_login(request: Request, prompt: str | None = None) -> RedirectResponse:
+    """Send the browser to Microsoft, carrying the flow back in a sealed cookie.
+
+    `?prompt=select_account` is how switching accounts is done. Microsoft, given
+    no prompt, reuses the browser's existing SSO session without asking — so a
+    user who has ever signed in is silently returned as the same account, and
+    signing out here (which only drops our own cookie) does not change that.
+    The frontend therefore asks for the picker whenever the user is choosing an
+    account rather than resuming one.
+    """
     _require_microsoft()
-    flow = ms_auth.begin_login()
+    if prompt is not None and prompt not in ALLOWED_PROMPTS:
+        # Rejected rather than ignored: a silently dropped prompt would send the
+        # user round the loop into the very account they were trying to leave.
+        raise HTTPException(status_code=400, detail="Unsupported prompt.")
+    flow = ms_auth.begin_login(prompt=prompt)
     response = RedirectResponse(flow["auth_uri"])
     for stale in _stale_flow_cookies(request):
         response.delete_cookie(stale, path="/")

@@ -1,7 +1,7 @@
 "use client";
 
-import { DASHBOARD_PATH, SIGN_IN_PATH } from "./api";
-import { useAuth } from "./auth";
+import { DASHBOARD_PATH } from "./api";
+import { useAuth, useSignInHref } from "./auth";
 
 /**
  * The hero's primary call to action.
@@ -30,6 +30,7 @@ import { useAuth } from "./auth";
 export function HeroCta() {
   const auth = useAuth();
   const resolved = auth.status !== "loading";
+  const signInHref = useSignInHref();
 
   return (
     <div
@@ -46,7 +47,7 @@ export function HeroCta() {
         /* A full page load, not a client route: the API answers with a redirect
            to Microsoft, which a Next link would not follow. rel="nofollow"
            discourages link preloading — see the same note in site-nav.tsx. */
-        <a className="btn btn-primary" rel="nofollow" href={SIGN_IN_PATH}>
+        <a className="btn btn-primary" rel="nofollow" href={signInHref}>
           Sign in with Microsoft
         </a>
       )}

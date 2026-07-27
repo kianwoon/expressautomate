@@ -71,15 +71,19 @@ def microsoft_configured(monkeypatch) -> None:
 def fake_msal(monkeypatch) -> None:
     """A believable flow dict and token response, with no MSAL client built."""
 
-    def begin_login() -> dict:
+    def begin_login(prompt: str | None = None) -> dict:
         state = uuid.uuid4().hex
+        # Real MSAL puts `prompt` in the authorize query only when one is
+        # given; mirroring that is what lets a test read it back off the
+        # redirect instead of reaching into the mock.
+        query = f"state={state}" + (f"&prompt={prompt}" if prompt else "")
         return {
             "state": state,
             "code_verifier": uuid.uuid4().hex,
             "nonce": uuid.uuid4().hex,
             "redirect_uri": settings.MS_REDIRECT_URI,
             "scope": ms_auth.delegated_scopes(),
-            "auth_uri": f"{AUTHORIZE_HOST}/organizations/oauth2/v2.0/authorize?state={state}",
+            "auth_uri": f"{AUTHORIZE_HOST}/organizations/oauth2/v2.0/authorize?{query}",
         }
 
     monkeypatch.setattr(ms_auth, "begin_login", begin_login)
@@ -131,6 +135,29 @@ async def test_login_redirects_to_the_microsoft_authorize_endpoint(client) -> No
     assert response.headers["location"].startswith(f"{AUTHORIZE_HOST}/")
     assert "authorize" in response.headers["location"]
     assert auth_api._flow_cookie_name(state_of(response)) in response.cookies
+
+
+async def test_login_asks_for_no_prompt_by_default(client) -> None:
+    """An ordinary sign-in must not make everyone click through the picker."""
+    response = await client.get("/api/auth/microsoft/login")
+    assert "prompt" not in parse_qs(urlparse(response.headers["location"]).query)
+
+
+async def test_login_forwards_select_account_so_an_account_can_be_switched(client) -> None:
+    """Without this parameter Microsoft silently reuses the live SSO session,
+    which is exactly what makes a second account unreachable."""
+    response = await client.get(
+        "/api/auth/microsoft/login", params={"prompt": "select_account"}
+    )
+    assert response.status_code == 307
+    query = parse_qs(urlparse(response.headers["location"]).query)
+    assert query["prompt"] == ["select_account"]
+
+
+async def test_login_rejects_an_unlisted_prompt(client) -> None:
+    """Rejected, not ignored: the value reaches the authorize URL."""
+    response = await client.get("/api/auth/microsoft/login", params={"prompt": "none"})
+    assert response.status_code == 400
 
 
 async def test_login_does_not_leak_the_flow_secrets_into_the_cookie(client) -> None:
@@ -213,6 +240,28 @@ async def test_a_different_entra_tenant_gets_its_own_tenant(client, monkeypatch,
         assert (await s.execute(text("SELECT email FROM users"))).scalars().all() == [
             "sam@agency-b.sg"
         ]
+
+
+async def test_signing_in_again_switches_the_session_to_the_new_account(
+    client, monkeypatch, cleanup
+) -> None:
+    """Switching accounts must replace the session, not stack a second one.
+
+    The picker (`?prompt=select_account`) is only half of switching; the other
+    half is that whoever comes back from Microsoft becomes the signed-in user,
+    even though a valid session for the previous account is still in the jar.
+    """
+    personal, work = str(uuid.uuid4()), str(uuid.uuid4())
+    cleanup.extend([uuid.UUID(personal), uuid.UUID(work)])
+
+    await sign_in(client, monkeypatch, token_response(personal, uuid.uuid4().hex, "rach@live.com"))
+    await sign_in(client, monkeypatch, token_response(work, uuid.uuid4().hex, "rachel@agency.sg"))
+
+    me = await client.get("/api/auth/me")
+    assert me.status_code == 200
+    body = me.json()
+    assert body["user"]["email"] == "rachel@agency.sg"
+    assert body["tenant"]["id"] == work
 
 
 MSA = auth_api.MSA_CONSUMER_TENANT_ID
