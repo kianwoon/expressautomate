@@ -9,6 +9,7 @@ import httpx
 
 from app.core.config import settings
 from app.core.logging import get_logger
+from app.services.notify.channels._response import _json_object
 from app.services.notify.channels.base import SendOutcome, SendResult
 from app.services.notify.render import WhatsAppContent
 
@@ -72,29 +73,31 @@ class WhatsAppChannel:
             return SendResult(outcome=SendOutcome.TRANSIENT, error=str(exc))
         finally:
             if self._owns_client:
-                await client.aclose()
+                try:
+                    await client.aclose()
+                except httpx.HTTPError:
+                    # A failure to close must not replace whatever result or
+                    # exception is already in flight from the try block above —
+                    # that would trade a real outcome for a spurious one and
+                    # trip the same stuck-row invariant this whole method exists
+                    # to protect.
+                    pass
 
         return _interpret(response)
 
 
 def _interpret(response: httpx.Response) -> SendResult:
     if response.status_code == 200:
-        try:
-            body = response.json()
-        except ValueError as exc:
-            # Gateway returned 200 with unparseable body (e.g., HTML error page).
-            # Transient because we cannot determine if the message sent, so retry is safe.
+        body = _json_object(response)
+        if body is None:
+            # Covers both an unparseable body (e.g., HTML error page) and a
+            # body that parsed but wasn't an object (`null`, `[]`, `"x"`).
+            # Transient because we cannot determine if the message sent, so
+            # retry is safe — see _json_object's docstring for why this is
+            # one check instead of two.
             return SendResult(
                 outcome=SendOutcome.TRANSIENT,
-                error=f"invalid response: {str(exc)[:500]}"
-            )
-        if not isinstance(body, dict):
-            # `json=null`, `json=[]`, `json="x"` all parse without raising, but
-            # are not the Cloud API response shape we expect. Same treatment as
-            # an unparseable body: retry is the cheap way to be wrong here.
-            return SendResult(
-                outcome=SendOutcome.TRANSIENT,
-                error=f"unexpected response shape: {type(body).__name__}",
+                error="invalid or unexpected response shape",
             )
         messages = body.get("messages") or []
         if not isinstance(messages, list):
@@ -111,9 +114,12 @@ def _interpret(response: httpx.Response) -> SendResult:
             provider_message_id=first.get("id") if isinstance(first, dict) else None,
         )
 
-    try:
-        error = response.json().get("error", {})
-    except ValueError:
+    body = _json_object(response) or {}
+    error = body.get("error")
+    if not isinstance(error, dict):
+        # `error` is documented as an object, but a malformed or truncated
+        # non-200 body could send it as anything (or omit it). Same gap as
+        # the top-level body check, one field deeper.
         error = {}
     code = error.get("code")
     detail = str(error.get("message", response.text))[:500]

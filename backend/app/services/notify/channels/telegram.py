@@ -8,6 +8,7 @@ import httpx
 
 from app.core.config import settings
 from app.core.logging import get_logger
+from app.services.notify.channels._response import _json_object
 from app.services.notify.channels.base import SendOutcome, SendResult
 from app.services.notify.render import TelegramContent
 
@@ -43,30 +44,31 @@ class TelegramChannel:
             return SendResult(outcome=SendOutcome.TRANSIENT, error=str(exc))
         finally:
             if self._owns_client:
-                await client.aclose()
+                try:
+                    await client.aclose()
+                except httpx.HTTPError:
+                    # A failure to close must not replace whatever result or
+                    # exception is already in flight from the try block above —
+                    # that would trade a real outcome for a spurious one and
+                    # trip the same stuck-row invariant this whole method exists
+                    # to protect.
+                    pass
 
         return _interpret(response)
 
 
 def _interpret(response: httpx.Response) -> SendResult:
     if response.status_code == 200:
-        try:
-            body = response.json()
-        except ValueError as exc:
-            # Gateway returned 200 with unparseable body (e.g., HTML error page).
-            # Transient because we cannot determine if the message sent, so retry is safe.
+        body = _json_object(response)
+        if body is None:
+            # Covers both an unparseable body (e.g., HTML error page) and a
+            # body that parsed but wasn't an object (`null`, `[]`, `"x"`).
+            # Transient because we cannot determine if the message sent, so
+            # retry is safe — see _json_object's docstring for why this is
+            # one check instead of two.
             return SendResult(
                 outcome=SendOutcome.TRANSIENT,
-                error=f"invalid response: {str(exc)[:500]}"
-            )
-        if not isinstance(body, dict):
-            # `json=null`, `json=[]`, `json="x"` all parse without raising, but
-            # are not the Telegram response shape we expect. Treat the same as
-            # an unparseable body: we cannot tell if the message sent, so a
-            # retry costs one extra call rather than losing the row forever.
-            return SendResult(
-                outcome=SendOutcome.TRANSIENT,
-                error=f"unexpected response shape: {type(body).__name__}",
+                error="invalid or unexpected response shape",
             )
         message_id = body.get("result", {}).get("message_id")
         return SendResult(
@@ -88,10 +90,10 @@ def _interpret(response: httpx.Response) -> SendResult:
 
 
 def _describe(response: httpx.Response) -> str:
-    try:
-        return str(response.json().get("description", response.text))[:500]
-    except ValueError:
+    body = _json_object(response)
+    if body is None:
         return response.text[:500]
+    return str(body.get("description", response.text))[:500]
 
 
 def _retry_after(response: httpx.Response) -> float | None:
@@ -101,8 +103,16 @@ def _retry_after(response: httpx.Response) -> float | None:
             return float(header)
         except ValueError:
             pass
+    body = _json_object(response) or {}
+    parameters = body.get("parameters")
+    if not isinstance(parameters, dict):
+        # Same shape gap one level deeper: `parameters` is documented as an
+        # object but nothing stops a 429 body from sending it as something
+        # else, and `.get` on that would raise exactly like the top-level
+        # cases this helper exists to prevent.
+        return None
+    value = parameters.get(_RETRY_AFTER_BODY_KEY)
     try:
-        value = response.json().get("parameters", {}).get(_RETRY_AFTER_BODY_KEY)
         return float(value) if value is not None else None
-    except (ValueError, AttributeError):
+    except (TypeError, ValueError):
         return None

@@ -195,3 +195,79 @@ async def test_whatsapp_200_with_non_object_json_is_transient() -> None:
     )
     assert result.outcome is SendOutcome.TRANSIENT
     assert result.error is not None
+
+
+async def test_telegram_non_200_with_non_object_json_does_not_raise() -> None:
+    """Same gap as the 200 path, one status code away: _describe() used to do
+    `response.json().get("description", ...)` unguarded, so a 400 with body
+    `[]` raised AttributeError instead of returning a result."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(400, json=[])
+
+    result = await TelegramChannel(client=_client(handler)).send(
+        "12345", TelegramContent(text="hello")
+    )
+    assert result.outcome is SendOutcome.PERMANENT
+    assert result.error is not None
+
+
+async def test_whatsapp_non_200_with_non_object_json_does_not_raise() -> None:
+    """Same gap as the 200 path: the non-200 branch used to do
+    `response.json().get("error", {})` unguarded, so a 429 with body `[]`
+    raised AttributeError instead of returning a result."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(429, json=[])
+
+    result = await WhatsAppChannel(client=_client(handler)).send(
+        "+6591234567", _wa_content()
+    )
+    assert result.outcome is SendOutcome.TRANSIENT
+    assert result.error is not None
+
+
+async def test_telegram_aclose_failure_does_not_escape_send() -> None:
+    """A client that raises on aclose() must not replace the real result
+    (or exception) that was already produced before `finally` ran."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"ok": True, "result": {"message_id": 7}})
+
+    client = _client(handler)
+
+    async def broken_aclose() -> None:
+        raise httpx.HTTPError("close failed")
+
+    client.aclose = broken_aclose  # type: ignore[method-assign]
+
+    channel = TelegramChannel()
+    channel._client = client
+    channel._owns_client = True
+
+    result = await channel.send("12345", TelegramContent(text="hello"))
+    assert result.outcome is SendOutcome.SENT
+    assert result.provider_message_id == "7"
+
+
+async def test_whatsapp_aclose_failure_does_not_escape_send() -> None:
+    """Same invariant as Telegram: aclose() raising must not clobber the
+    result already produced by the response."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"messages": [{"id": "wamid.Y"}]})
+
+    client = _client(handler)
+
+    async def broken_aclose() -> None:
+        raise httpx.HTTPError("close failed")
+
+    client.aclose = broken_aclose  # type: ignore[method-assign]
+
+    channel = WhatsAppChannel()
+    channel._client = client
+    channel._owns_client = True
+
+    result = await channel.send("+6591234567", _wa_content())
+    assert result.outcome is SendOutcome.SENT
+    assert result.provider_message_id == "wamid.Y"
