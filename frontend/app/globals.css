@@ -842,6 +842,121 @@ section { padding: 60px 0; }
 }
 .jo-search:focus-visible { outline: 2px solid var(--blue-500); outline-offset: -1px; }
 
+/* ---- decoded shorthand, on the job order ----
+   The literal code is set as a quotation — monospaced, on a wash, in a box —
+   because it is the only part of the pair that was actually in the email. The
+   meaning is plain body text: it is ours, and dressing it up the same way
+   would make an agency's definition look like a client's words. */
+.jo-codes { margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--line); }
+.jo-codes-lede { margin-top: 6px; max-width: 62ch; }
+.jo-codes-none { margin-top: 10px; font-size: 0.875rem; }
+.jo-codes-list { list-style: none; display: grid; gap: 8px; margin-top: 12px; }
+.jo-code {
+  display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+  font-size: 0.875rem;
+}
+.jo-code > * { min-width: 0; overflow-wrap: anywhere; }
+.jo-code-lit {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.8125rem; font-weight: 650;
+  padding: 2px 7px; border-radius: 6px;
+  background: var(--surface-alt); border: 1px solid var(--line);
+  color: var(--ink-900);
+}
+.jo-code-arrow { color: var(--ink-300); flex: none; }
+.jo-code-mean { color: var(--ink-700); }
+.jo-code-attr {
+  font-size: 0.6875rem; font-weight: 650; padding: 2px 8px; border-radius: 999px;
+  background: var(--amber-050); color: var(--amber-700);
+  border: 1px solid var(--amber-200); white-space: nowrap;
+}
+
+/* Amber, the same "a person should look at this" colour the quality states
+   already use. Not red: this is a client's wording that needs judgement, not
+   a failure and not a finding against the agency. */
+.jo-protected {
+  display: inline-flex; align-items: center; gap: 7px;
+  font-size: 0.75rem; font-weight: 650; padding: 4px 10px; border-radius: 999px;
+  background: var(--amber-050); color: var(--amber-700);
+  border: 1px solid var(--amber-200);
+}
+.jo-td .jo-protected { margin-top: 6px; }
+.jo-protected-dot { width: 7px; height: 7px; border-radius: 999px; background: currentColor; flex: none; }
+.jo-protected-note { margin-top: 16px; display: grid; gap: 8px; justify-items: start; }
+.jo-protected-note p { max-width: 62ch; }
+
+/* Announced, never shown: the arrow is silent to a screen reader, and without
+   this the code and the meaning run together as one phrase the sender never
+   wrote. */
+.jo-sr {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0;
+}
+
+/* ---- glossary, in settings ---- */
+.gl-list { list-style: none; display: grid; gap: 16px; margin-top: 28px; }
+.gl-row { display: grid; gap: 4px; }
+/* The agency's own entries are unmarked; ours carry the amber edge and say so
+   in words beside it. Colour alone would not survive a printout or a colour
+   vision difference, and the origin is exactly the thing that must not be
+   missed. */
+.gl-row[data-source="starter"] {
+  border-left: 3px solid var(--amber-600);
+  background: var(--amber-050);
+}
+.gl-row-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.gl-row-head > * { min-width: 0; overflow-wrap: anywhere; }
+.gl-code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.9375rem; font-weight: 700;
+  padding: 3px 9px; border-radius: 6px;
+  background: var(--surface); border: 1px solid var(--line); color: var(--ink-900);
+}
+.gl-arrow { color: var(--ink-300); flex: none; }
+.gl-meaning { font-size: 1rem; font-weight: 600; color: var(--ink-900); }
+.gl-origin {
+  margin-left: auto;
+  font-size: 0.6875rem; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase;
+  padding: 3px 9px; border-radius: 999px;
+  background: var(--amber-050); color: var(--amber-700); border: 1px solid var(--amber-200);
+  white-space: nowrap;
+}
+.gl-origin-note { margin-top: 8px; max-width: 62ch; }
+.gl-row-rows { margin-top: 12px; }
+.gl-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 16px; }
+.gl-confirm { margin-top: 16px; display: grid; gap: 4px; }
+.gl-confirm p { max-width: 56ch; }
+.gl-confirm .gl-actions { margin-top: 10px; }
+.gl-add { margin-top: 24px; }
+.gl-form { margin-top: 12px; }
+.gl-form-grid {
+  display: grid; gap: 14px;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+}
+.gl-field { display: grid; gap: 6px; align-content: start; }
+.gl-field-wide { grid-column: 1 / -1; }
+.gl-input {
+  font: inherit; font-size: 0.9375rem; padding: 9px 12px;
+  color: var(--ink-900); background: var(--surface);
+  border: 1px solid var(--line); border-radius: var(--radius);
+  width: 100%;
+}
+.gl-input:read-only { background: var(--surface-alt); color: var(--ink-500); }
+.gl-input:focus-visible { outline: 2px solid var(--blue-500); outline-offset: -1px; }
+.gl-form-actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 16px; }
+.gl-form-hint { max-width: 40ch; }
+.gl-error { margin-top: 12px; color: var(--amber-700); font-size: 0.875rem; max-width: 62ch; }
+
+/* Every control on these two features is reachable by keyboard and has to
+   show where the focus is. The buttons inherit `.btn`, which does not carry a
+   ring of its own. */
+.btn:focus-visible,
+.gl-row button:focus-visible,
+.jo-codes button:focus-visible {
+  outline: 2px solid var(--blue-500); outline-offset: 2px;
+}
+select.gl-input:focus-visible { outline: 2px solid var(--blue-500); outline-offset: 2px; }
+
 /* ---- footer ---- */
 footer { border-top: 1px solid var(--line); padding: 48px 0 40px; color: var(--ink-500); font-size: 0.875rem; }
 .footer-grid {

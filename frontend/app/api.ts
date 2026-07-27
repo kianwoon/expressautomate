@@ -112,6 +112,23 @@ export const MAILBOX_SETTINGS_PATH = `${API_BASE}/api/mailbox/settings`;
 /** POST a period to reach further back. Re-runs the historical walk. */
 export const MAILBOX_LOOKBACK_PATH = `${MAILBOX_SETTINGS_PATH}/lookback`;
 
+/**
+ * The agency's shorthand glossary, and the attributes a code may refer to.
+ *
+ * Clients write `C/F` and `o/o` in job orders. The decoding is deterministic
+ * and comes from this list, so the list is something the agency owns and can
+ * correct — a wrong meaning here silently mis-reads every email that uses the
+ * code. GET returns both the codes and the vocabulary of attributes; the page
+ * never carries its own copy of that vocabulary.
+ */
+export const GLOSSARY_PATH = `${API_BASE}/api/glossary`;
+
+/** One glossary entry, for PATCH and DELETE. Encoded, so an id that is not the
+ *  uuid we expect cannot walk out of its own path segment. */
+export function glossaryEntryPath(id: string): string {
+  return `${GLOSSARY_PATH}/${encodeURIComponent(id)}`;
+}
+
 /** Where a visitor reaches a person. Used by the footer and every stub page,
  *  so it lives here rather than being retyped in nine files. */
 export const CONTACT_EMAIL = "hello@expressautomate.app";

@@ -1,5 +1,6 @@
 "use client";
 
+import { ProtectedBadge, flagged } from "./codes";
 import { Salary, Value, day } from "./format";
 import type { Opportunity } from "./opportunities";
 import { QualityBadge } from "./quality";
@@ -120,6 +121,14 @@ export function JobOrdersTable({
                 <Td>{row.location_raw}</Td>
                 <td className="jo-td">
                   <QualityBadge row={row} />
+                  {/* No column of its own — there is no width left for one at
+                      this table's fixed layout, and a mark that is only on
+                      some rows would leave an empty column on most. It shares
+                      the quality cell because it is the same kind of thing: a
+                      reason to open the row. The decoded codes themselves are
+                      in the panel, where there is room to say whose words
+                      they are. */}
+                  {flagged(row) && <ProtectedBadge />}
                 </td>
               </tr>
             );

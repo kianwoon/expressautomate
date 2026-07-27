@@ -3,6 +3,7 @@
 import { useState } from "react";
 
 import { Breakable } from "../breakable";
+import { DecodedCodes, ProtectedBadge, flagged } from "./codes";
 import { Salary, Value, day } from "./format";
 import type { Opportunity } from "./opportunities";
 import { QualityNote, ReviewBadge } from "./quality";
@@ -73,6 +74,10 @@ function Detail({
       <div className="jo-detail-head">
         <span className="eyebrow">Details</span>
         <ReviewBadge status={row.review_status} />
+        {/* Beside the review state rather than buried below the fields: it is
+            a reason to read this row, so it has to be visible before anyone
+            decides whether to. */}
+        {flagged(row) && <ProtectedBadge />}
       </div>
 
       <h3 className="jo-detail-title">
@@ -96,6 +101,8 @@ function Detail({
           </span>
         </div>
       </div>
+
+      <DecodedCodes row={row} />
 
       <Prose k="Requirements" text={row.requirements} />
       <Prose k="Description" text={row.job_description} />

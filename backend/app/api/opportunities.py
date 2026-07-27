@@ -37,7 +37,7 @@ from sqlalchemy.orm import aliased
 from app.api.auth import _require_session
 from app.core.config import settings
 from app.db.rls import tenant_session
-from app.models import EmailMessage, Opportunity
+from app.models import EmailMessage, Opportunity, OpportunityCode
 from app.models.extraction import ExtractionEvidence
 
 router = APIRouter(tags=["opportunities"])
@@ -154,11 +154,19 @@ async def list_opportunities(
             )
         ).all()
 
-        evidence = await _evidence_counts(session, [row[0].id for row in rows])
+        page_ids = [row[0].id for row in rows]
+        evidence = await _evidence_counts(session, page_ids)
+        codes = await _decoded_codes(session, page_ids)
 
     return {
         "items": [
-            _payload(opportunity, internet_id, graph_id, evidence.get(opportunity.id, (0, 0)))
+            _payload(
+                opportunity,
+                internet_id,
+                graph_id,
+                evidence.get(opportunity.id, (0, 0)),
+                codes.get(opportunity.id, []),
+            )
             for opportunity, internet_id, graph_id in rows
         ],
         "total": total,
@@ -194,6 +202,35 @@ async def _evidence_counts(session, opportunity_ids: list[uuid.UUID]) -> dict:
         .group_by(ExtractionEvidence.opportunity_id)
     )
     return {row[0]: (row[1], row[2]) for row in result}
+
+
+async def _decoded_codes(session, opportunity_ids: list[uuid.UUID]) -> dict:
+    """The shorthand found in each of the page's emails, in one query.
+
+    Same shape and same reason as `_evidence_counts`: keyed on the ids already
+    fetched, never one query per row. Joining this onto the listing query would
+    fan a page of 50 vacancies out into one row per code and force the collapse
+    back together in Python.
+
+    `meaning` is read straight off `opportunity_codes` — the snapshot taken
+    when the email was read — and never joined back to `glossary_codes`. An
+    agency that corrects its glossary changes what happens next; the list must
+    keep showing what the recruiter was actually told at the time, or the
+    interpretation on screen stops being the one that was applied.
+
+    Ordered by position so the codes read in the order the client wrote them.
+    """
+    if not opportunity_ids:
+        return {}
+    result = await session.execute(
+        select(OpportunityCode)
+        .where(OpportunityCode.opportunity_id.in_(opportunity_ids))
+        .order_by(OpportunityCode.opportunity_id, OpportunityCode.start_char)
+    )
+    grouped: dict[uuid.UUID, list[OpportunityCode]] = {}
+    for code in result.scalars():
+        grouped.setdefault(code.opportunity_id, []).append(code)
+    return grouped
 
 
 @router.post("/opportunities/{opportunity_id}/review")
@@ -243,10 +280,31 @@ def _payload(
     internet_message_id: str | None,
     graph_message_id: str | None,
     evidence: tuple[int, int],
+    codes: list[OpportunityCode],
 ) -> dict:
     """One row, with absences preserved as absences."""
     verified_fields, total_fields = evidence
     return {
+        # The decoded shorthand, with the offsets that make it checkable: the
+        # client wrote `C/F` at 142–145 and the agency's own glossary says that
+        # means Chinese female. Both halves travel together because either one
+        # alone is an assertion — the offsets without the meaning are unreadable
+        # and the meaning without the offsets is unverifiable.
+        "codes": [
+            {
+                "code": code.code,
+                "meaning": code.meaning,
+                "attribute": code.attribute,
+                "start_char": code.start_char,
+                "end_char": code.end_char,
+            }
+            for code in codes
+        ],
+        # Derived here, not in the browser. This flag is what the feature is
+        # for — it says a client's request touched a protected characteristic —
+        # and a rule the client re-implements is a rule that can quietly differ
+        # per client, on exactly the rows where being wrong matters most.
+        "references_protected_attribute": any(c.attribute is not None for c in codes),
         "id": str(row.id),
         "internet_message_id": internet_message_id,
         "graph_message_id": graph_message_id,

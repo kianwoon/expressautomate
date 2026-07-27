@@ -289,6 +289,46 @@ class Settings(BaseSettings):
     # the endpoint. Newest first, so the cap trims the oldest.
     OPPORTUNITIES_PAGE_LIMIT: int = Field(default=200, gt=0)
 
+    # --- Client shorthand glossary ---
+    # Whether a tenant reading its glossary for the first time is offered the
+    # shipped starter codes. On by default, because an empty glossary on day
+    # one teaches nothing about what the feature is for. Switchable because a
+    # deployment outside Singapore inherits shorthand that is simply wrong
+    # there, and being handed twenty wrong defaults is worse than being handed
+    # none. Turning it off never removes codes already seeded — the seed ledger
+    # keeps those decisions with the agency.
+    GLOSSARY_SEED_STARTERS: bool = True
+    # Ceilings on what one glossary row may hold. The code is shorthand, not
+    # prose, and the meaning is a line of explanation the UI puts in a table
+    # cell; both are here rather than as literals in the endpoint so a
+    # deployment can loosen them without a code change.
+    GLOSSARY_CODE_MAX_LENGTH: int = Field(default=32, gt=0, le=64)
+    GLOSSARY_MEANING_MAX_LENGTH: int = Field(default=500, gt=0)
+    # --- Glossary scanning (app/services/ingest/glossary.py) ---
+    # The shortest code the scanner will look for. A one-character entry
+    # matches somewhere in almost every email, so decoding it would decorate
+    # every job order with a demographic claim the client never made; an agency
+    # that writes `M` in its glossary almost certainly meant it as a note.
+    # Configurable because how short is too short depends on the shorthand a
+    # market actually uses, not on this code.
+    GLOSSARY_MIN_CODE_LENGTH: int = Field(default=2, gt=0)
+    # Punctuation that may legally sit against a code without making it part of
+    # a longer token. Everything absent from this set — `/`, `-`, letters,
+    # digits — means the real token is longer than what matched, and reporting
+    # the fragment would report a code the email does not contain. This is the
+    # rule that keeps `C/F` out of `ABC/FGH`, so it is a deployment setting
+    # rather than a literal: adding a character here widens what gets decoded.
+    GLOSSARY_BOUNDARY_CHARS: str = "(),;:!?\"'“”‘’[]{}<>*—–…"
+    # Punctuation that ends a code only when nothing alphanumeric follows it.
+    # A full stop is genuinely both things: "we want C/F." closes a sentence,
+    # while "C.F.M" is one three-part code whose first two thirds must not be
+    # decoded on their own. The far side of the character decides which it was.
+    GLOSSARY_WEAK_BOUNDARY_CHARS: str = "."
+    # How many glossary rows one scan will compile patterns for. A tenant that
+    # pastes a thousand codes would otherwise make every extraction pay for
+    # them; the cap bounds the per-email cost rather than the glossary itself.
+    GLOSSARY_MAX_CODES: int = Field(default=500, gt=0)
+
     # --- Sync activity log ---
     # How many events one mailbox keeps. The bound is enforced by the writer,
     # which trims in the same transaction as the insert, rather than by a purge

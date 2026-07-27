@@ -22,6 +22,24 @@ import { OPPORTUNITIES_PATH, opportunityReviewPath } from "../api";
 export type ReviewStatus = "ready" | "needs_review" | "reviewed";
 export type QualityState = "verified" | "likely" | "needs_review";
 
+/**
+ * One shorthand code found in the email, and what the agency's glossary says
+ * it means.
+ *
+ * `code` is verbatim from the message; `meaning` is the agency's own
+ * definition and was never in the email. The character offsets are where it
+ * appeared, so a disputed decoding can be traced back to the exact position in
+ * the text rather than argued about.
+ */
+export type DecodedCode = {
+  code: string;
+  meaning: string;
+  /** The protected characteristic the code refers to, or null for none. */
+  attribute: string | null;
+  start_char: number;
+  end_char: number;
+};
+
 export type Opportunity = {
   id: string;
   received_datetime: string | null;
@@ -45,6 +63,11 @@ export type Opportunity = {
   /** How many of the fields we look for the email actually stated. */
   verified_fields: number;
   total_fields: number;
+  /** Shorthand found in the email. Optional: the endpoint gained these after
+   *  the table shipped, so every reader treats absent as "none found" rather
+   *  than assuming the key is there. */
+  codes?: DecodedCode[];
+  references_protected_attribute?: boolean;
 };
 
 export type Counts = { all: number; new: number; needs_review: number; reviewed: number };

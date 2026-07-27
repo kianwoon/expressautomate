@@ -19,6 +19,7 @@ from sqlalchemy import ARRAY, Text, bindparam, text
 from app.core.config import settings
 from app.db.rls import tenant_session
 from app.services.ingest.evidence import parse_salary, quality_state, verify
+from app.services.ingest.glossary import DetectedCode, GlossaryEntry, detect
 from app.services.ingest.schema import ExtractedField, ExtractedJob, ExtractionResponse
 from app.services.llm.client import LLMResult
 
@@ -80,6 +81,26 @@ _INSERT_EVIDENCE = text(
 )
 
 
+# Read under the tenant policy like everything else, so a scan can only ever
+# use the glossary of the agency whose email is being read. `code` is the
+# operator's own spelling — the scanner needs that, not the normalised form,
+# because a pattern built from the folded text would look for `cf` and match
+# the letters of an ordinary word.
+_SELECT_GLOSSARY = text(
+    "SELECT code, meaning, attribute FROM glossary_codes ORDER BY code"
+)
+
+_INSERT_CODE = text(
+    """
+    INSERT INTO opportunity_codes
+        (id, tenant_id, opportunity_id, code, meaning, attribute,
+         start_char, end_char)
+    VALUES (:id, :tenant_id, :opportunity_id, :code, :meaning, :attribute,
+            :start_char, :end_char)
+    """
+)
+
+
 def _value(field: ExtractedField | None) -> str | None:
     """`Not mentioned` becomes NULL in the column.
 
@@ -125,6 +146,12 @@ async def persist(
             },
         )
 
+        # Scanned once for the whole email, inside this transaction. Codes are
+        # part of what a job order means, so a commit that stored the vacancy
+        # and lost its shorthand would leave a row that reads as though the
+        # client stated no requirement at all.
+        codes = detect(source, await _glossary(session))
+
         # An email describing three vacancies becomes three rows. They share
         # one extraction, because they came from one model call — that is what
         # makes "what did this run cost, and what did it produce" answerable.
@@ -137,8 +164,87 @@ async def persist(
             await _insert_evidence(
                 session, tenant_id, extraction_id, opportunity_id, job, source
             )
+            await _insert_codes(
+                session, tenant_id, opportunity_id, job, codes, len(response.jobs)
+            )
 
     return opportunity_ids
+
+
+async def _glossary(session) -> list[GlossaryEntry]:
+    """This tenant's shorthand, or nothing.
+
+    The read goes through the same tenant-scoped session as the writes, so an
+    agency's dictionary can only ever be applied to that agency's mail — the
+    failure mode of a mis-scoped session is an empty glossary and no decoding,
+    never another agency's definitions attached to this client's words.
+    """
+    rows = (await session.execute(_SELECT_GLOSSARY)).all()
+    return [GlossaryEntry(code=r.code, meaning=r.meaning, attribute=r.attribute) for r in rows]
+
+
+def _covers(job: ExtractedJob, code: DetectedCode) -> bool:
+    """Does this vacancy's evidence surround where the code was found?
+
+    Only asked when one email described several vacancies. The codes are
+    located in the email, not in a vacancy, so attaching all of them to all of
+    them would tell a recruiter that the client's requirement for the second
+    role applies to the third — a demographic requirement invented by
+    bookkeeping, which is the exact failure this feature must not have.
+
+    The span of a vacancy's verified evidence is the best available answer to
+    "which part of the email is this row about", and it is a deterministic one.
+    A vacancy whose evidence located nowhere claims no part of the email and so
+    claims no codes: silence is the honest output when the boundary is unknown.
+    """
+    spans = [
+        (f.start_char, f.end_char)
+        for f in vars(job).values()
+        if isinstance(f, ExtractedField)
+        and f.start_char is not None
+        and f.end_char is not None
+    ]
+    if not spans:
+        return False
+    return min(s for s, _ in spans) <= code.start_char and code.end_char <= max(
+        e for _, e in spans
+    )
+
+
+async def _insert_codes(
+    session,
+    tenant_id: uuid.UUID,
+    opportunity_id: uuid.UUID,
+    job: ExtractedJob,
+    codes: list[DetectedCode],
+    job_count: int,
+) -> None:
+    """Attach the decoded shorthand, with the meaning copied onto the row.
+
+    `meaning` and `attribute` are written as values, never referenced. An
+    agency that later corrects its glossary corrects what happens next; what a
+    recruiter was told in January stays on the January row, because otherwise
+    the audit trail rewrites itself and stops being evidence of anything.
+
+    A single-vacancy email hands every code to that vacancy — there is nowhere
+    else for them to belong. Beyond one, `_covers` decides.
+    """
+    for code in codes:
+        if job_count > 1 and not _covers(job, code):
+            continue
+        await session.execute(
+            _INSERT_CODE,
+            {
+                "id": uuid.uuid4(),
+                "tenant_id": tenant_id,
+                "opportunity_id": opportunity_id,
+                "code": code.code,
+                "meaning": code.meaning,
+                "attribute": code.attribute,
+                "start_char": code.start_char,
+                "end_char": code.end_char,
+            },
+        )
 
 
 async def _insert_opportunity(
