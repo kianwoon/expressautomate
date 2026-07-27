@@ -52,16 +52,6 @@ async def _connected_user(request: Request) -> tuple[uuid.UUID, uuid.UUID, str]:
     otherwise reach Graph and get an opaque 403 back, when the real answer is
     "you have not connected a mailbox yet".
     """
-    # A missing Graph URL is an operator problem, and 503 says so. Letting it
-    # through produced a 500 that read as a code fault for a deployment that
-    # had simply never been given the setting.
-    if not settings.graph_configured():
-        raise HTTPException(
-            status_code=503,
-            detail="Mailbox access is not configured on this deployment "
-            "(GRAPH_BASE_URL). See docs/setup.md.",
-        )
-
     user_uuid, tenant_uuid = _require_session(request)
 
     async with tenant_session(tenant_uuid) as session:
@@ -87,6 +77,21 @@ async def _connected_user(request: Request) -> tuple[uuid.UUID, uuid.UUID, str]:
 async def mailbox_preview(request: Request) -> dict:
     """What is in the inbox, and what each import option would pull in."""
     tenant_uuid, user_id, ms_user_id = await _connected_user(request)
+
+    # A missing Graph URL is an operator problem, and 503 says so — letting it
+    # through produced a 500 that read as a code fault. Checked here rather
+    # than in `_connected_user` for two reasons: `/mailbox/ingest` makes no
+    # Graph call in this process (its work runs on the workers, which have
+    # their own env), so gating it here would block a path that still works;
+    # and asking after the session check keeps the deployment's configuration
+    # from being readable by anyone who is not signed in.
+    if not settings.graph_configured():
+        log.error("graph_base_url_missing", route="mailbox_preview")
+        raise HTTPException(
+            status_code=503,
+            detail="Mailbox access is not configured on this deployment "
+            "(GRAPH_BASE_URL). See docs/setup.md.",
+        )
 
     try:
         token = await ms_auth.access_token_for_user(tenant_uuid, user_id)

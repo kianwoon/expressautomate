@@ -21,6 +21,7 @@ from app.core.config import settings
 from app.core.logging import configure_logging, get_logger
 from app.db.rls import verify_rls_enforced
 from app.db.session import engine
+from app.services.graph.client import warn_if_unconfigured
 
 log = get_logger(__name__)
 
@@ -99,6 +100,9 @@ async def main() -> None:
 
     tasks = build_tasks()
     log.info("worker_startup", env=settings.APP_ENV, tasks=[t.name for t in tasks])
+    # Every sweep here ends in a Graph call; without the URL they all fail
+    # obscurely, one job at a time, with nothing naming the cause.
+    warn_if_unconfigured("worker")
 
     running = [asyncio.create_task(_run_periodically(t, stop)) for t in tasks]
     try:

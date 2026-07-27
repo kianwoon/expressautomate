@@ -716,6 +716,40 @@ async def test_choosing_a_period_provisions_the_mailbox(client, monkeypatch, cle
     assert (await client.post("/api/mailbox/ingest", json={"window": "30d"})).status_code == 409
 
 
+async def test_preview_names_the_missing_setting_rather_than_500ing(
+    client, monkeypatch, cleanup
+) -> None:
+    """Found in production. GRAPH_BASE_URL was set on both workers and not on
+    the web service, so the first web-service Graph call built a hostless URL
+    and died inside httpx's transport — a bare 500 for a one-line deployment
+    gap. 503 naming the setting is the answerable version.
+
+    Checked after the session, not before: an anonymous caller has no business
+    learning what this deployment is missing.
+    """
+    tid, oid = str(uuid.uuid4()), uuid.uuid4().hex
+    cleanup.append(uuid.UUID(tid))
+    monkeypatch.setattr(settings, "GRAPH_BASE_URL", "")
+
+    anonymous = await client.get("/api/mailbox/preview")
+    assert anonymous.status_code == 401, "configuration is not for strangers"
+
+    await sign_in(client, monkeypatch, token_response(tid, oid, "rachel@agency-a.sg"))
+    await connect_mailbox(
+        client,
+        monkeypatch,
+        token_response(tid, oid, "rachel@agency-a.sg", scopes=ms_auth.mailbox_scopes()),
+    )
+
+    response = await client.get("/api/mailbox/preview")
+    assert response.status_code == 503
+    assert "GRAPH_BASE_URL" in response.json()["detail"]
+
+    # The path that does not touch Graph in this process is not blocked by it:
+    # its work runs on the workers, which carry their own configuration.
+    assert (await client.post("/api/mailbox/ingest", json={"window": "now"})).status_code == 200
+
+
 async def test_reconnecting_revives_a_broken_mailbox(client, monkeypatch, cleanup) -> None:
     """A `needs_reauth` mailbox must come back when the user reconnects.
 

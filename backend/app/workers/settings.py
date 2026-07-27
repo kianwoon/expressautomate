@@ -12,6 +12,7 @@ not stop work already in the queue.
 """
 
 from app.core.config import settings
+from app.services.graph.client import warn_if_unconfigured
 from app.workers.jobs import (
     backfill_mailbox_job,
     delta_sync_mailbox,
@@ -20,6 +21,11 @@ from app.workers.jobs import (
     recreate_subscription,
 )
 from app.workers.queue import redis_settings
+
+
+async def _announce(ctx: dict) -> None:
+    """arq's startup hook. Takes the context it passes and ignores it."""
+    warn_if_unconfigured("arq")
 
 
 class WorkerSettings:
@@ -42,6 +48,9 @@ class WorkerSettings:
         recreate_subscription,
         reauthorize_subscription,
     ]
+    # Every function above ends in a Graph call. Said once here rather than
+    # discovered one failed job at a time.
+    on_startup = staticmethod(_announce)
     redis_settings = redis_settings()
     poll_delay = settings.ARQ_POLL_DELAY_SECONDS
     max_jobs = settings.ARQ_MAX_JOBS

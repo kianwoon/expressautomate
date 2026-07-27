@@ -15,6 +15,31 @@ Callers branch on exception type, not status codes.
 import httpx
 
 from app.core.config import settings
+from app.core.logging import get_logger
+
+log = get_logger(__name__)
+
+
+def warn_if_unconfigured(process: str) -> bool:
+    """Say once, at startup, that this process cannot reach Graph.
+
+    Every process that calls Graph says it, because the failure is otherwise
+    unattributable: an empty base URL makes httpx build a hostless URL and
+    raise deep in its transport, far from anything naming the setting. That is
+    how it reached production — set on the workers, missing on the web
+    service, silent until the first web-service Graph call months later.
+
+    Not fatal. Sign-in, the site and the webhook all work without it, and
+    refusing to boot would turn one broken feature into an outage.
+    """
+    if settings.graph_configured():
+        return True
+    log.error(
+        "graph_base_url_missing",
+        process=process,
+        detail="Mailbox reads will fail until GRAPH_BASE_URL is set.",
+    )
+    return False
 
 # Graph message ids change when a message moves between folders. Every dedup
 # constraint in the schema is keyed on that id, so asking for the immutable
