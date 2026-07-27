@@ -132,6 +132,25 @@ _BATCH_CLAIM = text(
     " ORDER BY id"
 ).bindparams(bindparam("ids", expanding=True))
 
+_EXTRACT_CLAIM = text(
+    "SELECT processing_status, body_html_r2_key, subject, sender_email"
+    " FROM email_messages WHERE id = :id AND mailbox_id = :mailbox_id"
+)
+
+_START_EXTRACTING = text(
+    "UPDATE email_messages SET processing_status = 'extracting' WHERE id = :id"
+)
+
+_FINISH_EXTRACTION = text(
+    "UPDATE email_messages SET processing_status = :status, last_error = NULL"
+    " WHERE id = :id"
+)
+
+_FAIL_EXTRACTION = text(
+    "UPDATE email_messages SET processing_status = 'failed', last_error = :error"
+    " WHERE id = :id"
+)
+
 _BACKFILL_START = text(
     "SELECT initial_sync_from, backfill_completed_at"
     " FROM mailboxes WHERE id = :mailbox_id"
@@ -427,6 +446,117 @@ async def classify_batch(ctx, *, tenant_id: str, email_message_ids: list[str]) -
                 tenant_id=tenant_id,
                 mailbox_id=str(row.mailbox_id),
             )
+
+
+async def extract_email(
+    ctx, *, email_message_id: str, tenant_id: str, mailbox_id: str
+) -> None:
+    """Turn one classified email into verified vacancies (plan §12–§16).
+
+    Failure discipline mirrors `classify_email`. The status moves to
+    `extracting` *before* the model call, because arq only reschedules on
+    `Retry` and nothing here raises one: an infrastructure failure is a
+    permanently failed job, and `rescan_stuck` re-enqueues `extracting` rows
+    once the outage ends (see RESUME_JOB in tasks.py). Leaving the row at
+    `classified` across the call would instead let a second sweep pay for the
+    same extraction while the first was still in flight.
+    """
+    from app.services.ingest.extract import extract
+    from app.services.ingest.persist import persist
+    from app.services.ingest.preprocess import to_text
+    from app.services.llm.client import LLMInvalidJSON
+
+    # Asked once, before the row is touched, for the reason `classify_email`
+    # gives: an unconfigured deployment must fail loudly here rather than mark
+    # every email `failed` one httpx error at a time.
+    if not settings.llm_configured(
+        settings.EXTRACTION_MODEL_FAST, settings.EXTRACTION_MODEL_STRONG
+    ):
+        log.error(
+            "llm_not_configured",
+            job="extract_email",
+            detail=(
+                "Set LLM_BASE_URL, OPENROUTER_API_KEY, EXTRACTION_MODEL_FAST"
+                " and EXTRACTION_MODEL_STRONG."
+            ),
+        )
+        raise RuntimeError("Extraction has no model configured.")
+
+    tenant = uuid.UUID(tenant_id)
+    mailbox = uuid.UUID(mailbox_id)
+
+    async with tenant_session(tenant) as session:
+        row = (
+            await session.execute(
+                _EXTRACT_CLAIM, {"id": email_message_id, "mailbox_id": mailbox}
+            )
+        ).one_or_none()
+
+    if row is None:
+        # Unknown row, or a job whose tenant does not own it. RLS already
+        # decided; there is nothing to do and nothing to report.
+        log.info("extract_skipped_unknown_row", email_message_id=email_message_id)
+        return
+    # `extracting` is accepted alongside `classified`: a worker killed mid-call
+    # leaves the row there, and `rescan_stuck` re-enqueues exactly this job for
+    # it. Accepting only `classified` would strand that row forever.
+    if row.processing_status not in ("classified", "extracting"):
+        log.info(
+            "extract_skipped_not_classified",
+            email_message_id=email_message_id,
+            status=row.processing_status,
+        )
+        return
+
+    async with tenant_session(tenant) as session:
+        await session.execute(_START_EXTRACTING, {"id": email_message_id})
+
+    html = await body_store().get(row.body_html_r2_key) or ""
+    # `to_text` is the single source of truth for the text the model's offsets
+    # index into. Extracting from anything else — the raw HTML, the preview —
+    # would make every span the model returns fail verification.
+    source = to_text(html, subject=row.subject, sender=row.sender_email)
+
+    try:
+        response, result = await extract(source)
+    except LLMInvalidJSON as exc:
+        # Both models were asked and neither answered in the required shape.
+        # Retrying would spend the same tokens on the same email for the same
+        # result, so the row is marked and left for a human to look at.
+        log.warning(
+            "extraction_failed", email_message_id=email_message_id, error=str(exc)
+        )
+        await _fail_extraction(tenant, email_message_id, str(exc))
+        return
+
+    ids = await persist(tenant, uuid.UUID(email_message_id), response, result, source)
+    # A recruitment email with no vacancy in it is a successful outcome, not a
+    # failure — the gate fails open, so plenty of what reaches here genuinely
+    # describes nothing to fill. Both statuses are terminal in RESUME_JOB.
+    status = "extracted" if ids else "no_opportunity"
+
+    async with tenant_session(tenant) as session:
+        await session.execute(
+            _FINISH_EXTRACTION, {"status": status, "id": email_message_id}
+        )
+
+    log.info(
+        "extraction_recorded",
+        email_message_id=email_message_id,
+        opportunities=len(ids),
+        model=result.model,
+    )
+
+
+async def _fail_extraction(
+    tenant_id: uuid.UUID, email_message_id: str, error: str
+) -> None:
+    """Truncated: `last_error` is read by a human, and an unbounded model
+    response would otherwise put a whole email body in a diagnostic column."""
+    async with tenant_session(tenant_id) as session:
+        await session.execute(
+            _FAIL_EXTRACTION, {"error": error[:2000], "id": email_message_id}
+        )
 
 
 async def recreate_subscription(ctx, *, tenant_id: str, mailbox_id: str) -> None:

@@ -211,11 +211,38 @@ class Settings(BaseSettings):
     # Stamped onto every extraction so a prompt change is attributable — without
     # it, a quality regression cannot be told from a change in the mail itself.
     PROMPT_VERSION: str = "v1"
+    # The self-reported confidence a fully verified extraction must clear to be
+    # called `verified` rather than `likely`. Tunable because the right number
+    # is a property of the model, not of this code: swapping the extraction
+    # model recalibrates what a 0.8 means, and a threshold frozen in source
+    # would silently send every row to review or none of them. It can only
+    # demote — it never rescues a span that failed verification.
+    EXTRACTION_VERIFIED_CONFIDENCE: float = Field(default=0.8, ge=0.0, le=1.0)
     # A message the gate rejected yields nothing, so keeping it for the full
     # tenant horizon is stored personal data with no purpose left to justify it
     # (spec: Retention). Short rather than zero: an operator disputing a wrong
     # verdict needs the source still there to look at.
     NON_RECRUITMENT_RETENTION_DAYS: int = Field(default=7, gt=0)
+    # The only currency codes a salary may be filed under. Anything else is
+    # dropped rather than guessed: a bare `[A-Z]{3}` scan read "KLN pays 3500"
+    # as currency KLN. Which codes are real is a property of the market a
+    # deployment serves, not of this code — Singapore sees these.
+    SALARY_CURRENCY_CODES: str = "SGD,USD,MYR,EUR,GBP,AUD,HKD,CNY,JPY,INR,PHP,IDR,THB"
+    # Symbol-to-code map. A bare "$" is deliberately absent: in Singapore mail
+    # it is SGD or USD depending on the sender, and picking one would file a
+    # 30% error as a fact.
+    SALARY_CURRENCY_SYMBOLS: str = "S$=SGD,RM=MYR,€=EUR,£=GBP,¥=JPY,₹=INR"
+    # Plausibility window for a parsed salary figure. Outside it the number is
+    # something else the sentence mentioned — working hours, a headcount, a
+    # postcode — and the whole string is refused rather than half-read. Both
+    # bounds are per-period and market-specific, hence configurable.
+    SALARY_MIN_CREDIBLE: float = Field(default=100.0, gt=0)
+    SALARY_MAX_CREDIBLE: float = Field(default=10_000_000.0, gt=0)
+    # How many job orders one dashboard request returns. The table renders
+    # every row it is given, so this is the ceiling on what a browser is asked
+    # to lay out — an operational limit, which is why it is not a literal in
+    # the endpoint. Newest first, so the cap trims the oldest.
+    OPPORTUNITIES_PAGE_LIMIT: int = Field(default=200, gt=0)
 
     # --- Queue (Upstash Redis) ---
     REDIS_URL: str = ""

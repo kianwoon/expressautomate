@@ -19,6 +19,7 @@ from app.workers.jobs import (
     classify_batch,
     classify_email,
     delta_sync_mailbox,
+    extract_email,
     fetch_email,
     reauthorize_subscription,
     recreate_subscription,
@@ -56,15 +57,17 @@ class WorkerSettings:
     # `classifying` is recovered one email at a time, deliberately, since a
     # batch that died may have died because of one of its members.
     #
-    # `extract_email` is still absent: it belongs to the rest of the extraction
-    # plan. Until it lands, rows park at `classified` and `rescan_stuck` keeps
-    # naming a job arq does not have — an error line per sweep, which is loud
-    # and free. What it must never do again is re-run the gate on them: that
-    # was the same visible-retry story costing a model call per row per sweep.
+    # `extract_email` is named by two producers — the classification jobs on a
+    # `recruitment` verdict, and `rescan_stuck` for rows stalled at `classified`
+    # or `extracting`. Until it was registered here those enqueues succeeded and
+    # then errored inside arq, on the far side of the queue, leaving four real
+    # recruitment emails parked at `classified` and a dashboard reporting no
+    # job orders at all.
     functions = [
         fetch_email,
         classify_batch,
         classify_email,
+        extract_email,
         backfill_mailbox_job,
         delta_sync_mailbox,
         recreate_subscription,

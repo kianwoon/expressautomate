@@ -48,6 +48,13 @@ export const CONNECT_MAILBOX_PATH = `${API_BASE}/api/auth/microsoft/connect-mail
  */
 export const MAILBOX_PREVIEW_PATH = `${API_BASE}/api/mailbox/preview`;
 
+/**
+ * The extracted job orders, newest first — the table that replaces the
+ * spreadsheet. Read-only, and bounded server-side, so the dashboard renders
+ * whatever it is given without paging.
+ */
+export const OPPORTUNITIES_PATH = `${API_BASE}/api/opportunities`;
+
 /** POST the chosen period. The only thing that starts ingestion. */
 export const MAILBOX_INGEST_PATH = `${API_BASE}/api/mailbox/ingest`;
 

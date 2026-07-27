@@ -1,11 +1,14 @@
 "use client";
 
-import { Fragment, useEffect } from "react";
+import { useEffect } from "react";
 
 import { CONNECT_MAILBOX_PATH, LANDING_PATH, SWITCH_ACCOUNT_PATH } from "../api";
+import { Breakable } from "../breakable";
 import { displayNameOf, useAuth, type Me } from "../auth";
+import { SiteFooter } from "../site-footer";
 import { SiteNav } from "../site-nav";
 import { ChoosePeriod } from "./choose-period";
+import { JobOrders } from "./job-orders";
 
 /**
  * The signed-in shell.
@@ -59,6 +62,10 @@ export default function Dashboard() {
           </div>
         </section>
       </main>
+      {/* The dashboard was the only page without one. Contact, terms and
+          privacy are exactly what someone wants to hand a mailbox to a product
+          — so the page where they do it is the worst one to omit them from. */}
+      <SiteFooter />
     </>
   );
 }
@@ -159,7 +166,12 @@ function SignedIn({ me }: { me: Me }) {
         </div>
       </div>
 
-      <Extraction extracted={me.mailbox.ingested.extracted} />
+      {/* Only once there is something to show. The "extraction is not live
+          yet" explainer that used to sit here is gone: extraction is live, so
+          it had become a page telling the reader the opposite of the truth.
+          An empty table would be its own kind of lie, hence nothing at all —
+          the stat card above already reports the count. */}
+      {me.mailbox.ingested.extracted > 0 && <JobOrders />}
     </>
   );
 }
@@ -205,7 +217,11 @@ function Ingesting({ me }: { me: Me }) {
                   : "Waiting on extraction"
             }
           />
-          <Stat n={extracted} label="job orders found" sub="Extraction is not live yet" />
+          <Stat
+            n={extracted}
+            label="job orders found"
+            sub={extracted === 0 ? "Nothing extracted yet" : "Listed in full below"}
+          />
         </div>
       )}
     </>
@@ -287,22 +303,6 @@ function NotConnected({ me }: { me: Me }) {
   );
 }
 
-function Extraction({ extracted }: { extracted: number }) {
-  return (
-    <div style={{ marginTop: 48, maxWidth: "68ch" }}>
-      <span className="eyebrow">What is not live yet</span>
-      <h2 style={{ marginTop: 12 }}>Reading, not yet understanding.</h2>
-      <p className="body" style={{ marginTop: 16 }}>
-        Mail is collected and stored. Turning it into structured job orders — company, role,
-        salary, hours, location — is the next piece and is not switched on, which is why{" "}
-        <strong>job orders found</strong> is {extracted}: a real count, not a placeholder.
-        Everything read in the meantime is kept, so extraction will run over the mail already
-        collected rather than starting from the day it arrives.
-      </p>
-    </div>
-  );
-}
-
 function Stat({ n, label, sub }: { n: number; label: string; sub: string | null }) {
   return (
     <div className="card">
@@ -338,34 +338,6 @@ function Row({ k, v, empty = "Not mentioned" }: { k: string; v: string | null; e
   );
 }
 
-/**
- * A long value with break opportunities at the places a reader expects one.
- *
- * `.row` values carry `overflow-wrap: anywhere`, which stops an address
- * spilling past the card but breaks it wherever the line happens to run out:
- * "wiserly@hotmail.co / m" — which reads as a typo in the user's own address
- * rather than as wrapping. `anywhere` is still the right backstop; what it was
- * missing is somewhere better to break.
- *
- * `<wbr>` supplies exactly that. Browsers prefer an explicit opportunity over
- * an arbitrary one, so the address now breaks after the `@` or before the
- * `.com` and falls back to mid-token only for something with no boundaries at
- * all. It inserts no character: copying the text still yields the address.
- */
-function Breakable({ text }: { text: string }) {
-  const pieces = splitAtSeparators(text);
-  return (
-    <>
-      {pieces.map((piece, i) => (
-        <Fragment key={i}>
-          {piece}
-          {i < pieces.length - 1 && <wbr />}
-        </Fragment>
-      ))}
-    </>
-  );
-}
-
 function stateLabel(me: Me): string {
   if (me.mailbox.awaiting_period) return "Awaiting your choice";
   if (me.mailbox.status === null) return "No mailbox connected";
@@ -395,37 +367,6 @@ function day(iso: string): string {
     month: "short",
     year: "numeric",
   });
-}
-
-/**
- * Split after `@ : ; ,` and before `. / - _` — the separators an address, URL
- * or id is likely to carry, cut so the delimiter stays with the part a reader
- * scans for.
- *
- * A hand-written scan rather than a regex with lookbehind. Lookbehind is a
- * *parse-time* error on Safari before 16.4, which would not degrade this
- * component — it would throw while loading the bundle and take the whole
- * dashboard with it. No wrapping nicety is worth that.
- */
-function splitAtSeparators(text: string): string[] {
-  const AFTER = "@:;,";
-  const BEFORE = "./-_";
-  const pieces: string[] = [];
-  let current = "";
-
-  for (const char of text) {
-    if (current && BEFORE.includes(char)) {
-      pieces.push(current);
-      current = "";
-    }
-    current += char;
-    if (AFTER.includes(char)) {
-      pieces.push(current);
-      current = "";
-    }
-  }
-  if (current) pieces.push(current);
-  return pieces;
 }
 
 /** Absolute, not "3 minutes ago": this page does not re-render on a timer, so
