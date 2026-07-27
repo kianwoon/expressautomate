@@ -611,7 +611,13 @@ _UPSERT_MAILBOX = text(
 )
 
 
-# Bring a mailbox back after a reconnection. `initial_sync_from` is untouched:
+# Bring back every mailbox this user owns that the dead grant took down — not
+# one. The unique constraint is per folder, so a user can hold several, and the
+# grant that broke was shared by all of them. Reviving one and calling it done
+# is the same silence `_MAILBOX_STATE` exists to break: a dashboard reporting
+# active while a second mailbox stayed dark.
+#
+# `initial_sync_from` is untouched:
 # the user chose that window once, and re-walking it would re-read history they
 # did not ask for a second time. Returns nothing when the row was already
 # active, so a re-consent by someone whose mailbox is fine does not churn a
@@ -738,15 +744,19 @@ async def _store_mailbox_consent(
         # a `needs_reauth` mailbox stayed stuck forever: re-consenting stored a
         # working token beside a row nothing would look at again.
         revived = (
-            await session.execute(_REVIVE_MAILBOX, {"user_id": user_id})
-        ).scalar_one_or_none() if _covers_mailbox(result.get("scope")) else None
+            list(
+                (await session.execute(_REVIVE_MAILBOX, {"user_id": user_id})).scalars().all()
+            )
+            if _covers_mailbox(result.get("scope"))
+            else []
+        )
 
-    if revived is not None:
+    for mailbox_id in revived:
         # The subscription died with the grant, so recreating it is the whole
         # of resuming. The backfill is deliberately not re-run: its window was
         # settled at connect time and history has not moved.
         await enqueue(
-            "recreate_subscription", tenant_id=str(tenant_uuid), mailbox_id=str(revived)
+            "recreate_subscription", tenant_id=str(tenant_uuid), mailbox_id=str(mailbox_id)
         )
 
     log.info(
@@ -754,7 +764,7 @@ async def _store_mailbox_consent(
         tenant_id=str(tenant_uuid),
         user_id=str(user_id),
         granted=_covers_mailbox(result.get("scope")),
-        revived=str(revived) if revived else None,
+        revived=len(revived),
     )
 
     response = RedirectResponse(_frontend_url(DASHBOARD_PATH))

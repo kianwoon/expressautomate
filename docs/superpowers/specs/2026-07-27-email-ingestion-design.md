@@ -388,6 +388,14 @@ cap rather than listing them, so a period the backfill cannot honour is never
 shown, and `/api/mailbox/ingest` validates against that same list — the cap is
 real, not advisory.
 
+**Known: a 410 resync can exceed the chosen period.** When Graph expires a
+`deltaLink` the walk restarts unfiltered from the folder, so messages older than
+`initial_sync_from` that were never imported get imported. Dedup makes the
+re-reads free, but the period the user chose is not re-applied. This predates
+the chooser and is most likely to fire on exactly the path the chooser makes
+visible — reconnecting after a long outage. Fixing it means filtering
+`_walk_start` by `initial_sync_from`; not done here.
+
 **Folder scope is not yet asked for.** `mailboxes.scope`/`folder_id` already
 carry it and every window is measured against the Inbox, so a folder picker is
 a UI addition later, not a schema change. Mailboxes provisioned before this step

@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 
-import { MAILBOX_INGEST_PATH, MAILBOX_PREVIEW_PATH } from "../api";
+import { CONNECT_MAILBOX_PATH, MAILBOX_INGEST_PATH, MAILBOX_PREVIEW_PATH } from "../api";
 
 /**
  * "How far back should we read?" — asked once, after consent, before anything
@@ -33,7 +33,9 @@ type State =
   | { status: "ready"; preview: Preview }
   // Kept apart from a failed *start*: one means we could not look, the other
   // means we looked and could not begin. They need different words.
-  | { status: "unreadable"; message: string };
+  // `reconnectable` is the difference between "the grant is dead" and "we
+  // could not reach anyone" — only the first has an action attached.
+  | { status: "unreadable"; message: string; reconnectable: boolean };
 
 export function ChoosePeriod({ onStarted }: { onStarted: () => void }) {
   const [state, setState] = useState<State>({ status: "loading" });
@@ -53,6 +55,7 @@ export function ChoosePeriod({ onStarted }: { onStarted: () => void }) {
         if (!res.ok) {
           setState({
             status: "unreadable",
+            reconnectable: res.status === 403,
             message:
               res.status === 403
                 ? "Microsoft is no longer letting us read this mailbox. Reconnect it and try again."
@@ -67,7 +70,11 @@ export function ChoosePeriod({ onStarted }: { onStarted: () => void }) {
         setChosen(preview.options[0]?.key ?? null);
       } catch {
         if (!controller.signal.aborted) {
-          setState({ status: "unreadable", message: "We could not reach the server." });
+          setState({
+            status: "unreadable",
+            reconnectable: false,
+            message: "We could not reach the server.",
+          });
         }
       }
     })();
@@ -116,6 +123,18 @@ export function ChoosePeriod({ onStarted }: { onStarted: () => void }) {
         <p className="body" style={{ marginTop: 12, maxWidth: "62ch" }}>
           Nothing has been imported, and nothing will be until you choose a period.
         </p>
+        {/* Telling someone to reconnect without giving them the button is
+            advice, not a way out. */}
+        {state.reconnectable && (
+          <a
+            className="btn btn-primary"
+            rel="nofollow"
+            style={{ marginTop: 20, display: "inline-block" }}
+            href={CONNECT_MAILBOX_PATH}
+          >
+            Reconnect your mailbox
+          </a>
+        )}
       </>
     );
   }

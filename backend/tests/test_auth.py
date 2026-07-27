@@ -766,6 +766,54 @@ async def test_reconnecting_revives_a_broken_mailbox(client, monkeypatch, cleanu
     assert after["awaiting_period"] is False, "the period was chosen the first time"
 
 
+async def test_reconnecting_revives_every_broken_mailbox(client, monkeypatch, cleanup) -> None:
+    """A user can own several — the constraint is per folder — and one grant
+    took them all down. Reviving one and calling it done leaves the dashboard
+    reporting active while a second mailbox stays dark.
+
+    allow-hardcode: SQL statements, not a phrase list — nothing is matched
+    against these strings.
+    """
+    queued: list[tuple[str, dict]] = []
+
+    async def _enqueue(name, **kwargs):
+        queued.append((name, kwargs))
+        return True
+
+    monkeypatch.setattr(auth_api, "enqueue", _enqueue)
+
+    tid, oid = str(uuid.uuid4()), uuid.uuid4().hex
+    cleanup.append(uuid.UUID(tid))
+    await sign_in(client, monkeypatch, token_response(tid, oid, "rachel@agency-a.sg"))
+    grant = token_response(tid, oid, "rachel@agency-a.sg", scopes=ms_auth.mailbox_scopes())
+    await connect_mailbox(client, monkeypatch, grant)
+    await start_ingestion(client, monkeypatch)
+
+    async with tenant_session(uuid.UUID(tid)) as session:
+        # A second folder, as the schema allows, then both broken together.
+        await session.execute(
+            text(
+                "INSERT INTO mailboxes"
+                " (id, tenant_id, user_id, ms_user_id, scope, folder_id,"
+                "  initial_sync_from, retention_months)"
+                " SELECT :id, tenant_id, user_id, ms_user_id, scope, 'archive',"
+                "  initial_sync_from, retention_months FROM mailboxes"
+            ),
+            {"id": uuid.uuid4()},
+        )
+        await session.execute(text("UPDATE mailboxes SET status = 'needs_reauth'"))
+
+    queued.clear()
+    await connect_mailbox(client, monkeypatch, grant)
+
+    async with tenant_session(uuid.UUID(tid)) as session:
+        states = (
+            (await session.execute(text("SELECT status FROM mailboxes"))).scalars().all()
+        )
+    assert states == ["active", "active"]
+    assert [name for name, _ in queued] == ["recreate_subscription"] * 2
+
+
 async def test_reconnecting_a_healthy_mailbox_changes_nothing(
     client, monkeypatch, cleanup
 ) -> None:
