@@ -100,7 +100,9 @@ export default function Page() {
         </li>
         <li>
           <strong>OpenRouter</strong> — routing message text to the AI models that perform
-          extraction. Relevant only once ingestion is running.
+          extraction. Relevant only once ingestion is running. OpenRouter is a router, so the model
+          provider it forwards a request to also receives that text. We would rather name the
+          arrangement than let &ldquo;we use OpenRouter&rdquo; imply the text stops there.
         </li>
         <li>
           <strong>Cloudflare</strong> — DNS for expressautomate.app.
@@ -124,6 +126,14 @@ export default function Page() {
         stored fields, such as your name and email address, are protected by the database&rsquo;s
         access controls and our host&rsquo;s disk encryption, not by application-level encryption of
         each field.
+      </p>
+
+      <h2>Cookies</h2>
+      <p>
+        We set one cookie, which records that you are signed in. It is not readable by scripts in
+        your browser, it is not shared with anyone, and it exists only so that you are not asked to
+        sign in again on every page. There is no advertising or analytics cookie on this site, which
+        is why you have not been shown a consent banner — we have nothing to ask you to consent to.
       </p>
 
       <h2>How long we keep it</h2>

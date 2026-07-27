@@ -399,7 +399,7 @@ export default function Home() {
                 <h3>Isolated per agency</h3>
                 <p className="body" style={{ marginTop: 8, fontSize: "0.9375rem" }}>
                   Each agency&rsquo;s data is separated in the database itself, not only in
-                  application code. Access tokens are encrypted at rest.
+                  application code. The token that grants mailbox access is encrypted at rest.
                 </p>
               </div>
               <div className="card">
