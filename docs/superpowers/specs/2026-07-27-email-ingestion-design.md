@@ -74,9 +74,13 @@ different failure mode.
 
 | Task | Interval | Purpose |
 |---|---|---|
-| `renew_subscriptions` | 15 min | Graph message subscriptions live ~3 days max. Renew at under 50 % of remaining life; recreate on failure (§8) |
+| `renew_subscriptions` | 15 min | Graph message subscriptions have a maximum lifetime (currently 10080 minutes). Read the returned `expirationDateTime` rather than assuming a constant, and renew at under 50 % of remaining life; recreate on failure (§8) |
 | `delta_sync` | 10 min | Per-mailbox `deltaLink` walk. Recovers missed notifications and webhook downtime (§9). Also marks deleted messages `gone` |
-| `rescan_stuck` | 5 min | Re-enqueues `pending` rows older than 5 minutes — the outbox net for a Redis enqueue that failed after the DB commit |
+| `rescan_stuck` | 5 min | Re-enqueues any row stalled in a non-terminal status — `pending` older than 5 min, and `fetched` or `extracting` older than 15 min |
+
+`rescan_stuck` must sweep every non-terminal status, not just `pending`. A
+worker killed after the status flips to `fetched`, or mid-`extracting`, would
+otherwise strand the row forever and falsify success criterion 3.
 
 Redis cannot join a Postgres transaction, so the enqueue-after-commit gap is
 real. `rescan_stuck` closes it. Dedup indexes make every replay a no-op.
@@ -108,10 +112,17 @@ processing_status, attempt_count, last_error, timestamps.
 `processing_status`: `pending` → `fetched` → `extracting` → `extracted` |
 `needs_review` | `failed` | `gone`.
 
-Unique on `(tenant_id, graph_message_id)` **and** `(tenant_id,
-internet_message_id)`. Both, because Graph's `id` changes when a message moves
-folders — that is precisely why `Prefer: IdType="ImmutableId"` is set on both
-the subscription and the fetch, and why §19 names both identifiers.
+Unique on `(tenant_id, mailbox_id, graph_message_id)` **and** `(tenant_id,
+mailbox_id, internet_message_id)`. Both identifiers, because Graph's `id`
+changes when a message moves folders — that is precisely why
+`Prefer: IdType="ImmutableId"` is set on both the subscription and the fetch,
+and why §19 names both.
+
+Scoped to `mailbox_id` deliberately. Two recruiters at one agency CC'd on the
+same job email share an `internet_message_id`; a tenant-wide constraint would
+silently discard the second recruiter's copy and with it the fact that they
+received it. Each mailbox keeps its own row. Recognising that those rows
+describe one vacancy is opportunity-level dedup (§19), which this spec defers.
 
 R2 key: `{tenant_id}/{mailbox_id}/{immutable_message_id}.{txt,html}`.
 Deterministic, so a retry overwrites rather than orphans. The object is written
@@ -172,8 +183,34 @@ Entra rotates refresh tokens on use, so two concurrent refreshes for one user
 lose one of them. Refresh is serialized per user with a Postgres advisory lock.
 
 Graph also sends **lifecycle notifications** (`reauthorizationRequired`,
-`subscriptionRemoved`) to a separate `lifecycleNotificationUrl`. That endpoint is
-required for mailbox resources and drives the same state machine.
+`subscriptionRemoved`) to a separate `lifecycleNotificationUrl`. Registering it
+is strongly recommended for mailbox resources — without it, a revoked grant
+surfaces only as notifications quietly stopping. It drives the same state
+machine.
+
+## Mailbox onboarding (§6.2)
+
+Nothing above works until a mailbox exists and a `deltaLink` has been
+established, so connecting a mailbox is part of this spec:
+
+1. User completes Microsoft sign-in with mailbox read scope.
+2. User chooses where ingestion begins — today, last 3 days, last 7 days, or a
+   custom date — and optionally a folder. Never download the whole mailbox.
+3. Insert the `mailboxes` row with `initial_sync_from` and `status = active`.
+4. **Initial sync job:** walk the delta endpoint filtered from
+   `initial_sync_from`, inserting `email_messages` rows at `pending` and
+   enqueueing `fetch_email` for each. Page through to the end and store the
+   final `deltaLink`. This backfill is the same code path `delta_sync` uses;
+   the only difference is the starting point.
+5. Create the Graph subscription (and lifecycle URL); store `subscription_id`
+   and the `expirationDateTime` Graph returns.
+
+Order matters: the subscription is created **after** the initial delta walk
+starts, so a message arriving during backfill is caught by one path or the
+other. The dedup indexes make the overlap harmless.
+
+A Google-only user reaches none of this and must be told so, rather than shown
+an empty dashboard.
 
 ## Module layout
 
