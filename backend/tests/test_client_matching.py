@@ -175,6 +175,45 @@ async def test_re_seeing_an_archived_client_does_not_resurrect_it(agency) -> Non
     assert await _status_of(agency, cid) == "archived"
 
 
+async def test_reprocessing_with_no_message_id_adds_no_second_mention(agency) -> None:
+    async with tenant_session(agency) as s:
+        cid = await match_client(s, agency, None, "hr@acme.com.sg", "Acme Pte Ltd")
+        await s.commit()
+    async with tenant_session(agency) as s:
+        again = await match_client(s, agency, None, "hr@acme.com.sg", "Acme Pte Ltd")
+        await s.commit()
+
+    assert cid == again
+    assert await _mention_count(agency, cid) == 1
+
+
+async def test_a_two_hop_merge_chain_lands_on_the_final_survivor(agency) -> None:
+    async with tenant_session(agency) as s:
+        a = await match_client(s, agency, None, "hr@acme.com.sg", "Acme Pte Ltd")
+        b = await match_client(s, agency, None, "hr@acme-group.com", "Acme Group")
+        c = await match_client(s, agency, None, "hr@acme-holdings.com", "Acme Holdings")
+        await s.commit()
+    async with tenant_session(agency) as s:
+        await s.execute(
+            text(
+                "UPDATE clients SET status = 'merged', merged_into_client_id = :w WHERE id = :l"
+            ),
+            {"w": b, "l": a},
+        )
+        await s.execute(
+            text(
+                "UPDATE clients SET status = 'merged', merged_into_client_id = :w WHERE id = :l"
+            ),
+            {"w": c, "l": b},
+        )
+        await s.commit()
+
+    async with tenant_session(agency) as s:
+        landed = await match_client(s, agency, None, "hr@acme.com.sg", "Acme Pte Ltd")
+        await s.commit()
+    assert landed == c
+
+
 async def test_re_seeing_a_merged_client_lands_on_the_survivor(agency) -> None:
     async with tenant_session(agency) as s:
         loser = await match_client(s, agency, None, "hr@acme.com.sg", "Acme Pte Ltd")

@@ -112,9 +112,13 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(
             ['email_message_id'], ['email_messages.id'], ondelete='SET NULL'
         ),
+        # NULLS NOT DISTINCT: without it, Postgres treats every NULL
+        # email_message_id as distinct, so ON CONFLICT DO NOTHING never fires
+        # for mentions with no message id and reprocessing duplicates them.
         sa.UniqueConstraint(
             'tenant_id', 'client_id', 'email_message_id',
             name='uq_client_mentions_once_per_message',
+            postgresql_nulls_not_distinct=True,
         ),
         sa.CheckConstraint(
             "matched_by IN ('email_domain', 'name', 'human')",
