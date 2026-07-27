@@ -346,7 +346,12 @@ async def test_a_row_belonging_to_another_tenant_is_not_touched(monkeypatch, bat
 
     assert llm.prompts == []
     assert queued == []
-    assert (await _row(tenant_id, row_ids[0])).classification_status is None
+    # `unknown` is the untouched state, not None: the column is NOT NULL with
+    # server_default 'unknown', so no row is ever None and the original
+    # assertion described a state the schema cannot produce. It failed for that
+    # reason rather than for the one it was written to catch — which is worse
+    # than a missing test, because a red result read as an environment quirk.
+    assert (await _row(tenant_id, row_ids[0])).classification_status == "unknown"
 
 
 async def test_an_unconfigured_gate_refuses_rather_than_guessing(monkeypatch):
