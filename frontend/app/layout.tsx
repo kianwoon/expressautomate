@@ -3,6 +3,10 @@ import "./globals.css";
 
 const TITLE = "expressautomate.app — AI recruitment operations";
 
+/** Bump when any file in public/ that this page links as an icon is redrawn.
+ *  See the note on `icons` below for why this exists. */
+const ICON_VERSION = "2";
+
 /* The one line a link preview gets. WhatsApp truncates the title at roughly
    two lines and the description at two more, so this says what the product
    does and stops — no feature list that will be cut mid-word. */
@@ -48,12 +52,22 @@ export const metadata: Metadata = {
   icons: {
     /* SVG first for browsers that take it (sharp at any size), .ico second as
        the fallback every other client understands, and the 180px PNG for the
-       iOS home screen, which ignores both of the others. */
+       iOS home screen, which ignores both of the others.
+
+       ?v= is a cache buster, and it is not optional. Cloudflare serves these
+       paths with `cache-control: max-age=14400`, so redrawing an icon leaves
+       the old one at the edge for up to four hours — measured, not assumed:
+       after the deploy that replaced the plated favicon, /icon.svg returned
+       `cf-cache-status: HIT, age: 1546` with the old file while
+       /icon.svg?cb=99 returned the new one. Browsers cache favicons harder
+       still. Bump ICON_VERSION whenever public/icon.svg, favicon.ico or
+       apple-touch-icon.png changes; the new URL is a different cache key and
+       takes effect at once, with no cache purge to remember. */
     icon: [
-      { url: "/icon.svg", type: "image/svg+xml" },
-      { url: "/favicon.ico", sizes: "any" },
+      { url: `/icon.svg?v=${ICON_VERSION}`, type: "image/svg+xml" },
+      { url: `/favicon.ico?v=${ICON_VERSION}`, sizes: "any" },
     ],
-    apple: "/apple-touch-icon.png",
+    apple: `/apple-touch-icon.png?v=${ICON_VERSION}`,
   },
 };
 
