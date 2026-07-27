@@ -30,6 +30,14 @@ class FakeChannel:
         return self.result
 
 
+class ExplodingChannel:
+    """Simulates a channel bug — something that is not a SendResult outcome
+    at all, e.g. a KeyError from bad response parsing."""
+
+    async def send(self, address: str, content) -> SendResult:
+        raise KeyError("chat_id")
+
+
 @pytest.fixture
 async def delivery(admin_session):
     """A pending delivery to a verified Telegram destination."""
@@ -197,6 +205,23 @@ async def test_transient_failure_returns_the_row_to_pending(delivery, monkeypatc
 
     with pytest.raises(Exception):  # noqa: B017 — arq retries on any exception
         # Raising is how arq is told to retry — see the job's docstring.
+        await jobs.deliver_notification(
+            {}, delivery_id=str(delivery_id), tenant_id=str(tenant_id)
+        )
+
+    assert await _status(tenant_id, delivery_id) == STATUS_PENDING
+
+
+async def test_unexpected_exception_releases_the_row_back_to_pending(
+    delivery, monkeypatch
+) -> None:
+    """A channel bug (KeyError, not a SendResult outcome) must not strand the
+    row in 'sending' — nothing else ever looks at that status, so a row left
+    there is lost silently and permanently."""
+    tenant_id, _, delivery_id = delivery
+    monkeypatch.setattr(jobs, "channel_for", lambda name: ExplodingChannel())
+
+    with pytest.raises(KeyError):
         await jobs.deliver_notification(
             {}, delivery_id=str(delivery_id), tenant_id=str(tenant_id)
         )

@@ -60,6 +60,18 @@ from app.workers.queue import enqueue
 
 log = get_logger(__name__)
 
+
+class _TransientDeliveryFailure(RuntimeError):
+    """Raised by deliver_notification's transient-failure path only.
+
+    That path has already moved the row back to 'pending' before raising, so
+    the unexpected-exception guard around it must recognise this specific
+    type and skip its own release step — otherwise a normal transient retry
+    would take a second, redundant trip through _RELEASE_CLAIM on every
+    failure.
+    """
+
+
 # Only what is stored. Pulling the whole message would cost bandwidth on every
 # fetch for fields nothing reads.
 MESSAGE_FIELDS = (
@@ -269,6 +281,21 @@ _RECORD_FAILURE = text(
 
 _RESET_FAILURES = text(
     "UPDATE notification_destinations SET failure_count = 0 WHERE id = :id"
+)
+
+# Used only by the unexpected-exception guard in deliver_notification. The
+# `status = :sending` predicate is defence in depth: every terminal branch
+# commits inside its own `tenant_session`, which rolls back on any exception
+# (see app/db/rls.py), so a row can only still be 'sending' when this runs.
+# Keeping the predicate anyway means a future refactor that breaks that
+# invariant fails safe (no-op) instead of clobbering a row another path has
+# since finished.
+_RELEASE_CLAIM = text(
+    """
+    UPDATE notification_deliveries
+    SET status = :pending
+    WHERE id = :id AND status = :sending
+    """
 )
 
 
@@ -1072,6 +1099,57 @@ async def deliver_notification(ctx, *, delivery_id: str, tenant_id: str) -> None
         log.info("delivery_skipped", delivery_id=delivery_id)
         return
 
+    try:
+        await _send_claimed_delivery(tenant, delivery_id, claimed)
+    except _TransientDeliveryFailure:
+        # The transient path below has already released the claim itself
+        # (back to 'pending', so arq's retry or the sweep can pick it up).
+        # Releasing again here would be a harmless no-op given the
+        # `status = 'sending'` guard on _RELEASE_CLAIM, but re-raising
+        # without touching the row keeps the intent obvious: this branch
+        # is "already handled", not "needs handling".
+        raise
+    except Exception:
+        # Anything else — a channel bug raising KeyError, a render bug, a
+        # database error on one of the intermediate queries — is a failure
+        # nobody anticipated. Every anticipated outcome above moves the row
+        # out of 'sending'; an unanticipated one must not leave it stranded
+        # there, because nothing else ever looks at 'sending' rows: arq's
+        # retry requires status = 'pending' to reclaim, and the recovery
+        # sweep only scans 'pending' and 'suppressed'. Left alone, this row
+        # would be lost silently and permanently.
+        #
+        # This cannot help if the worker is killed outright (SIGKILL, OOM,
+        # container eviction) — no except block runs then, and the row is
+        # still stuck. That case is the recovery sweep's job, not this one's.
+        log.error(
+            "delivery_unexpected_failure",
+            delivery_id=delivery_id,
+            exc_info=True,
+        )
+        async with tenant_session(tenant) as session:
+            await session.execute(
+                _RELEASE_CLAIM,
+                {"id": delivery_id, "pending": STATUS_PENDING, "sending": STATUS_SENDING},
+            )
+        # Re-raise, not swallow: arq must see the exception to retry, and the
+        # failure must be visible in logs/alerts, not just "a retry happened".
+        raise
+
+
+async def _send_claimed_delivery(tenant: uuid.UUID, delivery_id: str, claimed) -> None:
+    """Render and send an already-claimed row.
+
+    Split out of `deliver_notification` so the unexpected-exception guard
+    there wraps exactly this — everything that happens after the claim
+    succeeds and before any of it has committed a terminal status. Every
+    `tenant_session` here commits or rolls back atomically (app/db/rls.py),
+    so if any query in a terminal branch raises, that branch's own commit
+    never happens and the row is still 'sending' when control returns to the
+    guard above — safe to release. The one deliberate exception (transient
+    failure) already released the row itself before raising; see
+    `_TransientDeliveryFailure`.
+    """
     async with tenant_session(tenant) as session:
         target = (
             await session.execute(
@@ -1222,5 +1300,8 @@ async def deliver_notification(ctx, *, delivery_id: str, tenant_id: str) -> None
         )
     # arq retries on an exception and on nothing else. Releasing the claim
     # first means the retry — or the sweep, whichever arrives — finds a row it
-    # can claim rather than one stuck in `sending`.
-    raise RuntimeError(f"Transient notification failure: {result.error}")
+    # can claim rather than one stuck in `sending`. Raising the dedicated
+    # subclass (rather than a plain RuntimeError) lets deliver_notification's
+    # unexpected-exception guard recognise "already released, don't release
+    # again" and just re-raise instead of re-running _RELEASE_CLAIM.
+    raise _TransientDeliveryFailure(f"Transient notification failure: {result.error}")
