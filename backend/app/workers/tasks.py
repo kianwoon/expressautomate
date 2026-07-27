@@ -16,9 +16,18 @@ from sqlalchemy import text
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.db.session import SessionLocal
+from app.models.sync_event import (
+    KIND_SUBSCRIPTION_RENEWED,
+    OUTCOME_FAILED,
+    OUTCOME_SUCCEEDED,
+)
 from app.services.graph.subscriptions import renew_subscription
 from app.services.ms_auth import MailboxNotAuthorised
-from app.workers.jobs import graph_client_for_mailbox, mark_needs_reauth
+from app.workers.jobs import (
+    graph_client_for_mailbox,
+    mark_needs_reauth,
+    record_sync_event,
+)
 from app.workers.queue import enqueue
 
 log = get_logger(__name__)
@@ -167,12 +176,35 @@ async def renew_subscriptions() -> int:
             client = await graph_client_for_mailbox(row.tenant_id, row.mailbox_id)
             await renew_subscription(row.tenant_id, row.subscription_id, client)
             renewed += 1
+            # A renewal is a real action, not a poll: this sweep only touches
+            # subscriptions inside the expiry margin, so a mailbox produces one
+            # of these every few days rather than one every tick. It is also
+            # the cheapest evidence the mailbox is still live — which is
+            # exactly what someone reading a quiet panel is looking for.
+            await record_sync_event(
+                row.tenant_id,
+                row.mailbox_id,
+                KIND_SUBSCRIPTION_RENEWED,
+                OUTCOME_SUCCEEDED,
+                "Renewed the live feed from your mailbox",
+            )
         except MailboxNotAuthorised as exc:
             # Recreating would need the same dead grant. Stop and tell the user.
             await mark_needs_reauth(row.tenant_id, row.mailbox_id, str(exc))
         except Exception:
             log.exception(
                 "subscription_renewal_failed", subscription_id=row.subscription_id
+            )
+            # Recorded before the replacement is queued, so the panel shows the
+            # failure even if `recreate_subscription` then succeeds quietly —
+            # a feed that has to be rebuilt repeatedly is a pattern only the
+            # history makes visible.
+            await record_sync_event(
+                row.tenant_id,
+                row.mailbox_id,
+                KIND_SUBSCRIPTION_RENEWED,
+                OUTCOME_FAILED,
+                "Renewing the live feed from your mailbox failed; rebuilding it",
             )
             await enqueue(
                 "recreate_subscription",

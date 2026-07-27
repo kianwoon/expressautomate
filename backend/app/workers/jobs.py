@@ -26,6 +26,14 @@ from sqlalchemy import bindparam, text
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.db.rls import tenant_session
+from app.models.sync_event import (
+    KIND_BACKFILL,
+    KIND_DELTA_SYNC,
+    KIND_MAILBOX_REAUTH,
+    KIND_SUBSCRIPTION_RECREATED,
+    OUTCOME_FAILED,
+    OUTCOME_SUCCEEDED,
+)
 from app.services.graph.client import (
     MAILBOX_ROOT,
     GraphAuthError,
@@ -155,6 +163,81 @@ _BACKFILL_START = text(
     "SELECT initial_sync_from, backfill_completed_at"
     " FROM mailboxes WHERE id = :mailbox_id"
 )
+
+
+_RECORD_SYNC_EVENT = text(
+    "INSERT INTO sync_events (id, tenant_id, mailbox_id, kind, outcome, detail)"
+    " VALUES (:id, :tenant_id, :mailbox_id, :kind, :outcome, :detail)"
+)
+
+# The retention rule, run against one mailbox on every write. `ctid` rather
+# than `id` keeps it a plain index scan plus a delete of the tail, and the
+# OFFSET is what makes the cap exact: everything past the newest N goes.
+_TRIM_SYNC_EVENTS = text(
+    """
+    DELETE FROM sync_events
+    WHERE mailbox_id = :mailbox_id
+      AND ctid NOT IN (
+        SELECT ctid FROM sync_events
+        WHERE mailbox_id = :mailbox_id
+        ORDER BY created_at DESC, id DESC
+        LIMIT :keep
+      )
+    """
+)
+
+
+async def record_sync_event(
+    tenant_id: uuid.UUID,
+    mailbox_id: uuid.UUID | None,
+    kind: str,
+    outcome: str,
+    detail: str,
+) -> None:
+    """Write one line of the dashboard's sync history — and never fail loudly.
+
+    The whole body is wrapped because of what this function is: an audit trail
+    for jobs that are themselves the recovery mechanism. A failed INSERT here
+    raised inside `delta_sync_mailbox` would abort a sync that had already
+    succeeded, arq would retry the *sync* to fix the *log*, and every ten
+    minutes the mailbox would re-walk Graph because its diary was broken. The
+    log describing an outage must not be able to cause one.
+
+    Its own `tenant_session`, not the caller's: the caller's transaction may be
+    the one that just failed, and an event recorded inside it would roll back
+    with the failure it exists to report — which is the single case the panel
+    matters most.
+
+    `detail` is truncated for the same reason `last_error` is: it renders in a
+    list in a browser, and an unbounded exception message would put a stack
+    trace in it.
+    """
+    try:
+        async with tenant_session(tenant_id) as session:
+            await session.execute(
+                _RECORD_SYNC_EVENT,
+                {
+                    "id": uuid.uuid4(),
+                    "tenant_id": tenant_id,
+                    "mailbox_id": mailbox_id,
+                    "kind": kind,
+                    "outcome": outcome,
+                    "detail": detail[:500],
+                },
+            )
+            if mailbox_id is not None:
+                await session.execute(
+                    _TRIM_SYNC_EVENTS,
+                    {
+                        "mailbox_id": mailbox_id,
+                        "keep": settings.SYNC_ACTIVITY_KEEP_PER_MAILBOX,
+                    },
+                )
+    except Exception:
+        # Logged, not raised. stdout is where this information lived before
+        # this table existed, so losing the row costs the panel a line and
+        # nothing else.
+        log.exception("sync_event_not_recorded", kind=kind, outcome=outcome)
 
 
 def body_store():
@@ -594,6 +677,26 @@ async def recreate_subscription(ctx, *, tenant_id: str, mailbox_id: str) -> None
         await create_subscription(
             tenant, mailbox, target.ms_user_id, target.folder_id, client
         )
+    except Exception as exc:
+        # Recorded even though arq will retry: between the retire and a
+        # successful create the mailbox receives no notifications, and that
+        # window is invisible in every other surface the user has.
+        await record_sync_event(
+            tenant,
+            mailbox,
+            KIND_SUBSCRIPTION_RECREATED,
+            OUTCOME_FAILED,
+            f"Reconnecting the live feed from your mailbox failed: {exc!r}",
+        )
+        raise
+    else:
+        await record_sync_event(
+            tenant,
+            mailbox,
+            KIND_SUBSCRIPTION_RECREATED,
+            OUTCOME_SUCCEEDED,
+            "Reconnected the live feed from your mailbox",
+        )
     finally:
         await client.aclose()
 
@@ -671,8 +774,30 @@ async def backfill_mailbox_job(ctx, *, tenant_id: str, mailbox_id: str) -> None:
         await mark_needs_reauth(tenant, mailbox, str(exc))
         return
 
+    # Recorded unconditionally, unlike the delta sweep: a backfill happens once
+    # per mailbox (twice if the user widens the window), and it is the event
+    # the user is actually waiting on after connecting. "Imported 0 emails" is
+    # a real answer to "where is my mail" — an empty delta poll is not.
     try:
-        await backfill_mailbox(tenant, mailbox, client, since)
+        result = await backfill_mailbox(tenant, mailbox, client, since)
+    except Exception as exc:
+        await record_sync_event(
+            tenant,
+            mailbox,
+            KIND_BACKFILL,
+            OUTCOME_FAILED,
+            f"Importing your mailbox history failed: {exc!r}",
+        )
+        raise
+    else:
+        await record_sync_event(
+            tenant,
+            mailbox,
+            KIND_BACKFILL,
+            OUTCOME_SUCCEEDED,
+            f"Imported {result.recorded} of {result.seen} emails from your history"
+            + (" (stopped at the import limit)" if result.capped else ""),
+        )
     finally:
         await client.aclose()
 
@@ -698,10 +823,36 @@ async def delta_sync_mailbox(ctx, *, tenant_id: str, mailbox_id: str) -> None:
 
     try:
         result = await sync_mailbox(tenant, mailbox, client)
+    except Exception as exc:
+        # A failure is always worth a row. This is the sweep that keeps the
+        # mailbox current, so it failing is precisely the thing the panel
+        # exists to make visible.
+        await record_sync_event(
+            tenant,
+            mailbox,
+            KIND_DELTA_SYNC,
+            OUTCOME_FAILED,
+            f"Checking your mailbox for new email failed: {exc!r}",
+        )
+        raise
     finally:
         await client.aclose()
 
+    # Deliberately *not* recorded when the sweep found nothing. This runs every
+    # ten minutes for every active mailbox, and most polls are empty; a row per
+    # poll would push a genuine failure off the panel within the hour and turn
+    # the log into a heartbeat nobody reads. Success is only news when
+    # something was actually imported — and a mailbox that has synced nothing
+    # for days still shows its last real event, which is the honest picture.
     if result.recorded:
+        await record_sync_event(
+            tenant,
+            mailbox,
+            KIND_DELTA_SYNC,
+            OUTCOME_SUCCEEDED,
+            f"Synced {result.recorded} new email"
+            f"{'' if result.recorded == 1 else 's'} from your inbox",
+        )
         log.info(
             "delta_sync_recorded",
             mailbox_id=mailbox_id,
@@ -787,6 +938,16 @@ async def mark_needs_reauth(
     async with tenant_session(tenant_id) as session:
         await session.execute(_MARK_NEEDS_REAUTH, {"id": mailbox_id})
     log.warning("mailbox_needs_reauth", mailbox_id=str(mailbox_id), reason=reason[:200])
+    # The one failure the user can actually fix, and the one that otherwise
+    # reads as a quiet week: ingestion stops here until they reconnect.
+    await record_sync_event(
+        tenant_id,
+        mailbox_id,
+        KIND_MAILBOX_REAUTH,
+        OUTCOME_FAILED,
+        f"Microsoft stopped accepting our access to this mailbox — "
+        f"reconnect it to resume: {reason}",
+    )
 
 
 def _parse_datetime(value: str | None) -> datetime | None:

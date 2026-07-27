@@ -55,6 +55,23 @@ export const MAILBOX_PREVIEW_PATH = `${API_BASE}/api/mailbox/preview`;
  */
 export const OPPORTUNITIES_PATH = `${API_BASE}/api/opportunities`;
 
+/**
+ * Marks one job order as checked by a human, or un-marks it.
+ *
+ * A function rather than a constant because the id is in the path. Encoded, so
+ * an id that is not the uuid we expect cannot walk out of its own segment.
+ */
+export function opportunityReviewPath(id: string): string {
+  return `${OPPORTUNITIES_PATH}/${encodeURIComponent(id)}/review`;
+}
+
+/**
+ * What ingestion has actually been doing — the last few events, each with the
+ * outcome. Separate from the counts on `/auth/me` because a count says how
+ * much arrived and this says whether anything is going wrong.
+ */
+export const MAILBOX_ACTIVITY_PATH = `${API_BASE}/api/mailbox/activity`;
+
 /** POST the chosen period. The only thing that starts ingestion. */
 export const MAILBOX_INGEST_PATH = `${API_BASE}/api/mailbox/ingest`;
 

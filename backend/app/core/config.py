@@ -273,6 +273,18 @@ class Settings(BaseSettings):
     # the endpoint. Newest first, so the cap trims the oldest.
     OPPORTUNITIES_PAGE_LIMIT: int = Field(default=200, gt=0)
 
+    # --- Sync activity log ---
+    # How many events one mailbox keeps. The bound is enforced by the writer,
+    # which trims in the same transaction as the insert, rather than by a purge
+    # on a timer: a mailbox syncing every few minutes writes faster than any
+    # schedule a purge could reasonably run on, so a timer-based sweep decides
+    # how far the table overshoots rather than whether it does.
+    SYNC_ACTIVITY_KEEP_PER_MAILBOX: int = Field(default=200, gt=0)
+    # How many events the dashboard panel shows, newest first. Smaller than the
+    # retained history on purpose — the panel answers "did the last sync work",
+    # and the rest is there for someone investigating afterwards.
+    SYNC_ACTIVITY_PAGE_LIMIT: int = Field(default=50, gt=0)
+
     # --- Queue (Upstash Redis) ---
     REDIS_URL: str = ""
     # arq polls, and Upstash bills per command — a tight loop costs money every

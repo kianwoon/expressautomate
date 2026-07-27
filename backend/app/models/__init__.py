@@ -9,6 +9,7 @@ from app.models.mailbox import Mailbox
 from app.models.ms_token import MicrosoftToken
 from app.models.opportunity import Opportunity
 from app.models.signup import EarlyAccessSignup
+from app.models.sync_event import SyncEvent
 from app.models.tenant import Tenant, User
 
 __all__ = [
@@ -21,6 +22,7 @@ __all__ = [
     "MicrosoftToken",
     "Opportunity",
     "OpportunityFieldOverride",
+    "SyncEvent",
     "Tenant",
     "User",
 ]

@@ -8,6 +8,21 @@
   --teal-500: #14a89a;
   --teal-400: #21c1ae;
 
+  /* Amber is the third state. The dashboard needs a colour for "a person
+     should look at this" that is neither the brand blue nor a success teal,
+     and is not red — a job order whose email left three fields out is work
+     waiting, not an error. The tints are the wash behind a badge; the -700 is
+     the only one that passes contrast as text on it. */
+  --amber-700: #8a5a0f;
+  --amber-600: #b8791a;
+  --amber-200: #f0dcb8;
+  --amber-050: #fdf6e9;
+
+  /* The pale washes behind the quality badges and the selected row. Named
+     rather than inlined so the three states are visibly one family. */
+  --blue-050: #eef4ff;
+  --teal-050: #e7f7f4;
+
   --brand-gradient: linear-gradient(135deg, var(--blue-600) 0%, var(--teal-500) 100%);
 
   --ink-900: #0b1220;
@@ -581,28 +596,177 @@ section { padding: 60px 0; }
   font-size: 0.875rem; color: var(--ink-500); line-height: 1.7;
 }
 
-/* ---- job-orders table ---- */
-/* Two of the nine columns hold a paragraph. Left to run, one job description
-   makes its row twenty lines tall and the rest of the table scrolls off the
-   screen — the list stops being scannable, which is the only reason it beats
-   the inbox it replaces. Clamped to four lines, with the full text on the
-   cell's title so nothing is actually lost. Not `text-overflow: ellipsis`,
-   which is single-line only and would show about six words. */
-.jo-clamp {
-  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 4;
-  overflow: hidden;
+/* ---- dashboard workspace ---- */
+.jo-workspace { margin-top: 44px; }
+.jo-stats { margin-bottom: 40px; }
+.jo-stat { display: flex; flex-direction: column; gap: 6px; }
+.jo-stat-v { font-size: 1.75rem; font-weight: 700; line-height: 1.15; overflow-wrap: anywhere; }
+.jo-stat-k { font-weight: 650; }
+.jo-stat-sub { font-size: 0.8125rem; }
+/* The one card that is asking for something gets a left edge, and nothing
+   else. A whole card tinted amber reads as an error, which a queue of work
+   waiting to be looked at is not. */
+.jo-stat[data-tone="attention"] { border-left: 3px solid var(--amber-600); }
+
+.jo-head { display: flex; align-items: flex-start; gap: 20px; flex-wrap: wrap; }
+.jo-head-title { margin-top: 12px; }
+.jo-head-body { margin-top: 12px; max-width: 68ch; }
+/* One shared muted-secondary size, so a caption under a stat and a caption in
+   the detail panel are the same thing rather than two near-misses. */
+.jo-sub { font-size: 0.8125rem; color: var(--ink-500); }
+.jo-note { margin-top: 14px; font-size: 0.875rem; color: var(--ink-500); }
+.jo-note-card { margin-top: 16px; display: grid; gap: 16px; justify-items: start; }
+
+/* The bell is a shortcut, not an inbox. It is styled as a control with a
+   count, deliberately not as a badge on an icon — no dot, no red, nothing
+   that suggests an unread state we do not track. */
+.jo-bell {
+  margin-left: auto; display: inline-flex; align-items: center; gap: 8px;
+  padding: 8px 14px; font: inherit; font-size: 0.875rem; cursor: pointer;
+  color: var(--amber-700); background: var(--amber-050);
+  border: 1px solid var(--amber-200); border-radius: 999px;
 }
-/* The clamped cell is a disclosure. The marker is hidden because a triangle
-   in every long cell is visual noise across nine columns, but the summary
-   stays a real focusable control — removing the marker must not remove the
-   affordance, so the cursor and the focus ring carry it instead. */
-.jo-more > summary { cursor: pointer; list-style: none; }
-.jo-more > summary::-webkit-details-marker { display: none; }
-.jo-more > summary:focus-visible { outline: 2px solid var(--blue-500); outline-offset: 2px; }
-/* Once open, the clamp has to stop clamping or expanding would change
-   nothing — which is how a disclosure comes to look broken. */
-.jo-more[open] > summary .jo-clamp { -webkit-line-clamp: unset; display: block; }
-.jo-more[open] > summary { cursor: default; }
+.jo-bell:hover { border-color: var(--amber-600); }
+.jo-bell:focus-visible { outline: 2px solid var(--blue-500); outline-offset: 2px; }
+.jo-bell-n { font-weight: 700; }
+
+.jo-controls {
+  margin-top: 22px; display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+}
+.jo-chips { display: flex; gap: 8px; flex-wrap: wrap; }
+.jo-chip {
+  display: inline-flex; align-items: center; gap: 8px; padding: 7px 14px;
+  font: inherit; font-size: 0.875rem; cursor: pointer; color: var(--ink-700);
+  background: var(--surface); border: 1px solid var(--line); border-radius: 999px;
+}
+.jo-chip:hover { background: var(--surface-alt); }
+.jo-chip:focus-visible { outline: 2px solid var(--blue-500); outline-offset: 2px; }
+/* The active chip is filled, not merely outlined. An outline-only selected
+   state is indistinguishable from a focus ring, which is exactly the
+   confusion a keyboard user does not need. */
+.jo-chip[data-active="yes"] {
+  color: var(--surface); background: var(--blue-600); border-color: var(--blue-600);
+}
+.jo-chip-n { font-variant-numeric: tabular-nums; opacity: 0.75; }
+
+/* Master and detail. The list is the wider half; below 1080px the panel drops
+   under it rather than squeezing a paragraph into 240px. */
+.jo-split {
+  margin-top: 16px; display: grid; grid-template-columns: minmax(0, 1.85fr) minmax(0, 1fr);
+  gap: 20px; align-items: start;
+}
+/* Sticky so the row stays readable while the list is scrolled. Cleared of the
+   sticky nav, and capped so a long description scrolls inside the panel
+   instead of pushing the page. */
+.jo-detail {
+  position: sticky; top: 96px; max-height: calc(100vh - 120px); overflow-y: auto;
+}
+.jo-detail-head { display: flex; align-items: center; gap: 12px; }
+.jo-detail-title { margin-top: 12px; font-size: 1.125rem; }
+.jo-detail-company { margin-top: 4px; color: var(--ink-700); font-weight: 600; }
+.jo-detail-empty { margin-top: 12px; color: var(--ink-500); font-size: 0.875rem; }
+.jo-detail-rows { margin-top: 18px; }
+.jo-detail-prose { margin-top: 18px; }
+.jo-detail-prose p { margin-top: 6px; font-size: 0.875rem; }
+.jo-detail-source { margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--line); }
+.jo-detail-source p { margin-top: 6px; }
+.jo-detail-actions { margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--line); }
+.jo-detail-hint { margin-top: 10px; }
+.jo-detail-error { margin-top: 12px; color: var(--amber-700); font-size: 0.875rem; }
+
+/* Quality, never a percentage. Three named states, each with its own colour
+   and its own word — the word does the work, the colour only speeds up the
+   scan, so nothing here depends on seeing the difference between them. */
+.jo-quality {
+  display: inline-flex; align-items: center; gap: 6px; font-size: 0.75rem;
+  font-weight: 650; padding: 3px 9px; border-radius: 999px;
+  background: var(--surface-alt); color: var(--ink-700);
+}
+.jo-quality-dot { width: 7px; height: 7px; border-radius: 999px; background: currentColor; flex: none; }
+.jo-quality[data-state="verified"] { color: var(--teal-500); background: var(--teal-050); }
+.jo-quality[data-state="likely"] { color: var(--blue-600); background: var(--blue-050); }
+.jo-quality[data-state="needs_review"] { color: var(--amber-700); background: var(--amber-050); }
+.jo-quality-count { font-variant-numeric: tabular-nums; opacity: 0.85; }
+.jo-quality-note { margin-top: 16px; display: grid; gap: 8px; justify-items: start; }
+
+.jo-review {
+  font-size: 0.6875rem; font-weight: 700; padding: 3px 9px; border-radius: 999px;
+  margin-left: auto; background: var(--surface-alt); color: var(--ink-500);
+}
+.jo-review[data-state="needs_review"] { background: var(--amber-050); color: var(--amber-700); }
+.jo-review[data-state="reviewed"] { background: var(--teal-050); color: var(--teal-500); }
+
+/* ---- job-orders table ---- */
+/* The card supplies the border and background; the padding is dropped so the
+   header strip runs edge to edge. `overflow-x: auto` is the backstop for a
+   phone — below about 900px scrolling beats eight columns crushed to one word
+   each. */
+.jo-table-card { padding: 0; overflow-x: auto; }
+.jo-table {
+  width: 100%; min-width: 860px; border-collapse: collapse;
+  table-layout: fixed; font-size: 0.875rem;
+}
+.jo-th {
+  text-align: left; padding: 12px 14px; background: var(--surface-alt);
+  border-bottom: 1px solid var(--line); font-weight: 650;
+}
+.jo-th[data-active="yes"] { color: var(--ink-700); }
+.jo-td {
+  padding: 12px 14px; vertical-align: top;
+  /* The same backstop `.row` uses: a fixed-layout column cannot widen, so an
+     unbreakable token would otherwise print straight over its neighbour. */
+  overflow-wrap: anywhere;
+}
+.jo-td-strong { font-weight: 600; }
+/* The date must not wrap: broken over two lines it stops reading as a date at
+   a glance, and it is what the eye scans this table by. */
+.jo-td[data-nowrap="yes"] { white-space: nowrap; }
+.jo-row { border-top: 1px solid var(--line); cursor: pointer; }
+.jo-row:hover { background: var(--surface-alt); }
+/* A left edge plus a tint, not colour alone: the selected row has to be
+   findable in a screenshot, in high contrast, and by someone who cannot tell
+   this blue from this white. */
+.jo-row[data-selected="yes"] {
+  background: var(--blue-050); box-shadow: inset 3px 0 0 var(--blue-500);
+}
+/* The row-selecting control. It looks like the cell it sits in — a button
+   chrome on every company name would make the table look like a toolbar — but
+   it is a real button, so it is tabbable and it announces itself. */
+.jo-rowbtn {
+  font: inherit; font-weight: inherit; color: inherit; text-align: left;
+  background: none; border: 0; padding: 0; margin: 0; cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.jo-rowbtn:focus-visible { outline: 2px solid var(--blue-500); outline-offset: 3px; }
+.jo-rowbtn:hover { text-decoration: underline; text-underline-offset: 2px; }
+
+.jo-pager {
+  margin-top: 20px; display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+}
+.jo-pager .btn:disabled { opacity: 0.5; cursor: default; }
+
+/* ---- sync activity and mailbox overview ---- */
+.jo-panels {
+  margin-top: 40px; display: grid; gap: 22px;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+}
+.jo-activity h3, .jo-overview h3 { margin-bottom: 12px; }
+.jo-overview-rows { margin-bottom: 14px; }
+.jo-events { list-style: none; display: grid; gap: 12px; }
+.jo-events li { display: flex; align-items: flex-start; gap: 10px; font-size: 0.875rem; }
+.jo-event-dot {
+  width: 8px; height: 8px; border-radius: 999px; flex: none; margin-top: 7px;
+  background: var(--teal-500);
+}
+.jo-events li[data-outcome="failed"] .jo-event-dot { background: var(--amber-600); }
+.jo-event-body { display: grid; gap: 2px; min-width: 0; }
+.jo-event-body > * { overflow-wrap: anywhere; }
+.jo-event-when { margin-left: auto; color: var(--ink-300); font-size: 0.75rem; white-space: nowrap; }
+.jo-event-tag {
+  font-size: 0.6875rem; font-weight: 700; padding: 2px 8px; border-radius: 999px;
+  background: var(--amber-050); color: var(--amber-700); white-space: nowrap;
+}
+
 /* The whole header cell is the target, not just the label: a 40px-wide word
    is a frustrating thing to hit, and a sortable column that looks like plain
    text does not get clicked at all. */
@@ -739,6 +903,15 @@ footer { border-top: 1px solid var(--line); padding: 48px 0 40px; color: var(--i
   .impact li:nth-child(-n + 3) { border-top: none; }
   .voices-grid { grid-template-columns: 1fr; }
   .grid-4 { grid-template-columns: repeat(2, 1fr); }
+}
+
+/* Below this the detail panel is narrower than the paragraphs it exists to
+   show, so it stops being a column and becomes the thing under the list.
+   Sticky goes with it: pinned at the bottom of a stacked layout it would
+   cover the table it belongs to. */
+@media (max-width: 1080px) {
+  .jo-split { grid-template-columns: 1fr; }
+  .jo-detail { position: static; max-height: none; }
 }
 
 /* Tablet and small-laptop widths, signed in. The section links still show

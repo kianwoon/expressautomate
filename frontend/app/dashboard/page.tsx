@@ -3,11 +3,12 @@
 import { useEffect } from "react";
 
 import { CONNECT_MAILBOX_PATH, LANDING_PATH, SWITCH_ACCOUNT_PATH } from "../api";
-import { Breakable } from "../breakable";
 import { displayNameOf, useAuth, type Me } from "../auth";
 import { SiteFooter } from "../site-footer";
 import { SiteNav } from "../site-nav";
+import { AccountDetails } from "./account-details";
 import { ChoosePeriod } from "./choose-period";
+import { plural } from "./format";
 import { JobOrders } from "./job-orders";
 
 /**
@@ -127,13 +128,18 @@ function SignedIn({ me }: { me: Me }) {
         <NotConnected me={me} />
       )}
 
-      {/* Job orders come before the account details, because they are what
-          someone opened this page for. The three cards that used to sit here
-          answer questions asked once during setup — who am I signed in as,
-          which workspace, is the permission granted — and then repeated
-          themselves above the fold on every visit forever. They are still
-          available below, folded away. */}
-      {me.mailbox.ingested.opportunities > 0 && <JobOrders />}
+      {/* The workspace comes before the account details, because it is what
+          someone opened this page for. The cards that used to sit here answer
+          questions asked once during setup — who am I signed in as, which
+          workspace — and then repeated themselves above the fold on every
+          visit forever. They are still available below, folded away.
+
+          Shown whenever a mailbox is actually running, not only once a
+          vacancy has been found: the stat cards, the sync activity and the
+          mailbox overview are exactly what someone needs during the wait, and
+          hiding them until the first extraction lands left the first hour
+          looking like nothing was happening. */}
+      {(stage === "ingesting" || me.mailbox.ingested.opportunities > 0) && <JobOrders me={me} />}
 
       <AccountDetails me={me} />
     </>
@@ -141,121 +147,23 @@ function SignedIn({ me }: { me: Me }) {
 }
 
 /**
- * Setup facts, folded away.
- *
- * Not deleted: when a mailbox misbehaves these are the first things anyone
- * needs, and "where do I see which account this is?" is a real question. But
- * they are reference material — read once, then noise — so they cost a click
- * rather than a third of the page.
- *
- * `<details>` rather than a state hook deliberately: it works before hydration
- * and is what a browser already knows how to open, close and find-in-page.
+ * One sentence. The numbers that used to sit under it are now the four stat
+ * cards at the top of the workspace below, which are fed from the same
+ * response as the table — so the headline figure and the list can no longer
+ * disagree, as they did at 3 against 7 when one counted emails and the other
+ * counted vacancies.
  */
-function AccountDetails({ me }: { me: Me }) {
-  return (
-    <details style={{ marginTop: 48 }}>
-      <summary
-        className="eyebrow"
-        style={{ cursor: "pointer", listStyle: "revert", padding: "4px 0" }}
-      >
-        Account and mailbox details
-      </summary>
-
-      <div className="grid-3" style={{ marginTop: 20 }}>
-        <div className="card">
-          <h3>Account</h3>
-          <div className="rows" style={{ marginTop: 12 }}>
-            <Row k="Name" v={me.user.display_name?.trim() || null} />
-            <Row k="Email" v={me.user.email} />
-            <Row k="Role" v={me.user.role} />
-          </div>
-        </div>
-
-        <div className="card">
-          <h3>Workspace</h3>
-          <div className="rows" style={{ marginTop: 12 }}>
-            <Row k="Name" v={me.tenant.name} />
-            <Row
-              k="Account type"
-              v={me.tenant.is_personal_account ? "Personal Microsoft" : "Work or school"}
-            />
-          </div>
-          <p className="body" style={{ marginTop: 14, fontSize: "0.875rem" }}>
-            {me.tenant.is_personal_account
-              ? "A workspace of one. Personal Microsoft accounts each get their own, so nobody else can join this one — a work account is what lets colleagues share an agency."
-              : "Colleagues who sign in with the same work account share this agency and its data."}
-          </p>
-        </div>
-
-        <div className="card">
-          <h3>Mailbox</h3>
-          <div className="rows" style={{ marginTop: 12 }}>
-            <Row k="Permission" v={me.mailbox.connected ? "Granted" : "Not granted"} />
-            <Row k="State" v={stateLabel(me)} />
-            <Row k="Last activity" v={when(me.mailbox.last_activity)} empty="Nothing yet" />
-          </div>
-          <p className="body" style={{ marginTop: 14, fontSize: "0.875rem" }}>
-            Read-only. We never send, reply to, or delete anything.
-          </p>
-        </div>
-      </div>
-    </details>
-  );
-}
-
 function Ingesting({ me }: { me: Me }) {
-  const {
-    total,
-    in_progress: inProgress,
-    awaiting_extraction: awaiting,
-    opportunities,
-  } = me.mailbox.ingested;
+  const { total } = me.mailbox.ingested;
 
   return (
-    <>
-      <p className="lede" style={{ marginTop: 18 }}>
-        {/* No delivery-time promise: Microsoft decides when a notification
-            arrives, and a stated "minute or two" would be our claim to keep. */}
-        {total === 0
-          ? "Your mailbox is connected and being watched. Nothing has arrived yet — new mail appears here shortly after it reaches Outlook."
-          : `We have read ${plural(total, "email")} from your mailbox.`}
-      </p>
-
-      {total > 0 && (
-        <div className="grid-3" style={{ marginTop: 32 }}>
-          <Stat n={total} label="emails read" sub={range(me)} />
-          {/* Two different waits, and only one of them is short. Emails being
-              fetched clear in seconds; emails already stored are waiting on a
-              release. One number for both told people their mail was seconds
-              from being understood.
-
-              Both are reported, never whichever is larger: showing only the
-              active one made 82 parked emails vanish from the page the moment
-              a single new one arrived — replacing a wrong number with no
-              number at all. */}
-          <Stat
-            n={inProgress + awaiting}
-            label={inProgress > 0 ? "being read" : "stored, not yet understood"}
-            sub={
-              inProgress > 0
-                ? `${inProgress.toLocaleString()} fetching now, ${awaiting.toLocaleString()} waiting on extraction`
-                : awaiting === 0
-                  ? "Nothing waiting"
-                  : "Waiting on extraction"
-            }
-          />
-          {/* Vacancies, not emails. These are counted from the same rows the
-              table renders, so the headline figure and the list underneath it
-              can no longer disagree — they did, 3 against 7, because one email
-              advertised six roles and this counted emails. */}
-          <Stat
-            n={opportunities}
-            label={opportunities === 1 ? "job order found" : "job orders found"}
-            sub={opportunities === 0 ? "Nothing extracted yet" : "Listed in full below"}
-          />
-        </div>
-      )}
-    </>
+    <p className="lede" style={{ marginTop: 18 }}>
+      {/* No delivery-time promise: Microsoft decides when a notification
+          arrives, and a stated "minute or two" would be our claim to keep. */}
+      {total === 0
+        ? "Your mailbox is connected and being watched. Nothing has arrived yet — new mail appears here shortly after it reaches Outlook."
+        : `We have read ${plural(total, "email")} from your mailbox.`}
+    </p>
   );
 }
 
@@ -332,82 +240,4 @@ function NotConnected({ me }: { me: Me }) {
       )}
     </>
   );
-}
-
-function Stat({ n, label, sub }: { n: number; label: string; sub: string | null }) {
-  return (
-    <div className="card">
-      <div
-        className="gradient-text"
-        style={{ fontSize: "2.5rem", fontWeight: 700, lineHeight: 1.1 }}
-      >
-        {n.toLocaleString()}
-      </div>
-      <div style={{ marginTop: 6, fontWeight: 600 }}>{label}</div>
-      {sub && (
-        <p className="body muted" style={{ marginTop: 8, fontSize: "0.8125rem" }}>
-          {sub}
-        </p>
-      )}
-    </div>
-  );
-}
-
-/**
- * `empty` is deliberately per-row rather than one shared fallback.
- *
- * "Not mentioned" is extraction vocabulary — it means the AI read the email and
- * the field was not in it (§15). Reusing it for a mailbox that has simply never
- * done anything says something quite different and slightly wrong.
- */
-function Row({ k, v, empty = "Not mentioned" }: { k: string; v: string | null; empty?: string }) {
-  return (
-    <div className="row">
-      <span className="row-k">{k}</span>
-      <span className={v ? undefined : "muted"}>{v ? <Breakable text={v} /> : empty}</span>
-    </div>
-  );
-}
-
-function stateLabel(me: Me): string {
-  if (me.mailbox.awaiting_period) return "Awaiting your choice";
-  if (me.mailbox.status === null) return "No mailbox connected";
-  if (me.mailbox.status === "needs_reauth") return "Needs reconnecting";
-  if (me.mailbox.status === "disconnected") return "Disconnected";
-  // Active but not yet subscribed: the consent landed and the subscription is
-  // still being created. A brief, real state — not worth calling an error.
-  return me.mailbox.ingestion_active ? "Reading new mail" : "Starting up";
-}
-
-/** "1 email" / "2 emails" — a plural s on a count of one reads as a bug. */
-function plural(n: number, noun: string): string {
-  return `${n.toLocaleString()} ${noun}${n === 1 ? "" : "s"}`;
-}
-
-function range(me: Me): string | null {
-  const { oldest_received: oldest, newest_received: newest } = me.mailbox;
-  if (!oldest || !newest) return null;
-  const from = day(oldest);
-  const to = day(newest);
-  return from === to ? from : `${from} to ${to}`;
-}
-
-function day(iso: string): string {
-  return new Date(iso).toLocaleDateString(undefined, {
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-  });
-}
-
-/** Absolute, not "3 minutes ago": this page does not re-render on a timer, so
- *  a relative time would quietly age into a lie while someone reads it. */
-function when(iso: string | null): string | null {
-  if (!iso) return null;
-  return new Date(iso).toLocaleString(undefined, {
-    day: "numeric",
-    month: "short",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
 }
