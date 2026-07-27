@@ -103,6 +103,31 @@ Koyeb service is one image is one deploy unit, so the choice is independent
 deploys **or** one instance, not both. Merging saves an `eco-nano` but makes
 every landing-copy tweak restart the API.
 
+### Backend services — one image, three commands
+
+Ingestion needs three processes. They share the backend image and differ only
+by command, so the workflow deploys the same tag to all three.
+
+| Koyeb service | Command | Health check | What it does |
+|---|---|---|---|
+| `api` | image default (`uvicorn app.main:app`) | `/api/health` | Serves the site and the API; receives Graph change notifications |
+| `worker` | `python -u -m app.workers.main` | none | Periodic recovery: stalled rows, subscription renewal, delta reconciliation, missing subscriptions |
+| `arq` | `arq app.workers.settings.WorkerSettings` | none | Drains the queue — fetch, classify, extract, backfill |
+
+**`arq` is not optional.** Without it `api` and `worker` keep enqueueing jobs
+that nothing runs: every email stops at `pending`, Redis grows, and both
+producers report success. There is no error anywhere. `tests/test_deployment.py`
+fails if any of the three stops being deployed.
+
+`koyeb service update` **cannot create a service** — each must exist first. The
+worker and arq services take no route and no health check; a health check on a
+process that serves no HTTP leaves the deploy `PENDING` until CI times out.
+
+Every service needs the same environment as `api` plus `REDIS_URL`; `arq` and
+`worker` additionally need the `R2_*` and `GRAPH_*` values, since they are the
+processes that actually talk to Graph and object storage. `.env.example` is the
+full list — `tests/test_deployment.py` fails if a setting is missing from it.
+
 ### Replacing the GHCR credential
 
 The remaining win is to stop Koyeb building at all: have Actions build once
@@ -270,12 +295,44 @@ stored after the second grant covers both.
 then the DNS records to Koyeb can be wired up. Development runs on the free
 `*.koyeb.app` subdomain until then.
 
-### 3. Graph webhook URL
+### 3. Graph webhook URLs
 
 Microsoft Graph change notifications require a **public HTTPS** endpoint, so
 webhook ingestion (§7) cannot be tested from localhost. Options: deploy the
-backend to Koyeb early and point `MS_WEBHOOK_NOTIFICATION_URL` at it, or use a
-tunnel for local development.
+backend to Koyeb early and point the URLs at it, or use a tunnel locally.
+
+Two are needed, and Graph validates each with a handshake **at subscription
+creation time** — if either is unreachable, creating a subscription fails
+outright rather than degrading:
+
+```
+MS_WEBHOOK_NOTIFICATION_URL=https://expressautomate.app/api/graph/notifications
+MS_WEBHOOK_LIFECYCLE_URL=https://expressautomate.app/api/graph/lifecycle
+```
+
+### 4. Create the `arq` Koyeb service
+
+`koyeb service update` cannot create a service, so this one must be made by
+hand once — the deploy step then keeps it on the current image. No route, no
+health check, command `arq app.workers.settings.WorkerSettings`, and the same
+environment as `worker`.
+
+Until it exists, ingestion accepts mail and processes none of it, silently.
+**And until it exists, every backend deploy fails at the `Deploy arq` step** —
+`api` and `worker` will already have been updated, so the deploy is not lost,
+but the run goes red. That is deliberate: a green run that quietly skipped the
+queue consumer is how this hole stayed open in the first place.
+
+Then put its id in `ARQ_SERVICE_ID` at the top of
+`.github/workflows/backend.yml`. Two things switch on when you do:
+
+- the *already on this image* check, so arq stops redeploying on every backend
+  commit;
+- post-deploy verification, so a crash-looping arq fails the run instead of
+  leaving CI green.
+
+While it is blank the workflow warns on every run and both are skipped —
+correct, just noisier and slower.
 
 ## Local development
 

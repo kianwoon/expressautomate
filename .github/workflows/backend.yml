@@ -31,6 +31,11 @@ env:
   KOYEB_REGISTRY_SECRET: ghcr-expressautomate
   API_SERVICE_ID: 4a352e28-a0dc-4ae8-bda1-9b13c0605b27
   WORKER_SERVICE_ID: e1423408-7877-43bd-ad6f-182f0e6f2ddd
+  # Fill in once the arq service exists (see docs/setup.md §4). Until then arq
+  # is deployed on every backend change without the already-on-target
+  # short-circuit, and is left out of the post-deploy verification — both
+  # degrade safely, and the run says so rather than pretending.
+  ARQ_SERVICE_ID: ""
 
 jobs:
   # The image depends only on backend/, frontend/ and the Dockerfile. Tagging by
@@ -272,16 +277,46 @@ jobs:
             | python3 -c 'import sys,json; d=json.load(sys.stdin)["deployment"]["definition"]; print((d.get("docker") or {}).get("image",""))'
           }
           TARGET="${IMAGE}:${TAG}"
-          if [ "$API" = true ] && [ "$(running "$API_SERVICE_ID")" = "$TARGET" ]; then
-            echo "api already on $TARGET"; API=false
-          fi
-          if [ "$BACKEND" = true ] && [ "$(running "$WORKER_SERVICE_ID")" = "$TARGET" ]; then
-            echo "worker already on $TARGET"; BACKEND=false
+
+          # arq is scoped like worker — backend-only — but checked against its
+          # OWN image. Sharing the worker's result meant a run that deployed
+          # worker and then failed at arq could never recover: the re-run found
+          # worker on-target, skipped both, and arq stayed on the old image
+          # forever. Each service is asked about itself.
+          ARQ=$BACKEND
+
+          skip_if_current() {  # name, id, current-decision
+            [ "$3" = true ] || { echo false; return; }
+            [ -n "$2" ] || { echo true; return; }   # no id configured: deploy
+            if [ "$(running "$2")" = "$TARGET" ]; then
+              echo "$1 already on $TARGET" >&2; echo false
+            else
+              echo true
+            fi
+          }
+
+          API=$(skip_if_current api "$API_SERVICE_ID" "$API")
+          BACKEND=$(skip_if_current worker "$WORKER_SERVICE_ID" "$BACKEND")
+          ARQ=$(skip_if_current arq "$ARQ_SERVICE_ID" "$ARQ")
+
+          # The services this run will actually deploy AND can verify. A
+          # service with no configured id is deployed but not verified, so it
+          # must not be named here.
+          IDS=""
+          [ "$API" = true ]     && [ -n "$API_SERVICE_ID" ]    && IDS="$IDS,$API_SERVICE_ID"
+          [ "$BACKEND" = true ] && [ -n "$WORKER_SERVICE_ID" ] && IDS="$IDS,$WORKER_SERVICE_ID"
+          [ "$ARQ" = true ]     && [ -n "$ARQ_SERVICE_ID" ]    && IDS="$IDS,$ARQ_SERVICE_ID"
+          IDS="${IDS#,}"
+
+          if [ "$ARQ" = true ] && [ -z "$ARQ_SERVICE_ID" ]; then
+            echo "::warning::ARQ_SERVICE_ID is unset — arq will deploy but is not verified"
           fi
 
           echo "api=$API"        >> "$GITHUB_OUTPUT"
           echo "worker=$BACKEND" >> "$GITHUB_OUTPUT"
-          echo "-> api=$API worker=$BACKEND"
+          echo "arq=$ARQ"        >> "$GITHUB_OUTPUT"
+          echo "service_ids=$IDS" >> "$GITHUB_OUTPUT"
+          echo "-> api=$API worker=$BACKEND arq=$ARQ"
 
       - uses: astral-sh/setup-uv@v9.0.0
         if: steps.freshness.outputs.stale == 'false' && steps.scope.outputs.worker == 'true'
@@ -307,10 +342,16 @@ jobs:
 
       # Pinned tarball, not `curl | sh` from master: this step holds
       # KOYEB_TOKEN and DATABASE_ADMIN_URL.
+      # Every deploy step needs this, so it must be gated on the union of their
+      # scopes. Omitting arq broke exactly the recovery this scoping exists
+      # for: a re-run after worker deployed and arq failed has api=false,
+      # worker=false, arq=true — and `Deploy arq` would die on a missing binary.
       - name: Install Koyeb CLI
         if: >-
           steps.freshness.outputs.stale == 'false' &&
-          (steps.scope.outputs.api == 'true' || steps.scope.outputs.worker == 'true')
+          (steps.scope.outputs.api == 'true' ||
+           steps.scope.outputs.worker == 'true' ||
+           steps.scope.outputs.arq == 'true')
         env:
           KOYEB_CLI_VERSION: v5.10.1
         run: |
@@ -352,26 +393,46 @@ jobs:
             --docker-args -u --docker-args -m --docker-args app.workers.main \
             --token "$KOYEB_TOKEN"
 
-      # api is updated before worker, so a worker failure leaves them briefly
-      # on different builds. Tolerable because migrations run first and must be
-      # backward-compatible with the running image anyway; re-running the
-      # workflow reconciles them.
+      # The queue consumer. Without it `worker` and `api` enqueue jobs that
+      # nothing ever runs — every email stops at `pending`, Redis grows, and
+      # both producers report success. Backend-only like `worker`, but scoped
+      # against its own current image rather than the worker's.
+      - name: Deploy arq
+        if: steps.freshness.outputs.stale == 'false' && steps.scope.outputs.arq == 'true'
+        env:
+          KOYEB_TOKEN: ${{ secrets.KOYEB_TOKEN }}
+          TAG: ${{ needs.plan.outputs.tag }}
+        run: |
+          set -euo pipefail
+          koyeb service update expressautomate/arq \
+            --docker "${IMAGE}:${TAG}" \
+            --docker-private-registry-secret "$KOYEB_REGISTRY_SECRET" \
+            --docker-command arq \
+            --docker-args app.workers.settings.WorkerSettings \
+            --token "$KOYEB_TOKEN"
+
+      # The three are updated in order, so a failure part-way leaves them
+      # briefly on different builds. Tolerable because migrations run first and
+      # must be backward-compatible with the running image anyway, and because
+      # each service's scope is now decided against its OWN current image — so
+      # re-running the workflow really does reconcile them, including the case
+      # where an earlier run deployed one and failed on the next.
       #
       # The CLI returns before the rollout finishes, so confirm the image
       # actually landed AND became healthy rather than trusting the exit code.
       # Verify only what this run actually deployed. Checking a service that
       # was deliberately left alone would fail on its older (correct) image.
       - name: Verify deploy landed
+        # The id list is assembled in the scope step: three nested ternaries
+        # here was already at the edge of readable, and a fourth would have
+        # been the kind of expression nobody checks again.
         if: >-
           steps.freshness.outputs.stale == 'false' &&
-          (steps.scope.outputs.api == 'true' || steps.scope.outputs.worker == 'true')
+          steps.scope.outputs.service_ids != ''
         env:
           KOYEB_TOKEN: ${{ secrets.KOYEB_TOKEN }}
           IMAGE_TAG: ${{ needs.plan.outputs.tag }}
-          SERVICE_IDS: >-
-            ${{ steps.scope.outputs.api == 'true' && env.API_SERVICE_ID || '' }}${{
-            steps.scope.outputs.api == 'true' && steps.scope.outputs.worker == 'true' && ',' || ''
-            }}${{ steps.scope.outputs.worker == 'true' && env.WORKER_SERVICE_ID || '' }}
+          SERVICE_IDS: ${{ steps.scope.outputs.service_ids }}
           # Both carry DATABASE_URL and friends; a definition that lost them
           # would boot and fail at the first query.
           MIN_ENV_VARS: 5
