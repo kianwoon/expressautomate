@@ -27,7 +27,7 @@ from app.services.candidate_naming import is_matchable_phone, normalize_email
 _BY_EMAIL = text(
     """
     SELECT id FROM candidates
-    WHERE lower(email) = :email AND record_status <> 'merged'
+    WHERE tenant_id = :tenant_id AND lower(email) = :email AND record_status <> 'merged'
     LIMIT 1
     """
 )
@@ -35,7 +35,7 @@ _BY_EMAIL = text(
 _BY_PHONE = text(
     """
     SELECT id FROM candidates
-    WHERE phone_e164 = :phone AND record_status <> 'merged'
+    WHERE tenant_id = :tenant_id AND phone_e164 = :phone AND record_status <> 'merged'
     LIMIT 1
     """
 )
@@ -66,6 +66,15 @@ async def find_candidate(
     Runs on the caller's session so the lookup and whatever it decides to write
     share one transaction. A separate connection would let a candidate be
     created against a match that was rolled back.
+
+    Isolation is defense in depth here, not a single mechanism: RLS on the
+    `candidates` table (keyed off the `app.tenant_id` session setting that
+    `tenant_session` establishes) is what actually enforces the boundary, and
+    the explicit `tenant_id = :tenant_id` predicate below is a second,
+    independent guard against a session that was never scoped — it fails
+    closed (no session GUC set means the RLS predicate is NULL and no rows
+    return), so a caller that forgets to scope the session gets zero matches
+    rather than another tenant's row.
     """
     normalized_email = normalize_email(email)
     # A fixed line identifies a company. Kept on the record, never used to
@@ -76,11 +85,19 @@ async def find_candidate(
     by_phone: uuid.UUID | None = None
 
     if normalized_email:
-        row = (await session.execute(_BY_EMAIL, {"email": normalized_email})).first()
+        row = (
+            await session.execute(
+                _BY_EMAIL, {"tenant_id": tenant_id, "email": normalized_email}
+            )
+        ).first()
         by_email = row.id if row else None
 
     if usable_phone:
-        row = (await session.execute(_BY_PHONE, {"phone": usable_phone})).first()
+        row = (
+            await session.execute(
+                _BY_PHONE, {"tenant_id": tenant_id, "phone": usable_phone}
+            )
+        ).first()
         by_phone = row.id if row else None
 
     # Two keys pointing at two different people. Picking either would attach

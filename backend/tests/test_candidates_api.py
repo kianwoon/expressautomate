@@ -213,6 +213,23 @@ async def test_creating_a_duplicate_email_is_a_conflict_not_a_500(agency_with_ca
     assert r.status_code == 409
 
 
+async def test_editing_email_to_one_another_candidate_holds_is_a_conflict(
+    agency_with_candidates,
+) -> None:
+    """Covers the PATCH `IntegrityError` backstop at `app/api/candidates.py`.
+
+    The POST path already has a duplicate-email test above; this exercises
+    the same unique index from the update path, where the collision is
+    caught in `update_candidate`'s own `except IntegrityError` block rather
+    than `create_candidate`'s.
+    """
+    tid, uid, ids = agency_with_candidates
+    async with await _client_for(tid, uid) as http:
+        r = await http.patch(f"/api/candidates/{ids['placed']}", json={"email": "jane@acme.sg"})
+    assert r.status_code == 409
+    assert r.json()["detail"] == "Another candidate already has that email or phone"
+
+
 async def test_a_split_identity_is_refused_with_both_names(agency_with_candidates) -> None:
     tid, uid, ids = agency_with_candidates
     async with await _client_for(tid, uid) as http:

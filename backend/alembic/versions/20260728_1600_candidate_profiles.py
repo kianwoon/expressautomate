@@ -48,7 +48,6 @@ def upgrade() -> None:
         sa.Column('merged_into_candidate_id', sa.UUID(), nullable=True),
         sa.Column('created_by', sa.UUID(), nullable=True),
         sa.Column('updated_by', sa.UUID(), nullable=True),
-        sa.Column('last_activity_at', sa.DateTime(timezone=True), nullable=True),
         sa.Column(
             'created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False
         ),
