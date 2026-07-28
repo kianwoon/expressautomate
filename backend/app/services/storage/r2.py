@@ -12,7 +12,9 @@ purge can find.
 """
 
 import base64
+import sys
 import uuid
+from contextlib import asynccontextmanager
 from typing import Protocol
 
 import aioboto3
@@ -120,7 +122,8 @@ class R2BodyStore:
     def __init__(self) -> None:
         self._session = aioboto3.Session()
 
-    def _client(self):
+    @asynccontextmanager
+    async def _client(self):
         """Open a client for one operation.
 
         The region is passed explicitly. botocore does not fail without one —
@@ -130,14 +133,37 @@ class R2BodyStore:
         change how requests are signed. R2 tolerates some values, but which
         ones is not a property worth depending on. Cloudflare documents `auto`;
         pinning it makes signing independent of ambient AWS configuration.
+
+        Construction itself is the other thing that can fail, and it failed in
+        production: the service was deployed with no `R2_*` variables at all,
+        so botocore got an empty endpoint and raised a bare
+        `ValueError: Invalid endpoint:` from deep inside its endpoint
+        resolver. That is a misconfiguration exactly like a missing bucket —
+        it answers the same way forever — but it arrived as an unexplained
+        500. Only the *construction* is wrapped: the body of the `async with`
+        runs outside the guard, so a genuine `ValueError` raised by an
+        operation is not relabelled as an operator error.
         """
-        return self._session.client(
+        creator = self._session.client(
             "s3",
             endpoint_url=settings.R2_ENDPOINT_URL,
             region_name=settings.R2_REGION,
             aws_access_key_id=settings.R2_ACCESS_KEY_ID,
             aws_secret_access_key=settings.R2_SECRET_ACCESS_KEY,
         )
+        try:
+            client = await creator.__aenter__()
+        except ValueError as exc:
+            raise BodyStoreMisconfigured(
+                "R2 client cannot be built: endpoint "
+                f"{settings.R2_ENDPOINT_URL!r}, bucket "
+                f"{settings.R2_BUCKET_NAME!r}. Check the R2_* environment "
+                "variables on this service."
+            ) from exc
+        try:
+            yield client
+        finally:
+            await creator.__aexit__(*sys.exc_info())
 
     async def put(self, key: str, content: str) -> None:
         """Store a body, naming a missing bucket for what it is.

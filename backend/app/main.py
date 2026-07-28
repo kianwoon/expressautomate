@@ -4,8 +4,9 @@ import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import APIRouter, FastAPI
+from fastapi import APIRouter, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import insert, text
@@ -32,6 +33,12 @@ from app.db.session import SessionLocal, engine
 from app.models import EarlyAccessSignup
 from app.services.events import close_client
 from app.services.graph.client import warn_if_unconfigured
+from app.services.storage.r2 import BodyStoreMisconfigured
+
+# allow-hardcode: user-facing copy, not matching logic. Deliberately says
+# nothing about *what* is misconfigured — the bucket name and endpoint live in
+# the exception message, which is logged and never serialised to a client.
+_STORAGE_UNAVAILABLE_DETAIL = "Photo storage is unavailable."
 
 log = get_logger(__name__)
 
@@ -82,6 +89,30 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.exception_handler(BodyStoreMisconfigured)
+async def _body_store_misconfigured(
+    request: Request, exc: BodyStoreMisconfigured
+) -> JSONResponse:
+    """Object storage the operator has to fix: 503, and say nothing else.
+
+    Registered on the app rather than in one router because this is not an
+    avatar concern — any endpoint that touches the body store can raise it.
+
+    503 rather than 500 because the condition is real and external: the
+    request was well formed and will work once someone sets the variables.
+    The exception message names the bucket and the endpoint, which is exactly
+    what the operator needs and exactly what a client must never be told, so
+    it goes to the log and the response carries fixed copy instead.
+    """
+    log.error(
+        "body_store_misconfigured",
+        path=request.url.path,
+        error=str(exc),
+        cause=str(exc.__cause__) if exc.__cause__ else None,
+    )
+    return JSONResponse(status_code=503, content={"detail": _STORAGE_UNAVAILABLE_DETAIL})
+
 
 api.include_router(auth.router)
 api.include_router(mailbox.router)

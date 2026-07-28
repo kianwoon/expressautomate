@@ -358,3 +358,77 @@ async def test_a_missing_bucket_is_named_not_retried_blindly():
         await store.put("k", "body")
 
     assert settings.R2_BUCKET_NAME in str(exc.value)
+
+
+# --- construction-time misconfiguration ------------------------------------
+
+
+async def test_an_empty_endpoint_is_named_rather_than_raising_a_bare_valueerror(monkeypatch):
+    """Found in production: the service was deployed with no `R2_*` variables,
+    so botocore got an empty endpoint and raised `ValueError: Invalid
+    endpoint:` from inside its own resolver — before any operation ran, so
+    none of the `NoSuchBucket` handling could see it. It reached the browser
+    as an unexplained 500.
+
+    Construction failure is a misconfiguration like any other and gets the
+    same named exception, so one handler covers both.
+    """
+    monkeypatch.setattr(settings, "R2_ENDPOINT_URL", "")
+    store = R2BodyStore()
+
+    with pytest.raises(BodyStoreMisconfigured):
+        await store.put_bytes("k", b"x", "image/png")
+
+
+async def test_the_read_path_names_a_bad_endpoint_too(monkeypatch):
+    monkeypatch.setattr(settings, "R2_ENDPOINT_URL", "")
+    store = R2BodyStore()
+
+    with pytest.raises(BodyStoreMisconfigured):
+        await store.get("k")
+
+
+async def test_an_error_from_inside_the_with_body_is_not_relabelled(monkeypatch):
+    """Only the client construction is guarded. A `ValueError` raised by the
+    operation itself is a real fault and must keep its own type, or a bug in
+    the pipeline would be reported to an operator as "check your env vars"."""
+    store = R2BodyStore()
+
+    class _Boom:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def put_object(self, **kwargs):
+            raise ValueError("something else entirely")
+
+    store._client = lambda: _Boom()
+
+    with pytest.raises(ValueError, match="something else entirely"):
+        await store.put("k", "body")
+
+
+async def test_a_working_client_still_opens_and_closes(monkeypatch):
+    """The context manager rewrite must not change the happy path: an email
+    body still round-trips through the same `async with`."""
+    closed: list[bool] = []
+
+    class _Fake:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            closed.append(True)
+            return False
+
+        async def put_object(self, **kwargs):
+            return {}
+
+    store = R2BodyStore()
+    store._client = lambda: _Fake()
+
+    await store.put("k", "body")
+
+    assert closed == [True]

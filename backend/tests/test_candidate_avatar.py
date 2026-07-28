@@ -370,3 +370,57 @@ async def test_the_routes_require_a_session(agency, store):
         assert (await http.get(f"/api/candidates/{cid}/avatar")).status_code == 401
         assert (await _upload(http, cid, _png_bytes())).status_code == 401
         assert (await http.delete(f"/api/candidates/{cid}/avatar")).status_code == 401
+
+
+# --- storage the operator has to fix ---------------------------------------
+
+
+async def test_a_misconfigured_store_is_a_503_not_a_500(agency, monkeypatch):
+    """The production incident: the `api` service had no `R2_*` variables, so
+    the client could not even be built and the upload failed with a bare 500.
+
+    503 says the request was fine and the service is not, which is both true
+    and the difference between an operator checking env vars and a developer
+    hunting a code bug.
+    """
+    from app.services.storage.r2 import R2BodyStore
+
+    monkeypatch.setattr(settings, "R2_ENDPOINT_URL", "")
+    app.dependency_overrides[candidates_avatar.body_store] = R2BodyStore
+    try:
+        tid, uid, cid = agency
+        async with _client_for(tid, uid) as http:
+            response = await _upload(http, cid, _png_bytes())
+    finally:
+        app.dependency_overrides.pop(candidates_avatar.body_store, None)
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Photo storage is unavailable."
+
+
+async def test_the_503_never_names_the_bucket_or_the_endpoint(agency, monkeypatch):
+    """The exception message carries the bucket and endpoint on purpose — an
+    operator needs them. A client must not be told either: infrastructure
+    names are reconnaissance, and the same handler covers unauthenticated
+    endpoints too."""
+    from app.services.storage.r2 import R2BodyStore
+
+    monkeypatch.setattr(settings, "R2_ENDPOINT_URL", "")
+    app.dependency_overrides[candidates_avatar.body_store] = R2BodyStore
+    try:
+        tid, uid, cid = agency
+        async with _client_for(tid, uid) as http:
+            response = await _upload(http, cid, _png_bytes())
+    finally:
+        app.dependency_overrides.pop(candidates_avatar.body_store, None)
+
+    body = response.text
+    for secret in (
+        settings.R2_BUCKET_NAME,
+        settings.R2_ACCESS_KEY_ID,
+        settings.R2_SECRET_ACCESS_KEY,
+    ):
+        if secret:
+            assert secret not in body
+    assert "R2_" not in body
+    assert "endpoint" not in body.lower()
