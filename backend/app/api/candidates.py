@@ -27,6 +27,7 @@ from app.services.candidate_naming import (
     normalize_phone,
     normalize_skill,
 )
+from app.services.candidate_tenure import derive
 
 router = APIRouter(tags=["candidates"])
 
@@ -182,12 +183,34 @@ async def get_candidate(request: Request, candidate_id: uuid.UUID) -> dict:
             .scalars()
             .all()
         )
+        # Imported here rather than at module scope: `candidate_roles` imports
+        # `_load` from this module, and a top-level import each way would not
+        # resolve. The detail panel is the only reader, so the cost is one
+        # lookup on a route that already does three queries.
+        from app.api.candidate_roles import _serialize as _serialize_role
+        from app.api.candidate_roles import roles_for
+
+        roles = await roles_for(session, candidate_id)
 
     payload = _serialize(candidate)
     payload["skills"] = [s.skill for s in skills]
     # So the UI can say why an import did not change a field, rather than
     # leaving the recruiter to conclude the import is broken.
     payload["overridden_fields"] = sorted(overrides)
+    # Only the single-record GET carries the career. A table of fifty
+    # candidates does not need everybody's.
+    payload["roles"] = [_serialize_role(r) for r in roles]
+
+    # Derived fresh rather than read from the column: a role with no end date
+    # is still accruing, so the cached value is stale the month after it was
+    # written. Not persisted here — a GET that writes is a GET that deadlocks
+    # under load, and the column stays the cache the list and search read.
+    profile = derive(roles, today=date.today())
+    if profile.years_experience is not None and "years_experience" not in set(overrides):
+        payload["years_experience"] = profile.years_experience
+    # What lets the panel say "Most recently" instead of "Current" for a
+    # candidate who is between jobs.
+    payload["is_current"] = profile.is_current
     return payload
 
 
