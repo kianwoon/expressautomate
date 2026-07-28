@@ -6,15 +6,27 @@ review queue — only records and the people who edited them.
 """
 
 import uuid
+from datetime import date
 from typing import Literal
 
-from fastapi import APIRouter, HTTPException, Query, Request
-from sqlalchemy import func, or_, select
+from fastapi import APIRouter, HTTPException, Query, Request, Response
+from pydantic import BaseModel
+from sqlalchemy import delete, func, insert, or_, select, text, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.exc import IntegrityError
 
 from app.api.auth import _require_session
 from app.core.config import settings
 from app.db.rls import tenant_session
 from app.models.candidate import Candidate, CandidateFieldOverride, CandidateSkill
+from app.models.tenant import User
+from app.services.candidate_matching import find_candidate
+from app.services.candidate_naming import (
+    is_matchable_phone,
+    normalize_email,
+    normalize_phone,
+    normalize_skill,
+)
 
 router = APIRouter(tags=["candidates"])
 
@@ -187,3 +199,410 @@ async def _load(session, candidate_id: uuid.UUID) -> Candidate:
     if candidate is None:
         raise HTTPException(status_code=404, detail="Candidate not found")
     return candidate
+
+
+class CandidateIn(BaseModel):
+    """Only `full_name` is required.
+
+    A recruiter frequently has a name and a phone number and nothing else, and
+    a form that refused that would be a form they work around.
+    """
+
+    full_name: str
+    email: str | None = None
+    phone_raw: str | None = None
+    current_title: str | None = None
+    current_employer: str | None = None
+    location: str | None = None
+    years_experience: int | None = None
+    expected_salary: float | None = None
+    salary_currency: str | None = None
+    salary_period: str | None = None
+    available_from: date | None = None
+    notice_period_raw: str | None = None
+    employment_type: str | None = None
+    notes: str | None = None
+    pipeline_stage: StageFilter | None = None
+    skills: list[str] | None = None
+
+
+class CandidateUpdate(BaseModel):
+    """Every field optional — this is a PATCH.
+
+    Reusing `CandidateIn` here would be a bug: its `full_name` is required, so
+    `PATCH {"current_title": "..."}` would be rejected 422 for omitting a field
+    the caller never intended to change. `exclude_unset=True` on the dump is
+    what makes "not sent" different from "set to null", and that distinction
+    only exists if the model allows the field to be absent.
+    """
+
+    full_name: str | None = None
+    email: str | None = None
+    phone_raw: str | None = None
+    current_title: str | None = None
+    current_employer: str | None = None
+    location: str | None = None
+    years_experience: int | None = None
+    expected_salary: float | None = None
+    salary_currency: str | None = None
+    salary_period: str | None = None
+    available_from: date | None = None
+    notice_period_raw: str | None = None
+    employment_type: str | None = None
+    notes: str | None = None
+    pipeline_stage: StageFilter | None = None
+    skills: list[str] | None = None
+
+
+class MergeRequest(BaseModel):
+    target_id: uuid.UUID
+
+
+# Fields a human edit protects from a later import. `skills` is excluded: it is
+# a set, not a value, and merging an imported skill into a curated list loses
+# nothing.
+_OVERRIDABLE = (
+    "full_name", "email", "phone_raw", "current_title", "current_employer",
+    "location", "years_experience", "expected_salary", "salary_currency",
+    "salary_period", "available_from", "notice_period_raw", "employment_type",
+    "notes",
+)
+
+
+@router.post("/candidates", status_code=201)
+async def create_candidate(request: Request, body: CandidateIn) -> dict:
+    user_uuid, tenant_uuid = _require_session(request)
+    async with tenant_session(tenant_uuid) as session:
+        phone_e164 = _identity_phone(body.phone_raw)
+        email = normalize_email(body.email)
+
+        match = await find_candidate(session, tenant_uuid, email, phone_e164)
+        if match.conflict is not None:
+            # Two different people. Attaching to either would put one person's
+            # details on the other's record.
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "This email and phone belong to two different candidates "
+                    f"({match.conflict[0]} and {match.conflict[1]}). "
+                    "Merge them first, or correct the details."
+                ),
+            )
+        if match.candidate_id is not None:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Already recorded as candidate {match.candidate_id}",
+            )
+
+        candidate_id = uuid.uuid4()
+        values = body.model_dump(exclude={"skills"})
+        values.update(
+            id=candidate_id,
+            tenant_id=tenant_uuid,
+            email=email,
+            phone_e164=phone_e164,
+            pipeline_stage=body.pipeline_stage or "new",
+            record_status=Candidate.ACTIVE,
+            created_by=user_uuid,
+            updated_by=user_uuid,
+        )
+        try:
+            await session.execute(insert(Candidate).values(**values))
+            await _replace_skills(session, tenant_uuid, candidate_id, body.skills or [])
+            await session.commit()
+        except IntegrityError as exc:
+            # The unique indexes are the backstop for a race the matcher's
+            # read could not see. A 409 says the same thing the matcher would
+            # have; a 500 would blame the recruiter for a collision.
+            await session.rollback()
+            raise HTTPException(status_code=409, detail="Already recorded") from exc
+
+    return await get_candidate(request, candidate_id)
+
+
+@router.patch("/candidates/{candidate_id}")
+async def update_candidate(
+    request: Request, candidate_id: uuid.UUID, body: CandidateUpdate
+) -> dict:
+    user_uuid, tenant_uuid = _require_session(request)
+    async with tenant_session(tenant_uuid) as session:
+        await _load(session, candidate_id)
+        values = body.model_dump(exclude={"skills"}, exclude_unset=True)
+        if "phone_raw" in values:
+            values["phone_e164"] = _identity_phone(values["phone_raw"])
+        if "email" in values:
+            values["email"] = normalize_email(values["email"])
+        values["updated_by"] = user_uuid
+
+        try:
+            await session.execute(
+                update(Candidate).where(Candidate.id == candidate_id).values(**values)
+            )
+        except IntegrityError as exc:
+            # Editing an email or phone to one somebody else already holds.
+            # The unique index is right to refuse; a 500 would tell the
+            # recruiter the app is broken when their data is merely ambiguous.
+            await session.rollback()
+            raise HTTPException(
+                status_code=409,
+                detail="Another candidate already has that email or phone",
+            ) from exc
+        # Every edited field is remembered as a human decision. Without this a
+        # later import of a stale sheet silently undoes the correction, and
+        # nothing in the data afterwards could say it happened.
+        for field in _OVERRIDABLE:
+            if field in values:
+                await session.execute(
+                    pg_insert(CandidateFieldOverride)
+                    .values(
+                        id=uuid.uuid4(),
+                        tenant_id=tenant_uuid,
+                        candidate_id=candidate_id,
+                        field_name=field,
+                        human_value=None if values[field] is None else str(values[field]),
+                        changed_by=user_uuid,
+                    )
+                    .on_conflict_do_update(
+                        constraint="uq_candidate_overrides_one_per_field",
+                        set_={
+                            "human_value": (
+                                None if values[field] is None else str(values[field])
+                            ),
+                            "changed_by": user_uuid,
+                        },
+                    )
+                )
+        if body.skills is not None:
+            await _replace_skills(session, tenant_uuid, candidate_id, body.skills)
+        await session.commit()
+
+    return await get_candidate(request, candidate_id)
+
+
+@router.post("/candidates/{candidate_id}/archive")
+async def archive_candidate(request: Request, candidate_id: uuid.UUID) -> dict:
+    _user_uuid, tenant_uuid = _require_session(request)
+    async with tenant_session(tenant_uuid) as session:
+        candidate = await _load(session, candidate_id)
+        if candidate.record_status == Candidate.MERGED:
+            raise HTTPException(status_code=400, detail="Unmerge the candidate first")
+        await session.execute(
+            update(Candidate)
+            .where(Candidate.id == candidate_id)
+            .values(record_status=Candidate.ARCHIVED)
+        )
+        await session.commit()
+    return {"record_status": Candidate.ARCHIVED}
+
+
+@router.post("/candidates/{candidate_id}/merge")
+async def merge_candidate(
+    request: Request, candidate_id: uuid.UUID, body: MergeRequest
+) -> dict:
+    _user_uuid, tenant_uuid = _require_session(request)
+    if body.target_id == candidate_id:
+        raise HTTPException(status_code=400, detail="A candidate cannot be merged into itself")
+
+    async with tenant_session(tenant_uuid) as session:
+        loser = await _load(session, candidate_id)
+        target = await _load(session, body.target_id)
+        if target.record_status == Candidate.MERGED:
+            # Chains would need every reader to walk them. Refusing here is
+            # what keeps the graph one hop deep.
+            raise HTTPException(
+                status_code=400, detail="Target is itself merged; merge into its target"
+            )
+        if loser.record_status == Candidate.MERGED:
+            raise HTTPException(status_code=400, detail="Candidate is already merged")
+
+        # Skills that the target already has would violate the per-candidate
+        # unique key, so move only the ones it lacks and drop the rest — a
+        # duplicate skill carries no information the target does not have.
+        await session.execute(
+            text(
+                """
+                DELETE FROM candidate_skills loser
+                WHERE loser.candidate_id = :loser
+                  AND EXISTS (
+                      SELECT 1 FROM candidate_skills t
+                      WHERE t.candidate_id = :target
+                        AND t.skill_normalized = loser.skill_normalized
+                  )
+                """
+            ),
+            {"loser": candidate_id, "target": body.target_id},
+        )
+        await session.execute(
+            text(
+                "UPDATE candidate_skills SET candidate_id = :target WHERE candidate_id = :loser"
+            ),
+            {"loser": candidate_id, "target": body.target_id},
+        )
+        # Overrides move the same way, and for the same reason: they are a
+        # record of what a person decided about this human being.
+        await session.execute(
+            text(
+                """
+                DELETE FROM candidate_field_overrides loser
+                WHERE loser.candidate_id = :loser
+                  AND EXISTS (
+                      SELECT 1 FROM candidate_field_overrides t
+                      WHERE t.candidate_id = :target AND t.field_name = loser.field_name
+                  )
+                """
+            ),
+            {"loser": candidate_id, "target": body.target_id},
+        )
+        await session.execute(
+            text(
+                "UPDATE candidate_field_overrides SET candidate_id = :target "
+                "WHERE candidate_id = :loser"
+            ),
+            {"loser": candidate_id, "target": body.target_id},
+        )
+        # Status and target in one statement — a CHECK enforces that a merged
+        # row names its target and a live row does not.
+        await session.execute(
+            update(Candidate)
+            .where(Candidate.id == candidate_id)
+            .values(
+                record_status=Candidate.MERGED, merged_into_candidate_id=body.target_id
+            )
+        )
+        await session.commit()
+    return {"record_status": Candidate.MERGED, "merged_into_candidate_id": str(body.target_id)}
+
+
+@router.post("/candidates/{candidate_id}/unmerge")
+async def unmerge_candidate(request: Request, candidate_id: uuid.UUID) -> dict:
+    """Restore a merged candidate. Skills and overrides stay with the target.
+
+    Deliberately partial: a moved row carries no record of which candidate it
+    came from, so it cannot be given back. The identity keys return, which is
+    what makes the person findable again.
+    """
+    _user_uuid, tenant_uuid = _require_session(request)
+    async with tenant_session(tenant_uuid) as session:
+        candidate = await _load(session, candidate_id)
+        if candidate.record_status != Candidate.MERGED:
+            raise HTTPException(status_code=400, detail="Candidate is not merged")
+
+        # Unmerging returns this row's email and phone to the live indexes. If
+        # somebody else took either in the meantime, restoring would violate a
+        # unique index — so say who holds it rather than 500.
+        clash = (
+            await session.execute(
+                text(
+                    """
+                    SELECT id, full_name FROM candidates
+                    WHERE record_status <> 'merged' AND id <> :id
+                      AND ((:email IS NOT NULL AND lower(email) = lower(:email))
+                        OR (:phone IS NOT NULL AND phone_e164 = :phone))
+                    LIMIT 1
+                    """
+                ),
+                {"id": candidate_id, "email": candidate.email, "phone": candidate.phone_e164},
+            )
+        ).first()
+        if clash is not None:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Cannot unmerge: {clash.full_name} ({clash.id}) now holds "
+                    "this candidate's email or phone."
+                ),
+            )
+
+        await session.execute(
+            update(Candidate)
+            .where(Candidate.id == candidate_id)
+            .values(record_status=Candidate.ACTIVE, merged_into_candidate_id=None)
+        )
+        await session.commit()
+    return {"record_status": Candidate.ACTIVE}
+
+
+@router.delete("/candidates/{candidate_id}", status_code=204)
+async def delete_candidate(request: Request, candidate_id: uuid.UUID) -> Response:
+    """Erase a person. Owner only, and irreversible.
+
+    Skills and overrides cascade. Nothing else in phase 1 holds this person's
+    personal data — the bulk import that will is built in phase 2, and its plan
+    must extend this endpoint to scrub `candidate_import_rows`.
+    """
+    user_uuid, tenant_uuid = _require_session(request)
+    await _require_owner(user_uuid, tenant_uuid)
+    async with tenant_session(tenant_uuid) as session:
+        await _load(session, candidate_id)
+        await session.execute(delete(Candidate).where(Candidate.id == candidate_id))
+        await session.commit()
+    return Response(status_code=204)
+
+
+@router.get("/candidates/{candidate_id}/export")
+async def export_candidate(request: Request, candidate_id: uuid.UUID) -> dict:
+    """Everything stored about one person, for a data-access request."""
+    return await get_candidate(request, candidate_id)
+
+
+def _identity_phone(raw: str | None) -> str | None:
+    """The E.164 form, but only when this number may identify a person.
+
+    `phone_e164` is a unique key, and `uq_candidates_tenant_phone` enforces it
+    for every non-null value. A fixed line is shared by a whole company, so
+    storing one here would let the second colleague who lists the office number
+    be rejected as a duplicate of the first — while the matcher, which ignores
+    fixed lines, reports no match at all. The recruiter would see "Already
+    recorded" naming nobody.
+
+    So a non-personal number lives in `phone_raw` only. It is still shown, it
+    simply never identifies anyone, and the index and the matcher agree.
+    """
+    e164 = normalize_phone(raw)
+    return e164 if is_matchable_phone(e164) else None
+
+
+async def _require_owner(user_uuid: uuid.UUID, tenant_uuid: uuid.UUID) -> None:
+    """The first role check in this codebase — see the spec.
+
+    Archiving is what recruiters do daily and is open to everyone. Deleting is
+    irreversible and covers personal data, so it is the owner's to do.
+    """
+    async with tenant_session(tenant_uuid) as session:
+        role = (
+            await session.execute(
+                select(User.role).where(User.id == user_uuid)
+            )
+        ).scalar_one_or_none()
+    if role != "owner":
+        raise HTTPException(
+            status_code=403, detail="Only the account owner can delete a candidate"
+        )
+
+
+async def _replace_skills(
+    session, tenant_uuid: uuid.UUID, candidate_id: uuid.UUID, skills: list[str]
+) -> None:
+    """Skills are a set: the payload replaces them rather than appending.
+
+    An append-only list has no way to remove a skill somebody typed by
+    mistake, and a form that cannot unsay something is a form people distrust.
+    """
+    await session.execute(
+        delete(CandidateSkill).where(CandidateSkill.candidate_id == candidate_id)
+    )
+    seen: set[str] = set()
+    for raw in skills:
+        normalized = normalize_skill(raw)
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        await session.execute(
+            insert(CandidateSkill).values(
+                id=uuid.uuid4(),
+                tenant_id=tenant_uuid,
+                candidate_id=candidate_id,
+                skill=raw.strip(),
+                skill_normalized=normalized,
+            )
+        )

@@ -48,13 +48,14 @@ async def agency_with_candidates():
         await s.commit()
     yield tid, uid, ids
     async with AdminSessionLocal() as s:
-        await s.execute(
-            text(
-                "UPDATE candidates SET record_status = 'active', "
-                "merged_into_candidate_id = NULL WHERE tenant_id = :t"
-            ),
-            {"t": tid},
-        )
+        # No status/pointer reset before the delete: a test may leave two rows
+        # sharing an email where one is merged, and resetting both to 'active'
+        # first would trip `uq_candidates_tenant_email` before the delete ever
+        # runs. Deleting the whole tenant's rows in one statement is safe
+        # regardless of merge pointers — `fk_candidates_merged_into_same_tenant`
+        # is ON DELETE CASCADE, and a single DELETE evaluates its row set
+        # before enforcing the FK, so self-references within the same
+        # tenant never block it.
         for table in ("candidate_field_overrides", "candidate_skills", "candidates", "users"):
             await s.execute(text(f"DELETE FROM {table} WHERE tenant_id = :t"), {"t": tid})
         await s.execute(text("DELETE FROM tenants WHERE id = :t"), {"t": tid})
@@ -185,3 +186,106 @@ async def test_search_with_underscore_does_not_match_any_character(agency_with_c
     # Should return no candidates (none have _ in name/email/phone)
     assert body["items"] == []
     assert body["total"] == 0
+
+
+async def test_creating_a_candidate_records_who_did_it(agency_with_candidates) -> None:
+    tid, uid, _ = agency_with_candidates
+    async with await _client_for(tid, uid) as http:
+        r = await http.post(
+            "/api/candidates",
+            json={"full_name": "New Person", "email": "new@acme.sg", "skills": ["Python"]},
+        )
+    assert r.status_code == 201
+    async with AdminSessionLocal() as s:
+        created_by = (
+            await s.execute(
+                text("SELECT created_by FROM candidates WHERE id = :i"),
+                {"i": uuid.UUID(r.json()["id"])},
+            )
+        ).scalar_one()
+    assert created_by == uid
+
+
+async def test_creating_a_duplicate_email_is_a_conflict_not_a_500(agency_with_candidates) -> None:
+    tid, uid, _ = agency_with_candidates
+    async with await _client_for(tid, uid) as http:
+        r = await http.post("/api/candidates", json={"full_name": "X", "email": "jane@acme.sg"})
+    assert r.status_code == 409
+
+
+async def test_a_split_identity_is_refused_with_both_names(agency_with_candidates) -> None:
+    tid, uid, ids = agency_with_candidates
+    async with await _client_for(tid, uid) as http:
+        await http.patch(
+            f"/api/candidates/{ids['placed']}", json={"phone_raw": "+65 9123 4567"}
+        )
+        r = await http.post(
+            "/api/candidates",
+            json={"full_name": "Z", "email": "jane@acme.sg", "phone_raw": "+65 9123 4567"},
+        )
+    assert r.status_code == 409
+    assert "jane@acme.sg" in r.text or str(ids["active"]) in r.text
+
+
+async def test_editing_a_field_records_an_override(agency_with_candidates) -> None:
+    """This is what stops a later import undoing a recruiter's correction."""
+    tid, uid, ids = agency_with_candidates
+    async with await _client_for(tid, uid) as http:
+        await http.patch(
+            f"/api/candidates/{ids['active']}", json={"current_title": "Senior Engineer"}
+        )
+        body = (await http.get(f"/api/candidates/{ids['active']}")).json()
+    assert body["current_title"] == "Senior Engineer"
+    assert "current_title" in body["overridden_fields"]
+
+
+async def test_a_recruiter_may_archive_but_not_delete(agency_with_candidates) -> None:
+    tid, uid, ids = agency_with_candidates
+    async with AdminSessionLocal() as s:
+        await s.execute(
+            text("UPDATE users SET role = 'recruiter' WHERE id = :i"), {"i": uid}
+        )
+        await s.commit()
+    async with await _client_for(tid, uid) as http:
+        assert (await http.post(f"/api/candidates/{ids['active']}/archive")).status_code == 200
+        assert (await http.delete(f"/api/candidates/{ids['active']}")).status_code == 403
+
+
+async def test_an_owner_may_delete(agency_with_candidates) -> None:
+    tid, uid, ids = agency_with_candidates  # fixture creates this user as owner
+    async with await _client_for(tid, uid) as http:
+        assert (await http.delete(f"/api/candidates/{ids['placed']}")).status_code == 204
+        assert (await http.get(f"/api/candidates/{ids['placed']}")).status_code == 404
+
+
+async def test_export_returns_every_stored_field(agency_with_candidates) -> None:
+    tid, uid, ids = agency_with_candidates
+    async with await _client_for(tid, uid) as http:
+        body = (await http.get(f"/api/candidates/{ids['active']}/export")).json()
+    assert body["email"] == "jane@acme.sg"
+    assert "skills" in body
+
+
+async def test_merge_moves_skills_and_frees_both_keys(agency_with_candidates) -> None:
+    tid, uid, ids = agency_with_candidates
+    async with await _client_for(tid, uid) as http:
+        r = await http.post(
+            f"/api/candidates/{ids['placed']}/merge",
+            json={"target_id": str(ids["active"])},
+        )
+        assert r.status_code == 200
+        # The loser's email is free again, so a new person may take it.
+        created = await http.post(
+            "/api/candidates", json={"full_name": "Someone New", "email": "john@acme.sg"}
+        )
+    assert created.status_code == 201
+
+
+async def test_a_candidate_cannot_be_merged_into_itself(agency_with_candidates) -> None:
+    tid, uid, ids = agency_with_candidates
+    async with await _client_for(tid, uid) as http:
+        r = await http.post(
+            f"/api/candidates/{ids['active']}/merge",
+            json={"target_id": str(ids["active"])},
+        )
+    assert r.status_code == 400
