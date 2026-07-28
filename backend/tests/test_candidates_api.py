@@ -138,3 +138,50 @@ async def test_another_agencys_candidate_is_a_404_not_a_403(agency_with_candidat
             await s.execute(text("DELETE FROM users WHERE tenant_id = :t"), {"t": other_tid})
             await s.execute(text("DELETE FROM tenants WHERE id = :t"), {"t": other_tid})
             await s.commit()
+
+
+async def test_search_with_percent_wildcard_returns_no_results(agency_with_candidates) -> None:
+    """A literal % in search should not be treated as a wildcard."""
+    tid, uid, ids = agency_with_candidates
+    async with await _client_for(tid, uid) as http:
+        body = (await http.get("/api/candidates?q=%")).json()
+    # Should return no candidates, not all of them
+    assert body["items"] == []
+    assert body["total"] == 0
+
+
+async def test_search_finds_candidate_with_literal_percent(agency_with_candidates) -> None:
+    """A candidate whose name contains % should be findable by literal % search."""
+    tid, uid, ids = agency_with_candidates
+    cid = uuid.uuid4()
+    async with AdminSessionLocal() as s:
+        await s.execute(
+            text(
+                "INSERT INTO candidates (id, tenant_id, full_name, email, "
+                "pipeline_stage, record_status, merged_into_candidate_id) "
+                "VALUES (:i, :t, :n, :e, :st, :rs, :mt)"
+            ),
+            {"i": cid, "t": tid, "n": "Alex 100% Ready", "e": "alex@test.sg",
+             "st": "new", "rs": "active", "mt": None},
+        )
+        await s.commit()
+    try:
+        async with await _client_for(tid, uid) as http:
+            body = (await http.get("/api/candidates?q=100%")).json()
+        # Should find the candidate with 100% in their name
+        assert len(body["items"]) == 1
+        assert body["items"][0]["id"] == str(cid)
+    finally:
+        async with AdminSessionLocal() as s:
+            await s.execute(text("DELETE FROM candidates WHERE id = :i"), {"i": cid})
+            await s.commit()
+
+
+async def test_search_with_underscore_does_not_match_any_character(agency_with_candidates) -> None:
+    """A literal _ in search should not be treated as a single-char wildcard."""
+    tid, uid, ids = agency_with_candidates
+    async with await _client_for(tid, uid) as http:
+        body = (await http.get("/api/candidates?q=_")).json()
+    # Should return no candidates (none have _ in name/email/phone)
+    assert body["items"] == []
+    assert body["total"] == 0

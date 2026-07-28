@@ -97,13 +97,23 @@ async def list_candidates(
         if q:
             # Name, email and phone: the three things a recruiter has to hand
             # when they are looking for somebody they spoke to last week.
-            like = f"%{q.strip().lower()}%"
+            # Escape LIKE metacharacters (%, _) with backslash so they are treated
+            # as literals, not as SQL wildcards. This is not a SQL-injection concern—the
+            # value is parameterized—but without escaping, a recruiter searching for
+            # a literal "%" or "_" gets wrong results.
+            normalized = q.strip().lower()
+            escaped = (
+                normalized.replace("\\", "\\\\")
+                .replace("%", "\\%")
+                .replace("_", "\\_")
+            )
+            like = f"%{escaped}%"
             base = base.where(
                 or_(
-                    func.lower(Candidate.full_name).like(like),
-                    func.lower(Candidate.email).like(like),
-                    Candidate.phone_e164.like(like),
-                    Candidate.phone_raw.like(like),
+                    func.lower(Candidate.full_name).like(like, escape="\\"),
+                    func.lower(Candidate.email).like(like, escape="\\"),
+                    Candidate.phone_e164.like(like, escape="\\"),
+                    Candidate.phone_raw.like(like, escape="\\"),
                 )
             )
 
