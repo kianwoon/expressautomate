@@ -26,7 +26,10 @@ import {
 
 export type ClientStatus = "unconfirmed" | "confirmed" | "archived" | "merged";
 
-export type MatchedBy = "email_domain" | "name" | "human";
+// "human" is not included: `client_matching.py` only ever writes
+// "email_domain" or "name" (checked at `_resolve` and its callers) — there is
+// no code path that records a manual match.
+export type MatchedBy = "email_domain" | "name";
 
 export type ClientMention = {
   id: string;

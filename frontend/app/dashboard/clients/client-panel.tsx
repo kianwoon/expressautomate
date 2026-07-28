@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { CLIENTS_PATH } from "../../api";
 import type { Client, ClientMention, ClientPage, MatchedBy } from "../clients";
-import { mergeClient, unmergeClient } from "../clients";
+import { getClient, mergeClient, unmergeClient } from "../clients";
 import { day, when } from "../format";
 
 /**
@@ -33,7 +33,6 @@ const STATUS_LABEL: Record<Client["status"], string> = {
 const MATCHED_BY_LABEL: Record<MatchedBy, string> = {
   email_domain: "Mail arrived from this company's domain",
   name: "The company's name only resembled something in the email",
-  human: "A person matched this by hand",
 };
 
 export function ClientPanel({
@@ -42,6 +41,7 @@ export function ClientPanel({
   onArchive,
   onRestore,
   onChanged,
+  onSelectClient,
 }: {
   row: Client | null;
   onConfirm: () => Promise<void>;
@@ -52,6 +52,9 @@ export function ClientPanel({
   /** Called after a confirm, archive, restore, merge or unmerge succeeds, so
    *  the caller can refetch the list and the detail record. */
   onChanged: () => void;
+  /** Selects another client by id in the parent's detail pane — the panel's
+   *  only navigation hook, used to jump to a merge survivor. */
+  onSelectClient: (id: string) => void;
 }) {
   if (!row) {
     return (
@@ -73,6 +76,7 @@ export function ClientPanel({
       onArchive={onArchive}
       onRestore={onRestore}
       onChanged={onChanged}
+      onSelectClient={onSelectClient}
     />
   );
 }
@@ -83,12 +87,14 @@ function Detail({
   onArchive,
   onRestore,
   onChanged,
+  onSelectClient,
 }: {
   row: Client;
   onConfirm: () => Promise<void>;
   onArchive: () => Promise<void>;
   onRestore: () => Promise<void>;
   onChanged: () => void;
+  onSelectClient: (id: string) => void;
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -123,7 +129,7 @@ function Detail({
       <h3 className="jo-detail-title">{row.name}</h3>
 
       {row.status === "merged" ? (
-        <MergedInto row={row} onUnmerge={unmerge} busy={busy} />
+        <MergedInto row={row} onUnmerge={unmerge} busy={busy} onSelectClient={onSelectClient} />
       ) : (
         <>
           <div className="rows jo-detail-rows">
@@ -218,24 +224,64 @@ function Mentions({ mentions }: { mentions: ClientMention[] | undefined }) {
   );
 }
 
+/** Names the merge survivor instead of showing its bare id, and makes it
+ *  navigable to that client's record — a UUID told a recruiter nothing
+ *  without going to curl for it. */
 function MergedInto({
   row,
   onUnmerge,
   busy,
+  onSelectClient,
 }: {
   row: Client;
   onUnmerge: () => void;
   busy: boolean;
+  onSelectClient: (id: string) => void;
 }) {
+  const [survivor, setSurvivor] = useState<Client | null>(null);
+  const survivorId = row.merged_into_client_id;
+
+  useEffect(() => {
+    if (!survivorId) {
+      setSurvivor(null);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const client = await getClient(survivorId);
+        if (!cancelled) setSurvivor(client);
+      } catch {
+        /* the id still renders below; not worth an error banner here */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [survivorId]);
+
   return (
     <div className="jo-detail-rows rows">
       <p className="body">
-        This record was merged into another client
-        {row.merged_into_client_id && (
-          <>
-            {" "}
-            (id <code>{row.merged_into_client_id}</code>)
-          </>
+        This record was merged into{" "}
+        {survivorId ? (
+          <button
+            type="button"
+            className="jo-link"
+            onClick={() => onSelectClient(survivorId)}
+            style={{
+              background: "none",
+              border: "none",
+              padding: 0,
+              font: "inherit",
+              textDecoration: "underline",
+              cursor: "pointer",
+            }}
+          >
+            {survivor ? survivor.name : survivorId}
+          </button>
+        ) : (
+          "another client"
         )}
         . Their record now holds every mention this one had that could be moved.
       </p>
@@ -246,17 +292,30 @@ function MergedInto({
   );
 }
 
+// One fetch is `limit=200` (`CLIENTS_PAGE_LIMIT`, the server's own ceiling).
+// A single page silently truncated the corpus for any tenant past 200
+// clients: a duplicate last seen months ago would sort past the first page
+// and simply not appear, with nothing telling the recruiter a cut happened.
+// So this pages until `total` is exhausted instead of trusting one page —
+// and if a corpus is ever large enough to hit `MERGE_PICKER_MAX_PAGES`, the
+// cap is disclosed in the picker rather than repeating the same silent
+// truncation at a higher number.
+const MERGE_PICKER_MAX_PAGES = 25; // 25 * 200 = 5,000 clients before disclosure
+
 /** Opens a search over the client list and merges the current client into
  *  whichever result is chosen. The only way into `POST /clients/{id}/merge`
  *  — without it a duplicate proposal is unreachable except by curl.
  *
  * `GET /clients` has no `q` parameter (unlike candidates), so this fetches
- * the live, non-merged page and filters by name on the client side rather
- * than asking the server to search. */
+ * every non-merged client, paging until the server's own `total` is
+ * exhausted, and filters by name on the client side rather than asking the
+ * server to search. */
 function MergePicker({ clientId, onMerged }: { clientId: string; onMerged: () => void }) {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
   const [all, setAll] = useState<Client[]>([]);
+  const [loadingAll, setLoadingAll] = useState(false);
+  const [truncated, setTruncated] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const controllerRef = useRef<AbortController | null>(null);
@@ -266,19 +325,39 @@ function MergePicker({ clientId, onMerged }: { clientId: string; onMerged: () =>
     controllerRef.current?.abort();
     const controller = new AbortController();
     controllerRef.current = controller;
+    setLoadingAll(true);
+    setTruncated(false);
     (async () => {
       try {
-        const params = new URLSearchParams({ limit: "200" });
-        const res = await fetch(`${CLIENTS_PATH}?${params.toString()}`, {
-          credentials: "include",
-          headers: { Accept: "application/json" },
-          signal: controller.signal,
-        });
-        if (!res.ok) return;
-        const body = (await res.json()) as ClientPage;
-        setAll(body.items.filter((c) => c.id !== clientId));
+        const collected: Client[] = [];
+        let offset = 0;
+        let total = Infinity;
+        let page = 0;
+        while (offset < total && page < MERGE_PICKER_MAX_PAGES) {
+          const params = new URLSearchParams({ limit: "200", offset: String(offset) });
+          const res = await fetch(`${CLIENTS_PATH}?${params.toString()}`, {
+            credentials: "include",
+            headers: { Accept: "application/json" },
+            signal: controller.signal,
+          });
+          if (!res.ok) break;
+          const body = (await res.json()) as ClientPage;
+          collected.push(...body.items);
+          total = body.total;
+          offset += body.items.length;
+          page += 1;
+          // A page that returned nothing (e.g. limit misbehaving) would spin
+          // forever otherwise.
+          if (body.items.length === 0) break;
+        }
+        if (!controller.signal.aborted) {
+          setAll(collected.filter((c) => c.id !== clientId));
+          setTruncated(offset < total);
+        }
       } catch {
         /* the box will simply show nothing; not worth an error banner */
+      } finally {
+        if (!controller.signal.aborted) setLoadingAll(false);
       }
     })();
     return () => controller.abort();
@@ -325,6 +404,17 @@ function MergePicker({ clientId, onMerged }: { clientId: string; onMerged: () =>
         aria-label="Search for the client to merge into"
         style={{ marginTop: 8 }}
       />
+      {loadingAll && (
+        <p className="body muted" style={{ marginTop: 8 }}>
+          Loading every client…
+        </p>
+      )}
+      {!loadingAll && truncated && (
+        <p className="body jo-detail-error" role="alert" style={{ marginTop: 8 }}>
+          There are more clients than this search could load. Some results may be missing —
+          narrow your search or merge from a filtered list instead.
+        </p>
+      )}
       {results.length > 0 && (
         <ul style={{ marginTop: 8, listStyle: "none", padding: 0 }}>
           {results.map((c) => (
@@ -337,7 +427,14 @@ function MergePicker({ clientId, onMerged }: { clientId: string; onMerged: () =>
                 style={{ width: "100%", textAlign: "left" }}
               >
                 {c.name}
-                {c.email_domain && <span className="muted"> — {c.email_domain}</span>}
+                {/* Status is shown rather than excluding archived targets: an
+                 *  archived client can legitimately be the right merge target
+                 *  (e.g. re-merging a duplicate that was archived by
+                 *  mistake), and hiding it would just move this same "invisible
+                 *  survivor" defect one level up. Showing the status lets the
+                 *  recruiter make an informed choice instead. */}
+                <span className="muted"> — {STATUS_LABEL[c.status]}</span>
+                {c.email_domain && <span className="muted"> · {c.email_domain}</span>}
               </button>
             </li>
           ))}

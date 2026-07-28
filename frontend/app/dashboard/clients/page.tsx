@@ -209,6 +209,7 @@ function Workspace() {
               onArchive={doArchive}
               onRestore={doRestore}
               onChanged={refreshDetail}
+              onSelectClient={setSelectedId}
             />
           </div>
           {detailError && (
