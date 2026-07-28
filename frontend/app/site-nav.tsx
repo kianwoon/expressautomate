@@ -62,14 +62,16 @@ export function SiteNav({ sectionLinks = false }: { sectionLinks?: boolean }) {
 
   // Read in an effect, not during render: this is a static export, so the
   // server-rendered HTML has no location and reading it inline is a hydration
-  // mismatch. Starting false means the link is briefly present on the
-  // dashboard before being removed — the reverse would flash a missing link on
-  // every other page, and a control that vanishes is less alarming than one
-  // that appears late where you were looking for it.
-  const [onDashboard, setOnDashboard] = useState(false);
+  // mismatch. Starting unknown means both links are briefly present on the
+  // page they point at before being removed — the reverse would flash a
+  // missing link on every other page, and a control that vanishes is less
+  // alarming than one that appears late where you were looking for it.
+  const [path, setPath] = useState<string | null>(null);
   useEffect(() => {
-    setOnDashboard(window.location.pathname.replace(/\/$/, "") === DASHBOARD_PATH);
+    setPath(window.location.pathname.replace(/\/$/, ""));
   }, []);
+  const onDashboard = path === DASHBOARD_PATH;
+  const onSettings = path === SETTINGS_PATH;
 
   return (
     <nav className="nav">
@@ -112,11 +114,20 @@ export function SiteNav({ sectionLinks = false }: { sectionLinks?: boolean }) {
                   setting, and it should not cost a hover to find.
 
                   Hidden on the dashboard itself: a link to the page you are
-                  already on is a dead control, and this nav has room for
-                  exactly one thing beside the name. */}
+                  already on is a dead control. */}
               {!onDashboard && (
                 <a className="nav-dash" href={DASHBOARD_PATH}>
                   Dashboard
+                </a>
+              )}
+              {/* Settings sits in the bar rather than behind the account menu.
+                  It is the only thing in that menu that is a page of the
+                  product rather than an act on the session, and burying a page
+                  behind a hover costs more than the width it takes here.
+                  Hidden on the settings page for the same reason as above. */}
+              {!onSettings && (
+                <a className="nav-dash" href={SETTINGS_PATH}>
+                  Settings
                 </a>
               )}
               <AccountMenu
@@ -244,9 +255,9 @@ function AccountMenu({
               touch. In the panel it is simply visible whenever the menu is
               open, which is when knowing which account this is matters. */}
           <p className="nav-menu-who">{email}</p>
-          <a className="nav-menu-item" href={SETTINGS_PATH}>
-            Settings
-          </a>
+          {/* Settings used to sit here. It is in the nav bar now; what is left
+              is the two things that act on the session rather than open a
+              page. */}
           {/* A plain link, and deliberately not "sign out, then sign in":
               abandoning Microsoft's picker leaves the current session
               untouched, whereas clearing the cookie first would strand someone
