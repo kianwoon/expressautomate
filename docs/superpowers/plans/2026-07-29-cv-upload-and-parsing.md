@@ -47,7 +47,7 @@ Baseline before this plan: **847 passed**. Alembic head: `b7c1e4a2d905` (`202607
 | `backend/app/api/candidate_documents.py` (create) | Upload, download, delete, quota |
 | `backend/app/api/candidate_roles.py` (modify) | Confirm and reject endpoints |
 | `backend/app/core/config.py` (modify) | CV settings |
-| `frontend/app/dashboard/candidates/candidate-cv.tsx` (create) | Upload control and parse state |
+| `frontend/app/dashboard/candidates/candidate-cv.tsx` (create) | Upload control and parse state (Task 7) |
 | `frontend/app/dashboard/candidates/candidate-history.tsx` (modify) | Enable confirm/reject; show evidence |
 
 ---
@@ -301,8 +301,14 @@ git commit -m "Read a career off a CV, and prove each line came from the page"
 
 - [ ] **Step 1: Write the failing tests**
 
-The matching rule is the subtle one and needs pinning precisely:
-- A parsed role whose `employer_normalized` equals an existing role's **and** whose dates overlap attaches its evidence to that row and creates **no** second row.
+**The matching rule, stated exactly**, because it is the one thing here an implementer would otherwise guess at:
+
+- Both spans are pinned to month starts before comparison, the same way `candidate_tenure.span_months` does it — a CV giving "Mar 2019" and a typed role giving `2019-03-14` describe the same month and must match.
+- Overlap is **half-open**: they overlap iff `start_a < end_b AND start_b < end_a`. Adjacent roles — one ending March 2020, the next starting March 2020 — do **not** overlap, and are two roles.
+- An **open-ended** role (`ended_on IS NULL`) is treated as ending at today for the comparison, on both sides.
+- A parsed role with **no dates at all** matches on `employer_normalized` alone, and **only if exactly one** existing role has that employer. Two or more and it inserts unconfirmed instead: with nothing to disambiguate on, picking one would be a guess presented as a fact.
+
+Tests for each of those four, plus:
 - A parsed role at the same employer with **non-overlapping** dates inserts as a new role — somebody who left and returned held two roles.
 - A genuinely new role inserts `source="cv_upload"`, `status="unconfirmed"`, with `extraction_id` set.
 - Replaying the job on a `parsed` document inserts nothing.
@@ -311,7 +317,7 @@ The matching rule is the subtle one and needs pinning precisely:
 
 - [ ] **Step 2: Implement persistence**
 
-Copy the write pattern from `app/services/ingest/persist.py` rather than inventing one: it already writes `Extraction` and `ExtractionEvidence` and sets `evidence_valid`. Point the new rows at `candidate_document_id` and `candidate_role_id`.
+Copy the write pattern from `app/services/ingest/persist.py` rather than inventing one — but **only part of it carries over**. That module is raw SQL and vacancy-shaped; what you want is the `Extraction` insert and the `ExtractionEvidence` loop that sets `evidence_valid` (around `:136-139` and `:446-481`). The opportunity-specific writing around them does not apply. Point the new rows at `candidate_document_id` and `candidate_role_id`.
 
 - [ ] **Step 3: Implement the job**
 
@@ -321,7 +327,11 @@ Register in `settings.py`'s `functions` list.
 
 - [ ] **Step 4: Join the stuck sweep**
 
-`rescan_stuck` (`app/workers/tasks.py:103-142`) re-enqueues rows stranded by an outage. Documents in `pending` or `parsing` past the threshold join it. Without this, a worker that dies mid-job strands a CV forever — the case a `False` from `enqueue()` does not cover.
+`rescan_stuck` (`app/workers/tasks.py:103`) re-enqueues rows stranded by an outage — but it is **welded to email rows**: its `_STALLED` query, its `RESUME_JOB` map and its enqueue payload all assume an email message and a mailbox. "Documents join the sweep" is not an instruction anyone can follow.
+
+Concretely: add a **second query and enqueue block inside the same function**, selecting `candidate_documents` in `pending` or `parsing` older than the existing staleness threshold, enqueuing `parse_candidate_cv` with `tenant_id`, `candidate_id` and `document_id`. It already returns a count of rows requeued; add the documents to that count. One function, two sweeps, because they answer the same question and a second scheduled task is a second thing to forget.
+
+Without this, a worker that dies mid-job strands a CV forever — the case a `False` from `enqueue()` does not cover.
 
 - [ ] **Step 5: Verify and commit**
 
@@ -331,16 +341,25 @@ git commit -m "Turn a read CV into rows a person can accept or refuse"
 
 ---
 
-### Task 6: Upload, quota, and the human in the loop
+### Task 6: Upload, quota, and the human in the loop — backend
 
 **Files:**
 - Create: `backend/app/api/candidate_documents.py`
 - Modify: `backend/app/api/candidate_roles.py` (confirm/reject), `backend/app/main.py`, `backend/app/core/config.py`
-- Create: `frontend/app/dashboard/candidates/candidate-cv.tsx`
-- Modify: `frontend/app/dashboard/candidates/candidate-history.tsx`, `candidates.ts`, `api.ts`, `frontend/app/app.css`
 - Test: `backend/tests/test_candidate_documents_api.py`
 
+**Interfaces produced, which Task 7 codes against:**
+- `POST /api/candidates/{id}/documents` → **202** `{id, filename, parse_state, ...}`; **413** oversized; **415** unsupported; **429** past quota with nothing stored.
+- `GET /api/candidates/{id}/documents/{doc_id}/download` → `{url, expires_in}`.
+- `DELETE /api/candidates/{id}/documents/{doc_id}` → 204.
+- `POST /api/candidates/{id}/roles/{role_id}/confirm` and `/reject` → the updated role.
+- Documents embedded in the candidate GET as `documents`.
+
 **New settings** in `config.py`, beside the avatar block at `:167-179`, matching its style and validation: max upload bytes, max extracted characters, presigned download TTL, and **a per-tenant daily parse quota**. Nothing hardcoded.
+
+**Where the daily count lives: nowhere new.** It is a `COUNT(*)` of that tenant's `candidate_documents` rows created since midnight UTC, run inside the tenant-scoped session so RLS does the scoping for free. No counter table, no Redis key, nothing to drift out of step with reality.
+
+Two consequences, both accepted deliberately: deleting a document frees quota, and a document that failed to enqueue still consumed one. The first is a hole only somebody deliberately gaming their own bill would use; the second is the safer direction to err. A counter table would fix both and add a row that can disagree with the documents it counts, which is a worse problem than either.
 
 - [ ] **Step 1: Write the failing API tests**
 
@@ -356,27 +375,55 @@ Upload stores to R2, inserts `pending`, enqueues, returns **202**. On a `False` 
 
 `POST /api/candidates/{id}/roles/{role_id}/confirm` and `/reject`. Piece 1 shipped these buttons disabled with nothing behind them (`candidate-history.tsx:502-513`); this is where they come alive. Confirming re-runs the derivation from Task 3 of the previous plan, because a confirmed role changes the candidate's current employer.
 
-- [ ] **Step 4: The UI**
+- [ ] **Step 4: Verify and commit**
 
-`candidate-cv.tsx` in the avatar's house style — drop or click, no grey button pair. Parse state inline. The `unreadable` message must name the cause and the way forward: the file looks like a scan, the roles can be typed meanwhile, reading scans is coming. To a recruiter holding a scanned CV, a bare refusal is indistinguishable from a broken product.
-
-Unconfirmed roles show the quoted line from the CV that produced them. That is the payoff of everything above: not "the AI says she worked here", but "the CV says this, here".
-
-Styles go in `app.css` (797 lines), not `globals.css`.
-
-- [ ] **Step 5: Verify and commit**
-
-Backend suite, `ruff`, then from `frontend/`: `npx tsc --noEmit`, `npm run lint`, `npm run build`.
+Backend suite and `ruff check .`.
 
 ```bash
-git commit -m "Let a recruiter hand over a CV and answer for what it found"
+git commit -m "Take a CV from a recruiter, and let them answer for what it found"
+```
+
+---
+
+### Task 7: Upload, parse state, and the evidence — frontend
+
+**Files:**
+- Create: `frontend/app/dashboard/candidates/candidate-cv.tsx`
+- Modify: `frontend/app/dashboard/candidates/candidate-history.tsx` (enable confirm/reject, show evidence), `candidates.ts`, `api.ts`, `frontend/app/app.css`
+
+**Interfaces consumed:** the six routes and the `documents` array from Task 6, exactly as listed there.
+
+- [ ] **Step 1: Types and fetch functions**
+
+`CandidateDocument` in `candidates.ts`, plus `documents?: CandidateDocument[]` on `Candidate` — optional, because the list endpoint does not send it and absent must mean "not loaded", never "none". Follow the file's existing fetch idiom: `credentials: "include"`, `Accept: application/json`, errors through `readError` (`candidates.ts:185`).
+
+- [ ] **Step 2: The upload control**
+
+`candidate-cv.tsx` in the avatar's house style — drop a file on it or click it, no grey button pair, controls revealed on hover **and** `:focus-within` so they never leave the tab order. Parse state renders inline.
+
+**The `unreadable` message must name the cause and the way forward:** the file looks like a scan rather than a text document, the roles can be typed meanwhile, and reading scans is coming. To a recruiter holding a scanned CV, a bare refusal is indistinguishable from a broken product.
+
+- [ ] **Step 3: Turn on confirm and reject**
+
+`candidate-history.tsx:502-513` renders these buttons disabled with a comment saying they wait for the CV parser. Wire them to the Task 6 endpoints and drop the comment.
+
+**An unconfirmed role shows the quoted line from the CV that produced it.** That is the payoff of everything above: not "the AI says she worked here", but "the CV says this, here."
+
+Styles go in `app.css` (797 lines), not `globals.css`. Respect `prefers-reduced-motion`.
+
+- [ ] **Step 4: Verify and commit**
+
+From `frontend/`: `npx tsc --noEmit`, `npm run lint`, `npm run build`. Report the `/dashboard/candidates` route size. You cannot see the rendered page — it is behind sign-in; do not claim visual verification.
+
+```bash
+git commit -m "Show what the CV said, and let a recruiter agree or not"
 ```
 
 ---
 
 ## Self-Review
 
-**Spec coverage.** Local text extraction → Task 3. Retention of file and text → Tasks 2, 5. Roles and skills → Tasks 4, 5. Matching → Task 5. `unreadable` vs `failed` → Tasks 2, 5. Two-pass escalation and span verification → Task 4. Stuck sweep → Task 5. Quota → Task 6. Confirm/reject → Task 6. Evidence in the UI → Task 6. All 13 spec tests appear across Tasks 2-6.
+**Spec coverage.** Local text extraction → Task 3. Retention of file and text → Tasks 2, 5. Roles and skills → Tasks 4, 5. Matching → Task 5. `unreadable` vs `failed` → Tasks 2, 5. Two-pass escalation and span verification → Task 4. Stuck sweep → Task 5. Quota → Task 6. Confirm/reject → Task 6. Upload UI and evidence display → Task 7. All 13 spec tests appear across Tasks 2-7.
 
 **Beyond the spec, and necessary.** Task 1 exists because `Extraction.email_message_id` is NOT NULL against `email_messages` (`extraction.py:28-33`) — the spec assumed an `extraction_id` that cannot currently be created. Task 5 puts the job in a new module because `jobs.py` is at 1443 of 1500 lines. Neither was in the spec; both block delivery.
 
