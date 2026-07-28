@@ -85,7 +85,12 @@ class ExtractedDate(ExtractedField):
             return self
         if self.precision is None:
             raise ValueError(f"{self.value!r} states no date precision")
-        supported = shape_precision(f"{self.value} {self.evidence or ''}")
+        # `value` is the model's claim, not evidence of anything — concatenating
+        # it in here would let a fabricated day in `value` license its own
+        # precision, since the day the model invented would then appear in the
+        # very string being inspected for a day. Only `evidence`, the quote off
+        # the page, may say what precision the page actually supports.
+        supported = shape_precision(self.evidence or "")
         if PRECISIONS.index(self.precision) > PRECISIONS.index(supported):
             raise ValueError(
                 f"{self.value!r} is {supported} precision, not {self.precision}"

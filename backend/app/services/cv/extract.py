@@ -111,6 +111,7 @@ async def extract_cv(text: str, *, llm=None) -> tuple[CVResponse, LLMResult]:
                 },
             )
             response = CVResponse.model_validate(result.data)
+            response = _drop_unstated(response)
         except (LLMInvalidJSON, ValueError) as exc:
             # A ValueError here is the schema refusing a value that quotes
             # nothing, or a date claiming more precision than the page carries.
@@ -142,6 +143,23 @@ async def extract_cv(text: str, *, llm=None) -> tuple[CVResponse, LLMResult]:
 def _fields(role: ExtractedRole) -> list:
     """The stated fields of a role. A "Not mentioned" one has nothing to check."""
     return [f for f in vars(role).values() if f is not None and not f.is_missing]
+
+
+def _drop_unstated(response: CVResponse) -> CVResponse:
+    """Discard rows that assert nothing before verification ever sees them.
+
+    A role every field of which is `None` or "Not mentioned" has no quotation
+    to check, so `_role_is_supported`'s `all(...)` over an empty list would
+    vacuously say yes — that is a bug in a support check, not license to publish
+    an empty row as a position held. Likewise a skill whose value is the
+    not-mentioned sentinel has no claim in it for `verify` to test, and passes
+    for the same vacuous reason. Neither is a fabrication by itself, but both
+    are noise that would otherwise ride along as if the CV had said something.
+    """
+    return CVResponse(
+        roles=[r for r in response.roles if _fields(r)],
+        skills=[s for s in response.skills if not s.is_missing],
+    )
 
 
 def _role_is_supported(role: ExtractedRole, source: str) -> bool:

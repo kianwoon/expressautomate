@@ -24,7 +24,7 @@ import pytest
 
 from app.core.config import settings
 from app.services.cv.extract import extract_cv
-from app.services.cv.schema import CVResponse, cv_json_schema
+from app.services.cv.schema import CVResponse, ExtractedDate, cv_json_schema
 from app.services.ingest.schema import NOT_MENTIONED
 from app.services.llm.client import LLMInvalidJSON, LLMResult
 
@@ -150,30 +150,49 @@ async def test_evidence_that_fails_after_escalation_does_not_become_a_role():
 
 
 async def test_a_field_the_cv_does_not_state_is_not_invented():
-    llm = _Spy(_payload())
+    """A field the model fills in with no source text must be refused.
+
+    A no-verification implementation would happily keep whatever the model
+    wrote for `title` even though it quotes nothing on the page — this is the
+    stub `test_a_field_the_cv_does_not_state_is_not_invented` used to pass
+    against, because it only ever inspected the untouched `end_date`. Here the
+    fabricated field is one that quotes text absent from the CV, which only a
+    real verification pass discards; without it, this role would come back
+    intact with an invented title.
+    """
+    llm = _Spy(_payload(title=_FABRICATED), _payload(title=_FABRICATED))
 
     response, _ = await extract_cv(CV, llm=llm)
 
-    role = response.roles[0]
-    assert role.end_date.value == NOT_MENTIONED
-    assert role.end_date.is_missing
-    assert role.end_date.start_char is None
+    # Both attempts kept the fabricated title, so the whole role — the only
+    # one the CV produced — must be dropped rather than published with it.
+    assert response.roles == []
 
 
-async def test_a_month_date_never_acquires_a_day():
-    llm = _Spy(_payload())
+def test_a_month_date_never_acquires_a_day():
+    """"Mar 2019" evidence must not license a `value` that carries a day.
 
-    response, _ = await extract_cv(CV, llm=llm)
-
-    start = response.roles[0].start_date
-    assert start.value == "Mar 2019"
-    assert start.precision == "month"
-    # Nothing anywhere in the answer claims a day. A "1" appearing only inside
-    # "2019" is why this looks at the whole serialised result rather than at
-    # one field: a day invented in `value`, in `evidence` or in a second role
-    # would all be equally wrong.
-    assert "Mar 1" not in response.model_dump_json()
-    assert "2019-03-01" not in response.model_dump_json()
+    The stub this replaces asserted properties of an answer the model was
+    simply never asked to give (`_payload()` never sends a day), so it would
+    pass even against a schema with no precision check at all. This is a
+    direct unit test of `ExtractedDate` rather than a round trip through
+    `extract_cv`, and deliberately so: going through the full pipeline lets
+    `verify`'s numeric corroboration (finding 1's note that it is "a safety
+    net in the wrong layer") catch the fabricated "01" on its own, which would
+    make this test pass even with the schema-level hole still open. Testing
+    the schema directly isolates exactly what finding 1 is about — a day
+    fabricated in `value` must not make `shape_precision` see a day, because
+    only `evidence`, the quote off the page, may license precision.
+    """
+    with pytest.raises(ValueError):
+        ExtractedDate.model_validate(
+            {
+                "value": "2019-03-01",
+                "evidence": "Mar 2019",
+                "confidence": 0.9,
+                "precision": "day",
+            }
+        )
 
 
 async def test_a_precision_finer_than_the_page_supports_is_refused():
@@ -187,6 +206,31 @@ async def test_a_precision_finer_than_the_page_supports_is_refused():
 
     assert result.model == settings.EXTRACTION_MODEL_STRONG
     assert response.roles[0].start_date.precision == "month"
+
+
+async def test_a_role_asserting_nothing_is_not_a_role():
+    """Every field "Not mentioned" is an empty row, not a position held."""
+    empty_role = {
+        "title": _missing(),
+        "company": _missing(),
+        "start_date": _missing(),
+        "end_date": _missing(),
+        "summary": _missing(),
+    }
+    llm = _Spy(_payload() | {"roles": [empty_role], "skills": []})
+
+    response, _ = await extract_cv(CV, llm=llm)
+
+    assert response.roles == []
+
+
+async def test_a_skill_the_cv_does_not_name_is_dropped():
+    """"Not mentioned" in `skills` would otherwise pass `verify` vacuously."""
+    llm = _Spy(_payload() | {"skills": [_missing()]})
+
+    response, _ = await extract_cv(CV, llm=llm)
+
+    assert response.skills == []
 
 
 async def test_a_cv_the_model_cannot_read_raises_rather_than_inventing_a_career():
