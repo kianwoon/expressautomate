@@ -293,6 +293,14 @@ class Settings(BaseSettings):
 
     CANDIDATES_PAGE_LIMIT: int = Field(default=200, gt=0)
 
+    # The most years of experience a candidate record may claim. There is no
+    # database constraint to derive this from, and none is wanted: the point of
+    # the bound is to catch a mistyped figure (a birth year in the experience
+    # box) before it reaches the row, not to legislate a career length. So it
+    # is deliberately generous — longer than any working life — and configurable
+    # rather than a literal in the endpoint.
+    CANDIDATE_MAX_YEARS_EXPERIENCE: int = Field(default=80, gt=0)
+
     # Phone numbers are parsed to E.164 before they identify anyone. A sheet
     # writes "9123 4567" and means +65 9123 4567; without a region there is
     # nothing to resolve that against.

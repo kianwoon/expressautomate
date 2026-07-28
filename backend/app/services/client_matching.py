@@ -19,6 +19,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.client import Client
 from app.services.client_naming import domain_of, normalize_company_name
 
+# Isolation is defence in depth here, not a single mechanism — the same
+# arrangement `candidate_matching.py` documents. RLS on `clients` (keyed off
+# the `app.tenant_id` setting `tenant_session` establishes) is what actually
+# enforces the boundary; the explicit `tenant_id = :tenant_id` predicate below
+# is a second, independent guard against a session that was never scoped. It
+# fails closed: an unscoped session returns no rows rather than another
+# agency's. Stated in both matchers deliberately, so a reader of either one is
+# not left believing the two modules disagree about what guarantees isolation.
+#
 # Merged rows are deprioritised, not excluded: the partial unique index still
 # lets several merged rows share a domain, but `_surviving` will redirect
 # through whichever one we pick anyway. Archived rows must stay eligible —
@@ -27,7 +36,7 @@ from app.services.client_naming import domain_of, normalize_company_name
 _BY_DOMAIN = text(
     """
     SELECT id, status, merged_into_client_id FROM clients
-    WHERE email_domain = :domain
+    WHERE tenant_id = :tenant_id AND email_domain = :domain
     ORDER BY (status = 'merged') ASC, last_seen_at DESC NULLS LAST, created_at DESC
     LIMIT 1
     """
@@ -38,7 +47,7 @@ _BY_DOMAIN = text(
 _BY_NAME = text(
     """
     SELECT id, status, merged_into_client_id FROM clients
-    WHERE name_normalized = :name AND status <> 'merged'
+    WHERE tenant_id = :tenant_id AND name_normalized = :name AND status <> 'merged'
     ORDER BY last_seen_at DESC NULLS LAST, created_at DESC
     LIMIT 1
     """
@@ -130,12 +139,18 @@ async def _resolve(
     email_message_id: uuid.UUID | None,
 ) -> tuple[uuid.UUID | None, str]:
     if domain is not None:
-        row = (await session.execute(_BY_DOMAIN, {"domain": domain})).first()
+        row = (
+            await session.execute(
+                _BY_DOMAIN, {"tenant_id": tenant_id, "domain": domain}
+            )
+        ).first()
         if row is not None:
             return await _surviving(session, row), "email_domain"
 
     if normalized:
-        row = (await session.execute(_BY_NAME, {"name": normalized})).first()
+        row = (
+            await session.execute(_BY_NAME, {"tenant_id": tenant_id, "name": normalized})
+        ).first()
         if row is not None:
             return await _surviving(session, row), "name"
 

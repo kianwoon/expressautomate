@@ -220,3 +220,45 @@ async def test_re_seeing_a_merged_client_lands_on_the_survivor(agency) -> None:
         landed = await match_client(s, agency, None, "hr@acme.com.sg", "Acme Pte Ltd")
         await s.commit()
     assert landed == winner
+
+
+async def test_the_matcher_carries_its_own_tenant_predicate(agency) -> None:
+    """Defence in depth, exactly as `candidate_matching` already had it.
+
+    RLS is what enforces isolation in production, and it holds. This test runs
+    the matcher on the RLS-bypassing admin session — the one place where the
+    policy is not doing the work — so it can see whether the *queries* also
+    fail closed. Before the fix the domain and name lookups had no tenant
+    predicate at all, and this found the other agency's client; the sibling
+    candidate matcher was already written the other way, and two near-copy
+    modules disagreeing about what guarantees isolation is how a future reader
+    gets it wrong.
+    """
+    other = uuid.uuid4()
+    async with AdminSessionLocal() as s:
+        await s.execute(
+            text("INSERT INTO tenants (id, name, slug) VALUES (:i, :n, :n)"),
+            {"i": other, "n": f"agency-{other.hex[:6]}"},
+        )
+        await s.execute(
+            text(
+                "INSERT INTO clients (id, tenant_id, name, name_normalized, "
+                "email_domain, status) VALUES (:i, :t, 'Acme', 'acme pte ltd', "
+                "'acme.com.sg', 'unconfirmed')"
+            ),
+            {"i": uuid.uuid4(), "t": other},
+        )
+        await s.commit()
+
+    try:
+        async with AdminSessionLocal() as s:
+            matched = await match_client(s, agency, None, "hr@acme.com.sg", "Acme Pte Ltd")
+            await s.commit()
+            owner = (
+                await s.execute(
+                    text("SELECT tenant_id FROM clients WHERE id = :i"), {"i": matched}
+                )
+            ).scalar_one()
+        assert owner == agency
+    finally:
+        await cleanup_tenant(other)

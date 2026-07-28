@@ -6,12 +6,14 @@ computed over the whole tenant rather than the page — a chip that shrank as
 you paged would answer a different question than it appears to.
 """
 
+import asyncio
 import uuid
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 
+from app.api import clients as clients_api
 from app.main import app
 from tests.conftest import AdminSessionLocal, cleanup_tenant
 
@@ -397,3 +399,95 @@ async def test_one_agency_never_sees_anothers_clients(agency_with_clients) -> No
             assert r.status_code == 404
     finally:
         await cleanup_tenant(other_tid)
+
+
+# --- The bugs an adversarial pass through the real API turned up. ------------
+
+
+async def _seed_client(tid: uuid.UUID, name: str) -> uuid.UUID:
+    cid = uuid.uuid4()
+    async with AdminSessionLocal() as s:
+        await s.execute(
+            text(
+                "INSERT INTO clients (id, tenant_id, name, name_normalized, status) "
+                "VALUES (:i, :t, :n, :n, 'unconfirmed')"
+            ),
+            {"i": cid, "t": tid, "n": name},
+        )
+        await s.commit()
+    return cid
+
+
+async def test_two_opposing_merges_at_once_cannot_make_a_cycle(
+    agency_with_clients, monkeypatch
+) -> None:
+    """The candidate endpoint had this bug observably; this one is a near-copy
+
+    of it, so it had it too. A→B and B→A raced left both rows pointing at
+    each other: neither in any list, neither unmergeable back into a live row.
+
+    The fixed pause in `_load` is what makes the race deterministic rather than
+    hoped for — see the note in `test_candidates_api.py`.
+    """
+    tid, uid, _ = agency_with_clients
+    a = await _seed_client(tid, "race a")
+    b = await _seed_client(tid, "race b")
+
+    real_load = clients_api._load
+
+    async def paced_load(session, client_id):
+        row = await real_load(session, client_id)
+        await asyncio.sleep(0.15)
+        return row
+
+    monkeypatch.setattr(clients_api, "_load", paced_load)
+
+    async with await _client_for(tid, uid) as one, await _client_for(tid, uid) as two:
+        first, second = await asyncio.gather(
+            one.post(f"/api/clients/{a}/merge", json={"target_id": str(b)}),
+            two.post(f"/api/clients/{b}/merge", json={"target_id": str(a)}),
+        )
+
+    assert sorted([first.status_code, second.status_code]) == [200, 400], (
+        first.text,
+        second.text,
+    )
+    async with AdminSessionLocal() as s:
+        pointers = (
+            await s.execute(
+                text("SELECT merged_into_client_id FROM clients WHERE id IN (:a, :b)"),
+                {"a": a, "b": b},
+            )
+        ).scalars().all()
+    assert len([p for p in pointers if p is not None]) == 1
+
+
+async def test_an_archived_client_must_be_restored_before_it_can_be_confirmed(
+    agency_with_clients,
+) -> None:
+    """`restore` exists so an archived client re-enters the review queue rather
+
+    than silently becoming live again. Confirming straight out of `archived`
+    walked past it.
+    """
+    tid, uid, ids = agency_with_clients
+    async with await _client_for(tid, uid) as http:
+        assert (await http.post(f"/api/clients/{ids['live']}/archive")).status_code == 200
+        refused = await http.post(f"/api/clients/{ids['live']}/confirm")
+        assert refused.status_code == 400
+        assert (await http.get(f"/api/clients/{ids['live']}")).json()["status"] == "archived"
+
+        assert (await http.post(f"/api/clients/{ids['live']}/restore")).status_code == 200
+        allowed = await http.post(f"/api/clients/{ids['live']}/confirm")
+    assert allowed.status_code == 200
+    assert allowed.json()["status"] == "confirmed"
+
+
+async def test_confirming_and_archiving_stay_idempotent(agency_with_clients) -> None:
+    """A double-clicked button is not a mistake worth an error."""
+    tid, uid, ids = agency_with_clients
+    async with await _client_for(tid, uid) as http:
+        assert (await http.post(f"/api/clients/{ids['live']}/confirm")).status_code == 200
+        assert (await http.post(f"/api/clients/{ids['live']}/confirm")).status_code == 200
+        assert (await http.post(f"/api/clients/{ids['live']}/archive")).status_code == 200
+        assert (await http.post(f"/api/clients/{ids['live']}/archive")).status_code == 200

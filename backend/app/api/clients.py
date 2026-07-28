@@ -140,6 +140,14 @@ async def get_client(request: Request, client_id: uuid.UUID) -> dict:
 
 @router.post("/clients/{client_id}/confirm")
 async def confirm_client(request: Request, client_id: uuid.UUID) -> dict:
+    """Accept a proposed client as one the agency really works with.
+
+    Only from `unconfirmed` (or `confirmed`, idempotently). An archived client
+    must go through `restore` first: archiving is a decision that this company
+    is no longer current, and confirming straight out of it would reinstate the
+    row as live without it ever passing back through review. `merged` is
+    refused too — unmerge first. See `_LEGAL_SOURCES`.
+    """
     return await _transition(request, client_id, Client.CONFIRMED)
 
 
@@ -189,6 +197,13 @@ async def merge_client(request: Request, client_id: uuid.UUID, body: MergeReques
         raise HTTPException(status_code=400, detail="A client cannot be merged into itself")
 
     async with tenant_session(tenant_uuid) as session:
+        # Lock both rows before reading their statuses. Without this, merging
+        # A→B and B→A at the same instant leaves the two rows pointing at each
+        # other: both validated against a snapshot taken before the other
+        # wrote, both committed, and neither row is live or unmergeable back
+        # into one. Lowest id first so the two transactions queue instead of
+        # deadlocking, and the statuses are read only once both locks are held.
+        await _lock_pair(session, client_id, body.target_id)
         loser = await _load(session, client_id)
         target = await _load(session, body.target_id)
         if target.status == Client.MERGED:
@@ -355,12 +370,53 @@ async def unmerge_client(request: Request, client_id: uuid.UUID) -> dict:
     return {"status": Client.UNCONFIRMED}
 
 
+async def _lock_pair(session, first: uuid.UUID, second: uuid.UUID) -> None:
+    """Take a row lock on both clients, lowest id first.
+
+    One statement per row rather than an `IN (...)` with an ORDER BY: the order
+    in which Postgres locks the rows of a single statement is a property of the
+    chosen plan, not of the ORDER BY, so only separate statements make the
+    ordering something this code actually decides. A missing row simply locks
+    nothing — the 404 comes from `_load` afterwards.
+    """
+    for client_id in sorted((first, second), key=lambda value: value.bytes):
+        await session.execute(
+            select(Client.id).where(Client.id == client_id).with_for_update()
+        )
+
+
+# Which statuses each transition may be made *from*. Stated as a whitelist
+# rather than a list of the statuses to refuse: excluding only `merged` let an
+# archived client be confirmed directly, which walked straight past `restore` —
+# the endpoint that exists precisely so an archived client re-enters the review
+# queue rather than becoming live again in one call.
+#
+# Confirming is a human judgement about a client the agency currently works
+# with, so it may only be made about a row that is in (or already past) review,
+# never about one that was put away. Archiving is always available except from
+# `merged`, where `unmerge` must come first so `status` and
+# `merged_into_client_id` never disagree about whether the row is live. Both
+# transitions stay idempotent — re-confirming a confirmed row is a no-op, not
+# an error, because a double-clicked button is not a mistake worth an error.
+_LEGAL_SOURCES: dict[str, frozenset[str]] = {
+    Client.CONFIRMED: frozenset({Client.UNCONFIRMED, Client.CONFIRMED}),
+    Client.ARCHIVED: frozenset({Client.UNCONFIRMED, Client.CONFIRMED, Client.ARCHIVED}),
+}
+
+
 async def _transition(request: Request, client_id: uuid.UUID, status: str) -> dict:
     _user_uuid, tenant_uuid = _require_session(request)
     async with tenant_session(tenant_uuid) as session:
         client = await _load(session, client_id)
         if client.status == Client.MERGED:
             raise HTTPException(status_code=400, detail="Unmerge the client first")
+        if client.status not in _LEGAL_SOURCES[status]:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Client is {client.status}; restore it before marking it {status}"
+                ),
+            )
         await session.execute(update(Client).where(Client.id == client_id).values(status=status))
         await session.commit()
     return {"status": status}

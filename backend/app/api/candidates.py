@@ -10,7 +10,7 @@ from datetime import date
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from sqlalchemy import delete, func, insert, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
@@ -187,6 +187,21 @@ async def get_candidate(request: Request, candidate_id: uuid.UUID) -> dict:
     return payload
 
 
+async def _lock_pair(session, first: uuid.UUID, second: uuid.UUID) -> None:
+    """Take a row lock on both candidates, lowest id first.
+
+    One statement per row rather than an `IN (...)` with an ORDER BY: the order
+    in which Postgres locks the rows of a single statement is a property of the
+    chosen plan, not of the ORDER BY, so only separate statements make the
+    ordering something this code actually decides. A missing row simply locks
+    nothing — the 404 comes from `_load` afterwards.
+    """
+    for candidate_id in sorted((first, second), key=lambda value: value.bytes):
+        await session.execute(
+            select(Candidate.id).where(Candidate.id == candidate_id).with_for_update()
+        )
+
+
 async def _load(session, candidate_id: uuid.UUID) -> Candidate:
     """Fetch inside the tenant session, so another agency's id is a 404.
 
@@ -201,7 +216,106 @@ async def _load(session, candidate_id: uuid.UUID) -> Candidate:
     return candidate
 
 
-class CandidateIn(BaseModel):
+# The widest value `candidates.expected_salary` can physically hold, derived
+# from the column rather than written out: a Numeric(p, s) stores up to
+# 10**(p - s) - 10**-s. Anything larger is a numeric overflow the database
+# raises as a DBAPIError, which reaches the client as a 500 — so the bound is
+# enforced here, at the schema boundary, and a migration that widens the column
+# moves this bound with it instead of leaving a stale literal behind.
+_SALARY_TYPE = Candidate.__table__.c.expected_salary.type
+MAX_EXPECTED_SALARY = float(
+    10 ** (_SALARY_TYPE.precision - _SALARY_TYPE.scale) - 10 ** -_SALARY_TYPE.scale
+)
+
+# Postgres SQLSTATE for a unique/exclusion violation. Only this class of
+# integrity error means "somebody already has that"; every other one (a CHECK,
+# a foreign key) is a different fault and must not be dressed up as a duplicate.
+_UNIQUE_VIOLATION = "23505"
+
+
+def _is_duplicate(exc: IntegrityError) -> bool:
+    return getattr(exc.orig, "sqlstate", None) == _UNIQUE_VIOLATION
+
+
+class _CandidateFieldRules:
+    """Validation shared by the create and patch bodies.
+
+    Every rule here exists because the database would otherwise answer for it,
+    and the database's answer is the wrong one to show a recruiter: a blank
+    name trips a CHECK and used to surface as 409 "Already recorded", and an
+    over-large salary overflowed the column into a 500.
+    """
+
+    @field_validator("full_name", check_fields=False)
+    @classmethod
+    def _name_is_not_blank(cls, value: str | None) -> str | None:
+        # `ck_candidates_name_not_blank` says the same thing in the database.
+        # Saying it here means the caller is told which field is wrong.
+        # A field validator only runs for a value the caller actually sent, so
+        # None here means an explicit `"full_name": null` on a PATCH — which
+        # the NOT NULL column would refuse anyway, as a 500.
+        if value is None or not value.strip():
+            raise ValueError("full_name must not be blank")
+        return value
+
+    @field_validator("email", check_fields=False)
+    @classmethod
+    def _email_is_parseable(cls, value: str | None) -> str | None:
+        """An absent email is fine; an unparseable one is not.
+
+        `normalize_email` returns None for both, and storing None for the
+        second is silent data loss on the field the matcher depends on — the
+        recruiter believes they recorded an identity key and nothing did.
+        """
+        if value is None:
+            return None
+        normalized = normalize_email(value)
+        if normalized is None:
+            raise ValueError("email is not a valid address")
+        return normalized
+
+    @field_validator("phone_raw", check_fields=False)
+    @classmethod
+    def _phone_is_parseable(cls, value: str | None) -> str | None:
+        """Same distinction as email, one step weaker.
+
+        A number that parses but belongs to a switchboard is deliberately kept
+        (see `_identity_phone`) — it is a real number that simply never
+        identifies anyone. A number that does not parse at all is a typo, and
+        accepting it would leave the record with no usable phone while looking
+        as though it had one.
+        """
+        if value is None:
+            return None
+        if normalize_phone(value) is None:
+            raise ValueError("phone_raw is not a valid phone number")
+        return value
+
+    @field_validator("expected_salary", check_fields=False)
+    @classmethod
+    def _salary_fits_the_column(cls, value: float | None) -> float | None:
+        if value is None:
+            return None
+        if value < 0 or value > MAX_EXPECTED_SALARY:
+            raise ValueError(
+                f"expected_salary must be between 0 and {MAX_EXPECTED_SALARY}"
+            )
+        return value
+
+    @field_validator("years_experience", check_fields=False)
+    @classmethod
+    def _years_are_plausible(cls, value: int | None) -> int | None:
+        if value is None:
+            return None
+        if value < 0 or value > settings.CANDIDATE_MAX_YEARS_EXPERIENCE:
+            raise ValueError(
+                "years_experience must be between 0 and "
+                f"{settings.CANDIDATE_MAX_YEARS_EXPERIENCE}"
+            )
+        return value
+
+
+class CandidateIn(_CandidateFieldRules, BaseModel):
     """Only `full_name` is required.
 
     A recruiter frequently has a name and a phone number and nothing else, and
@@ -226,7 +340,7 @@ class CandidateIn(BaseModel):
     skills: list[str] | None = None
 
 
-class CandidateUpdate(BaseModel):
+class CandidateUpdate(_CandidateFieldRules, BaseModel):
     """Every field optional — this is a PATCH.
 
     Reusing `CandidateIn` here would be a bug: its `full_name` is required, so
@@ -314,7 +428,14 @@ async def create_candidate(request: Request, body: CandidateIn) -> dict:
             # The unique indexes are the backstop for a race the matcher's
             # read could not see. A 409 says the same thing the matcher would
             # have; a 500 would blame the recruiter for a collision.
+            #
+            # Only a unique violation means that. Any other constraint failing
+            # here is a bug in this endpoint's validation, and reporting it as
+            # a duplicate sends someone hunting for a conflicting record that
+            # does not exist — so it is re-raised rather than disguised.
             await session.rollback()
+            if not _is_duplicate(exc):
+                raise
             raise HTTPException(status_code=409, detail="Already recorded") from exc
 
     return await get_candidate(request, candidate_id)
@@ -344,6 +465,12 @@ async def update_candidate(
     user_uuid, tenant_uuid = _require_session(request)
     async with tenant_session(tenant_uuid) as session:
         candidate = await _load(session, candidate_id)
+        # A merged row is not a person any more; its identity belongs to the
+        # target. Editing one writes to a record nothing reads, and worse, it
+        # can change the email and phone that `unmerge` has to give back.
+        # Archive already refuses a merged row for the same reason.
+        if candidate.record_status == Candidate.MERGED:
+            raise HTTPException(status_code=400, detail="Unmerge the candidate first")
         values = body.model_dump(exclude={"skills"}, exclude_unset=True)
         if "phone_raw" in values:
             values["phone_e164"] = _identity_phone(values["phone_raw"])
@@ -373,7 +500,11 @@ async def update_candidate(
             # Editing an email or phone to one somebody else already holds.
             # The unique index is right to refuse; a 500 would tell the
             # recruiter the app is broken when their data is merely ambiguous.
+            # Narrowed to a unique violation: any other constraint failing here
+            # is this endpoint's own validation gap, not a duplicate.
             await session.rollback()
+            if not _is_duplicate(exc):
+                raise
             raise HTTPException(
                 status_code=409,
                 detail="Another candidate already has that email or phone",
@@ -458,6 +589,16 @@ async def merge_candidate(
         raise HTTPException(status_code=400, detail="A candidate cannot be merged into itself")
 
     async with tenant_session(tenant_uuid) as session:
+        # Lock both rows before reading their statuses, or two opposing merges
+        # (A→B and B→A at the same instant) each validate against a snapshot
+        # taken before the other wrote, both succeed, and the two rows end up
+        # pointing at each other: a cycle in which neither row is live, neither
+        # appears in any list, and neither can be unmerged into a live record.
+        #
+        # Locked in a fixed order — lowest id first — so the two transactions
+        # queue rather than deadlock. The statuses are only read *after* both
+        # locks are held, because the pre-lock read is exactly what is stale.
+        await _lock_pair(session, candidate_id, body.target_id)
         loser = await _load(session, candidate_id)
         target = await _load(session, body.target_id)
         if target.record_status == Candidate.MERGED:

@@ -6,12 +6,14 @@ Merged rows are hidden by default because a merged row is not a person any
 more, but stay reachable by id so an unmerge is still possible.
 """
 
+import asyncio
 import uuid
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 
+from app.api import candidates as candidates_api
 from app.main import app
 from tests.conftest import AdminSessionLocal
 from tests.test_clients_api import sign_in  # the real session cookie, not a copy
@@ -460,3 +462,190 @@ async def test_merging_a_merge_target_repoints_the_chain(agency_with_candidates)
     for row in rows:
         if row.merged_into_candidate_id is not None:
             assert row.merged_into_candidate_id not in merged_ids
+
+
+# --- The bugs an adversarial pass through the real API turned up. ------------
+
+
+# How the race is made deterministic rather than hoped for.
+#
+# Firing two opposing merges with `asyncio.gather` alone reproduces the cycle
+# only sometimes — whether both transactions read before either writes depends
+# on how the event loop happens to interleave two sets of database round
+# trips, and a test that reports the bug only sometimes is a test that will be
+# ignored. So `_load` is slowed by a fixed pause: every request finishes both
+# of its reads before any request reaches its writes, which is precisely the
+# interleaving the bug needs.
+#
+# The pause does not hide the fix. With the rows locked before they are read,
+# the second request cannot reach `_load` at all until the first has committed
+# and released them, so it re-reads the world the first request left behind
+# and refuses. Without the locks, both read the same stale snapshot and both
+# commit.
+_RACE_PAUSE_SECONDS = 0.15
+
+
+async def _new_candidate(http, **fields) -> str:
+    r = await http.post("/api/candidates", json={"full_name": "Nobody", **fields})
+    assert r.status_code == 201, r.text
+    return r.json()["id"]
+
+
+async def test_two_opposing_merges_at_once_cannot_make_a_cycle(
+    agency_with_candidates, monkeypatch
+) -> None:
+    """A→B and B→A raced: both used to win, leaving two rows pointing at each
+
+    other. Neither then appeared in any list, neither matched, and neither
+    could be unmerged into a live record — the pair was simply gone.
+    """
+    tid, uid, _ = agency_with_candidates
+    async with await _client_for(tid, uid) as http:
+        a = await _new_candidate(http, full_name="A", email="a@race.sg")
+        b = await _new_candidate(http, full_name="B", email="b@race.sg")
+
+    real_load = candidates_api._load
+
+    async def paced_load(session, candidate_id):
+        row = await real_load(session, candidate_id)
+        await asyncio.sleep(_RACE_PAUSE_SECONDS)
+        return row
+
+    monkeypatch.setattr(candidates_api, "_load", paced_load)
+
+    async with await _client_for(tid, uid) as one, await _client_for(tid, uid) as two:
+        first, second = await asyncio.gather(
+            one.post(f"/api/candidates/{a}/merge", json={"target_id": b}),
+            two.post(f"/api/candidates/{b}/merge", json={"target_id": a}),
+        )
+
+    codes = sorted([first.status_code, second.status_code])
+    assert codes == [200, 400], (first.text, second.text)
+
+    async with AdminSessionLocal() as s:
+        pointers = (
+            await s.execute(
+                text(
+                    "SELECT merged_into_candidate_id FROM candidates WHERE id IN (:a, :b)"
+                ),
+                {"a": uuid.UUID(a), "b": uuid.UUID(b)},
+            )
+        ).scalars().all()
+    # Exactly one pointer, so the graph is still one hop deep and the survivor
+    # is a live record the loser can be unmerged back out of.
+    assert len([p for p in pointers if p is not None]) == 1
+
+
+async def test_a_salary_larger_than_the_column_is_a_422_not_a_500(
+    agency_with_candidates,
+) -> None:
+    tid, uid, ids = agency_with_candidates
+    async with await _client_for(tid, uid) as http:
+        created = await http.post(
+            "/api/candidates", json={"full_name": "Rich", "expected_salary": 1e10}
+        )
+        patched = await http.patch(
+            f"/api/candidates/{ids['active']}", json={"expected_salary": 1e10}
+        )
+        ok = await http.patch(
+            f"/api/candidates/{ids['active']}", json={"expected_salary": 9_999_999_999.99}
+        )
+    assert created.status_code == 422
+    assert patched.status_code == 422
+    assert ok.status_code == 200
+
+
+async def test_an_unparseable_email_is_refused_rather_than_dropped(
+    agency_with_candidates,
+) -> None:
+    """It used to return 201 with `email: null` — the recruiter believed they
+
+    had stored the identity key the whole matcher depends on, and nothing had.
+    """
+    tid, uid, ids = agency_with_candidates
+    async with await _client_for(tid, uid) as http:
+        created = await http.post(
+            "/api/candidates", json={"full_name": "Typo", "email": "not-an-email"}
+        )
+        patched = await http.patch(
+            f"/api/candidates/{ids['active']}", json={"email": "not-an-email"}
+        )
+        # An email nobody supplied is still absent, not an error.
+        omitted = await http.post("/api/candidates", json={"full_name": "No Email"})
+        cleared = await http.patch(f"/api/candidates/{ids['placed']}", json={"email": None})
+    assert created.status_code == 422
+    assert "email" in created.text
+    assert patched.status_code == 422
+    assert omitted.status_code == 201 and omitted.json()["email"] is None
+    assert cleared.status_code == 200 and cleared.json()["email"] is None
+
+
+async def test_an_unparseable_phone_is_refused_rather_than_dropped(
+    agency_with_candidates,
+) -> None:
+    tid, uid, _ = agency_with_candidates
+    async with await _client_for(tid, uid) as http:
+        rubbish = await http.post(
+            "/api/candidates", json={"full_name": "Typo", "phone_raw": "not-a-phone"}
+        )
+        # A fixed line still parses. It is kept and simply never identifies
+        # anyone, which is the deliberate behaviour of `_identity_phone`.
+        fixed_line = await http.post(
+            "/api/candidates", json={"full_name": "Switchboard", "phone_raw": "+65 6123 4567"}
+        )
+    assert rubbish.status_code == 422
+    assert fixed_line.status_code == 201
+    assert fixed_line.json()["phone_e164"] is None
+
+
+async def test_a_blank_name_is_a_422_naming_the_field_not_a_false_conflict(
+    agency_with_candidates,
+) -> None:
+    """It used to surface as 409 "Already recorded" — a lie that sends someone
+
+    hunting for a duplicate that does not exist.
+    """
+    tid, uid, ids = agency_with_candidates
+    async with await _client_for(tid, uid) as http:
+        created = await http.post("/api/candidates", json={"full_name": "   "})
+        patched = await http.patch(f"/api/candidates/{ids['active']}", json={"full_name": ""})
+        nulled = await http.patch(
+            f"/api/candidates/{ids['active']}", json={"full_name": None}
+        )
+    for r in (created, patched, nulled):
+        assert r.status_code == 422, r.text
+        assert "full_name" in r.text
+
+
+async def test_a_merged_candidate_cannot_be_edited(agency_with_candidates) -> None:
+    """Archive already refuses a merged row; PATCH used to edit it happily,
+
+    including the email and phone that `unmerge` has to give back.
+    """
+    tid, uid, ids = agency_with_candidates
+    async with await _client_for(tid, uid) as http:
+        r = await http.patch(
+            f"/api/candidates/{ids['merged']}", json={"email": "hijack@acme.sg"}
+        )
+        after = (await http.get(f"/api/candidates/{ids['merged']}")).json()
+    assert r.status_code == 400
+    assert after["email"] == "jane.t@acme.sg"
+
+
+async def test_years_of_experience_must_be_a_number_somebody_could_mean(
+    agency_with_candidates,
+) -> None:
+    tid, uid, _ = agency_with_candidates
+    async with await _client_for(tid, uid) as http:
+        negative = await http.post(
+            "/api/candidates", json={"full_name": "Time Traveller", "years_experience": -5}
+        )
+        absurd = await http.post(
+            "/api/candidates", json={"full_name": "Methuselah", "years_experience": 1995}
+        )
+        fine = await http.post(
+            "/api/candidates", json={"full_name": "Normal", "years_experience": 12}
+        )
+    assert negative.status_code == 422
+    assert absurd.status_code == 422
+    assert fine.status_code == 201
