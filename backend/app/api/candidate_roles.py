@@ -318,6 +318,49 @@ async def update_role(
         return _serialize(role)
 
 
+async def _set_status(
+    request: Request, candidate_id: uuid.UUID, role_id: uuid.UUID, status: str
+) -> dict:
+    """The shared body of confirm and reject.
+
+    Both re-derive, and both do it in the same transaction as the status
+    change. Confirming a role can make it the candidate's current one;
+    rejecting the role that *was* current takes that employer away again —
+    `derive` drops rejected roles, so the recompute is what keeps the
+    candidate row from asserting a fact the recruiter just denied (§15).
+
+    Idempotent on purpose: confirming an already-confirmed role is a
+    double-click, not an error.
+    """
+    user_uuid, tenant_uuid = _require_session(request)
+    async with tenant_session(tenant_uuid) as session:
+        candidate = await _load(session, candidate_id)
+        role = await _load_role(session, candidate_id, role_id)
+        role.status = status
+        role.updated_by = user_uuid
+        await session.flush()
+        await apply_derived(session, candidate)
+        await session.commit()
+        return _serialize(role)
+
+
+@router.post("/candidates/{candidate_id}/roles/{role_id}/confirm")
+async def confirm_role(request: Request, candidate_id: uuid.UUID, role_id: uuid.UUID) -> dict:
+    """A person vouches for what the parse read off the CV."""
+    return await _set_status(request, candidate_id, role_id, CandidateRole.CONFIRMED)
+
+
+@router.post("/candidates/{candidate_id}/roles/{role_id}/reject")
+async def reject_role(request: Request, candidate_id: uuid.UUID, role_id: uuid.UUID) -> dict:
+    """A person says the parse got this wrong.
+
+    Kept rather than deleted: the row is evidence of what the model claimed,
+    and a re-parse of the same CV should not resurrect a role somebody has
+    already thrown out.
+    """
+    return await _set_status(request, candidate_id, role_id, CandidateRole.REJECTED)
+
+
 @router.delete("/candidates/{candidate_id}/roles/{role_id}", status_code=204)
 async def delete_role(request: Request, candidate_id: uuid.UUID, role_id: uuid.UUID) -> Response:
     _user_uuid, tenant_uuid = _require_session(request)

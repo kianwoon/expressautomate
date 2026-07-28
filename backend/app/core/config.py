@@ -202,6 +202,18 @@ class Settings(BaseSettings):
     # inflates inside `pypdf` where nothing is watching. This is the only
     # thing standing between one hostile page and a worker slot held forever.
     CV_PARSE_TIMEOUT_SECONDS: float = Field(default=300.0, gt=0)
+    # The largest upload the API will accept, counted as the bytes arrive
+    # rather than trusted from `Content-Length`. Generous next to a real CV
+    # and far below `CV_TEXT_MAX_CHARS`, so the bound that actually bites a
+    # hostile file is the text one, not this.
+    CV_MAX_UPLOAD_BYTES: int = Field(default=10 * 1024 * 1024, gt=0)
+    # How long a download link stays valid. Short for the same reason the
+    # avatar's is: a signed URL is a capability, and one that outlives the
+    # session it was minted under is a capability nobody revoked.
+    CV_PRESIGNED_URL_TTL_SECONDS: int = Field(default=300, gt=0)
+    # How many CVs one agency may upload in a UTC day. Each upload buys a
+    # model call, so this is a spend ceiling before it is anything else.
+    CV_DAILY_PARSE_QUOTA: int = Field(default=200, gt=0)
 
     # --- AI extraction ---
     # Kept although nothing calls the router any more: OPENROUTER_API_KEY and

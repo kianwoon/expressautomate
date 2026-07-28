@@ -14,6 +14,7 @@ from sqlalchemy import insert, text
 from app.api import (
     activity,
     auth,
+    candidate_documents,
     candidate_roles,
     candidates,
     candidates_avatar,
@@ -124,6 +125,7 @@ api.include_router(glossary.router)
 api.include_router(candidates.router)
 api.include_router(candidate_roles.router)
 api.include_router(candidates_avatar.router)
+api.include_router(candidate_documents.router)
 api.include_router(clients.router)
 api.include_router(notifications.router)
 api.include_router(events.router)

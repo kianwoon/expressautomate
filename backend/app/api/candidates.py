@@ -187,10 +187,13 @@ async def get_candidate(request: Request, candidate_id: uuid.UUID) -> dict:
         # `_load` from this module, and a top-level import each way would not
         # resolve. The detail panel is the only reader, so the cost is one
         # lookup on a route that already does three queries.
+        from app.api.candidate_documents import documents_for
+        from app.api.candidate_documents import serialize as _serialize_document
         from app.api.candidate_roles import _serialize as _serialize_role
         from app.api.candidate_roles import roles_for
 
         roles = await roles_for(session, candidate_id)
+        documents = await documents_for(session, candidate_id)
 
     payload = _serialize(candidate)
     payload["skills"] = [s.skill for s in skills]
@@ -200,6 +203,10 @@ async def get_candidate(request: Request, candidate_id: uuid.UUID) -> dict:
     # Only the single-record GET carries the career. A table of fifty
     # candidates does not need everybody's.
     payload["roles"] = [_serialize_role(r) for r in roles]
+    # Beside the roles, and for the same reason: a recruiter looking at an
+    # unconfirmed role needs to see the upload it came from, and whether that
+    # upload is still being read.
+    payload["documents"] = [_serialize_document(d) for d in documents]
 
     # Derived fresh rather than read from the column: a role with no end date
     # is still accruing, so the cached value is stale the month after it was

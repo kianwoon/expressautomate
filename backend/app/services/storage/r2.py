@@ -80,6 +80,20 @@ def avatar_key(tenant_id: uuid.UUID, candidate_id: uuid.UUID) -> str:
     return f"{tenant_id}/candidates/{candidate_id}/avatar"
 
 
+def document_key(
+    tenant_id: uuid.UUID, candidate_id: uuid.UUID, document_id: uuid.UUID, kind: str
+) -> str:
+    """Where one uploaded CV is kept, exactly as it arrived.
+
+    Computed from the authenticated tenant and a freshly minted document id,
+    never from anything the client sent — the filename is attacker-controlled
+    and a `../` or a leading `/` in it would escape the `{tenant_id}/` prefix
+    that tenant erasure purges by. `kind` is what `sniff` decided the bytes
+    are, not what the upload claimed to be.
+    """
+    return f"{tenant_id}/candidates/{candidate_id}/documents/{document_id}.{kind}"
+
+
 def document_text_key(
     tenant_id: uuid.UUID, candidate_id: uuid.UUID, document_id: uuid.UUID
 ) -> str:
