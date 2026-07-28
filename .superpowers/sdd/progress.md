@@ -36,3 +36,9 @@ ENVIRONMENT FIXED — backend/scripts/test-env.sh. 875 passed, 1 skipped, repeat
   (2) An interrupted run leaves stranded rows; rescan_stuck then counts 140 where a test
       expects 0. Looks like an auth storm, is actually data pollution. Rebuild the container.
   The script sources .env.test and hides any root .env for the run.
+P2 Task 5: complete (2e8e075..2d0847f, 901 passed). Fable 8.5/10 APPROVE WITH CHANGES; both
+  Important defects fixed: same-month role could never match (zero-length half-open span),
+  and ambiguous numeric dates (both fields <=12) were guessed day-first - now year-only.
+  ACCEPTANCE CRITERION FOR TASK 6: the upload route must enqueue parse_candidate_cv.
+    Today only rescan_stuck does, so an uploaded CV would sit until the sweep found it.
+  DEFERRED: get_bytes and the arq timeout are covered by doubles only - needs a staging smoke.
