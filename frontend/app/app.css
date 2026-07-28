@@ -637,3 +637,162 @@ select.gl-input:focus-visible { outline: 2px solid var(--blue-500); outline-offs
   outline: 2px solid var(--blue-500);
   outline-offset: 2px;
 }
+
+/* The candidate's work history. Same bargain as the avatar above: the controls
+   for a role live on the role, faint until the row is hovered or something
+   inside it takes focus, and never out of the tab order. A column of grey
+   buttons beside the timeline is exactly what this replaces. */
+.ch-section {
+  margin-top: 22px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+.ch-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+/* Set as a link, not a button block. It acts on the section rather than on any
+   one role, so it has nowhere else to sit, but it should not out-weigh the
+   history itself. */
+.ch-add {
+  font: inherit;
+  font-size: 0.8125rem;
+  padding: 2px 4px;
+  border: 0;
+  background: none;
+  color: var(--ink-500);
+  cursor: pointer;
+  border-radius: var(--radius);
+  transition: color 150ms ease;
+}
+.ch-add:hover:not(:disabled) { color: var(--ink-900); }
+.ch-add:disabled { opacity: 0.5; cursor: default; }
+.ch-add:focus-visible { outline: 2px solid var(--blue-500); outline-offset: 2px; }
+.ch-empty { margin-top: 10px; font-size: 0.875rem; }
+.ch-list { list-style: none; margin: 12px 0 0; padding: 0; }
+/* The rail is the timeline. A left border on every role, thickened and
+   coloured on the one they are in now, so the current job is found by glance
+   rather than by reading dates. */
+.ch-item {
+  position: relative;
+  padding: 10px 0 10px 14px;
+  border-left: 2px solid var(--line);
+}
+.ch-item[data-current="yes"] { border-left-color: var(--blue-500); }
+/* A row nobody has checked yet — the CV parser's output, once it exists. The
+   amber rail is the same "needs review" signal the job orders use. */
+.ch-item[data-status="unconfirmed"] { border-left-color: var(--amber-700); }
+.ch-item-editing { border-left-color: var(--blue-500); }
+.ch-line { display: flex; align-items: flex-start; gap: 8px; }
+.ch-who { min-width: 0; overflow-wrap: anywhere; }
+.ch-title { font-weight: 650; color: var(--ink-900); }
+.ch-at { color: var(--ink-500); }
+.ch-employer { color: var(--ink-700); }
+.ch-when { margin-top: 2px; font-size: 0.8125rem; color: var(--ink-500); }
+.ch-dur { color: var(--ink-500); }
+.ch-meta { margin-top: 2px; font-size: 0.8125rem; color: var(--ink-500); }
+/* Faint rather than hidden. `opacity` keeps the buttons rendered, focusable and
+   announced; `display: none` or `visibility: hidden` would take them away from
+   the keyboard entirely, which is the defect this whole pattern exists to
+   avoid. Any focus inside the row brings them up, so tabbing reveals exactly
+   what hovering does. */
+.ch-tools {
+  margin-left: auto;
+  display: flex;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity 150ms ease;
+}
+.ch-item:hover .ch-tools,
+.ch-item:focus-within .ch-tools {
+  opacity: 1;
+}
+.ch-tool {
+  font: inherit;
+  font-size: 0.75rem;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  border: 0;
+  border-radius: var(--radius);
+  background: none;
+  color: var(--ink-500);
+  cursor: pointer;
+  transition: color 150ms ease, background-color 150ms ease;
+}
+.ch-tool:hover:not(:disabled) { color: var(--ink-900); background: var(--surface-alt); }
+.ch-tool-remove:hover:not(:disabled) { color: #c74f4f; background: none; }
+.ch-tool:disabled { opacity: 0.55; cursor: not-allowed; }
+/* Always visible, never revealed: a keyboard has to be able to find these
+   without a hover state, so they get a ring whatever the row is doing. */
+.ch-tool:focus-visible {
+  outline: 2px solid var(--blue-500);
+  outline-offset: 1px;
+}
+.ch-item:focus-within .ch-tools { opacity: 1; }
+.ch-more { margin-top: 6px; }
+.ch-more > summary {
+  font-size: 0.8125rem;
+  color: var(--ink-500);
+  cursor: pointer;
+  width: fit-content;
+  border-radius: var(--radius);
+}
+.ch-more > summary:hover { color: var(--ink-900); }
+.ch-more > summary:focus-visible { outline: 2px solid var(--blue-500); outline-offset: 2px; }
+.ch-desc { margin-top: 6px; font-size: 0.875rem; white-space: pre-wrap; }
+/* The disclosure's own opening is instant; this is the content easing in
+   behind it, and it is the one piece of motion in the section. */
+.ch-more[open] > .ch-desc { animation: ch-reveal 150ms ease; }
+@keyframes ch-reveal {
+  from { opacity: 0; transform: translateY(-2px); }
+  to { opacity: 1; transform: none; }
+}
+.ch-verify {
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.ch-flag {
+  font-size: 0.75rem;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--amber-050);
+  color: var(--amber-700);
+}
+.ch-editor { margin: 4px 0; }
+/* A fieldset so the pair is announced as one thing, with no browser chrome —
+   the legend is doing the labelling, not drawing a box. */
+.ch-dates {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 6px;
+}
+.ch-dates > legend { padding: 0; margin-bottom: 6px; }
+.ch-dates[disabled] { opacity: 0.55; }
+.ch-select { padding: 7px 10px; }
+.ch-current {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.8125rem;
+  color: var(--ink-700);
+}
+/* Someone who has asked for less movement gets none of it: the controls appear
+   at full strength instead of fading, and the disclosure simply is open. */
+@media (prefers-reduced-motion: reduce) {
+  .ch-tools,
+  .ch-add,
+  .ch-tool {
+    transition: none;
+  }
+  .ch-tools { opacity: 1; }
+  .ch-more[open] > .ch-desc { animation: none; }
+}

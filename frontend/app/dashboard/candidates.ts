@@ -9,6 +9,8 @@ import {
   candidateMergePath,
   candidatePath,
   candidateRestorePath,
+  candidateRolePath,
+  candidateRolesPath,
   candidateUnmergePath,
 } from "../api";
 
@@ -26,6 +28,54 @@ import {
  */
 
 export type Stage = "new" | "contacted" | "submitted" | "placed" | "rejected";
+
+/** How much of a date the source actually stated. A CV that says "2019" has
+ *  no month in it, and rendering "1 Jan 2019" would assert a day nobody
+ *  wrote down — the §15 rule this whole feature is built around. The
+ *  precision travels with the date so the reader can only ever be shown what
+ *  the source supports. */
+export type DatePrecision = "year" | "month" | "day";
+
+/** One job the candidate held.
+ *
+ * `ended_on: null` is what makes a role current, and `is_current` is the
+ * server saying so rather than a second stored fact that could disagree with
+ * the dates beside it.
+ *
+ * `source` and `status` have one useful value each today — a recruiter typed
+ * it, and it is confirmed. They ship now because the CV parser that will
+ * write `unconfirmed` rows is the next piece of work, and adding the columns
+ * later would mean a migration and a redesign rather than an endpoint. */
+export type CandidateRole = {
+  id: string;
+  employer: string;
+  employer_normalized: string | null;
+  title: string;
+  title_normalized: string | null;
+  started_on: string | null;
+  started_precision: DatePrecision | null;
+  ended_on: string | null;
+  ended_precision: DatePrecision | null;
+  employment_type: string | null;
+  location: string | null;
+  description: string | null;
+  source: string;
+  status: "unconfirmed" | "confirmed" | "rejected";
+  is_current: boolean;
+};
+
+/** What a create sends, and — one key at a time — what a patch sends. */
+export type CandidateRoleBody = {
+  employer?: string;
+  title?: string;
+  started_on?: string | null;
+  started_precision?: DatePrecision | null;
+  ended_on?: string | null;
+  ended_precision?: DatePrecision | null;
+  employment_type?: string | null;
+  location?: string | null;
+  description?: string | null;
+};
 
 export type Candidate = {
   id: string;
@@ -49,6 +99,11 @@ export type Candidate = {
   merged_into_candidate_id?: string | null;
   /** Only present on the single-record GET, not on a list row. */
   skills?: string[];
+  /** Only present on the single-record GET, not on a list row. Optional
+   *  rather than defaulted to `[]`, because a list row has not been asked
+   *  about its roles — absent must read as "not loaded", never as "none".
+   *  Already ordered current-first then newest by the server. */
+  roles?: CandidateRole[];
   /** Only present on the single-record GET, not on a list row. */
   overridden_fields?: string[];
   /** Set once a photo has been uploaded; `null` means "show the initials
@@ -268,6 +323,48 @@ export async function mergeCandidate(id: string, targetId: string): Promise<void
 export async function unmergeCandidate(id: string): Promise<void> {
   const res = await fetch(candidateUnmergePath(id), {
     method: "POST",
+    credentials: "include",
+    headers: { Accept: "application/json" },
+  });
+  if (!res.ok) throw new ApiError(await readError(res));
+}
+
+export async function createCandidateRole(
+  id: string,
+  body: CandidateRoleBody & { employer: string; title: string },
+): Promise<CandidateRole> {
+  const res = await fetch(candidateRolesPath(id), {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new ApiError(await readError(res));
+  return (await res.json()) as CandidateRole;
+}
+
+/** A true partial update: only the keys present in `body` are touched, and an
+ *  explicit `null` clears a nullable field. Callers must therefore send the
+ *  keys they mean and omit the rest — spreading a whole role in here would
+ *  turn every edit into a replacement. */
+export async function updateCandidateRole(
+  id: string,
+  roleId: string,
+  body: CandidateRoleBody,
+): Promise<CandidateRole> {
+  const res = await fetch(candidateRolePath(id, roleId), {
+    method: "PATCH",
+    credentials: "include",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new ApiError(await readError(res));
+  return (await res.json()) as CandidateRole;
+}
+
+export async function deleteCandidateRole(id: string, roleId: string): Promise<void> {
+  const res = await fetch(candidateRolePath(id, roleId), {
+    method: "DELETE",
     credentials: "include",
     headers: { Accept: "application/json" },
   });

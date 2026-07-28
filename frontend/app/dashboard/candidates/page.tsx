@@ -261,7 +261,7 @@ function Workspace({ role }: { role: string }) {
               onRestore={doRestore}
               onDelete={canDelete ? doDelete : null}
               onChanged={refreshDetail}
-              onAvatarChanged={refetchDetail}
+              onDetailChanged={refetchDetail}
             />
           </div>
           {detailError && (

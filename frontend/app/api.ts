@@ -219,6 +219,20 @@ export function candidateAvatarPath(id: string): string {
   return `${candidatePath(id)}/avatar`;
 }
 
+/** The roles a candidate held. Nested under the candidate because a role has
+ *  no meaning apart from one — an id from another agency is a 404 before any
+ *  role is reached. POST creates; the collection itself is never fetched
+ *  directly, since `GET /candidates/{id}` already embeds it. */
+export function candidateRolesPath(id: string): string {
+  return `${candidatePath(id)}/roles`;
+}
+
+/** One role, for PATCH and DELETE. Both ids are encoded for the same reason
+ *  `candidatePath` encodes one: neither is guaranteed to be a bare UUID. */
+export function candidateRolePath(id: string, roleId: string): string {
+  return `${candidateRolesPath(id)}/${encodeURIComponent(roleId)}`;
+}
+
 /** The client list. A site route, so no API_BASE prefix. */
 export const CLIENTS_DASHBOARD_PATH = "/dashboard/clients";
 

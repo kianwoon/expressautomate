@@ -8,6 +8,7 @@ import type { Candidate, CandidatePage } from "../candidates";
 import { mergeCandidate, unmergeCandidate } from "../candidates";
 import { Value, day } from "../format";
 import { CandidateAvatar } from "./candidate-avatar";
+import { CandidateHistory } from "./candidate-history";
 
 /**
  * One candidate in full, beside the list.
@@ -37,7 +38,7 @@ export function CandidatePanel({
   onRestore,
   onDelete,
   onChanged,
-  onAvatarChanged,
+  onDetailChanged,
 }: {
   row: Candidate | null;
   onEdit: () => void;
@@ -51,10 +52,11 @@ export function CandidatePanel({
   /** Called after a merge or unmerge succeeds, so the caller can refetch the
    *  list and the detail record. */
   onChanged: () => void;
-  /** Called after a photo is uploaded or removed. Separate from `onChanged`
-   *  because a photo changes nothing the table draws, and re-reading the list
-   *  for it is what used to blank the screen mid-upload. */
-  onAvatarChanged: () => void;
+  /** Refetch this candidate alone; do not reload the list. Serves both the
+   *  photo and the work history — neither changes anything the table draws,
+   *  and re-reading the list for them is what used to blank the screen
+   *  mid-upload. */
+  onDetailChanged: () => void;
 }) {
   if (!row) {
     return (
@@ -77,7 +79,7 @@ export function CandidatePanel({
       onRestore={onRestore}
       onDelete={onDelete}
       onChanged={onChanged}
-      onAvatarChanged={onAvatarChanged}
+      onDetailChanged={onDetailChanged}
     />
   );
 }
@@ -93,7 +95,7 @@ function Detail({
   onRestore,
   onDelete,
   onChanged,
-  onAvatarChanged,
+  onDetailChanged,
 }: {
   row: Candidate;
   onEdit: () => void;
@@ -101,7 +103,7 @@ function Detail({
   onRestore: () => Promise<void>;
   onDelete: (() => Promise<void>) | null;
   onChanged: () => void;
-  onAvatarChanged: () => void;
+  onDetailChanged: () => void;
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -173,7 +175,7 @@ function Detail({
       {/* The name sits beside the photo rather than under it: the two
           together are the answer to "who am I looking at", and splitting
           them left the circle paired with a sentence about uploading. */}
-      <CandidateAvatar row={row} onChanged={onAvatarChanged}>
+      <CandidateAvatar row={row} onChanged={onDetailChanged}>
         <h3 className="jo-detail-title ca-name">{row.full_name}</h3>
         {row.current_title && (
           <p className="jo-detail-company">
@@ -225,6 +227,12 @@ function Detail({
             <span className="row-k">Notes</span>
             <OverrideProse row={row} field="notes" text={row.notes} />
           </div>
+
+          {/* Below the fields rather than above them, because three of those
+              fields — title, employer, experience — are derived from these
+              rows. The reader meets the summary first and then what it was
+              computed from. */}
+          <CandidateHistory row={row} onChanged={onDetailChanged} />
 
           <MergePicker candidateId={row.id} onMerged={onChanged} />
         </>
