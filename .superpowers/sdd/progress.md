@@ -58,3 +58,7 @@ PIECE 2 COMPLETE. Fable final: SHIP WITH FIXES 8.5/10; all findings closed in a5
   HUMAN MUST CHECK ONCE SIGNED IN: (1) a real PDF reaches parsed with a visible evidence
     quote; (2) a scanned CV shows the unreadable guidance; (3) confirm/reject move the
     candidate's headline fields.
+  Final fix reviewed (Fable 7.5/10) - widening the match query for rejected roles had
+    introduced two untested regressions: a rejected row made a dateless live match look
+    ambiguous, and live-vs-rejected overlap resolved by database row order. Closed in
+    cb27aef: live roles are consulted first, rejected only for suppression. 927 passed.
