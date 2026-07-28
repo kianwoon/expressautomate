@@ -21,7 +21,12 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "c4d9f1a83e12"
-down_revision: str | None = "b7c1e4a2d905"
+# Re-parented onto the opportunity-vocabulary revision rather than the
+# candidate-roles one this was written against. Both were authored off
+# `b7c1e4a2d905` on separate branches, which left two heads at the merge, and
+# the other branch reached production first. Following it keeps the history a
+# single line, which is the only shape `alembic upgrade head` can act on.
+down_revision: str | None = "3f9a6c21e8b4"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
