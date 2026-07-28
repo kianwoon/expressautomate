@@ -190,9 +190,13 @@ async def get_candidate(request: Request, candidate_id: uuid.UUID) -> dict:
         from app.api.candidate_documents import documents_for
         from app.api.candidate_documents import serialize as _serialize_document
         from app.api.candidate_roles import _serialize as _serialize_role
-        from app.api.candidate_roles import roles_for
+        from app.api.candidate_roles import evidence_for, roles_for
 
         roles = await roles_for(session, candidate_id)
+        # One query for every role's evidence rather than one per role — the
+        # roles are already loaded, so a second round trip per row would be
+        # the N+1 the rest of this endpoint is careful to avoid.
+        evidence = await evidence_for(session, [r.id for r in roles])
         documents = await documents_for(session, candidate_id)
 
     payload = _serialize(candidate)
@@ -202,7 +206,7 @@ async def get_candidate(request: Request, candidate_id: uuid.UUID) -> dict:
     payload["overridden_fields"] = sorted(overrides)
     # Only the single-record GET carries the career. A table of fifty
     # candidates does not need everybody's.
-    payload["roles"] = [_serialize_role(r) for r in roles]
+    payload["roles"] = [_serialize_role(r, evidence.get(r.id)) for r in roles]
     # Beside the roles, and for the same reason: a recruiter looking at an
     # unconfirmed role needs to see the upload it came from, and whether that
     # upload is still being read.

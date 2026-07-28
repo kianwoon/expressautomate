@@ -13,8 +13,94 @@ from sqlalchemy import select, text
 from app.db.rls import tenant_session
 from app.main import app
 from app.models.candidate import CandidateRole
+from app.services.cv.persist import persist_cv
+from app.services.cv.schema import CVResponse
+from app.services.llm.client import LLMResult
 from tests.conftest import AdminSessionLocal
 from tests.test_opportunities_api import sign_in
+
+# A minimal CV, and the pieces `persist_cv` needs to turn one role of it into
+# a `candidate_roles` row plus its `extraction_evidence`. Kept local rather
+# than imported from `test_cv_persist` — that module imports `agency` and
+# `_a_candidate_row` from this one, so the reverse import would be a cycle.
+_CV_TEXT = "Jane Tan\nStaff Nurse, Parkway Shenton, Mar 2019 to Mar 2020\n"
+
+
+def _cv_field(value: str, evidence: str | None = None) -> dict:
+    """One extracted field, with the span `verify` will check against `_CV_TEXT`.
+
+    `evidence` defaults to `value` (found verbatim in `_CV_TEXT`); passing a
+    string that is not on the page is how a test manufactures the invalid
+    case without touching `verify` itself.
+    """
+    quote = evidence if evidence is not None else value
+    at = _CV_TEXT.find(quote)
+    return {
+        "value": value,
+        "evidence": quote,
+        "start_char": max(at, 0),
+        "end_char": max(at, 0) + len(quote),
+        "confidence": 0.9,
+    }
+
+
+def _cv_role(
+    title_evidence: str | None = None, company_evidence: str | None = None
+) -> tuple[CVResponse, LLMResult]:
+    payload = {
+        "roles": [{"title": _cv_field("Staff Nurse", title_evidence),
+                    "company": _cv_field("Parkway Shenton", company_evidence)}],
+        "skills": [],
+    }
+    return CVResponse.model_validate(payload), LLMResult(
+        data=payload, model="test/fast", latency_ms=12, raw={"choices": []}
+    )
+
+
+async def _cv_document(tenant_id, candidate_id) -> uuid.UUID:
+    document_id = uuid.uuid4()
+    async with AdminSessionLocal() as s:
+        await s.execute(
+            text(
+                "INSERT INTO candidate_documents (id, tenant_id, candidate_id, filename,"
+                " content_type, byte_size, object_key, parse_state)"
+                " VALUES (:i, :t, :c, 'cv.pdf', 'application/pdf', 10, :k, 'parsing')"
+            ),
+            {"i": document_id, "t": tenant_id, "c": candidate_id, "k": f"{tenant_id}/cv.pdf"},
+        )
+        await s.commit()
+    return document_id
+
+
+async def _persist_cv_role(
+    tenant_id, candidate_id, title_evidence=None, company_evidence=None
+) -> uuid.UUID:
+    """Runs the real CV pipeline so the resulting evidence row is the same
+    shape production writes, then hands back the new role's id."""
+    from app.models.candidate import CandidateDocument
+
+    document_id = await _cv_document(tenant_id, candidate_id)
+    response, result = _cv_role(title_evidence, company_evidence)
+    async with tenant_session(tenant_id) as session:
+        document = await session.get(CandidateDocument, document_id)
+        await persist_cv(
+            session,
+            tenant_id=tenant_id,
+            candidate_id=candidate_id,
+            document=document,
+            response=response,
+            result=result,
+            text=_CV_TEXT,
+        )
+        # Queried inside the same block, not after: `tenant_session` sets the
+        # RLS tenant with `SET LOCAL`, which a commit discards, and the
+        # context manager's own commit only fires once this block exits.
+        role_id = (
+            await session.execute(
+                select(CandidateRole.id).where(CandidateRole.candidate_id == candidate_id)
+            )
+        ).scalar_one()
+    return role_id
 
 
 async def _a_candidate_row(tenant_id, user_id):
@@ -48,6 +134,9 @@ async def agency():
     yield tid, uid
     async with AdminSessionLocal() as s:
         for table in (
+            "extraction_evidence",
+            "extractions",
+            "candidate_documents",
             "candidate_roles",
             "candidate_field_overrides",
             "candidate_skills",
@@ -75,6 +164,9 @@ async def other_agency():
     yield tid, uid
     async with AdminSessionLocal() as s:
         for table in (
+            "extraction_evidence",
+            "extractions",
+            "candidate_documents",
             "candidate_roles",
             "candidate_field_overrides",
             "candidate_skills",
@@ -576,3 +668,78 @@ async def test_a_candidate_with_only_rejected_roles_has_no_derived_profile(agenc
         body = (await client.get(f"/api/candidates/{candidate['id']}")).json()
     assert body["current_employer"] is None
     assert body["current_title"] is None
+
+
+@pytest.mark.asyncio
+async def test_a_cv_role_serializes_with_its_quoted_evidence(agency):
+    """The disclosure this feature exists for: a role the CV parser proposed
+    carries the line of the CV that produced it, once `evidence_valid` says
+    that line is really on the page."""
+    tenant_id, user_id = agency
+    candidate_id = await _a_candidate_row(tenant_id, user_id)
+    role_id = await _persist_cv_role(tenant_id, candidate_id)
+
+    async with await _client_for(tenant_id, user_id) as client:
+        body = (await client.get(f"/api/candidates/{candidate_id}")).json()
+
+    role = next(r for r in body["roles"] if r["id"] == str(role_id))
+    assert role["evidence"] == "Staff Nurse"
+
+
+@pytest.mark.asyncio
+async def test_a_human_typed_role_serializes_with_no_evidence(agency):
+    """A recruiter's own entry has no `extraction_evidence` row at all — the
+    key must be absent, not an empty string the frontend would render as a
+    blank disclosure."""
+    async with await _client_for(*agency) as client:
+        candidate = await _a_candidate(client, full_name="Tan Hui Ling")
+        res = await client.post(
+            f"/api/candidates/{candidate['id']}/roles",
+            json={"employer": "Parkway Shenton", "title": "Staff Nurse"},
+        )
+        assert res.status_code == 201, res.text
+        assert "evidence" not in res.json()
+
+        body = (await client.get(f"/api/candidates/{candidate['id']}")).json()
+    assert "evidence" not in body["roles"][0]
+
+
+@pytest.mark.asyncio
+async def test_unverified_evidence_is_not_exposed(agency):
+    """A quote that failed verification is precisely the thing §15 forbids
+    asserting — it must not reach the client even though the row exists."""
+    tenant_id, user_id = agency
+    candidate_id = await _a_candidate_row(tenant_id, user_id)
+    # Neither field's "evidence" is a string actually printed in `_CV_TEXT`,
+    # so `verify` marks both invalid — the role exists, but nothing about it
+    # was ever confirmed on the page.
+    role_id = await _persist_cv_role(
+        tenant_id,
+        candidate_id,
+        title_evidence="Ward Manager",
+        company_evidence="Some Other Clinic",
+    )
+
+    async with await _client_for(tenant_id, user_id) as client:
+        body = (await client.get(f"/api/candidates/{candidate_id}")).json()
+
+    role = next(r for r in body["roles"] if r["id"] == str(role_id))
+    assert "evidence" not in role
+
+
+@pytest.mark.asyncio
+async def test_a_role_evidence_belongs_to_one_tenant_only(agency, other_agency):
+    """Agency B's session cannot pull Agency A's evidence, even knowing the
+    role id — the same RLS boundary the roles themselves are scoped by."""
+    from app.api.candidate_roles import evidence_for
+
+    a_tenant, a_user = agency
+    b_tenant, _b_user = other_agency
+    a_candidate = await _a_candidate_row(a_tenant, a_user)
+    role_id = await _persist_cv_role(a_tenant, a_candidate)
+
+    async with tenant_session(a_tenant) as session:
+        assert (await evidence_for(session, [role_id])).get(role_id) == "Staff Nurse"
+
+    async with tenant_session(b_tenant) as session:
+        assert (await evidence_for(session, [role_id])) == {}

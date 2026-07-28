@@ -17,10 +17,20 @@ from app.api.auth import _require_session
 from app.api.candidates import _load
 from app.db.rls import tenant_session
 from app.models.candidate import Candidate, CandidateFieldOverride, CandidateRole
+from app.models.extraction import ExtractionEvidence
 from app.services.candidate_tenure import derive
 from app.services.client_naming import normalize_company_name
+from app.services.cv.schema import ROLE_FIELDS
 
 router = APIRouter(tags=["candidate-roles"])
+
+# The order `ROLE_FIELDS` puts a model's answer in, and the order in which a
+# role's evidence is searched for the one line worth showing beside it. A CV
+# role can carry a verified quote for several fields at once (title, company,
+# both dates); the panel has room for one, and the title's line is the one
+# that reads like "what the CV said about this job" rather than a fragment
+# about a date.
+_EVIDENCE_FIELD_PRIORITY = ROLE_FIELDS
 
 
 class RoleBody(BaseModel):
@@ -95,8 +105,8 @@ class RolePatchBody(BaseModel):
         return self
 
 
-def _serialize(role: CandidateRole) -> dict:
-    return {
+def _serialize(role: CandidateRole, evidence: str | None = None) -> dict:
+    payload = {
         "id": str(role.id),
         "employer": role.employer,
         "employer_normalized": role.employer_normalized,
@@ -115,6 +125,13 @@ def _serialize(role: CandidateRole) -> dict:
         # rather than stored, so it cannot disagree with the dates beside it.
         "is_current": role.ended_on is None,
     }
+    # Absent, not `None`-valued: a role a recruiter typed has no evidence row
+    # at all, and the frontend tells the two apart by whether the key is
+    # there — an empty disclosure for a human-entered role would be the
+    # feature's honesty rule pointed the wrong way.
+    if evidence:
+        payload["evidence"] = evidence
+    return payload
 
 
 def _ordered(candidate_id: uuid.UUID):
@@ -137,6 +154,49 @@ def _ordered(candidate_id: uuid.UUID):
 
 async def roles_for(session, candidate_id: uuid.UUID) -> list[CandidateRole]:
     return list((await session.execute(_ordered(candidate_id))).scalars())
+
+
+async def evidence_for(session, role_ids: list[uuid.UUID]) -> dict[uuid.UUID, str]:
+    """One quote per role, keyed by role id — a single query for the whole page.
+
+    Loaded once for the full role list rather than per role, so the detail
+    panel stays at the query count it already had. Only `evidence_valid` rows
+    are candidates: an unverified span is the exact thing §15 says not to
+    assert, so it must never reach a client, verified or not.
+
+    A role can have several verified fields (title, company, both dates); the
+    panel shows one line, so `_EVIDENCE_FIELD_PRIORITY` picks whichever field
+    ranks first rather than an arbitrary row order the database happens to
+    return.
+    """
+    if not role_ids:
+        return {}
+    rows = (
+        await session.execute(
+            select(
+                ExtractionEvidence.candidate_role_id,
+                ExtractionEvidence.field_name,
+                ExtractionEvidence.evidence_text,
+            ).where(
+                ExtractionEvidence.candidate_role_id.in_(role_ids),
+                ExtractionEvidence.evidence_valid.is_(True),
+            )
+        )
+    ).all()
+
+    by_role: dict[uuid.UUID, dict[str, str]] = {}
+    for role_id, field_name, evidence_text in rows:
+        if not evidence_text:
+            continue
+        by_role.setdefault(role_id, {})[field_name] = evidence_text
+
+    result: dict[uuid.UUID, str] = {}
+    for role_id, fields in by_role.items():
+        for field_name in _EVIDENCE_FIELD_PRIORITY:
+            if field_name in fields:
+                result[role_id] = fields[field_name]
+                break
+    return result
 
 
 async def overridden_fields(session, candidate_id: uuid.UUID) -> set[str]:
@@ -266,7 +326,8 @@ async def create_role(request: Request, candidate_id: uuid.UUID, body: RoleBody)
         await session.flush()
         await apply_derived(session, candidate)
         await session.commit()
-        return _serialize(role)
+        evidence = (await evidence_for(session, [role.id])).get(role.id)
+        return _serialize(role, evidence)
 
 
 @router.patch("/candidates/{candidate_id}/roles/{role_id}")
@@ -315,7 +376,8 @@ async def update_role(
         await session.flush()
         await apply_derived(session, candidate)
         await session.commit()
-        return _serialize(role)
+        evidence = (await evidence_for(session, [role.id])).get(role.id)
+        return _serialize(role, evidence)
 
 
 async def _set_status(
@@ -341,7 +403,8 @@ async def _set_status(
         await session.flush()
         await apply_derived(session, candidate)
         await session.commit()
-        return _serialize(role)
+        evidence = (await evidence_for(session, [role.id])).get(role.id)
+        return _serialize(role, evidence)
 
 
 @router.post("/candidates/{candidate_id}/roles/{role_id}/confirm")
