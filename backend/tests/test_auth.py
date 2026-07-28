@@ -465,7 +465,9 @@ async def test_me_returns_the_signed_in_user(client, monkeypatch, cleanup) -> No
     body = (await client.get("/api/auth/me")).json()
     assert body["user"]["email"] == "rachel@agency-a.sg"
     assert body["user"]["display_name"] == "Rachel Tan"
-    assert body["user"]["role"] == "recruiter"
+    # The first user to sign in for a new tenant becomes the owner, since they set up the agency
+    # and are the only one who may delete candidate personal data.
+    assert body["user"]["role"] == "owner"
     assert body["tenant"]["id"] == tid
     assert body["tenant"]["name"] == "agency-a.sg"
     # The dashboard is built against exactly these keys.
