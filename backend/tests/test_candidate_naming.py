@@ -28,6 +28,9 @@ from app.services.candidate_naming import (
         (None, None),
         ("not a phone", None),
         ("12", None),                       # too short to be anyone's number
+        ("9123a4567", None),               # embedded letter rejected
+        ("+65 9123 456X", None),           # letter at end rejected
+        ("1800-FLOWERS", None),            # vanity number rejected
     ],
 )
 def test_normalize_phone(raw: str | None, expected: str | None) -> None:

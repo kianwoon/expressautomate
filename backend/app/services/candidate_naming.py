@@ -24,6 +24,12 @@ def normalize_phone(raw: str | None) -> str | None:
     """
     if not raw or not raw.strip():
         return None
+    # Reject inputs with alphabetic characters. The phonenumbers library
+    # strips embedded letters per RFC3966, silently turning "9123a4567" into
+    # "+6591234567" — a different valid number. As an identity key, this
+    # corrupts matching and must fail confidently instead.
+    if re.search(r"[a-zA-Z]", raw):
+        return None
     try:
         parsed = phonenumbers.parse(raw, settings.DEFAULT_PHONE_REGION)
     except phonenumbers.NumberParseException:
