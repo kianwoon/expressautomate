@@ -291,6 +291,24 @@ class Settings(BaseSettings):
 
     CLIENTS_PAGE_LIMIT: int = Field(default=200, gt=0)
 
+    CANDIDATES_PAGE_LIMIT: int = Field(default=200, gt=0)
+
+    # Phone numbers are parsed to E.164 before they identify anyone. A sheet
+    # writes "9123 4567" and means +65 9123 4567; without a region there is
+    # nothing to resolve that against.
+    DEFAULT_PHONE_REGION: str = Field(default="SG", min_length=2, max_length=2)
+
+    # Which leading digits belong to a person rather than a switchboard. A
+    # fixed line is shared by a whole company, so matching a candidate on one
+    # would merge colleagues into a single record.
+    MOBILE_PREFIXES_RAW: str = Field(default="8,9", alias="MOBILE_PREFIXES")
+
+    @property
+    def MOBILE_PREFIXES(self) -> frozenset[str]:
+        return frozenset(
+            part.strip() for part in self.MOBILE_PREFIXES_RAW.split(",") if part.strip()
+        )
+
     # Which domains may never key a client. A hiring manager writing from
     # gmail.com identifies a person, not a company, and matching on that
     # domain would file every unrelated agency's clients under one row.

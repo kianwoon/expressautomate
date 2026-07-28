@@ -20,6 +20,7 @@ dependencies = [
     "aioboto3>=15.5.0",
     "arq>=0.28.0",
     "selectolax>=0.4.11",
+    "phonenumbers>=9.0.35",
 ]
 
 [dependency-groups]
