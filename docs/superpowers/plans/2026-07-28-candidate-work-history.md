@@ -12,7 +12,7 @@
 
 - All config comes from the repo-root `.env` via `app.core.config.settings`. **No hardcoded URLs, model names, keys, limits or TTLs.**
 - Every business table carries `tenant_id` via the `TenantScoped` mixin (`app/db/base.py:33`).
-- **No source file may exceed 1500 lines.** `backend/app/api/candidates.py` is 823. `frontend/app/globals.css` is 1496 — Task 5 exists because of this.
+- **No source file may exceed 1500 lines.** `backend/app/api/candidates.py` is 823. `frontend/app/globals.css` is 1496 — Task 4 exists because of this.
 - Every API route lives under `/api`; `backend/tests/test_routing.py` fails if one escapes.
 - A candidate belonging to another tenant is **404, never 403**.
 - Tests never touch the live database. `backend/tests/conftest.py` refuses a non-local host.
