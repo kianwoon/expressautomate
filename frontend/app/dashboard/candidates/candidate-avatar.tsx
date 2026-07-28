@@ -84,6 +84,7 @@ export function CandidateAvatar({
   const [dragging, setDragging] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const shownFor = useRef<string | null>(null);
+  const fileRef = useRef<HTMLInputElement | null>(null);
 
   // Re-fetched every time the panel opens on a (possibly different)
   // candidate — the URL is short-lived, so holding one from a previous
@@ -160,6 +161,11 @@ export function CandidateAvatar({
       await deleteCandidateAvatar(row.id);
       setPhoto({ status: "none" });
       onChanged();
+      // The button that was just pressed no longer exists — removal is the
+      // only reason it renders. Left alone, focus falls to the body and a
+      // keyboard lands back at the top of the document. Hand it to the
+      // control that is still there, which is the one they would want next.
+      fileRef.current?.focus();
     } catch (err) {
       setError(err instanceof Error ? err.message : "We could not remove that photo just now.");
     } finally {
@@ -212,6 +218,7 @@ export function CandidateAvatar({
               the overlay above lights up from `:focus-within`. */}
           <input
             className="ca-file"
+            ref={fileRef}
             type="file"
             accept="image/*"
             onChange={onFileChosen}
