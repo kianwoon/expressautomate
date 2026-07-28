@@ -54,6 +54,47 @@ class RoleBody(BaseModel):
         return self
 
 
+class RolePatchBody(BaseModel):
+    """A patch, not a replacement.
+
+    Every field defaults to unset rather than `None`, so `model_fields_set`
+    can tell "the caller sent this key" apart from "the caller sent this key
+    as null" apart from "the caller never mentioned this key". PATCH must
+    only touch the keys actually sent — anything else silently wipes the
+    fields a recruiter didn't mean to touch.
+    """
+
+    employer: str | None = None
+    title: str | None = None
+    started_on: date | None = None
+    started_precision: str | None = None
+    ended_on: date | None = None
+    ended_precision: str | None = None
+    employment_type: str | None = None
+    location: str | None = None
+    description: str | None = None
+
+    @model_validator(mode="after")
+    def _sent_fields_are_sane(self) -> "RolePatchBody":
+        # Cross-field date ordering can't be checked here in general — the
+        # other end of the comparison may live on the stored row rather than
+        # in this body. What we *can* reject up front is a blank string for a
+        # field the caller did send, and a precision value outside the enum.
+        if "employer" in self.model_fields_set and not (self.employer or "").strip():
+            raise ValueError("A role needs an employer")
+        if "title" in self.model_fields_set and not (self.title or "").strip():
+            raise ValueError("A role needs a title")
+        for field in ("started_precision", "ended_precision"):
+            if field in self.model_fields_set:
+                value = getattr(self, field)
+                if value is not None and value not in CandidateRole.PRECISIONS:
+                    raise ValueError(
+                        "A date's precision must be one of "
+                        + ", ".join(CandidateRole.PRECISIONS)
+                    )
+        return self
+
+
 def _serialize(role: CandidateRole) -> dict:
     return {
         "id": str(role.id),
@@ -120,7 +161,11 @@ async def apply_derived(session, candidate: Candidate) -> None:
     exists to prevent.
     """
     roles = await roles_for(session, candidate.id)
-    if not roles:
+    # `derive` itself drops rejected roles, so a candidate whose every role is
+    # rejected has nothing for it to work from. Checking the raw list here
+    # would take the "has roles" branch anyway and derive from an empty set —
+    # match derive's own idea of "has roles" instead of the row count.
+    if not [role for role in roles if role.status != CandidateRole.REJECTED]:
         # Deliberately not clearing the columns. Emptying a recruiter's screen
         # because they tidied one history entry is worse than slight staleness.
         return
@@ -204,14 +249,46 @@ async def create_role(request: Request, candidate_id: uuid.UUID, body: RoleBody)
 
 @router.patch("/candidates/{candidate_id}/roles/{role_id}")
 async def update_role(
-    request: Request, candidate_id: uuid.UUID, role_id: uuid.UUID, body: RoleBody
+    request: Request, candidate_id: uuid.UUID, role_id: uuid.UUID, body: RolePatchBody
 ) -> dict:
     user_uuid, tenant_uuid = _require_session(request)
     async with tenant_session(tenant_uuid) as session:
         candidate = await _load(session, candidate_id)
         role = await _load_role(session, candidate_id, role_id)
-        for field, value in _values(body).items():
-            setattr(role, field, value)
+
+        sent = body.model_fields_set
+        if "employer" in sent:
+            role.employer = body.employer.strip()
+            role.employer_normalized = normalize_company_name(body.employer)
+        if "title" in sent:
+            role.title = body.title.strip()
+            role.title_normalized = body.title.strip().lower()
+        for field in (
+            "started_on",
+            "started_precision",
+            "ended_on",
+            "ended_precision",
+            "employment_type",
+            "location",
+            "description",
+        ):
+            if field in sent:
+                setattr(role, field, getattr(body, field))
+
+        # The comparison the model validator runs on a full body still has to
+        # hold after a partial one — but one side of it may be a value the
+        # caller never sent, sitting only on the row we just merged onto. So
+        # this check has to happen post-merge, against the resulting role,
+        # not against the patch body in isolation.
+        if role.started_on and role.ended_on and role.ended_on < role.started_on:
+            # Same sentence and the same `detail[0]["msg"]` shape the
+            # `RoleBody` validator produces on create, so a client doesn't
+            # need a second error format to handle the patch path.
+            raise HTTPException(
+                status_code=422,
+                detail=[{"msg": "Value error, A role cannot end before it starts"}],
+            )
+
         role.updated_by = user_uuid
         await session.flush()
         await apply_derived(session, candidate)

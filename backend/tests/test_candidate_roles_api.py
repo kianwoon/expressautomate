@@ -316,3 +316,117 @@ async def test_editing_a_role_moves_the_candidates_current_employer(agency):
     assert missing.status_code == 404
     assert body["current_employer"] == "Parkway Shenton"
     assert body["roles"][0]["employer_normalized"] == "parkway shenton"
+
+
+# allow-hardcode: "Raffles Medical" / "Parkway Shenton" / "Enrolled Nurse" /
+# "Ward nursing" below are test fixture content, same as the file header note,
+# not a matching/scoring oracle.
+@pytest.mark.asyncio
+async def test_patching_only_the_employer_leaves_the_rest_of_the_role_alone(agency):
+    """PATCH means "change what I sent", not "replace with what I sent".
+
+    Regression test for a bug where the route accepted a full role body and
+    `setattr` every field, so an absent key became `None` instead of "leave
+    unchanged" — a patch of just `{employer}` used to silently wipe the
+    dates. This is the test that would have caught it.
+    """
+    async with await _client_for(*agency) as client:
+        candidate = await _a_candidate(client, full_name="Tan Hui Ling")
+        created = (
+            await client.post(
+                f"/api/candidates/{candidate['id']}/roles",
+                json={
+                    "employer": "Raffles Medical",
+                    "title": "Enrolled Nurse",
+                    "started_on": "2019-03-01",
+                    "started_precision": "month",
+                    "ended_on": "2022-06-01",
+                    "ended_precision": "month",
+                    "location": "Singapore",
+                    "description": "Ward nursing",
+                },
+            )
+        ).json()
+
+        patched = await client.patch(
+            f"/api/candidates/{candidate['id']}/roles/{created['id']}",
+            json={"employer": "Parkway Shenton"},
+        )
+    assert patched.status_code == 200, patched.text
+    body = patched.json()
+    assert body["employer"] == "Parkway Shenton"
+    assert body["title"] == "Enrolled Nurse"
+    assert body["started_on"] == "2019-03-01"
+    assert body["started_precision"] == "month"
+    assert body["ended_on"] == "2022-06-01"
+    assert body["location"] == "Singapore"
+    assert body["description"] == "Ward nursing"
+
+
+@pytest.mark.asyncio
+async def test_a_patch_that_ends_before_the_stored_start_is_a_422(agency):
+    """The cross-field check must run against the merged row, not the body.
+
+    A patch of only `{ended_on}` never mentions `started_on` at all, so the
+    comparison has to pull the stored start date off the row after merging —
+    validating the incoming body alone would miss this entirely.
+    """
+    async with await _client_for(*agency) as client:
+        candidate = await _a_candidate(client, full_name="Tan Hui Ling")
+        created = (
+            await client.post(
+                f"/api/candidates/{candidate['id']}/roles",
+                json={
+                    "employer": "Raffles Medical",
+                    "title": "Enrolled Nurse",
+                    "started_on": "2020-01-01",
+                },
+            )
+        ).json()
+
+        res = await client.patch(
+            f"/api/candidates/{candidate['id']}/roles/{created['id']}",
+            json={"ended_on": "2019-01-01"},
+        )
+    assert res.status_code == 422
+    assert "end" in res.json()["detail"][0]["msg"].lower()
+
+
+@pytest.mark.asyncio
+async def test_a_candidate_with_only_rejected_roles_has_no_derived_profile(agency):
+    """`derive` drops rejected roles; the "has roles" guard must agree.
+
+    Inserting the role directly with `status=REJECTED` bypasses the create
+    route (which always stamps `CONFIRMED`), then a PATCH on that same role
+    exercises `apply_derived` and proves it takes the "no roles" branch
+    rather than deriving from an empty, all-rejected set.
+    """
+    tenant_id, _user_id = agency
+    async with await _client_for(*agency) as client:
+        candidate = await _a_candidate(client, full_name="Tan Hui Ling")
+
+        async with tenant_session(tenant_id) as session:
+            role = CandidateRole(
+                tenant_id=tenant_id,
+                candidate_id=uuid.UUID(candidate["id"]),
+                employer="Raffles Medical",
+                employer_normalized="raffles medical",
+                title="Enrolled Nurse",
+                title_normalized="enrolled nurse",
+                started_on=date(2019, 3, 1),
+                started_precision="month",
+                source=CandidateRole.HUMAN,
+                status=CandidateRole.REJECTED,
+            )
+            session.add(role)
+            await session.commit()
+            role_id = role.id
+
+        patched = await client.patch(
+            f"/api/candidates/{candidate['id']}/roles/{role_id}",
+            json={"employer": "Parkway Shenton"},
+        )
+        assert patched.status_code == 200, patched.text
+        body = (await client.get(f"/api/candidates/{candidate['id']}")).json()
+    assert body["current_employer"] is None
+    assert body["current_title"] is None
