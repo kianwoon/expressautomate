@@ -19,6 +19,7 @@ import uuid
 from datetime import date, datetime
 
 from sqlalchemy import (
+    CheckConstraint,
     Date,
     DateTime,
     ForeignKey,
@@ -160,6 +161,94 @@ class CandidateSkill(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
             "skill_normalized",
             name="uq_candidate_skills_once_per_candidate",
         ),
+    )
+
+
+class CandidateRole(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
+    """One job a candidate held.
+
+    The level beneath the flat candidate row: `current_title` says where
+    somebody is, this says how they got there, which is the part sourcing can
+    reason about.
+
+    Dates carry their own precision because a CV that says "Mar 2019" does not
+    say the day. Storing `2019-03-01` and rendering "1 March 2019" would assert
+    a fact no source ever stated (§15), so the precision travels with the date
+    and the UI renders only what was actually known.
+
+    `source` and `status` have exactly one value each today — a recruiter types
+    these rows and they are confirmed on arrival. They exist now because the CV
+    parser and the importers land in this same table later, and adding the
+    columns then means a migration across every tenant's live data.
+    """
+
+    __tablename__ = "candidate_roles"
+
+    HUMAN = "human"
+    SOURCES = (HUMAN, "cv_upload", "email_attachment", "import")
+
+    UNCONFIRMED = "unconfirmed"
+    CONFIRMED = "confirmed"
+    REJECTED = "rejected"
+    STATUSES = (UNCONFIRMED, CONFIRMED, REJECTED)
+
+    PRECISIONS = ("year", "month", "day")
+
+    candidate_id: Mapped[uuid.UUID] = mapped_column(
+        PgUUID(as_uuid=True), nullable=False, index=True
+    )
+
+    # Raw beside normalised, the same rule `opportunities` and `candidates`
+    # follow: the recruiter recognises what they typed, and only the normalised
+    # form can be compared against a job order's company name.
+    employer: Mapped[str] = mapped_column(Text, nullable=False)
+    employer_normalized: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    title_normalized: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+
+    # Nullable because a CV that gives no dates at all is still worth recording
+    # — the employer and title alone are a matchable fact. A NULL `ended_on`
+    # with a non-NULL `started_on` means the role is current.
+    started_on: Mapped[date | None] = mapped_column(Date)
+    started_precision: Mapped[str | None] = mapped_column(String(8))
+    ended_on: Mapped[date | None] = mapped_column(Date)
+    ended_precision: Mapped[str | None] = mapped_column(String(8))
+
+    employment_type: Mapped[str | None] = mapped_column(String(32))
+    location: Mapped[str | None] = mapped_column(Text)
+    description: Mapped[str | None] = mapped_column(Text)
+
+    source: Mapped[str] = mapped_column(String(24), nullable=False, default=HUMAN)
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default=CONFIRMED, index=True
+    )
+    # Set only on a row a model produced, so the evidence behind it can be
+    # found. Always NULL while a person is the only writer.
+    extraction_id: Mapped[uuid.UUID | None] = mapped_column(PgUUID(as_uuid=True))
+
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL")
+    )
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL")
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "candidate_id"],
+            ["candidates.tenant_id", "candidates.id"],
+            name="fk_candidate_roles_candidate_same_tenant",
+            ondelete="CASCADE",
+        ),
+        # No unique constraint on (candidate, employer, title, started_on).
+        # Somebody can genuinely hold the same title at the same employer
+        # twice, having left and returned, and refusing the second one would
+        # be the system telling a recruiter their own record is wrong.
+        CheckConstraint(
+            "ended_on IS NULL OR started_on IS NULL OR ended_on >= started_on",
+            name="ck_candidate_roles_ends_after_start",
+        ),
+        Index("ix_candidate_roles_candidate_started", "candidate_id", "started_on"),
     )
 
 
