@@ -186,6 +186,10 @@ export function candidateArchivePath(id: string): string {
   return `${candidatePath(id)}/archive`;
 }
 
+export function candidateRestorePath(id: string): string {
+  return `${candidatePath(id)}/restore`;
+}
+
 export function candidateMergePath(id: string): string {
   return `${candidatePath(id)}/merge`;
 }

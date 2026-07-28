@@ -77,6 +77,55 @@ function orNull(value: string): string | null {
   return trimmed === "" ? null : trimmed;
 }
 
+type SubmitBody = ReturnType<typeof toSubmitBody>;
+
+function toSubmitBody(form: FormState) {
+  return {
+    full_name: form.full_name.trim(),
+    email: orNull(form.email),
+    phone_raw: orNull(form.phone_raw),
+    current_title: orNull(form.current_title),
+    current_employer: orNull(form.current_employer),
+    location: orNull(form.location),
+    years_experience: form.years_experience.trim() === "" ? null : Number(form.years_experience),
+    expected_salary: form.expected_salary.trim() === "" ? null : Number(form.expected_salary),
+    salary_currency: orNull(form.salary_currency),
+    salary_period: orNull(form.salary_period),
+    available_from: orNull(form.available_from),
+    notice_period_raw: orNull(form.notice_period_raw),
+    employment_type: orNull(form.employment_type),
+    notes: orNull(form.notes),
+    pipeline_stage: form.pipeline_stage,
+    skills: form.skills
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean),
+  };
+}
+
+/** Only the keys whose value actually differs from the row this form was
+ *  populated from. `full_name` and `pipeline_stage` always ride along —
+ *  the former is required by the backend on every PATCH shape it accepts
+ *  in this form, the latter is not override-protected — but every other
+ *  field is sent only when the recruiter changed it. */
+function changedFields(next: SubmitBody, initialForm: FormState): Partial<SubmitBody> {
+  const before = toSubmitBody(initialForm);
+  const out: Partial<SubmitBody> = {
+    full_name: next.full_name,
+    pipeline_stage: next.pipeline_stage,
+  };
+  (Object.keys(next) as (keyof SubmitBody)[]).forEach((key) => {
+    if (key === "skills") {
+      if (JSON.stringify(next.skills) !== JSON.stringify(before.skills)) out.skills = next.skills;
+      return;
+    }
+    if (next[key] !== before[key]) {
+      (out as Record<string, unknown>)[key] = next[key];
+    }
+  });
+  return out;
+}
+
 export function CandidateForm({
   row,
   onDone,
@@ -88,6 +137,10 @@ export function CandidateForm({
   onCancel: () => void;
 }) {
   const [form, setForm] = useState<FormState>(() => toFormState(row));
+  // Captured once, at mount, so an edit can be diffed against what the row
+  // actually held — not against whatever the form happens to hold by the
+  // time the recruiter submits.
+  const [initial] = useState<FormState>(() => toFormState(row));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -103,30 +156,14 @@ export function CandidateForm({
     setSaving(true);
     setError(null);
 
-    const body = {
-      full_name: form.full_name.trim(),
-      email: orNull(form.email),
-      phone_raw: orNull(form.phone_raw),
-      current_title: orNull(form.current_title),
-      current_employer: orNull(form.current_employer),
-      location: orNull(form.location),
-      years_experience: form.years_experience.trim() === "" ? null : Number(form.years_experience),
-      expected_salary: form.expected_salary.trim() === "" ? null : Number(form.expected_salary),
-      salary_currency: orNull(form.salary_currency),
-      salary_period: orNull(form.salary_period),
-      available_from: orNull(form.available_from),
-      notice_period_raw: orNull(form.notice_period_raw),
-      employment_type: orNull(form.employment_type),
-      notes: orNull(form.notes),
-      pipeline_stage: form.pipeline_stage,
-      skills: form.skills
-        .split(",")
-        .map((s) => s.trim())
-        .filter(Boolean),
-    };
+    const fullBody = toSubmitBody(form);
 
     try {
-      const saved = row ? await updateCandidate(row.id, body) : await createCandidate(body);
+      // An edit sends only what the recruiter actually changed. Sending the
+      // full body would mark every field an override — protecting a typo fix
+      // by freezing the other thirteen fields from every later import.
+      const body = row ? changedFields(fullBody, initial) : fullBody;
+      const saved = row ? await updateCandidate(row.id, body) : await createCandidate(fullBody);
       onDone(saved);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "We could not save that just now.");

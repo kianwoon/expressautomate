@@ -320,18 +320,49 @@ async def create_candidate(request: Request, body: CandidateIn) -> dict:
     return await get_candidate(request, candidate_id)
 
 
+def _comparable(field: str, value: object) -> object:
+    """Normalize a field's value to the form it is compared and stored in.
+
+    `expected_salary` arrives as `Decimal` from the column and `float` from a
+    PATCH body; `available_from` arrives as `date` from the column and from
+    the body. Both sides must go through the same cast or an unchanged value
+    would look changed and record a meaningless override.
+    """
+    if value is None:
+        return None
+    if field == "expected_salary":
+        return float(value)
+    if field == "available_from":
+        return value.isoformat()
+    return value
+
+
 @router.patch("/candidates/{candidate_id}")
 async def update_candidate(
     request: Request, candidate_id: uuid.UUID, body: CandidateUpdate
 ) -> dict:
     user_uuid, tenant_uuid = _require_session(request)
     async with tenant_session(tenant_uuid) as session:
-        await _load(session, candidate_id)
+        candidate = await _load(session, candidate_id)
         values = body.model_dump(exclude={"skills"}, exclude_unset=True)
         if "phone_raw" in values:
             values["phone_e164"] = _identity_phone(values["phone_raw"])
         if "email" in values:
             values["email"] = normalize_email(values["email"])
+
+        # Only a field whose incoming value actually differs from what the
+        # row currently holds is a human decision worth protecting. Recording
+        # every field present in the body — even one the client merely
+        # echoed back unchanged — would mark the whole record "edited by
+        # hand" and freeze it from every later import, for this endpoint and
+        # for the phase-2 import worker alike, since both write through here.
+        changed_fields = [
+            field
+            for field in _OVERRIDABLE
+            if field in values
+            and _comparable(field, values[field]) != _comparable(field, getattr(candidate, field))
+        ]
+
         values["updated_by"] = user_uuid
 
         try:
@@ -347,31 +378,31 @@ async def update_candidate(
                 status_code=409,
                 detail="Another candidate already has that email or phone",
             ) from exc
-        # Every edited field is remembered as a human decision. Without this a
-        # later import of a stale sheet silently undoes the correction, and
-        # nothing in the data afterwards could say it happened.
-        for field in _OVERRIDABLE:
-            if field in values:
-                await session.execute(
-                    pg_insert(CandidateFieldOverride)
-                    .values(
-                        id=uuid.uuid4(),
-                        tenant_id=tenant_uuid,
-                        candidate_id=candidate_id,
-                        field_name=field,
-                        human_value=None if values[field] is None else str(values[field]),
-                        changed_by=user_uuid,
-                    )
-                    .on_conflict_do_update(
-                        constraint="uq_candidate_overrides_one_per_field",
-                        set_={
-                            "human_value": (
-                                None if values[field] is None else str(values[field])
-                            ),
-                            "changed_by": user_uuid,
-                        },
-                    )
+        # A field that actually changed is remembered as a human decision.
+        # Without this a later import of a stale sheet silently undoes the
+        # correction, and nothing in the data afterwards could say it
+        # happened.
+        for field in changed_fields:
+            await session.execute(
+                pg_insert(CandidateFieldOverride)
+                .values(
+                    id=uuid.uuid4(),
+                    tenant_id=tenant_uuid,
+                    candidate_id=candidate_id,
+                    field_name=field,
+                    human_value=None if values[field] is None else str(values[field]),
+                    changed_by=user_uuid,
                 )
+                .on_conflict_do_update(
+                    constraint="uq_candidate_overrides_one_per_field",
+                    set_={
+                        "human_value": (
+                            None if values[field] is None else str(values[field])
+                        ),
+                        "changed_by": user_uuid,
+                    },
+                )
+            )
         if body.skills is not None:
             await _replace_skills(session, tenant_uuid, candidate_id, body.skills)
         await session.commit()
@@ -393,6 +424,29 @@ async def archive_candidate(request: Request, candidate_id: uuid.UUID) -> dict:
         )
         await session.commit()
     return {"record_status": Candidate.ARCHIVED}
+
+
+@router.post("/candidates/{candidate_id}/restore")
+async def restore_candidate(request: Request, candidate_id: uuid.UUID) -> dict:
+    """Undo an archive. Open to everyone, same as archive.
+
+    Archiving is reversible by design — this is the other half of that
+    promise. A merged row is refused for the same reason archive refuses one:
+    unmerge must come first so `record_status` and
+    `merged_into_candidate_id` never disagree about whether the row is live.
+    """
+    _user_uuid, tenant_uuid = _require_session(request)
+    async with tenant_session(tenant_uuid) as session:
+        candidate = await _load(session, candidate_id)
+        if candidate.record_status == Candidate.MERGED:
+            raise HTTPException(status_code=400, detail="Unmerge the candidate first")
+        await session.execute(
+            update(Candidate)
+            .where(Candidate.id == candidate_id)
+            .values(record_status=Candidate.ACTIVE)
+        )
+        await session.commit()
+    return {"record_status": Candidate.ACTIVE}
 
 
 @router.post("/candidates/{candidate_id}/merge")

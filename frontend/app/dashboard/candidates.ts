@@ -7,6 +7,7 @@ import {
   candidateArchivePath,
   candidateMergePath,
   candidatePath,
+  candidateRestorePath,
   candidateUnmergePath,
 } from "../api";
 
@@ -205,6 +206,15 @@ export async function updateCandidate(id: string, body: Partial<Candidate>): Pro
 
 export async function archiveCandidate(id: string): Promise<void> {
   const res = await fetch(candidateArchivePath(id), {
+    method: "POST",
+    credentials: "include",
+    headers: { Accept: "application/json" },
+  });
+  if (!res.ok) throw new ApiError(await readError(res));
+}
+
+export async function restoreCandidate(id: string): Promise<void> {
+  const res = await fetch(candidateRestorePath(id), {
     method: "POST",
     credentials: "include",
     headers: { Accept: "application/json" },

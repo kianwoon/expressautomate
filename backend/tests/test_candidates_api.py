@@ -256,6 +256,39 @@ async def test_editing_a_field_records_an_override(agency_with_candidates) -> No
     assert "current_title" in body["overridden_fields"]
 
 
+async def test_a_multi_field_patch_only_overrides_what_changed(agency_with_candidates) -> None:
+    """The real form sends every field on every edit, not just the one that
+
+    changed. `exclude_unset` cannot help there — the client sets them all —
+    so the backend must be the one comparing the incoming value against what
+    the row already held. A recruiter fixing one typo must not freeze the
+    other thirteen fields from a later import.
+    """
+    tid, uid, ids = agency_with_candidates
+    async with await _client_for(tid, uid) as http:
+        before = (await http.get(f"/api/candidates/{ids['active']}")).json()
+        body = {
+            "full_name": before["full_name"],
+            "email": before["email"],
+            "phone_raw": before["phone_raw"],
+            "current_title": "Senior Engineer",  # the only real change
+            "current_employer": before["current_employer"],
+            "location": before["location"],
+            "years_experience": before["years_experience"],
+            "expected_salary": before["expected_salary"],
+            "salary_currency": before["salary_currency"],
+            "salary_period": before["salary_period"],
+            "available_from": before["available_from"],
+            "notice_period_raw": before["notice_period_raw"],
+            "employment_type": before["employment_type"],
+            "notes": before["notes"],
+            "pipeline_stage": before["pipeline_stage"],
+        }
+        await http.patch(f"/api/candidates/{ids['active']}", json=body)
+        after = (await http.get(f"/api/candidates/{ids['active']}")).json()
+    assert after["overridden_fields"] == ["current_title"]
+
+
 async def test_a_recruiter_may_archive_but_not_delete(agency_with_candidates) -> None:
     tid, uid, ids = agency_with_candidates
     async with AdminSessionLocal() as s:
@@ -266,6 +299,33 @@ async def test_a_recruiter_may_archive_but_not_delete(agency_with_candidates) ->
     async with await _client_for(tid, uid) as http:
         assert (await http.post(f"/api/candidates/{ids['active']}/archive")).status_code == 200
         assert (await http.delete(f"/api/candidates/{ids['active']}")).status_code == 403
+
+
+async def test_archive_then_restore_returns_to_the_default_list(agency_with_candidates) -> None:
+    """Archiving is what recruiters do daily, and the spec's whole rationale
+
+    for making delete owner-only is that archiving is reversible. Restore is
+    the other half of that promise.
+    """
+    tid, uid, ids = agency_with_candidates
+    async with await _client_for(tid, uid) as http:
+        r = await http.post(f"/api/candidates/{ids['active']}/archive")
+        assert r.status_code == 200
+        body = (await http.get(f"/api/candidates/{ids['active']}")).json()
+        assert body["record_status"] == "archived"
+
+        r = await http.post(f"/api/candidates/{ids['active']}/restore")
+        assert r.status_code == 200
+        assert r.json()["record_status"] == "active"
+        body = (await http.get(f"/api/candidates/{ids['active']}")).json()
+        assert body["record_status"] == "active"
+
+
+async def test_restoring_a_merged_candidate_is_refused(agency_with_candidates) -> None:
+    tid, uid, ids = agency_with_candidates
+    async with await _client_for(tid, uid) as http:
+        r = await http.post(f"/api/candidates/{ids['merged']}/restore")
+    assert r.status_code == 400
 
 
 async def test_an_owner_may_delete(agency_with_candidates) -> None:

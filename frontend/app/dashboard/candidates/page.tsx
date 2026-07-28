@@ -6,7 +6,13 @@ import { LANDING_PATH } from "../../api";
 import { useAuth } from "../../auth";
 import { SiteFooter } from "../../site-footer";
 import { SiteNav } from "../../site-nav";
-import { archiveCandidate, deleteCandidate, getCandidate, useCandidates } from "../candidates";
+import {
+  archiveCandidate,
+  deleteCandidate,
+  getCandidate,
+  restoreCandidate,
+  useCandidates,
+} from "../candidates";
 import type { Candidate, Filter } from "../candidates";
 import { CandidateForm } from "./candidate-form";
 import { CandidatePanel } from "./candidate-panel";
@@ -139,6 +145,12 @@ function Workspace({ role }: { role: string }) {
     refreshDetail();
   }
 
+  async function doRestore() {
+    if (!detail) return;
+    await restoreCandidate(detail.id);
+    refreshDetail();
+  }
+
   const canDelete = role === "owner";
   async function doDelete() {
     if (!detail) return;
@@ -237,6 +249,7 @@ function Workspace({ role }: { role: string }) {
               row={detailError ? null : detail}
               onEdit={() => detail && setView({ mode: "edit", row: detail })}
               onArchive={doArchive}
+              onRestore={doRestore}
               onDelete={canDelete ? doDelete : null}
               onChanged={refreshDetail}
             />

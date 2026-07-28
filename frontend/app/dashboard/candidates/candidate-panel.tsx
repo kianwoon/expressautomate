@@ -33,12 +33,16 @@ export function CandidatePanel({
   row,
   onEdit,
   onArchive,
+  onRestore,
   onDelete,
   onChanged,
 }: {
   row: Candidate | null;
   onEdit: () => void;
   onArchive: () => Promise<void>;
+  /** Undoes an archive. Archiving is reversible by design, so this is offered
+   *  wherever Archive is, just on the other side of the same toggle. */
+  onRestore: () => Promise<void>;
   /** `null` for a recruiter — the button is absent rather than present and
    *  guaranteed to 403. */
   onDelete: (() => Promise<void>) | null;
@@ -64,6 +68,7 @@ export function CandidatePanel({
       row={row}
       onEdit={onEdit}
       onArchive={onArchive}
+      onRestore={onRestore}
       onDelete={onDelete}
       onChanged={onChanged}
     />
@@ -78,12 +83,14 @@ function Detail({
   row,
   onEdit,
   onArchive,
+  onRestore,
   onDelete,
   onChanged,
 }: {
   row: Candidate;
   onEdit: () => void;
   onArchive: () => Promise<void>;
+  onRestore: () => Promise<void>;
   onDelete: (() => Promise<void>) | null;
   onChanged: () => void;
 }) {
@@ -96,6 +103,19 @@ function Detail({
     setError(null);
     try {
       await onArchive();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "We could not save that just now.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function restore() {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await onRestore();
     } catch (err) {
       setError(err instanceof Error ? err.message : "We could not save that just now.");
     } finally {
@@ -204,6 +224,11 @@ function Detail({
           {row.record_status === "active" && (
             <button type="button" className="btn btn-secondary" onClick={archive} disabled={busy}>
               {busy ? "Saving…" : "Archive"}
+            </button>
+          )}
+          {row.record_status === "archived" && (
+            <button type="button" className="btn btn-secondary" onClick={restore} disabled={busy}>
+              {busy ? "Saving…" : "Restore"}
             </button>
           )}
           {onDelete && (
