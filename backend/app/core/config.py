@@ -178,6 +178,17 @@ class Settings(BaseSettings):
     # requests are signed and R2 would reject them.
     R2_REGION: str = "auto"
 
+    # --- Candidate avatar photos (shown only inside the candidate modal) ---
+    AVATAR_MAX_UPLOAD_BYTES: int = Field(default=5 * 1024 * 1024, gt=0)
+    AVATAR_MAX_PIXEL_DIMENSION: int = Field(default=1024, gt=0)
+    AVATAR_PRESIGNED_URL_TTL_SECONDS: int = Field(default=300, gt=0)
+    # What every avatar is re-encoded *to*. Whatever the client uploads is
+    # decoded and written back out in this format, which is what strips EXIF
+    # (phone photos carry GPS). A Pillow format name, not a MIME type: the MIME
+    # type is looked up from Pillow's own registry so the two can never drift.
+    # PNG by default because it is lossless and keeps transparency.
+    AVATAR_STORED_FORMAT: str = "PNG"
+
     # --- AI extraction ---
     # Kept although nothing calls the router any more: OPENROUTER_API_KEY and
     # LLM_BASE_URL are still what `llm_configured` answers for, and a deployment

@@ -66,6 +66,18 @@ def body_key(
     return f"{tenant_id}/{mailbox_id}/{encoded}.{kind}"
 
 
+def avatar_key(tenant_id: uuid.UUID, candidate_id: uuid.UUID) -> str:
+    """Deterministic object key for a candidate's avatar photo.
+
+    The leading `{tenant_id}/` segment is load-bearing, same as `body_key`:
+    it is the prefix a tenant erasure would purge by, so anything stored
+    without it would survive that request. No prefix purge is written yet —
+    the convention is kept here so the sweep, when it lands, finds every
+    object it needs to and not a photo it was never told about.
+    """
+    return f"{tenant_id}/candidates/{candidate_id}/avatar"
+
+
 class BodyDeletionFailed(Exception):
     """Some keys in a batch were not deleted."""
 
@@ -100,6 +112,8 @@ class BodyStore(Protocol):
     async def put(self, key: str, content: str) -> None: ...
     async def get(self, key: str) -> str | None: ...
     async def delete(self, *keys: str) -> None: ...
+    async def put_bytes(self, key: str, content: bytes, content_type: str) -> None: ...
+    async def presigned_get(self, key: str, ttl_seconds: int) -> str: ...
 
 
 class R2BodyStore:
@@ -146,6 +160,41 @@ class R2BodyStore:
                         "No email body can be stored until it is created."
                     ) from exc
                 raise
+
+    async def put_bytes(self, key: str, content: bytes, content_type: str) -> None:
+        """Store binary content (the avatar path — everything else here is text).
+
+        Kept as a sibling to `put` rather than a replacement so every existing
+        caller storing `str` bodies is untouched.
+        """
+        async with self._client() as s3:
+            try:
+                await s3.put_object(
+                    Bucket=settings.R2_BUCKET_NAME,
+                    Key=key,
+                    Body=content,
+                    ContentType=content_type,
+                )
+            except ClientError as exc:
+                if exc.response.get("Error", {}).get("Code") == _NO_SUCH_BUCKET:
+                    raise BodyStoreMisconfigured(
+                        f"R2 bucket {settings.R2_BUCKET_NAME!r} does not exist. "
+                        "No object can be stored until it is created."
+                    ) from exc
+                raise
+
+    async def presigned_get(self, key: str, ttl_seconds: int) -> str:
+        """A time-limited URL for reading `key` directly from R2.
+
+        Used for the avatar path so the browser fetches the image straight
+        from R2 rather than proxying bytes through the API.
+        """
+        async with self._client() as s3:
+            return await s3.generate_presigned_url(
+                "get_object",
+                Params={"Bucket": settings.R2_BUCKET_NAME, "Key": key},
+                ExpiresIn=ttl_seconds,
+            )
 
     async def get(self, key: str) -> str | None:
         """Fetch a body, or None if it is no longer stored.
@@ -199,6 +248,7 @@ class InMemoryBodyStore:
 
     def __init__(self) -> None:
         self.objects: dict[str, str] = {}
+        self.binary_objects: dict[str, tuple[bytes, str]] = {}
 
     async def put(self, key: str, content: str) -> None:
         self.objects[key] = content
@@ -209,3 +259,10 @@ class InMemoryBodyStore:
     async def delete(self, *keys: str) -> None:
         for key in keys:
             self.objects.pop(key, None)
+            self.binary_objects.pop(key, None)
+
+    async def put_bytes(self, key: str, content: bytes, content_type: str) -> None:
+        self.binary_objects[key] = (content, content_type)
+
+    async def presigned_get(self, key: str, ttl_seconds: int) -> str:
+        return f"https://fake-r2.test/{key}?ttl={ttl_seconds}"

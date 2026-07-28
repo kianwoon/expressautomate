@@ -7,6 +7,7 @@ import { CANDIDATES_PATH } from "../../api";
 import type { Candidate, CandidatePage } from "../candidates";
 import { mergeCandidate, unmergeCandidate } from "../candidates";
 import { Value, day } from "../format";
+import { CandidateAvatar } from "./candidate-avatar";
 
 /**
  * One candidate in full, beside the list.
@@ -160,6 +161,8 @@ function Detail({
           <span className="eyebrow">{STAGE_LABEL[row.pipeline_stage]}</span>
         )}
       </div>
+
+      <CandidateAvatar row={row} onChanged={onChanged} />
 
       <h3 className="jo-detail-title">{row.full_name}</h3>
       {row.current_title && (

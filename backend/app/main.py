@@ -14,6 +14,7 @@ from app.api import (
     activity,
     auth,
     candidates,
+    candidates_avatar,
     clients,
     events,
     glossary,
@@ -89,6 +90,7 @@ api.include_router(opportunities.router)
 api.include_router(activity.router)
 api.include_router(glossary.router)
 api.include_router(candidates.router)
+api.include_router(candidates_avatar.router)
 api.include_router(clients.router)
 api.include_router(notifications.router)
 api.include_router(events.router)

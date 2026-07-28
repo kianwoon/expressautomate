@@ -16,10 +16,11 @@ somebody can merge later.
 """
 
 import uuid
-from datetime import date
+from datetime import date, datetime
 
 from sqlalchemy import (
     Date,
+    DateTime,
     ForeignKey,
     ForeignKeyConstraint,
     Index,
@@ -67,6 +68,12 @@ class Candidate(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
     employment_type: Mapped[str | None] = mapped_column(String(32))
 
     notes: Mapped[str | None] = mapped_column(Text)
+
+    # The R2 object key for the candidate's photo, shown only inside the
+    # candidate modal. Nullable because most candidates never get one — a
+    # human uploads it deliberately, unlike everything else on this row.
+    avatar_key: Mapped[str | None] = mapped_column(Text)
+    avatar_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     # Where the person is in the process, and whether the row is still real.
     # Separate columns because they answer different questions: collapsing them

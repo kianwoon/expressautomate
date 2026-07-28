@@ -213,6 +213,12 @@ export function candidateUnmergePath(id: string): string {
   return `${candidatePath(id)}/unmerge`;
 }
 
+/** The candidate's photo. POST (multipart upload) and DELETE both live here;
+ *  GET returns a short-lived presigned URL, never the file itself. */
+export function candidateAvatarPath(id: string): string {
+  return `${candidatePath(id)}/avatar`;
+}
+
 /** The client list. A site route, so no API_BASE prefix. */
 export const CLIENTS_DASHBOARD_PATH = "/dashboard/clients";
 

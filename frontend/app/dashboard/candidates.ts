@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState } from "react";
 import {
   CANDIDATES_PATH,
   candidateArchivePath,
+  candidateAvatarPath,
   candidateMergePath,
   candidatePath,
   candidateRestorePath,
@@ -50,6 +51,11 @@ export type Candidate = {
   skills?: string[];
   /** Only present on the single-record GET, not on a list row. */
   overridden_fields?: string[];
+  /** Set once a photo has been uploaded; `null` means "show the initials
+   *  fallback" rather than "loading". Never used to build a URL directly —
+   *  the URL itself is a separate, short-lived fetch (see `getCandidateAvatar`). */
+  avatar_key: string | null;
+  avatar_updated_at: string | null;
 };
 
 export type CandidatePage = {
@@ -244,6 +250,47 @@ export async function mergeCandidate(id: string, targetId: string): Promise<void
 export async function unmergeCandidate(id: string): Promise<void> {
   const res = await fetch(candidateUnmergePath(id), {
     method: "POST",
+    credentials: "include",
+    headers: { Accept: "application/json" },
+  });
+  if (!res.ok) throw new ApiError(await readError(res));
+}
+
+export type AvatarUrl = { url: string; expires_in: number };
+
+/** A presigned URL good for roughly `expires_in` seconds — `null` means the
+ *  candidate has no photo (a 404), not a failed request. Callers must not
+ *  hold onto the URL past the component's lifetime: it is re-fetched every
+ *  time the panel opens rather than cached anywhere longer-lived. */
+export async function getCandidateAvatar(id: string): Promise<AvatarUrl | null> {
+  const res = await fetch(candidateAvatarPath(id), {
+    credentials: "include",
+    headers: { Accept: "application/json" },
+  });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new ApiError(await readError(res));
+  return (await res.json()) as AvatarUrl;
+}
+
+export async function uploadCandidateAvatar(
+  id: string,
+  file: File,
+): Promise<{ avatar_key: string; avatar_updated_at: string }> {
+  const form = new FormData();
+  form.append("file", file);
+  const res = await fetch(candidateAvatarPath(id), {
+    method: "POST",
+    credentials: "include",
+    headers: { Accept: "application/json" },
+    body: form,
+  });
+  if (!res.ok) throw new ApiError(await readError(res));
+  return (await res.json()) as { avatar_key: string; avatar_updated_at: string };
+}
+
+export async function deleteCandidateAvatar(id: string): Promise<void> {
+  const res = await fetch(candidateAvatarPath(id), {
+    method: "DELETE",
     credentials: "include",
     headers: { Accept: "application/json" },
   });
