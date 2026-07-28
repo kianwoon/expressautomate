@@ -4,6 +4,7 @@ import { useEffect, useId, useState } from "react";
 
 import {
   CANDIDATES_DASHBOARD_PATH,
+  CLIENTS_DASHBOARD_PATH,
   DASHBOARD_PATH,
   LANDING_AFTER_SIGN_OUT,
   LANDING_PATH,
@@ -74,6 +75,7 @@ export function SiteNav({ sectionLinks = false }: { sectionLinks?: boolean }) {
   const onDashboard = path === DASHBOARD_PATH;
   const onSettings = path === SETTINGS_PATH;
   const onCandidates = path === CANDIDATES_DASHBOARD_PATH;
+  const onClients = path === CLIENTS_DASHBOARD_PATH;
 
   return (
     <nav className="nav">
@@ -139,6 +141,16 @@ export function SiteNav({ sectionLinks = false }: { sectionLinks?: boolean }) {
               {!onCandidates && (
                 <a className="nav-dash" href={CANDIDATES_DASHBOARD_PATH}>
                   Candidates
+                </a>
+              )}
+              {/* Otherwise the clients review queue has no route to it from
+                  anywhere else on the site — reachable only by typing the
+                  URL, same as candidates before this link existed. Hidden on
+                  the clients page itself for the same reason as the other
+                  links above. */}
+              {!onClients && (
+                <a className="nav-dash" href={CLIENTS_DASHBOARD_PATH}>
+                  Clients
                 </a>
               )}
               <AccountMenu

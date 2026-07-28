@@ -198,6 +198,43 @@ export function candidateUnmergePath(id: string): string {
   return `${candidatePath(id)}/unmerge`;
 }
 
+/** The client list. A site route, so no API_BASE prefix. */
+export const CLIENTS_DASHBOARD_PATH = "/dashboard/clients";
+
+/**
+ * The agency's client list — companies the pipeline has proposed from
+ * job-order emails. Unlike candidates, there is no create form here: the
+ * matcher proposes rows and a human only confirms, merges, archives or
+ * unmerges them.
+ */
+export const CLIENTS_PATH = `${API_BASE}/api/clients`;
+
+/** One client, for GET. Encoded, so an id that is not the uuid we expect
+ *  cannot walk out of its own path segment. */
+export function clientPath(id: string): string {
+  return `${CLIENTS_PATH}/${encodeURIComponent(id)}`;
+}
+
+export function clientConfirmPath(id: string): string {
+  return `${clientPath(id)}/confirm`;
+}
+
+export function clientArchivePath(id: string): string {
+  return `${clientPath(id)}/archive`;
+}
+
+export function clientRestorePath(id: string): string {
+  return `${clientPath(id)}/restore`;
+}
+
+export function clientMergePath(id: string): string {
+  return `${clientPath(id)}/merge`;
+}
+
+export function clientUnmergePath(id: string): string {
+  return `${clientPath(id)}/unmerge`;
+}
+
 /** Where a visitor reaches a person. Used by the footer and every stub page,
  *  so it lives here rather than being retyped in nine files. */
 export const CONTACT_EMAIL = "support@expressautomate.app";

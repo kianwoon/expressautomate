@@ -105,6 +105,29 @@ async def test_confirming_is_the_only_way_a_client_becomes_confirmed(agency_with
     assert body["status"] == "confirmed"
 
 
+async def test_archive_then_restore_returns_to_unconfirmed(agency_with_clients) -> None:
+    """Archiving a client must be reversible, the same as archiving a candidate."""
+    tid, uid, ids = agency_with_clients
+    async with await _client_for(tid, uid) as http:
+        r = await http.post(f"/api/clients/{ids['live']}/archive")
+        assert r.status_code == 200
+        body = (await http.get(f"/api/clients/{ids['live']}")).json()
+        assert body["status"] == "archived"
+
+        r = await http.post(f"/api/clients/{ids['live']}/restore")
+        assert r.status_code == 200
+        assert r.json()["status"] == "unconfirmed"
+        body = (await http.get(f"/api/clients/{ids['live']}")).json()
+        assert body["status"] == "unconfirmed"
+
+
+async def test_restoring_a_merged_client_is_refused(agency_with_clients) -> None:
+    tid, uid, ids = agency_with_clients
+    async with await _client_for(tid, uid) as http:
+        r = await http.post(f"/api/clients/{ids['merged']}/restore")
+    assert r.status_code == 400
+
+
 async def test_unmerge_restores_a_wrongly_merged_client(agency_with_clients) -> None:
     tid, uid, ids = agency_with_clients
     async with await _client_for(tid, uid) as http:
@@ -329,7 +352,7 @@ async def test_unmerge_refuses_when_the_domain_was_reclaimed(agency_with_clients
 
 
 async def test_one_agency_never_sees_anothers_clients(agency_with_clients) -> None:
-    tid, uid, _ = agency_with_clients
+    tid, uid, ids = agency_with_clients
     other_tid, other_uid = uuid.uuid4(), uuid.uuid4()
     async with AdminSessionLocal() as s:
         await s.execute(
@@ -344,7 +367,9 @@ async def test_one_agency_never_sees_anothers_clients(agency_with_clients) -> No
     try:
         async with await _client_for(other_tid, other_uid) as http:
             body = (await http.get("/api/clients")).json()
-        assert body["items"] == []
-        assert body["total"] == 0
+            assert body["items"] == []
+            assert body["total"] == 0
+            r = await http.post(f"/api/clients/{ids['live']}/restore")
+            assert r.status_code == 404
     finally:
         await cleanup_tenant(other_tid)

@@ -148,6 +148,17 @@ async def archive_client(request: Request, client_id: uuid.UUID) -> dict:
     return await _transition(request, client_id, Client.ARCHIVED)
 
 
+@router.post("/clients/{client_id}/restore")
+async def restore_client(request: Request, client_id: uuid.UUID) -> dict:
+    """Undo an archive, mirroring `restore_candidate`.
+
+    A merged row is refused by `_transition` for the same reason archive
+    refuses one: unmerge must come first so `status` and
+    `merged_into_client_id` never disagree about whether the row is live.
+    """
+    return await _transition(request, client_id, Client.UNCONFIRMED)
+
+
 @router.post("/clients/{client_id}/merge")
 async def merge_client(request: Request, client_id: uuid.UUID, body: MergeRequest) -> dict:
     _user_uuid, tenant_uuid = _require_session(request)
