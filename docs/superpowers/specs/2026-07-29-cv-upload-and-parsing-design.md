@@ -35,8 +35,9 @@ there is nothing to verify against, and provenance collapses to "the model said
 so" — for claims about a real person's employment history.
 
 So: `pypdf` and `python-docx` turn the file into text, and the existing
-pipeline runs on that text unchanged. A scanned CV is told plainly that it
-cannot be read. That is a real gap, and the honest fallback is a second pass
+pipeline's *discipline* runs on that text. Not the pipeline itself — see
+below; only `_attempts()` is literally reusable. A scanned CV is told plainly
+that it cannot be read. That is a real gap, and the honest fallback is a second pass
 using a multimodal model later, kept visibly distinct because its rows would
 carry weaker provenance than these.
 
@@ -90,9 +91,9 @@ payload as every job here carries it.
 3. Store the text, record `text_chars`, truncate to the configured character
    cap so token spend is bounded by configuration rather than by whatever
    somebody uploaded.
-4. Two passes, reusing `extract.py:_attempts()`: the fast model at low
-   reasoning effort, escalating to the strong model at high effort **only**
-   when a span fails to verify or confidence is below the bar (§32).
+4. Two passes, reusing `extract.py:_attempts()` (`extract.py:72`): the fast
+   model at low reasoning effort, escalating to the strong model at high effort
+   **only** when a span fails to verify or confidence is below the bar (§32).
 5. Verify every evidence span against the stored text before trusting any of
    it. A span that is not really there is what triggers the escalation.
 6. Write `Extraction` and `ExtractionEvidence`, then match, then insert.
@@ -100,6 +101,31 @@ payload as every job here carries it.
 **The model reports the precision it saw.** "Mar 2019" is month precision, and
 no day is invented — §15 expressed in the prompt rather than repaired
 afterwards.
+
+### How much of the email pipeline is actually reusable
+
+Less than it looks, and an implementer who assumes otherwise will stall.
+`_attempts()` (`extract.py:72`) is pure configuration and reusable as-is.
+`extract()` itself is not: it validates against `ExtractionResponse`, which is
+the *vacancy* schema (`extract.py:26,129`), and formats `PROMPT.format(email=…)`
+around an email body. A CV needs its own prompt, its own response schema and
+its own quality gate. What carries over is the shape of the thing — two passes,
+spans verified against the source, escalate only on proof — not the code.
+
+### Spending money on a model must be bounded by configuration
+
+Nothing in this codebase caps model spend today. The character cap bounds one
+CV; it does nothing about an afternoon of bulk uploads, each running up to two
+passes. A per-tenant daily parse quota, driven from `settings`, refuses further
+parses past the bar and says so plainly rather than silently spending.
+
+### A job can be lost after a successful enqueue
+
+Handling a `False` from `enqueue()` covers Redis being down. It does not cover
+the worker dying mid-job, which leaves a document in `pending` or `parsing`
+forever with nothing to move it. Email rows already have the answer:
+`rescan_stuck` (`app/workers/jobs.py:485`) re-enqueues rows stranded by an
+outage. `candidate_documents` joins that sweep, with the same reasoning.
 
 ### Matching, so a CV does not duplicate a career
 
@@ -131,9 +157,16 @@ A new file, `app/api/candidate_documents.py` — `candidates.py` is 846 lines
 against a 1500-line ceiling.
 
 - `POST /api/candidates/{id}/documents` — multipart. Size capped **before** the
-  body is fully read, type sniffed from magic bytes, key derived server-side
+  body is fully read, type sniffed from the bytes, key derived server-side
   from the authenticated tenant. Stores the file, inserts `pending`, enqueues,
-  answers **202**.
+  answers **202**. Past the tenant's daily parse quota it answers 429 and
+  stores nothing.
+
+  Note the avatar endpoint is **not** a usable precedent for the sniffing
+  itself — it is built around `Image.open()`, which no PDF will satisfy. The
+  ordering and the size cap carry over; the type check does not. A PDF starts
+  `%PDF-`. A DOCX is a zip, so `PK` alone proves nothing: it is a DOCX only if
+  the archive contains `word/document.xml`.
 - `GET /api/candidates/{id}/documents/{doc_id}/download` — a short-TTL
   presigned URL for the original. This is the route that lets a recruiter
   forward the real CV to a client.
@@ -170,6 +203,13 @@ Upload sits beside the timeline in the avatar's house style: drop a file on it
 or click it, no pair of grey buttons. Parse state renders inline — reading it,
 could not read it, failed with a retry.
 
+**`unreadable` must say what to do next.** Singapore agencies receive plenty of
+scanned and photographed CVs, and to the recruiter holding one, "we could not
+read this" is indistinguishable from "this product is broken". The message
+names the cause and the way forward: the file looks like a scan rather than a
+text document, the roles can be typed in meanwhile, and reading scans is coming.
+Nothing else in this piece matters if its own user concludes it does not work.
+
 **An unconfirmed role can show the line from the CV that produced it**, with
 its span verified against the stored text. That is the whole §15 apparatus
 finally visible to a recruiter: not "the AI says she worked at Parkway
@@ -188,9 +228,13 @@ Shenton", but "the CV says this, here".
 6. A genuinely new role inserts `unconfirmed` with its `extraction_id`.
 7. Replaying the job inserts nothing twice.
 8. A failed enqueue leaves the document `failed`, not `pending`.
-9. Deleting a document leaves the roles it produced.
-10. Skills dedupe on `skill_normalized`.
-11. RLS enforced on `candidate_documents`, and on the amended
+9. A document stranded in `pending` or `parsing` by a lost worker is
+   re-enqueued by the stuck sweep — the case a false enqueue return does not
+   cover.
+10. A tenant past its daily parse quota gets 429, and nothing is stored.
+11. Deleting a document leaves the roles it produced.
+12. Skills dedupe on `skill_normalized`.
+13. RLS enforced on `candidate_documents`, and on the amended
     `candidate_skills`.
 
 ## Out of scope
