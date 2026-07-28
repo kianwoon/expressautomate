@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import "./app.css";
 
 const TITLE = "expressautomate.app — AI recruitment operations";
 

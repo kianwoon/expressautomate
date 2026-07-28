@@ -1,0 +1,639 @@
+/* Styles for the signed-in application: the dashboard, the candidate and
+   client panels, the glossary and notifications.
+   Split out of globals.css when that file reached its 1500-line ceiling.
+   Shared primitives — the palette, type, buttons, nav, footer and every
+   media query — stay in globals.css, because both halves of the product use
+   them and duplicating them is how they drift. */
+
+
+/* ---- dashboard workspace ---- */
+/* `section { padding: 60px 0 }` is a page-level rule, and this is a section
+   nested inside one — it was quietly collecting 60px of padding meant for
+   full-width bands. That, plus the margin below, plus the hero's own padding,
+   is how three separate rules stacked into a gap nobody had chosen. */
+.jo-workspace { padding: 0; margin-top: 44px; }
+/* When the workspace leads the page there is nothing above it to be separated
+   from, so the margin is space with no job. The hero's padding alone sets the
+   distance from the nav. */
+.jo-workspace[data-lead="yes"] { margin-top: 0; }
+.jo-stats { margin-bottom: 40px; }
+.jo-stat {
+  display: flex; flex-direction: column; gap: 4px;
+  /* A minimum, not a height: the four cards sit on one row and the longest
+     caption used to make its own card taller than its neighbours, which read
+     as a mistake rather than as a longer sentence. */
+  min-height: 148px;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.jo-stat:hover { border-color: var(--ink-300); box-shadow: 0 4px 14px rgba(var(--shadow-rgb), 0.06); }
+/* The glyph sits in its own tinted square rather than floating beside the
+   text: at 18px a line icon on white disappears next to a 2rem numeral, and
+   the wash is what gives each card its colour without tinting the whole
+   surface. */
+.jo-stat-icon {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 34px; height: 34px; border-radius: 9px; margin-bottom: 8px;
+}
+.jo-stat[data-accent="blue"] .jo-stat-icon { background: var(--blue-050); color: var(--blue-600); }
+.jo-stat[data-accent="teal"] .jo-stat-icon { background: var(--teal-050); color: var(--teal-500); }
+.jo-stat[data-accent="amber"] .jo-stat-icon { background: var(--amber-050); color: var(--amber-600); }
+/* The label is the small uppercase key and the figure is the loud part, which
+   is the opposite of how these read before: four large numerals with their
+   meaning in smaller text underneath. */
+.jo-stat-k {
+  font-size: 0.75rem; font-weight: 650; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--ink-500);
+}
+.jo-stat-v {
+  font-size: 2rem; font-weight: 700; line-height: 1.1; overflow-wrap: anywhere;
+  /* The sync card carries words where the others carry a numeral. Letting it
+     set its own smaller size keeps four cards looking like one row instead of
+     three numbers and an outlier wrapping onto two lines. */
+  font-size: clamp(1.4rem, 2.2vw, 2rem);
+}
+.jo-stat-sub { font-size: 0.8125rem; margin-top: 2px; }
+/* The one card that is asking for something gets a left edge, and nothing
+   else. A whole card tinted amber reads as an error, which a queue of work
+   waiting to be looked at is not. */
+.jo-stat[data-tone="attention"] { border-left: 3px solid var(--amber-600); }
+
+.jo-head { display: flex; align-items: flex-start; gap: 20px; flex-wrap: wrap; }
+.jo-head-title { margin-top: 12px; }
+.jo-head-body { margin-top: 12px; max-width: 68ch; }
+/* One shared muted-secondary size, so a caption under a stat and a caption in
+   the detail panel are the same thing rather than two near-misses. */
+.jo-sub { font-size: 0.8125rem; color: var(--ink-500); }
+.jo-note { margin-top: 14px; font-size: 0.875rem; color: var(--ink-500); }
+.jo-note-card { margin-top: 16px; display: grid; gap: 16px; justify-items: start; }
+
+/* The bell is a shortcut, not an inbox. It is styled as a control with a
+   count, deliberately not as a badge on an icon — no dot, no red, nothing
+   that suggests an unread state we do not track. */
+.jo-bell {
+  margin-left: auto; display: inline-flex; align-items: center; gap: 8px;
+  padding: 8px 14px; font: inherit; font-size: 0.875rem; cursor: pointer;
+  color: var(--amber-700); background: var(--amber-050);
+  border: 1px solid var(--amber-200); border-radius: 999px;
+}
+
+/* Is this page still being told things?
+   Sits with the bell because both are status rather than content, and reads as
+   quiet by default: a working connection is the normal case and should not
+   compete with the numbers it is vouching for. */
+.jo-live {
+  margin-left: auto; display: inline-flex; align-items: center; gap: 8px;
+  padding: 8px 14px; font-size: 0.875rem; border-radius: 999px;
+  border: 1px solid transparent; white-space: nowrap;
+}
+.jo-live-dot { width: 8px; height: 8px; border-radius: 999px; flex: none; }
+.jo-live[data-status="live"] { color: var(--ink-500); }
+.jo-live[data-status="live"] .jo-live-dot { background: var(--teal-500); }
+.jo-live[data-status="waiting"] { color: var(--ink-500); }
+.jo-live[data-status="waiting"] .jo-live-dot { background: var(--ink-300); }
+/* The only one that earns a border and a colour. Amber, not red: the page is
+   stale, which is a caveat on what is shown — it is not an error, and nothing
+   the user did caused it. */
+.jo-live[data-status="offline"] {
+  color: var(--amber-700); background: var(--amber-050); border-color: var(--amber-200);
+}
+.jo-live[data-status="offline"] .jo-live-dot { background: var(--amber-600); }
+.jo-live[data-status="live"] .jo-live-dot { animation: jo-live-pulse 2.4s ease-in-out infinite; }
+.jo-live[data-status="waiting"] .jo-live-dot { animation: jo-live-pulse 1.2s ease-in-out infinite; }
+
+/* The bell keeps its own place when the light is beside it: two elements both
+   claiming `margin-left: auto` would put all the space before the first. */
+.jo-live + .jo-bell, .jo-bell + .jo-live { margin-left: 0; }
+
+.jo-bell:hover { border-color: var(--amber-600); }
+.jo-bell:focus-visible { outline: 2px solid var(--blue-500); outline-offset: 2px; }
+.jo-bell-n { font-weight: 700; }
+
+.jo-controls {
+  margin-top: 22px; display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+}
+.jo-chips { display: flex; gap: 8px; flex-wrap: wrap; }
+.jo-chip {
+  display: inline-flex; align-items: center; gap: 8px; padding: 7px 14px;
+  font: inherit; font-size: 0.875rem; cursor: pointer; color: var(--ink-700);
+  background: var(--surface); border: 1px solid var(--line); border-radius: 999px;
+}
+.jo-chip:hover { background: var(--surface-alt); }
+.jo-chip:focus-visible { outline: 2px solid var(--blue-500); outline-offset: 2px; }
+/* The active chip is filled, not merely outlined. An outline-only selected
+   state is indistinguishable from a focus ring, which is exactly the
+   confusion a keyboard user does not need. */
+.jo-chip[data-active="yes"] {
+  color: var(--surface); background: var(--blue-600); border-color: var(--blue-600);
+}
+.jo-chip-n { font-variant-numeric: tabular-nums; opacity: 0.75; }
+
+/* Master and detail. The list is the wider half; below 1080px the panel drops
+   under it rather than squeezing a paragraph into 240px. */
+.jo-split {
+  margin-top: 16px; display: grid; grid-template-columns: minmax(0, 1.85fr) minmax(0, 1fr);
+  gap: 20px; align-items: start;
+}
+/* Sticky so the row stays readable while the list is scrolled. Cleared of the
+   sticky nav, and capped so a long description scrolls inside the panel
+   instead of pushing the page. */
+.jo-detail {
+  position: sticky; top: 96px; max-height: calc(100vh - 120px); overflow-y: auto;
+}
+.jo-detail-head { display: flex; align-items: center; gap: 12px; }
+.jo-detail-title { margin-top: 12px; font-size: 1.125rem; }
+.jo-detail-company { margin-top: 4px; color: var(--ink-700); font-weight: 600; }
+.jo-detail-empty { margin-top: 12px; color: var(--ink-500); font-size: 0.875rem; }
+.jo-detail-rows { margin-top: 18px; }
+.jo-detail-prose { margin-top: 18px; }
+.jo-detail-prose p { margin-top: 6px; font-size: 0.875rem; }
+.jo-detail-source { margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--line); }
+.jo-detail-source p { margin-top: 6px; }
+.jo-detail-actions { margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--line); }
+.jo-detail-hint { margin-top: 10px; }
+.jo-detail-error { margin-top: 12px; color: var(--amber-700); font-size: 0.875rem; }
+
+/* Quality, never a percentage. Three named states, each with its own colour
+   and its own word — the word does the work, the colour only speeds up the
+   scan, so nothing here depends on seeing the difference between them. */
+.jo-quality {
+  display: inline-flex; align-items: center; gap: 6px; font-size: 0.75rem;
+  font-weight: 650; padding: 3px 9px; border-radius: 999px;
+  background: var(--surface-alt); color: var(--ink-700);
+}
+.jo-quality-dot { width: 7px; height: 7px; border-radius: 999px; background: currentColor; flex: none; }
+.jo-quality[data-state="verified"] { color: var(--teal-500); background: var(--teal-050); }
+.jo-quality[data-state="likely"] { color: var(--blue-600); background: var(--blue-050); }
+.jo-quality[data-state="needs_review"] { color: var(--amber-700); background: var(--amber-050); }
+.jo-quality-count { font-variant-numeric: tabular-nums; opacity: 0.85; }
+.jo-quality-note { margin-top: 16px; display: grid; gap: 8px; justify-items: start; }
+
+.jo-review {
+  font-size: 0.6875rem; font-weight: 700; padding: 3px 9px; border-radius: 999px;
+  margin-left: auto; background: var(--surface-alt); color: var(--ink-500);
+}
+.jo-review[data-state="needs_review"] { background: var(--amber-050); color: var(--amber-700); }
+.jo-review[data-state="reviewed"] { background: var(--teal-050); color: var(--teal-500); }
+
+/* ---- job-orders table ---- */
+/* The card supplies the border and background; the padding is dropped so the
+   header strip runs edge to edge. `overflow-x: auto` is the backstop for a
+   phone — below about 900px scrolling beats eight columns crushed to one word
+   each. */
+.jo-table-card { padding: 0; overflow-x: auto; }
+.jo-table {
+  width: 100%; min-width: 860px; border-collapse: collapse;
+  table-layout: fixed; font-size: 0.875rem;
+}
+.jo-th {
+  text-align: left; padding: 12px 14px; background: var(--surface-alt);
+  border-bottom: 1px solid var(--line); font-weight: 650;
+}
+.jo-th[data-active="yes"] { color: var(--ink-700); }
+.jo-td {
+  padding: 12px 14px; vertical-align: top;
+  /* The same backstop `.row` uses: a fixed-layout column cannot widen, so an
+     unbreakable token would otherwise print straight over its neighbour. */
+  overflow-wrap: anywhere;
+}
+.jo-td-strong { font-weight: 600; }
+/* The date must not wrap: broken over two lines it stops reading as a date at
+   a glance, and it is what the eye scans this table by. */
+.jo-td[data-nowrap="yes"] { white-space: nowrap; }
+.jo-row { border-top: 1px solid var(--line); cursor: pointer; }
+.jo-row:hover { background: var(--surface-alt); }
+/* A left edge plus a tint, not colour alone: the selected row has to be
+   findable in a screenshot, in high contrast, and by someone who cannot tell
+   this blue from this white. */
+.jo-row[data-selected="yes"] {
+  background: var(--blue-050); box-shadow: inset 3px 0 0 var(--blue-500);
+}
+/* The row-selecting control. It looks like the cell it sits in — a button
+   chrome on every company name would make the table look like a toolbar — but
+   it is a real button, so it is tabbable and it announces itself. */
+.jo-rowbtn {
+  font: inherit; font-weight: inherit; color: inherit; text-align: left;
+  background: none; border: 0; padding: 0; margin: 0; cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.jo-rowbtn:focus-visible { outline: 2px solid var(--blue-500); outline-offset: 3px; }
+.jo-rowbtn:hover { text-decoration: underline; text-underline-offset: 2px; }
+
+.jo-pager {
+  margin-top: 20px; display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+}
+.jo-pager .btn:disabled { opacity: 0.5; cursor: default; }
+
+/* ---- sync activity and mailbox overview ---- */
+.jo-panels {
+  margin-top: 40px; display: grid; gap: 22px;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+}
+.jo-activity h3, .jo-overview h3 { margin-bottom: 12px; }
+.jo-overview-rows { margin-bottom: 14px; }
+.jo-events { list-style: none; display: grid; gap: 12px; }
+.jo-events li { display: flex; align-items: flex-start; gap: 10px; font-size: 0.875rem; }
+.jo-event-dot {
+  width: 8px; height: 8px; border-radius: 999px; flex: none; margin-top: 7px;
+  background: var(--teal-500);
+}
+.jo-events li[data-outcome="failed"] .jo-event-dot { background: var(--amber-600); }
+.jo-event-body { display: grid; gap: 2px; min-width: 0; }
+.jo-event-body > * { overflow-wrap: anywhere; }
+.jo-event-when { margin-left: auto; color: var(--ink-300); font-size: 0.75rem; white-space: nowrap; }
+.jo-event-tag {
+  font-size: 0.6875rem; font-weight: 700; padding: 2px 8px; border-radius: 999px;
+  background: var(--amber-050); color: var(--amber-700); white-space: nowrap;
+}
+
+/* The whole header cell is the target, not just the label: a 40px-wide word
+   is a frustrating thing to hit, and a sortable column that looks like plain
+   text does not get clicked at all. */
+.jo-sort {
+  display: flex; align-items: center; gap: 6px; width: 100%;
+  background: none; border: 0; padding: 0; margin: 0; cursor: pointer;
+  font: inherit; color: inherit; letter-spacing: inherit; text-align: left;
+  text-transform: inherit;
+}
+.jo-sort:hover { color: var(--ink-900); }
+.jo-sort:focus-visible { outline: 2px solid var(--blue-500); outline-offset: 3px; }
+/* The arrow holds its width whether or not it is showing one, so the headings
+   do not jump sideways as the sort column moves. */
+.jo-arrow { flex: none; width: 10px; color: var(--blue-500); }
+.jo-search {
+  width: 100%; max-width: 30rem; padding: 9px 12px; font: inherit;
+  color: var(--ink-900); background: var(--surface);
+  border: 1px solid var(--line); border-radius: var(--radius);
+}
+.jo-search:focus-visible { outline: 2px solid var(--blue-500); outline-offset: -1px; }
+
+/* ---- decoded shorthand, on the job order ----
+   The literal code is set as a quotation — monospaced, on a wash, in a box —
+   because it is the only part of the pair that was actually in the email. The
+   meaning is plain body text: it is ours, and dressing it up the same way
+   would make an agency's definition look like a client's words. */
+.jo-codes { margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--line); }
+.jo-codes-lede { margin-top: 6px; max-width: 62ch; }
+.jo-codes-none { margin-top: 10px; font-size: 0.875rem; }
+.jo-codes-list { list-style: none; display: grid; gap: 8px; margin-top: 12px; }
+.jo-code {
+  display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+  font-size: 0.875rem;
+}
+.jo-code > * { min-width: 0; overflow-wrap: anywhere; }
+.jo-code-lit {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.8125rem; font-weight: 650;
+  padding: 2px 7px; border-radius: 6px;
+  background: var(--surface-alt); border: 1px solid var(--line);
+  color: var(--ink-900);
+}
+.jo-code-arrow { color: var(--ink-300); flex: none; }
+.jo-code-mean { color: var(--ink-700); }
+.jo-code-attr {
+  font-size: 0.6875rem; font-weight: 650; padding: 2px 8px; border-radius: 999px;
+  background: var(--amber-050); color: var(--amber-700);
+  border: 1px solid var(--amber-200); white-space: nowrap;
+}
+
+/* Amber, the same "a person should look at this" colour the quality states
+   already use. Not red: this is a client's wording that needs judgement, not
+   a failure and not a finding against the agency. */
+.jo-protected {
+  display: inline-flex; align-items: center; gap: 7px;
+  font-size: 0.75rem; font-weight: 650; padding: 4px 10px; border-radius: 999px;
+  background: var(--amber-050); color: var(--amber-700);
+  border: 1px solid var(--amber-200);
+}
+.jo-td .jo-protected { margin-top: 6px; }
+.jo-protected-dot { width: 7px; height: 7px; border-radius: 999px; background: currentColor; flex: none; }
+.jo-protected-note { margin-top: 16px; display: grid; gap: 8px; justify-items: start; }
+.jo-protected-note p { max-width: 62ch; }
+
+/* Announced, never shown: the arrow is silent to a screen reader, and without
+   this the code and the meaning run together as one phrase the sender never
+   wrote. */
+.jo-sr {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0;
+}
+
+/* ---- glossary, in settings ---- */
+.gl-list { list-style: none; display: grid; gap: 16px; margin-top: 28px; }
+.gl-row { display: grid; gap: 4px; }
+/* The agency's own entries are unmarked; ours carry the amber edge and say so
+   in words beside it. Colour alone would not survive a printout or a colour
+   vision difference, and the origin is exactly the thing that must not be
+   missed. */
+.gl-row[data-source="starter"] {
+  border-left: 3px solid var(--amber-600);
+  background: var(--amber-050);
+}
+.gl-row-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.gl-row-head > * { min-width: 0; overflow-wrap: anywhere; }
+.gl-code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.9375rem; font-weight: 700;
+  padding: 3px 9px; border-radius: 6px;
+  background: var(--surface); border: 1px solid var(--line); color: var(--ink-900);
+}
+.gl-arrow { color: var(--ink-300); flex: none; }
+.gl-meaning { font-size: 1rem; font-weight: 600; color: var(--ink-900); }
+.gl-origin {
+  margin-left: auto;
+  font-size: 0.6875rem; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase;
+  padding: 3px 9px; border-radius: 999px;
+  background: var(--amber-050); color: var(--amber-700); border: 1px solid var(--amber-200);
+  white-space: nowrap;
+}
+.gl-origin-note { margin-top: 8px; max-width: 62ch; }
+.gl-row-rows { margin-top: 12px; }
+.gl-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 16px; }
+.gl-confirm { margin-top: 16px; display: grid; gap: 4px; }
+.gl-confirm p { max-width: 56ch; }
+.gl-confirm .gl-actions { margin-top: 10px; }
+.gl-add { margin-top: 24px; }
+.gl-form { margin-top: 12px; }
+.gl-form-grid {
+  display: grid; gap: 14px;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+}
+.gl-field { display: grid; gap: 6px; align-content: start; }
+.gl-field-wide { grid-column: 1 / -1; }
+.gl-input {
+  font: inherit; font-size: 0.9375rem; padding: 9px 12px;
+  color: var(--ink-900); background: var(--surface);
+  border: 1px solid var(--line); border-radius: var(--radius);
+  width: 100%;
+}
+.gl-input:read-only { background: var(--surface-alt); color: var(--ink-500); }
+.gl-input:focus-visible { outline: 2px solid var(--blue-500); outline-offset: -1px; }
+.gl-form-actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 16px; }
+.gl-form-hint { max-width: 40ch; }
+.gl-error { margin-top: 12px; color: var(--amber-700); font-size: 0.875rem; max-width: 62ch; }
+
+/* Every control on these two features is reachable by keyboard and has to
+   show where the focus is. `.btn:focus-visible` itself lives in globals.css,
+   since `.btn` is shared with the landing page — only these two app-only
+   button selectors belong here. */
+.gl-row button:focus-visible,
+.jo-codes button:focus-visible {
+  outline: 2px solid var(--blue-500); outline-offset: 2px;
+}
+select.gl-input:focus-visible { outline: 2px solid var(--blue-500); outline-offset: 2px; }
+
+/* Settings sub-navigation. `nt-` is the notifications/settings prefix, in the
+   same style as `gl-` (glossary) and `jo-` (job orders). */
+.nt-tabs {
+  display: flex;
+  gap: 22px;
+  margin-top: 26px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+}
+.nt-tab {
+  padding: 0 2px 10px;
+  font-size: 0.95rem;
+  text-decoration: none;
+  color: inherit;
+  opacity: 0.62;
+  border-bottom: 2px solid transparent;
+}
+.nt-tab:hover {
+  opacity: 0.9;
+}
+.nt-tab-on {
+  opacity: 1;
+  border-bottom-color: currentColor;
+}
+
+/* Notification destination cards. */
+.nt-card {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 12px;
+  padding: 20px 22px;
+  margin-top: 18px;
+}
+.nt-card-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.nt-card-title {
+  font-weight: 600;
+}
+.nt-badge {
+  font-size: 0.78rem;
+  padding: 2px 9px;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+  opacity: 0.85;
+}
+.nt-badge-off {
+  opacity: 0.55;
+}
+.nt-events {
+  border: 0;
+  padding: 0;
+  margin: 16px 0 0;
+}
+.nt-events-legend {
+  font-size: 0.82rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  opacity: 0.7;
+  padding: 0;
+}
+.nt-event {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+}
+.nt-note {
+  margin-top: 12px;
+  font-size: 0.92rem;
+  opacity: 0.75;
+  max-width: 62ch;
+}
+.nt-error {
+  margin-top: 12px;
+  font-size: 0.92rem;
+  color: #ff9b9b;
+}
+.nt-card-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 18px;
+}
+/* A destination that cannot be linked yet — present so the channel is visibly
+   planned rather than absent, but plainly not actionable. */
+.nt-card-muted {
+  opacity: 0.6;
+}
+/* White plate behind the QR: the site is dark, and a dark-on-dark QR does not
+   scan. */
+.nt-qr {
+  margin-top: 16px;
+  border-radius: 8px;
+  background: #fff;
+  padding: 10px;
+  display: block;
+}
+
+/* The candidate photo, where the circle itself is the control. Everything here
+   exists so there is no "Upload photo" button sitting in the layout: the file
+   input lives behind the overlay, and the overlay is what the recruiter sees. */
+.jo-detail-avatar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin: 4px 0 2px;
+}
+.ca-side {
+  display: flex;
+  flex-direction: column;
+  /* Nearly nothing. The name and the title are one thought about one person,
+     read as a pair rather than as prose, so they are set tight and the title
+     is greyed to keep the name the thing you land on. The gap is really for
+     the hint and the error below them, which are a different thought. */
+  gap: 1px;
+  min-width: 0;
+}
+.ca-side .ca-name { line-height: 1.3; }
+.ca-side .jo-detail-company { line-height: 1.35; color: var(--ink-500); }
+/* The heading and the title carry their own top margins for the stacked
+   layout they used to sit in. Beside the circle the column's own gap does
+   that job, and the margins would push the name off centre. */
+.ca-side .ca-name,
+.ca-side .jo-detail-company,
+.ca-side .jo-detail-error {
+  margin-top: 0;
+}
+/* A name with no spaces in it is still a name. In this column it has the
+   panel's width minus the circle to live in, so it breaks rather than
+   reaching past the edge. */
+.ca-side > * {
+  overflow-wrap: anywhere;
+}
+.ca-hint {
+  font-size: 0.8125rem;
+  color: var(--ink-500);
+}
+/* Fixed 56px and `flex-shrink: 0`: as a flex item the avatar will otherwise
+   yield its width to the column beside it, and a squashed `border-radius: 50%`
+   reads as an ellipse rather than a photo. */
+.ca-shell {
+  position: relative;
+  width: 56px;
+  height: 56px;
+  flex: 0 0 56px;
+}
+.ca-trigger {
+  display: block;
+  position: relative;
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  overflow: hidden;
+  cursor: pointer;
+}
+.ca-photo {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  object-fit: cover;
+  display: block;
+}
+.ca-initials {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-weight: 600;
+  font-size: 18px;
+}
+.ca-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  color: #fff;
+  background: rgba(12, 22, 38, 0.55);
+  opacity: 0;
+  transition: opacity 150ms ease;
+}
+.ca-trigger:hover .ca-overlay,
+.ca-trigger:focus-within .ca-overlay,
+.ca-shell[data-drop="yes"] .ca-overlay {
+  opacity: 1;
+}
+/* The focus ring belongs on the circle, not on the invisible input, or a
+   keyboard user gets an outline around nothing they can see. */
+.ca-trigger:focus-within {
+  outline: 2px solid var(--blue-500);
+  outline-offset: 2px;
+}
+.ca-shell[data-drop="yes"] .ca-trigger {
+  outline: 2px dashed var(--blue-500);
+  outline-offset: 3px;
+}
+.ca-shell[data-busy="yes"] .ca-trigger {
+  cursor: default;
+  opacity: 0.65;
+}
+/* Hidden from sight but deliberately still in the tab order — `display: none`
+   here would take the only real control away from the keyboard. */
+.ca-file {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  border: 0;
+}
+.ca-spinner {
+  position: absolute;
+  inset: -4px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  border-top-color: var(--blue-500);
+  animation: ca-spin 700ms linear infinite;
+  pointer-events: none;
+}
+/* A small badge on the rim rather than a second grey button in the row: it is
+   only ever offered when there is in fact a photo to take away. */
+.ca-remove {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink-700);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 1px 3px rgba(12, 22, 38, 0.18);
+  transition: color 150ms ease, border-color 150ms ease;
+}
+.ca-remove:hover {
+  color: #c74f4f;
+  border-color: #c74f4f;
+}
+.ca-remove:focus-visible {
+  outline: 2px solid var(--blue-500);
+  outline-offset: 2px;
+}
