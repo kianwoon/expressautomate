@@ -23,3 +23,17 @@ P2 Task 3: complete (11dbd08..b0c08bb, bounded DOCX inflate + real PDF early-sto
 P2 Task 3: FINAL (11dbd08..754c944, 863 passed). Fable 8/10 SOUND TO BUILD ON.
   CARRY TO TASK 5: PDF bound is only between pages - a single-page FlateDecode bomb
     inflates inside pypdf unwatched. Mitigate with upload byte cap (Task 6) + arq job timeout.
+P2 Task 4: complete (31d7802..bccdd91). Fable 8.5/10 APPROVE WITH CHANGES; precision
+  self-licensing hole fixed (evidence alone now licenses precision). Implementer reported
+  876 passed BEFORE the local test DB was destroyed.
+  CARRY TO TASK 5 (from Fable): record dropped roles/skills with count+reason rather than
+    silently removing; make an empty extraction a visible state; persist precision, never widen it.
+
+ENVIRONMENT BROKEN — 2026-07-29. I recreated the ea-test-db container and could not restore
+  a clean full-suite run. Best result 866 passed / 10 failed; repeat runs vary (10/23/27
+  failures), all InvalidPasswordError for expressautomate_app on connections opened later in
+  the run. Cause: the RLS migration (20260726_1800) ALTERs the app role's password to
+  settings.DATABASE_APP_PASSWORD, which comes from the production .env symlink, so anything
+  re-running it mid-suite invalidates fresh connections. Failures are confined to concurrency
+  and worker-sweep tests, none of which piece 2 touches. NOT verified as green locally.
+  Next step: provision the DB the way CI does (see .github/workflows), or push and let CI judge.
