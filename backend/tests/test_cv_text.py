@@ -1,6 +1,7 @@
 """Turning an uploaded file into text, and refusing what we cannot read."""
 
 import io
+import struct
 import zipfile
 
 import pytest
@@ -58,31 +59,69 @@ def test_corrupt_pdf_raises_unsupported_document():
         extract_text(corrupt_pdf, "pdf", max_chars=1000)
 
 
-def test_docx_with_disproportionate_declared_size_is_refused():
-    """A DOCX whose zip directory claims a wildly disproportionate
-    uncompressed size is refused before python-docx ever decompresses it.
+def _forge_uncompressed_size(archive: bytes, member: str, claimed: int) -> bytes:
+    """Rewrite a member's declared uncompressed size, in both places a zip
+    records it, leaving the compressed stream untouched.
 
-    We build this with plain zipfile rather than committing a binary bomb:
-    a single member can *declare* any file_size in its header regardless of
-    what bytes actually follow, which is exactly the property a bomb
-    detector must catch without inflating the payload.
+    This is what a malicious zip does: the size fields are metadata written
+    by whoever produced the file, and nothing in the format ties them to
+    what the DEFLATE stream really yields.
     """
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_STORED) as z:
-        # A real document.xml so sniff() still recognises this as a docx.
-        z.writestr("word/document.xml", "<w:document/>")
-        # Forge a directory entry claiming an enormous uncompressed size,
-        # without writing that many bytes into the archive.
-        info = zipfile.ZipInfo("word/media/huge.bin")
-        z.writestr(info, b"x" * 10)
-        # Patch the central-directory record after the fact so file_size
-        # looks like a decompression bomb, mirroring what a hand-crafted
-        # malicious zip would declare.
-        for zinfo in z.infolist():
-            if zinfo.filename == "word/media/huge.bin":
-                zinfo.file_size = 200 * 1024 * 1024
+    raw = bytearray(archive)
+    name = member.encode()
 
-    docx_bytes = buf.getvalue()
+    # Central directory records: name length at +28, name at +46, size at +24.
+    pos = 0
+    while (pos := raw.find(b"PK\x01\x02", pos)) >= 0:
+        (name_len,) = struct.unpack_from("<H", raw, pos + 28)
+        if bytes(raw[pos + 46 : pos + 46 + name_len]) == name:
+            struct.pack_into("<I", raw, pos + 24, claimed)
+        pos += 4
+
+    # Local headers: name length at +26, name at +30, size at +22.
+    pos = 0
+    while (pos := raw.find(b"PK\x03\x04", pos)) >= 0:
+        (name_len,) = struct.unpack_from("<H", raw, pos + 26)
+        if bytes(raw[pos + 30 : pos + 30 + name_len]) == name:
+            struct.pack_into("<I", raw, pos + 22, claimed)
+        pos += 4
+
+    return bytes(raw)
+
+
+def test_docx_that_lies_about_its_size_is_still_refused():
+    """The bypass that a metadata-only guard cannot see.
+
+    This member *declares* 100 bytes, so summing `ZipFile.infolist()`
+    file_size finds nothing wrong — but its DEFLATE stream really expands
+    to 50MB, far past the bound implied by max_chars. The archive is only
+    ~50KB on disk, so a guard that trusts the declaration would wave it
+    through to python-docx and let it inflate unwatched.
+
+    Built here with zipfile rather than committed as a binary: the point is
+    the mismatch between claim and reality, and that is clearer in code.
+    """
+    from docx import Document as DocxDocument
+
+    # Start from a genuinely valid document, so nothing *else* about this
+    # file gives python-docx a reason to refuse it. Without this the test
+    # would pass for the wrong reason — any old parse failure would satisfy
+    # `pytest.raises` and we would learn nothing about the bound.
+    doc = DocxDocument()
+    doc.add_paragraph("A perfectly ordinary CV.")
+    buf = io.BytesIO()
+    doc.save(buf)
+
+    with zipfile.ZipFile(buf, "a", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("word/media/bomb.bin", b"\x00" * (50 * 1024 * 1024))
+
+    docx_bytes = _forge_uncompressed_size(buf.getvalue(), "word/media/bomb.bin", 100)
+
+    # The declaration now looks entirely innocent to a metadata-only check.
+    assert len(docx_bytes) < 1024 * 1024
+    with zipfile.ZipFile(io.BytesIO(docx_bytes)) as z:
+        assert sum(i.file_size for i in z.infolist()) < 20000 * 100
+
     assert sniff(docx_bytes) == "docx"
     with pytest.raises(UnsupportedDocument):
         extract_text(docx_bytes, "docx", max_chars=20000)
@@ -116,16 +155,107 @@ def test_docx_text_is_truncated_to_max_chars():
     assert len(result) < full_length
 
 
-def test_pdf_extraction_stops_early_rather_than_reading_every_page():
-    """A PDF with many pages stops accumulating once max_chars is reached,
-    so returned length reflects the bound, not the full document."""
-    buf = io.BytesIO()
-    writer = PdfWriter()
-    for _ in range(50):
-        writer.add_blank_page(width=612, height=792)
-    writer.write(buf)
-    pdf_bytes = buf.getvalue()
+def _pdf_with_text_pages(page_count: int, line: str) -> bytes:
+    """Build a PDF whose every page carries real, extractable text.
+
+    Written by hand rather than with a helper library because pypdf can
+    only add *blank* pages, and a blank page is precisely what made the
+    earlier version of the early-stop test vacuous: with no text anywhere,
+    reading one page and reading fifty both produce "".
+    """
+    pages = []
+    contents = []
+    page_nums = []
+    num = 3
+    for _ in range(page_count):
+        stream = f"BT /F1 12 Tf 72 720 Td ({line}) Tj ET".encode()
+        content_num = num + 1
+        pages.append(
+            (
+                num,
+                b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+                b"/Resources << /Font << /F1 %d 0 R >> >> /Contents %d 0 R >>"
+                % (3 + page_count * 2, content_num),
+            )
+        )
+        contents.append(
+            (
+                content_num,
+                b"<< /Length %d >>\nstream\n%s\nendstream" % (len(stream), stream),
+            )
+        )
+        page_nums.append(b"%d 0 R" % num)
+        num += 2
+
+    font_num = 3 + page_count * 2
+    objects = [
+        (1, b"<< /Type /Catalog /Pages 2 0 R >>"),
+        (
+            2,
+            b"<< /Type /Pages /Count %d /Kids [%s] >>"
+            % (page_count, b" ".join(page_nums)),
+        ),
+        (font_num, b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"),
+        *pages,
+        *contents,
+    ]
+    objects.sort()
+
+    out = io.BytesIO()
+    out.write(b"%PDF-1.4\n")
+    offsets = {}
+    for number, payload in objects:
+        offsets[number] = out.tell()
+        out.write(b"%d 0 obj\n" % number)
+        out.write(payload)
+        out.write(b"\nendobj\n")
+
+    highest = max(offsets)
+    xref = out.tell()
+    out.write(b"xref\n0 %d\n" % (highest + 1))
+    out.write(b"0000000000 65535 f \n")
+    for i in range(1, highest + 1):
+        if i in offsets:
+            out.write(b"%010d 00000 n \n" % offsets[i])
+        else:
+            out.write(b"0000000000 65535 f \n")
+    out.write(
+        b"trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n"
+        % (highest + 1, xref)
+    )
+    return out.getvalue()
+
+
+def test_pdf_extraction_stops_early_rather_than_reading_every_page(monkeypatch):
+    """A long PDF must stop being read once max_chars is satisfied.
+
+    Every page here carries 80 real characters, so the fifty pages hold
+    4000 — twenty times the 200 we ask for. Counting extract_text calls is
+    the only way to see the difference: an implementation that reads all
+    fifty pages and slices afterwards returns the same 200 characters as
+    one that stops at page three, while doing twenty times the work on a
+    worker shared with every other tenant. Assert on the work, not the
+    output.
+    """
+    from pypdf._page import PageObject
+
+    line = "x" * 80
+    pdf_bytes = _pdf_with_text_pages(50, line)
+
+    pages_read = 0
+    real_extract = PageObject.extract_text
+
+    def counting_extract(self, *args, **kwargs):
+        nonlocal pages_read
+        pages_read += 1
+        return real_extract(self, *args, **kwargs)
+
+    monkeypatch.setattr(PageObject, "extract_text", counting_extract)
 
     assert sniff(pdf_bytes) == "pdf"
-    result = extract_text(pdf_bytes, "pdf", max_chars=10)
-    assert len(result) <= 10
+    result = extract_text(pdf_bytes, "pdf", max_chars=200)
+
+    assert len(result) == 200
+    assert result.startswith(line)
+    # Three pages of 80 characters clear 200; a full scan would be fifty.
+    assert pages_read == 3, f"read {pages_read} pages to satisfy 200 characters"

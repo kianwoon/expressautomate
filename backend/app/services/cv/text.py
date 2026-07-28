@@ -1,7 +1,9 @@
 """Extract text from CV files (PDF and DOCX)."""
 
 import io
+import struct
 import zipfile
+import zlib
 
 from docx import Document
 from pypdf import PdfReader
@@ -9,10 +11,22 @@ from pypdf import PdfReader
 # A multiple, not a hardcoded byte count: the caller's max_chars already
 # encodes the app's configured limit, and we only need enough headroom to
 # admit legitimately verbose documents (rich XML markup around a modest
-# amount of text) while still rejecting a zip whose declared size implies
-# a decompression bomb. No `settings` import here — this module stays pure
-# and the actual limit always comes from the caller.
+# amount of text) while still rejecting a zip that inflates without bound.
+# No `settings` import here — this module stays pure and the actual limit
+# always comes from the caller.
 _DOCX_BOMB_MULTIPLIER = 100
+
+# How much compressed input we hand the decompressor at a time, and how much
+# plaintext we let it hand back per call. Both are deliberately small: the
+# whole point of the bound is that we get to look at the running total
+# between chunks, and a chunk we cannot interrupt is a chunk that can
+# exhaust the worker before we ever check.
+_INFLATE_CHUNK = 64 * 1024
+
+_STORED = 0
+_DEFLATED = 8
+_LOCAL_HEADER_SIZE = 30
+_FLAG_ENCRYPTED = 0x1
 
 
 class UnsupportedDocument(Exception):
@@ -72,7 +86,9 @@ def extract_text(data: bytes, kind: str, *, max_chars: int) -> str:
 
     Raises:
         UnsupportedDocument: If the file cannot be parsed, or (for DOCX) if
-            its declared uncompressed size implies a decompression bomb.
+            it actually decompresses past the bound derived from max_chars.
+            Note "actually": the archive's own claims about its size are
+            never consulted, because the attacker writes them.
     """
     if kind == "pdf":
         return _extract_pdf(data, max_chars=max_chars)
@@ -116,26 +132,137 @@ def _extract_pdf(data: bytes, *, max_chars: int) -> str:
         raise UnsupportedDocument(f"Failed to parse PDF: {e}") from e
 
 
+def _member_data_offset(data: bytes, info: zipfile.ZipInfo) -> int:
+    """Return the offset of a member's payload, read from its local header.
+
+    The central directory says where the local header starts; the local
+    header itself says how long its name and extra fields are. We read those
+    two lengths rather than reusing the central directory's copies, because
+    the two records can legitimately disagree about extra-field length and
+    the local one is what actually precedes the bytes.
+    """
+    off = info.header_offset
+    if data[off : off + 4] != b"PK\x03\x04":
+        raise UnsupportedDocument("DOCX member has no local file header")
+    name_len, extra_len = struct.unpack_from("<HH", data, off + 26)
+    return off + _LOCAL_HEADER_SIZE + name_len + extra_len
+
+
+def _inflate_bounded(data: bytes, info: zipfile.ZipInfo, budget: int) -> bytes:
+    """Decompress one zip member, giving up the moment it exceeds `budget`.
+
+    This exists because *every* size in a zip file is a claim made by
+    whoever wrote the file, not a fact. `ZipInfo.file_size` lives in the
+    central directory and a hostile archive is free to declare one byte
+    while its DEFLATE stream expands to gigabytes. Any check that reads the
+    declaration and then hands the raw bytes to a parser has checked
+    nothing — it has only asked the attacker whether they are an attacker.
+
+    So we never consult `file_size` or `compress_size`. We feed the raw
+    stream to zlib in chunks, cap how much plaintext zlib may return each
+    time, and count what comes back. The instant the running total passes
+    the budget we stop and raise, having materialised at most one chunk
+    beyond it. This is the defence; deleting it reopens a
+    denial-of-service against every tenant sharing this worker.
+    """
+    if info.flag_bits & _FLAG_ENCRYPTED:
+        raise UnsupportedDocument("DOCX member is encrypted")
+
+    start = _member_data_offset(data, info)
+
+    if info.compress_type == _STORED:
+        # A stored member cannot inflate — its plaintext is already sitting
+        # in the archive we were handed, so its size is bounded by the
+        # upload limit the caller enforced upstream. We still clamp to the
+        # end of the buffer in case the declared length overruns it.
+        end = min(len(data), start + max(info.compress_size, 0))
+        chunk = data[start:end]
+        if len(chunk) > budget:
+            raise UnsupportedDocument(
+                "DOCX member exceeds the size implied by the text limit"
+            )
+        return chunk
+
+    if info.compress_type != _DEFLATED:
+        raise UnsupportedDocument(
+            f"DOCX member uses unsupported compression {info.compress_type}"
+        )
+
+    # -15 selects a raw DEFLATE stream (no zlib wrapper), which is what a
+    # zip member holds. We read input to the end of the buffer rather than
+    # trusting compress_size, and stop on the decompressor's own end-of-
+    # stream flag — a declared length that lies in either direction cannot
+    # make us read more than the budget allows.
+    decompressor = zlib.decompressobj(-15)
+    out: list[bytes] = []
+    total = 0
+    pos = start
+    while not decompressor.eof:
+        # zlib hands back whatever input it could not fit into max_length
+        # bytes of output; that tail must be replayed before we advance
+        # through the buffer, or we silently drop compressed data.
+        feed = decompressor.unconsumed_tail
+        if not feed:
+            if pos >= len(data):
+                # Input exhausted before the stream ended: truncated member.
+                break
+            feed = data[pos : pos + _INFLATE_CHUNK]
+            pos += len(feed)
+        piece = decompressor.decompress(feed, _INFLATE_CHUNK)
+        if not piece and not decompressor.unconsumed_tail and pos >= len(data):
+            break
+        total += len(piece)
+        if total > budget:
+            raise UnsupportedDocument(
+                "DOCX decompresses to more than the size implied by the "
+                "text limit; refusing to continue"
+            )
+        out.append(piece)
+    return b"".join(out)
+
+
+def _bounded_docx_archive(data: bytes, *, budget: int) -> io.BytesIO:
+    """Rebuild the archive from bytes we have actually inflated and counted.
+
+    python-docx wants a file-like zip, and if we handed it the original
+    bytes it would decompress them all over again — this time with nothing
+    watching. Rather than reimplementing the parts of the OOXML package
+    python-docx knows how to read, we inflate every member ourselves under
+    a shared budget and repack the verified plaintext with no compression.
+    What python-docx then opens cannot expand at all: it is already flat,
+    and already known to fit.
+    """
+    remaining = budget
+    rebuilt = io.BytesIO()
+    with zipfile.ZipFile(io.BytesIO(data)) as z:
+        infos = z.infolist()
+        with zipfile.ZipFile(rebuilt, "w", zipfile.ZIP_STORED) as out:
+            for info in infos:
+                if info.is_dir():
+                    continue
+                plain = _inflate_bounded(data, info, remaining)
+                remaining -= len(plain)
+                if remaining < 0:
+                    raise UnsupportedDocument(
+                        "DOCX contents exceed the size implied by the text "
+                        "limit; refusing to continue"
+                    )
+                out.writestr(info.filename, plain)
+    rebuilt.seek(0)
+    return rebuilt
+
+
 def _extract_docx(data: bytes, *, max_chars: int) -> str:
     """Extract text from a DOCX file, refusing to decompress a bomb.
 
-    `ZipFile.infolist()` reads only the zip's central directory, which
-    records each member's declared uncompressed size — it does not
-    decompress anything. We sum those sizes and refuse to hand the archive
-    to python-docx (which does decompress fully) if the total is wildly
-    disproportionate to what we could ever need for max_chars of text.
+    The budget is derived from the caller's max_chars — see
+    `_DOCX_BOMB_MULTIPLIER` — and is spent across the archive as a whole,
+    so a thousand small members cannot do what one large member is
+    forbidden to do.
     """
     try:
-        with zipfile.ZipFile(io.BytesIO(data)) as z:
-            declared_size = sum(info.file_size for info in z.infolist())
-        if declared_size > max_chars * _DOCX_BOMB_MULTIPLIER:
-            raise UnsupportedDocument(
-                f"DOCX declared uncompressed size ({declared_size} bytes) is "
-                "disproportionate to the requested text limit; refusing to "
-                "decompress"
-            )
-
-        doc = Document(io.BytesIO(data))
+        budget = max_chars * _DOCX_BOMB_MULTIPLIER
+        doc = Document(_bounded_docx_archive(data, budget=budget))
         text_parts = []
         total_len = 0
         for para in doc.paragraphs:
