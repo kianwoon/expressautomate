@@ -13,6 +13,7 @@ from sqlalchemy import insert, text
 from app.api import (
     activity,
     auth,
+    candidates,
     clients,
     glossary,
     graph_webhook,
@@ -81,6 +82,7 @@ api.include_router(graph_webhook.router)
 api.include_router(opportunities.router)
 api.include_router(activity.router)
 api.include_router(glossary.router)
+api.include_router(candidates.router)
 api.include_router(clients.router)
 api.include_router(notifications.router)
 api.include_router(telegram_webhook.router)
