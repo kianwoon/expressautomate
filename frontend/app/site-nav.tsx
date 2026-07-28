@@ -17,8 +17,6 @@ import { Logo } from "./logo";
 const SECTION_LINKS = [
   { href: "/use-cases", label: "Use cases" },
   { href: "/#what", label: "Benefits" },
-  { href: "/#how", label: "How it works" },
-  { href: "/#security", label: "Security" },
   { href: "/pricing", label: "Pricing" },
 ] as const;
 

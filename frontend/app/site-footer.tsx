@@ -1,4 +1,5 @@
 import { CONTACT_MAILTO } from "./api";
+import { LionMark } from "./lion-mark";
 import { Logo } from "./logo";
 
 /**
@@ -68,7 +69,10 @@ export function SiteFooter() {
 
         <div className="footer-where">
           <p>Made for recruitment agencies.</p>
-          <p>Built in Singapore.</p>
+          <p className="footer-origin">
+            <LionMark />
+            Built in Singapore.
+          </p>
         </div>
       </div>
     </footer>
