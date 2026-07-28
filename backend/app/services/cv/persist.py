@@ -148,11 +148,18 @@ def _read_parts(value: str) -> tuple[int | None, int | None, int | None]:
 
     match = _DMY.search(value)
     if match:
-        # Day-first. This deployment serves Singapore, where 3/4/2019 is the
-        # third of April; reading it month-first would move a date by months
-        # without anything to notice it had happened.
         day, month, year = match.groups()
-        return int(year), int(month), int(day)
+        day, month = int(day), int(month)
+        # Day-first when it's unambiguous: this deployment serves Singapore,
+        # so 25/4/2019 is the 25th of April, and if the first field exceeds
+        # 12 there is only one legal reading anyway. But when both fields are
+        # <=12 the CV genuinely does not say which is the day and which is
+        # the month — 3/4/2019 could honestly be either. Guessing day-first
+        # there would store a fabricated fact (§15), so only the year is
+        # trustworthy; do not "fix" this back into a guess.
+        if day <= 12 and month <= 12:
+            return int(year), None, None
+        return int(year), month, day
 
     match = _DAY_MONTH_YEAR.search(value)
     if match:
@@ -197,21 +204,45 @@ def stored_date(field: ExtractedDate | None) -> tuple[date | None, str | None]:
     year, month, day = _read_parts(field.value or "")
     if year is None:
         return None, None
-    if field.precision == "day" and day is None:
-        return None, None
-    if field.precision == "month" and month is None:
-        return None, None
+    precision = field.precision
+    if precision == "day" and day is None:
+        # Either the value legitimately carries no day (a month-shaped
+        # quotation the model over-claimed), or it is the ambiguous
+        # numeric case `_read_parts` refused to guess at — either way,
+        # the year is still real. Report it at the precision it can
+        # actually support rather than dropping the role entirely.
+        precision = "month" if month is not None else "year"
+    if precision == "month" and month is None:
+        precision = "year"
 
     try:
-        return date(year, month or 1, day or 1), field.precision
+        return date(year, month or 1, day or 1), precision
     except ValueError:
         # A month of 13 or a 31st of February. The model wrote something that
         # is not a date; nothing here is going to repair it.
         return None, None
 
 
+def _for_matching(span: tuple[date, date]) -> tuple[date, date]:
+    """A span, widened so a same-month role can still be found.
+
+    `span_months` correctly pins both ends to month starts and clamps a
+    same-month role to zero length — that arithmetic is right and other code
+    depends on it staying that way. But a half-open overlap test can never be
+    true for a zero-length span on either side, so a role that started and
+    ended in the same calendar month could never match anything, typed or
+    parsed. For matching only, such a role is widened to occupy its one
+    month; this function is never used for tenure arithmetic.
+    """
+    start, end = span
+    if end == start:
+        end = date(start.year + (start.month == 12), start.month % 12 + 1, 1)
+    return start, end
+
+
 def _overlaps(a: tuple[date, date], b: tuple[date, date]) -> bool:
     """Half-open overlap. Adjacency is not overlap — it is two jobs."""
+    a, b = _for_matching(a), _for_matching(b)
     return a[0] < b[1] and b[0] < a[1]
 
 
@@ -335,6 +366,7 @@ async def persist_cv(
     response: CVResponse,
     result: LLMResult,
     text: str,
+    today: date | None = None,
 ) -> None:
     """Record one CV parse: the run, what it found, and what it left out.
 
@@ -368,7 +400,9 @@ async def persist_cv(
     existing = list(
         (await session.execute(_EXISTING_ROLES, {"candidate_id": candidate_id})).all()
     )
-    today = date.today()
+    # Injected as a keyword with a default, matching `candidate_tenure.derive`,
+    # so the open-ended-role path can be tested without waiting on the clock.
+    today = today or date.today()
 
     dropped, reason = _dropped_by_verification(response, result)
     unusable = 0
@@ -447,9 +481,14 @@ async def persist_cv(
         )
 
     inserted_skills = 0
+    blank_skills = 0
     for skill in response.skills:
         value = (skill.value or "").strip()
         if not value:
+            # Blank after stripping is still a skill the model claimed and
+            # verification let through; leaving it out of `dropped_count`
+            # would under-report exactly like the roles case below.
+            blank_skills += 1
             continue
         await session.execute(
             _INSERT_SKILL,
@@ -475,6 +514,11 @@ async def persist_cv(
         )
         reason = f"{reason} {note}" if reason else note
         dropped += unusable
+
+    if blank_skills:
+        note = f"{blank_skills} skill(s) were left out because the CV named none."
+        reason = f"{reason} {note}" if reason else note
+        dropped += blank_skills
 
     document.dropped_count = dropped
     document.dropped_reason = reason

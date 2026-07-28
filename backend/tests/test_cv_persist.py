@@ -122,6 +122,28 @@ def test_an_undated_role_matches_one_employer_and_refuses_two():
     assert match_existing_role("acme", None, None, None, None, two, TODAY) is None
 
 
+def test_a_same_month_role_matches_a_same_month_role():
+    """A role that starts and ends in the same month is not zero-length
+    for matching purposes, or it could never match anything."""
+    existing = [_Row("acme", date(2019, 3, 1), "month", date(2019, 3, 1), "month")]
+    assert (
+        match_existing_role(
+            "acme", date(2019, 3, 1), "month", date(2019, 3, 1), "month", existing, TODAY
+        )
+        == existing[0].id
+    )
+
+
+def test_a_same_month_role_does_not_match_a_different_month():
+    existing = [_Row("acme", date(2019, 3, 1), "month", date(2019, 3, 1), "month")]
+    assert (
+        match_existing_role(
+            "acme", date(2019, 4, 1), "month", date(2019, 4, 1), "month", existing, TODAY
+        )
+        is None
+    )
+
+
 def test_a_return_to_a_former_employer_is_a_second_role():
     existing = [_Row("acme", date(2015, 1, 1), "month", date(2017, 1, 1), "month")]
     assert (
@@ -155,6 +177,21 @@ def test_a_day_is_kept_whole():
     assert (day, precision) == (date(2019, 3, 3), "day")
 
 
+def test_an_ambiguous_numeric_date_is_not_guessed_at():
+    """3/4/2019: both fields are <=12, so the CV does not say which is the
+    day and which is the month. Storing 3 April would assert a fact the CV
+    never stated (§15); only the year is honest."""
+    value = _date("3/4/2019", "3/4/2019", "day")
+    day, precision = stored_date(ExtractedDate.model_validate(value))
+    assert (day, precision) == (date(2019, 1, 1), "year")
+
+
+def test_an_unambiguous_numeric_date_still_reads_day_first():
+    value = _date("25/4/2019", "25/4/2019", "day")
+    day, precision = stored_date(ExtractedDate.model_validate(value))
+    assert (day, precision) == (date(2019, 4, 25), "day")
+
+
 # --- what actually lands in the tables -----------------------------------
 
 
@@ -180,9 +217,10 @@ async def _cleanup(tenant_id):
         await s.commit()
 
 
-async def _run(tenant_id, candidate_id, document_id, response, result):
+async def _run(tenant_id, candidate_id, document_id, response, result, today=None):
     async with tenant_session(tenant_id) as session:
         document = await session.get(CandidateDocument, document_id)
+        kwargs = {"today": today} if today is not None else {}
         await persist_cv(
             session,
             tenant_id=tenant_id,
@@ -191,6 +229,7 @@ async def _run(tenant_id, candidate_id, document_id, response, result):
             response=response,
             result=result,
             text=CV,
+            **kwargs,
         )
 
 
@@ -321,6 +360,76 @@ async def test_what_verification_dropped_is_recorded_on_the_document(agency):  #
     assert row.parse_state == "parsed"
     assert row.dropped_count == 2
     assert "1 role(s)" in row.dropped_reason and "1 skill(s)" in row.dropped_reason
+    await _cleanup(tenant_id)
+
+
+@pytest.mark.asyncio
+async def test_a_blank_skill_is_counted_as_dropped(agency):  # noqa: F811
+    tenant_id, user_id = agency
+    candidate_id = await _a_candidate_row(tenant_id, user_id)
+    document_id = await _document(tenant_id, candidate_id)
+
+    # A blank `value` still needs a real quotation to pass `ExtractedField`'s
+    # anti-fabrication check, so the blank skill quotes real CV text — the
+    # blankness under test is in `value` alone, same as a model that echoed
+    # whitespace for a bullet with nothing legible in it.
+    payload = {
+        "roles": [],
+        "skills": [_field("triage"), _field("   ", evidence="triage")],
+    }
+    response = CVResponse.model_validate(payload)
+    result = LLMResult(data=payload, model="test/fast", latency_ms=12, raw={"choices": []})
+    await _run(tenant_id, candidate_id, document_id, response, result)
+
+    async with AdminSessionLocal() as s:
+        row = (
+            await s.execute(
+                text("SELECT dropped_count FROM candidate_documents WHERE id = :i"),
+                {"i": document_id},
+            )
+        ).one()
+    assert row.dropped_count == 1
+    await _cleanup(tenant_id)
+
+
+@pytest.mark.asyncio
+async def test_today_is_injectable_for_the_open_ended_role_path(agency):  # noqa: F811
+    """`today` defaults to the real clock but can be pinned, matching
+    `candidate_tenure.derive(roles, today=...)`, so an open-ended role's
+    match against "today" is testable without waiting on the calendar."""
+    tenant_id, user_id = agency
+    candidate_id = await _a_candidate_row(tenant_id, user_id)
+    document_id = await _document(tenant_id, candidate_id)
+    # allow-hardcode: an INSERT statement (test fixture setup), not a
+    # detect-list or matching oracle.
+    async with AdminSessionLocal() as s:
+        await s.execute(
+            text(
+                "INSERT INTO candidate_roles (id, tenant_id, candidate_id, employer,"
+                " employer_normalized, title, title_normalized, started_on,"
+                " started_precision, ended_on, ended_precision, source, status)"
+                " VALUES (:i, :t, :c, 'Raffles Medical', 'raffles medical', 'Senior Nurse',"
+                " 'senior nurse', '2020-03-01', 'month', NULL, NULL, 'human', 'confirmed')"
+            ),
+            {"i": uuid.uuid4(), "t": tenant_id, "c": candidate_id},
+        )
+        await s.commit()
+
+    response, result = _response(
+        roles=[_role("Senior Nurse", "Raffles Medical",
+                     ("Mar 2020", "Mar 2020", "month"))]
+    )
+    await _run(tenant_id, candidate_id, document_id, response, result, today=date(2030, 1, 1))
+
+    async with AdminSessionLocal() as s:
+        rows = (
+            await s.execute(
+                text("SELECT source FROM candidate_roles WHERE candidate_id = :c"),
+                {"c": candidate_id},
+            )
+        ).all()
+    # Matched against the existing open-ended role rather than inserted anew.
+    assert [r.source for r in rows] == ["human"]
     await _cleanup(tenant_id)
 
 
