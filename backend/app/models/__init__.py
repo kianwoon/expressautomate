@@ -1,3 +1,4 @@
+from app.models.candidate import Candidate, CandidateFieldOverride, CandidateSkill
 from app.models.client import Client, ClientMention
 from app.models.email_message import EmailMessage
 from app.models.extraction import (
@@ -23,6 +24,9 @@ from app.models.sync_event import SyncEvent
 from app.models.tenant import Tenant, User
 
 __all__ = [
+    "Candidate",
+    "CandidateFieldOverride",
+    "CandidateSkill",
     "Client",
     "ClientMention",
     "EarlyAccessSignup",
