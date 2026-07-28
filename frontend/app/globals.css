@@ -1342,8 +1342,15 @@ footer { border-top: 1px solid var(--line); padding: 48px 0 40px; color: var(--i
    layout they used to sit in. Beside the circle the column's own gap does
    that job, and the margins would push the name off centre. */
 .ca-side .ca-name,
-.ca-side .jo-detail-company {
+.ca-side .jo-detail-company,
+.ca-side .jo-detail-error {
   margin-top: 0;
+}
+/* A name with no spaces in it is still a name. In this column it has the
+   panel's width minus the circle to live in, so it breaks rather than
+   reaching past the edge. */
+.ca-side > * {
+  overflow-wrap: anywhere;
 }
 .ca-hint {
   font-size: 0.8125rem;
