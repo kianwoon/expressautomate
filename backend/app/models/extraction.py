@@ -14,7 +14,7 @@ instruction the model is asked to honour.
 
 import uuid
 
-from sqlalchemy import Boolean, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, CheckConstraint, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PgUUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -25,10 +25,20 @@ from app.db.base import Base, TenantScoped, Timestamps, UUIDPrimaryKey
 class Extraction(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
     __tablename__ = "extractions"
 
-    email_message_id: Mapped[uuid.UUID] = mapped_column(
+    # Nullable since a CV extraction has no email behind it. The CHECK below is
+    # what keeps this honest: provenance that names no source, or two, is not
+    # provenance at all.
+    email_message_id: Mapped[uuid.UUID | None] = mapped_column(
         PgUUID(as_uuid=True),
         ForeignKey("email_messages.id", ondelete="CASCADE"),
-        nullable=False,
+        index=True,
+    )
+    # Bare column, no FK yet: `candidate_documents` is Task 2's table, and a
+    # string FK to a table absent from the metadata breaks mapper
+    # configuration rather than merely failing at the database. Task 2 adds
+    # the ForeignKey here alongside the migration that creates the table.
+    candidate_document_id: Mapped[uuid.UUID | None] = mapped_column(
+        PgUUID(as_uuid=True),
         index=True,
     )
     model_name: Mapped[str] = mapped_column(String(128), nullable=False)
@@ -38,6 +48,13 @@ class Extraction(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
     completion_tokens: Mapped[int | None] = mapped_column(Integer)
     latency_ms: Mapped[int | None] = mapped_column(Integer)
     raw_response: Mapped[dict | None] = mapped_column(JSONB)
+
+    __table_args__ = (
+        CheckConstraint(
+            "(email_message_id IS NULL) <> (candidate_document_id IS NULL)",
+            name="ck_extractions_exactly_one_source",
+        ),
+    )
 
 
 class ExtractionEvidence(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
@@ -51,6 +68,13 @@ class ExtractionEvidence(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
     )
     opportunity_id: Mapped[uuid.UUID | None] = mapped_column(
         PgUUID(as_uuid=True), ForeignKey("opportunities.id", ondelete="CASCADE"), index=True
+    )
+    # Both stay nullable with no CHECK between them: evidence may legitimately
+    # name neither when it describes a field of the source document itself
+    # (e.g. "this CV has no listed graduation year"), so do not "fix" this
+    # into an exactly-one-source constraint the way Extraction has one.
+    candidate_role_id: Mapped[uuid.UUID | None] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("candidate_roles.id", ondelete="CASCADE"), index=True
     )
     field_name: Mapped[str] = mapped_column(String(64), nullable=False)
     extracted_value: Mapped[str | None] = mapped_column(Text)
