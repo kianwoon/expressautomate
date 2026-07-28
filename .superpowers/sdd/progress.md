@@ -49,3 +49,12 @@ P2 Task 6: complete (a6a6920..62dc217, 918 passed). Fable 9/10 APPROVE, no fix-n
 P2 Task 7: complete (273509e..d22cbc0, 922 passed). Evidence exposure was a PLAN GAP -
   the UI task said "show the evidence" but no task exposed it on the role serializer.
   Closed in d22cbc0 with a single IN-query, evidence_valid only, no offsets or confidence.
+
+PIECE 2 COMPLETE. Fable final: SHIP WITH FIXES 8.5/10; all findings closed in a57e4f0.
+  924 passed, ruff/tsc/build clean. NOT pushed, migrations NOT applied to Koyeb.
+  BEFORE REAL RECRUITERS (owner ruling): one staging upload to exercise real R2 and the
+    arq timeout - both are covered by doubles only today.
+  ACCEPTED AS-IS: UTC quota reset, multipart disk-spool before 413, day-precision residual.
+  HUMAN MUST CHECK ONCE SIGNED IN: (1) a real PDF reaches parsed with a visible evidence
+    quote; (2) a scanned CV shows the unreadable guidance; (3) confirm/reject move the
+    candidate's headline fields.
