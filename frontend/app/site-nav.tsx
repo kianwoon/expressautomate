@@ -15,12 +15,12 @@ import {
 import { displayNameOf, useAuth, useSignInHref } from "./auth";
 import { Logo } from "./logo";
 
-/** Landing-page section links; the dashboard has no sections to jump to. */
-const SECTION_LINKS = [
-  { href: "/use-cases", label: "Use cases" },
-  { href: "/#what", label: "Benefits" },
-  { href: "/pricing", label: "Pricing" },
-] as const;
+/** Landing-page section links; the dashboard has no sections to jump to.
+ *
+ *  Down to the one link that leads somewhere a visitor decides from. The
+ *  others were browsing, which is what the footer is for: it already carries
+ *  every one of them, so removing a link here loses no destination. */
+const SECTION_LINKS = [{ href: "/pricing", label: "Pricing" }] as const;
 
 /**
  * The whole nav, shared by the landing page and the dashboard.
