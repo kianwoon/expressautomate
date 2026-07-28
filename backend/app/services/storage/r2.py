@@ -80,6 +80,22 @@ def avatar_key(tenant_id: uuid.UUID, candidate_id: uuid.UUID) -> str:
     return f"{tenant_id}/candidates/{candidate_id}/avatar"
 
 
+def document_text_key(
+    tenant_id: uuid.UUID, candidate_id: uuid.UUID, document_id: uuid.UUID
+) -> str:
+    """Where the plain text read out of one CV is kept.
+
+    Beside the uploaded file rather than in place of it, because an evidence
+    span is an offset into *this* string: re-deriving text from the PDF later
+    is not guaranteed to reproduce the same offsets, so a stored extraction
+    would start quoting the wrong characters.
+
+    The leading `{tenant_id}/` segment is load-bearing, same as `body_key` and
+    `avatar_key`: it is the prefix a tenant erasure purges by.
+    """
+    return f"{tenant_id}/candidates/{candidate_id}/documents/{document_id}.txt"
+
+
 class BodyDeletionFailed(Exception):
     """Some keys in a batch were not deleted."""
 
@@ -113,6 +129,7 @@ class BodyStore(Protocol):
 
     async def put(self, key: str, content: str) -> None: ...
     async def get(self, key: str) -> str | None: ...
+    async def get_bytes(self, key: str) -> bytes | None: ...
     async def delete(self, *keys: str) -> None: ...
     async def put_bytes(self, key: str, content: bytes, content_type: str) -> None: ...
     async def presigned_get(self, key: str, ttl_seconds: int) -> str: ...
@@ -249,6 +266,28 @@ class R2BodyStore:
                 raise
             return (await obj["Body"].read()).decode()
 
+    async def get_bytes(self, key: str) -> bytes | None:
+        """`get`, without the decode. Same absence rules, same bucket rule.
+
+        A CV is a PDF or a DOCX, and decoding either as UTF-8 raises rather
+        than returning something wrong — which would turn a readable document
+        into a job crash. The bytes are what the parser wants.
+        """
+        async with self._client() as s3:
+            try:
+                obj = await s3.get_object(Bucket=settings.R2_BUCKET_NAME, Key=key)
+            except ClientError as exc:
+                code = exc.response.get("Error", {}).get("Code")
+                if code == _NO_SUCH_BUCKET:
+                    raise BodyStoreMisconfigured(
+                        f"R2 bucket {settings.R2_BUCKET_NAME!r} does not exist. "
+                        "No document can be read until it is created."
+                    ) from exc
+                if code in _ABSENT_CODES:
+                    return None
+                raise
+            return await obj["Body"].read()
+
     async def delete(self, *keys: str) -> None:
         """Delete objects, tolerating any that are already gone.
 
@@ -281,6 +320,10 @@ class InMemoryBodyStore:
 
     async def get(self, key: str) -> str | None:
         return self.objects.get(key)
+
+    async def get_bytes(self, key: str) -> bytes | None:
+        stored = self.binary_objects.get(key)
+        return stored[0] if stored else None
 
     async def delete(self, *keys: str) -> None:
         for key in keys:

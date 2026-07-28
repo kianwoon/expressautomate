@@ -11,9 +11,12 @@ wedged arq worker still gets fresh work queued, and a crashed supervisor does
 not stop work already in the queue.
 """
 
+from arq.worker import func
+
 from app.core.config import settings
 from app.core.logging import configure_logging
 from app.services.graph.client import warn_if_unconfigured
+from app.workers.cv_jobs import parse_candidate_cv
 from app.workers.jobs import (
     backfill_mailbox_job,
     classify_batch,
@@ -76,6 +79,19 @@ class WorkerSettings:
         # Notifications. Enqueued by `emit_and_enqueue` after the opportunity
         # commits, and by `flush_notifications` for rows whose enqueue was lost.
         deliver_notification,
+        # The only job here with a timeout of its own. Everything above is
+        # bounded by the service it calls — Graph and the model client both
+        # carry their own — but a CV parse runs a document parser on bytes a
+        # stranger uploaded, and a single-page FlateDecode bomb inflates
+        # inside `pypdf` where nothing of ours can interrupt it. `name` is
+        # given explicitly: producers enqueue the string "parse_candidate_cv",
+        # and a wrapper registered under any other name would fail on the far
+        # side of the queue, where the producer already saw success.
+        func(
+            parse_candidate_cv,
+            name="parse_candidate_cv",
+            timeout=settings.CV_PARSE_TIMEOUT_SECONDS,
+        ),
     ]
     # Every function above but the two classification jobs ends in a Graph call. Said once
     # here rather than discovered one failed job at a time.

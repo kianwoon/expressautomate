@@ -321,9 +321,14 @@ class CandidateDocument(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
     PENDING = "pending"
     PARSING = "parsing"
     PARSED = "parsed"
+    # Text came out of the file, the model read it, and it described no role
+    # and named no skill. Terminal like `parsed`, and separate from it because
+    # a blank candidate panel otherwise looks the same as a full one that has
+    # not loaded — see the `cv_parse_outcome` migration.
+    EMPTY = "empty"
     UNREADABLE = "unreadable"
     FAILED = "failed"
-    PARSE_STATES = (PENDING, PARSING, PARSED, UNREADABLE, FAILED)
+    PARSE_STATES = (PENDING, PARSING, PARSED, EMPTY, UNREADABLE, FAILED)
 
     candidate_id: Mapped[uuid.UUID] = mapped_column(
         PgUUID(as_uuid=True), nullable=False, index=True
@@ -344,6 +349,15 @@ class CandidateDocument(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
     parse_state: Mapped[str] = mapped_column(String(16), nullable=False, default=PENDING)
     parse_error: Mapped[str | None] = mapped_column(Text)
 
+    # What the extractor read but would not publish. A role or skill whose
+    # quotation is not on the page is discarded (`cv.extract`), and without a
+    # count beside the document a recruiter has no way to tell "the CV listed
+    # three jobs" from "two of the five were thrown away". `dropped_reason` is
+    # the sentence shown next to it; both stay set on a `parsed` document, so
+    # this is a note about a success, not an error.
+    dropped_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    dropped_reason: Mapped[str | None] = mapped_column(Text)
+
     uploaded_by: Mapped[uuid.UUID | None] = mapped_column(
         PgUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL")
     )
@@ -356,7 +370,7 @@ class CandidateDocument(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
             ondelete="CASCADE",
         ),
         CheckConstraint(
-            "parse_state IN ('pending','parsing','parsed','unreadable','failed')",
+            "parse_state IN ('pending','parsing','parsed','empty','unreadable','failed')",
             name="ck_candidate_documents_parse_state",
         ),
     )

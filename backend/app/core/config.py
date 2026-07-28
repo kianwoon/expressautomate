@@ -189,6 +189,20 @@ class Settings(BaseSettings):
     # PNG by default because it is lossless and keeps transparency.
     AVATAR_STORED_FORMAT: str = "PNG"
 
+    # --- CV documents ---
+    # How much text one CV may contribute. This is the decompression-bomb
+    # bound `app.services.cv.text` enforces on our behalf, and it is also the
+    # size of the string every evidence offset indexes into, so it belongs in
+    # configuration rather than at the call site: a deployment that raises it
+    # is accepting both a longer prompt and a larger worker footprint.
+    CV_TEXT_MAX_CHARS: int = Field(default=200_000, gt=0)
+    # The wall clock a single CV parse may occupy an arq worker for, model
+    # call included. `text.py` bounds DOCX inflation and stops PDF text from
+    # accumulating between pages, but a single-page FlateDecode bomb still
+    # inflates inside `pypdf` where nothing is watching. This is the only
+    # thing standing between one hostile page and a worker slot held forever.
+    CV_PARSE_TIMEOUT_SECONDS: float = Field(default=300.0, gt=0)
+
     # --- AI extraction ---
     # Kept although nothing calls the router any more: OPENROUTER_API_KEY and
     # LLM_BASE_URL are still what `llm_configured` answers for, and a deployment

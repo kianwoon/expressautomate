@@ -313,6 +313,19 @@ async def test_the_sync_job_stops_quietly_when_the_grant_is_dead(
 # --- the registry ------------------------------------------------------------
 
 
+def _registered_names(worker_settings) -> set[str]:
+    """The names arq will actually answer to.
+
+    An entry is either a bare coroutine, registered under its own name, or an
+    `arq.worker.Function` wrapping one to carry a timeout — `parse_candidate_cv`
+    is the latter. Reading `__name__` alone raises on the wrapper, and a guard
+    that crashes on a correctly registered job is worse than no guard.
+    """
+    return {
+        getattr(fn, "name", None) or fn.__name__ for fn in worker_settings.functions
+    }
+
+
 def test_every_job_the_lifecycle_endpoint_can_enqueue_is_registered():
     """A name with no function is an error inside arq, on the far side of the
     queue — the producer sees success and nothing surfaces.
@@ -324,7 +337,7 @@ def test_every_job_the_lifecycle_endpoint_can_enqueue_is_registered():
     from app.api.graph_webhook import _LIFECYCLE_JOBS
     from app.workers.settings import WorkerSettings
 
-    registered = {fn.__name__ for fn in WorkerSettings.functions}
+    registered = _registered_names(WorkerSettings)
     required = set(_LIFECYCLE_JOBS.values())
 
     assert required <= registered, f"unregistered: {sorted(required - registered)}"
@@ -341,7 +354,7 @@ def test_the_recovery_sweep_only_resumes_jobs_that_exist_or_are_planned():
     from app.workers.settings import WorkerSettings
     from app.workers.tasks import RESUME_JOB
 
-    registered = {fn.__name__ for fn in WorkerSettings.functions}
+    registered = _registered_names(WorkerSettings)
     awaiting_extraction = {"classify_email", "extract_email"}
 
     unaccounted = set(RESUME_JOB.values()) - registered - awaiting_extraction

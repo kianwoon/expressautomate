@@ -51,6 +51,14 @@ RESUME_JOB = {
 # allow-hardcode: SQL statements, not a phrase list.
 _STALLED = text("SELECT * FROM stalled_email_rows(:pending_minutes, :working_minutes)")
 _CLAIM_FETCHED = text("SELECT * FROM claim_fetched_email_rows(:limit)")
+# The documents half of `rescan_stuck`. A resolver rather than a plain SELECT
+# for the reason every statement here is one: this process sets no
+# `app.tenant_id`, and `candidate_documents` carries FORCE ROW LEVEL
+# SECURITY, so a direct read would match nothing at all — silently, since RLS
+# filters rather than errors.
+_STALLED_DOCUMENTS = text(
+    "SELECT * FROM stalled_candidate_documents(:pending_minutes, :working_minutes)"
+)
 _DUE_FOR_RENEWAL = text("SELECT * FROM subscriptions_due_for_renewal(:margin)")
 _ACTIVE_MAILBOXES = text("SELECT * FROM active_mailboxes()")
 _MISSING_SUBSCRIPTION = text("SELECT * FROM mailboxes_without_subscription()")
@@ -107,17 +115,21 @@ async def rescan_stuck() -> int:
     committed the row, so an enqueue that failed after commit leaves durable
     work with no job attached. Without this sweep, "killing any worker
     mid-flight loses no email" is simply false.
+
+    Two kinds of row, one function. Email messages and uploaded CVs have
+    nothing in common except the way they are stranded — a lost enqueue, or a
+    worker killed mid-job — and that is the whole question this answers. A
+    second scheduled task would be a second thing to forget to schedule, and
+    the sweep that was forgotten is invisible until somebody notices a CV that
+    has said "parsing" for a week.
     """
+    ages = {
+        "pending_minutes": settings.RESCAN_PENDING_MINUTES,
+        "working_minutes": settings.RESCAN_WORKING_MINUTES,
+    }
     async with SessionLocal() as session:
-        rows = (
-            await session.execute(
-                _STALLED,
-                {
-                    "pending_minutes": settings.RESCAN_PENDING_MINUTES,
-                    "working_minutes": settings.RESCAN_WORKING_MINUTES,
-                },
-            )
-        ).all()
+        rows = (await session.execute(_STALLED, ages)).all()
+        documents = (await session.execute(_STALLED_DOCUMENTS, ages)).all()
 
     requeued = 0
     for row in rows:
@@ -132,6 +144,19 @@ async def rescan_stuck() -> int:
             email_message_id=str(row.id),
             tenant_id=str(row.tenant_id),
             mailbox_id=str(row.mailbox_id),
+        ):
+            requeued += 1
+
+    for row in documents:
+        # No resume map: a document has exactly one job, and both non-terminal
+        # states resume at it. `parse_candidate_cv` accepts `parsing` as well
+        # as `pending` precisely so a row a killed worker left mid-parse is
+        # picked up rather than skipped as already answered.
+        if await enqueue(
+            "parse_candidate_cv",
+            tenant_id=str(row.tenant_id),
+            candidate_id=str(row.candidate_id),
+            document_id=str(row.id),
         ):
             requeued += 1
 
