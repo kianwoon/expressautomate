@@ -133,7 +133,16 @@ export function CandidateAvatar({
           alt={alt}
           width={56}
           height={56}
-          style={{ width: 56, height: 56, borderRadius: "50%", objectFit: "cover" }}
+          // `flexShrink: 0` keeps it a circle. Without it the avatar is a
+          // flex item that yields its width to the column beside it, and a
+          // squashed `border-radius: 50%` reads as an ellipse, not a photo.
+          style={{
+            width: 56,
+            height: 56,
+            flexShrink: 0,
+            borderRadius: "50%",
+            objectFit: "cover",
+          }}
         />
       ) : (
         <span
@@ -141,6 +150,7 @@ export function CandidateAvatar({
           style={{
             width: 56,
             height: 56,
+            flexShrink: 0,
             borderRadius: "50%",
             background,
             color: "#fff",

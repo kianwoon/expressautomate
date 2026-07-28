@@ -90,8 +90,14 @@ the service is ever recreated — both caused outages when they drifted:
 **Per-service env vars are also not in this repo.** The workflow deploys the
 image; the variables were set by hand, so they drift per service. `GRAPH_BASE_URL`
 was missing on `api` for a day — harmless until the inbox preview became the
-first web-service code to call Graph, then every preview 500ed. Anything that
-adds a Graph call to a service that had none needs its env checked:
+first web-service code to call Graph, then every preview 500ed. It happened a
+second time with `R2_*`: only `worker` had the five keys, so candidate avatar
+upload — the first web-service code to touch R2 — died on
+`ValueError: Invalid endpoint:` with an empty `R2_ENDPOINT_URL`.
+
+The pattern is not about Graph. **Whenever a service gains its first call to
+any external system, check that service's env before shipping** — the tests
+pass either way, because nothing in this repo knows what Koyeb was told:
 
 ```bash
 koyeb deployment get $(koyeb deployments list --service <id> -o json | jq -r '.deployments[0].id') -o json | jq -r '.deployment.definition.env[].key'
