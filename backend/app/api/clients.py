@@ -26,6 +26,10 @@ router = APIRouter(tags=["clients"])
 
 StatusFilter = Literal["unconfirmed", "confirmed", "archived", "merged"]
 
+# No `_is_duplicate`/`IntegrityError` narrowing here, unlike candidates.py:
+# every endpoint below takes no request body and creates nothing, so there is
+# no user-supplied value that could ever violate a uniqueness constraint.
+
 
 class MergeRequest(BaseModel):
     target_id: uuid.UUID
@@ -136,6 +140,35 @@ async def get_client(request: Request, client_id: uuid.UUID) -> dict:
         for m in mentions
     ]
     return payload
+
+
+async def _lock_pair(session, first: uuid.UUID, second: uuid.UUID) -> None:
+    """Take a row lock on both clients, lowest id first.
+
+    One statement per row rather than an `IN (...)` with an ORDER BY: the order
+    in which Postgres locks the rows of a single statement is a property of the
+    chosen plan, not of the ORDER BY, so only separate statements make the
+    ordering something this code actually decides. A missing row simply locks
+    nothing — the 404 comes from `_load` afterwards.
+    """
+    for client_id in sorted((first, second), key=lambda value: value.bytes):
+        await session.execute(
+            select(Client.id).where(Client.id == client_id).with_for_update()
+        )
+
+
+async def _load(session, client_id: uuid.UUID) -> Client:
+    """Fetch inside the tenant session, so another agency's id is a 404.
+
+    Not a 403: telling a caller that an id exists but is not theirs is itself
+    a cross-tenant disclosure.
+    """
+    client = (
+        await session.execute(select(Client).where(Client.id == client_id))
+    ).scalar_one_or_none()
+    if client is None:
+        raise HTTPException(status_code=404, detail="Client not found")
+    return client
 
 
 @router.post("/clients/{client_id}/confirm")
@@ -370,21 +403,6 @@ async def unmerge_client(request: Request, client_id: uuid.UUID) -> dict:
     return {"status": Client.UNCONFIRMED}
 
 
-async def _lock_pair(session, first: uuid.UUID, second: uuid.UUID) -> None:
-    """Take a row lock on both clients, lowest id first.
-
-    One statement per row rather than an `IN (...)` with an ORDER BY: the order
-    in which Postgres locks the rows of a single statement is a property of the
-    chosen plan, not of the ORDER BY, so only separate statements make the
-    ordering something this code actually decides. A missing row simply locks
-    nothing — the 404 comes from `_load` afterwards.
-    """
-    for client_id in sorted((first, second), key=lambda value: value.bytes):
-        await session.execute(
-            select(Client.id).where(Client.id == client_id).with_for_update()
-        )
-
-
 # Which statuses each transition may be made *from*. Stated as a whitelist
 # rather than a list of the statuses to refuse: excluding only `merged` let an
 # archived client be confirmed directly, which walked straight past `restore` —
@@ -408,6 +426,11 @@ async def _transition(request: Request, client_id: uuid.UUID, status: str) -> di
     _user_uuid, tenant_uuid = _require_session(request)
     async with tenant_session(tenant_uuid) as session:
         client = await _load(session, client_id)
+        # `_LEGAL_SOURCES` already excludes `merged` from every transition, so
+        # this guard is redundant for correctness — it exists only to answer
+        # with "unmerge first" instead of the generic "restore it before
+        # marking it ..." message a merged row would otherwise get from the
+        # whitelist check below.
         if client.status == Client.MERGED:
             raise HTTPException(status_code=400, detail="Unmerge the client first")
         if client.status not in _LEGAL_SOURCES[status]:
@@ -420,17 +443,3 @@ async def _transition(request: Request, client_id: uuid.UUID, status: str) -> di
         await session.execute(update(Client).where(Client.id == client_id).values(status=status))
         await session.commit()
     return {"status": status}
-
-
-async def _load(session, client_id: uuid.UUID) -> Client:
-    """Fetch inside the tenant session, so another agency's id is a 404.
-
-    Not a 403: telling a caller that an id exists but is not theirs is itself
-    a cross-tenant disclosure.
-    """
-    client = (
-        await session.execute(select(Client).where(Client.id == client_id))
-    ).scalar_one_or_none()
-    if client is None:
-        raise HTTPException(status_code=404, detail="Client not found")
-    return client

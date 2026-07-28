@@ -33,6 +33,10 @@ router = APIRouter(tags=["candidates"])
 StageFilter = Literal["new", "contacted", "submitted", "placed", "rejected"]
 RecordStatusFilter = Literal["active", "archived", "merged"]
 
+# No `_LEGAL_SOURCES` whitelist here, unlike clients.py: a candidate only has
+# `active | archived | merged`, and archive/restore are exact inverses of each
+# other, so there is no illegal-source combination to guard against.
+
 
 def _serialize(candidate: Candidate) -> dict:
     return {

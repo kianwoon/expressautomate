@@ -418,6 +418,11 @@ async def _seed_client(tid: uuid.UUID, name: str) -> uuid.UUID:
     return cid
 
 
+# Named to match `_RACE_PAUSE_SECONDS` in test_candidates_api.py — see the
+# note there for why the pause is fixed rather than hoped for.
+_RACE_PAUSE_SECONDS = 0.15
+
+
 async def test_two_opposing_merges_at_once_cannot_make_a_cycle(
     agency_with_clients, monkeypatch
 ) -> None:
@@ -437,7 +442,7 @@ async def test_two_opposing_merges_at_once_cannot_make_a_cycle(
 
     async def paced_load(session, client_id):
         row = await real_load(session, client_id)
-        await asyncio.sleep(0.15)
+        await asyncio.sleep(_RACE_PAUSE_SECONDS)
         return row
 
     monkeypatch.setattr(clients_api, "_load", paced_load)
