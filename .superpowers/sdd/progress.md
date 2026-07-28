@@ -46,3 +46,6 @@ P2 Task 6: complete (a6a6920..62dc217, 918 passed). Fable 9/10 APPROVE, no fix-n
   Deferred by owner ruling: quota window is UTC (8am SGT) - accepted, revisit if a tenant
     ever hits the cap; R2 exercised via doubles only; multipart is spooled to disk before
     the 413 (Starlette behaviour, matches the avatar precedent).
+P2 Task 7: complete (273509e..d22cbc0, 922 passed). Evidence exposure was a PLAN GAP -
+  the UI task said "show the evidence" but no task exposed it on the role serializer.
+  Closed in d22cbc0 with a single IN-query, evidence_valid only, no offsets or confidence.
