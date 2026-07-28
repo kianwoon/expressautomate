@@ -1,0 +1,181 @@
+# Candidate and work-history import
+
+Decided 2026-07-29. Backend and UI. Piece 4 of
+[work history and sourcing](2026-07-28-candidate-sourcing-decomposition.md).
+
+An agency arriving on this platform has a spreadsheet, not five hundred CVs.
+This is the path that gets their existing list in on day one.
+
+## The decomposition was wrong about this piece
+
+It assumed piece 4 would add history rows to a candidate import that already
+existed, because
+[candidate profiles](2026-07-28-candidate-profiles-design.md) describes a
+CSV/XLSX upload. That is Phase 2 of that spec, and **only Phase 1 was built** —
+manual add and edit. There is no import endpoint anywhere in the codebase, and
+no library for reading tabular files.
+
+So this piece builds the candidate import and the history import together.
+They share the upload, the parsing, the matching, the job and the undo;
+building them separately would build all of that twice.
+
+What is real and reusable, rather than merely written down:
+
+- `CandidateFieldOverride` is implemented — written at
+  `app/api/candidates.py:696`, read at `:313` and `app/api/candidate_roles.py:207`.
+  The rule *the import wins, except on a field a human edited* has working
+  machinery behind it.
+- `candidate_roles.source` already accepts `"import"`.
+- Piece 2's upload endpoint, size cap, byte sniffing, arq job and bounded zip
+  inflate all transfer directly.
+
+## Decisions
+
+| Question | Answer |
+|---|---|
+| Scope | One importer covering candidates **and** history |
+| Formats | CSV and XLSX |
+| How a history row names its candidate | Its own email or phone column, matched like any candidate |
+| Bad rows | Collected and reported; the run continues |
+| Preview | **No** — valid rows are written immediately |
+| Re-import | Matched and updated, never duplicated |
+| Imported row status | `confirmed` — a spreadsheet is a person's record, not a proposal |
+
+## Undo, because there is no preview
+
+Writing straight to live data with no dry run is only defensible if it can be
+taken back. A mis-mapped column silently rewrites hundreds of rows, and that is
+the failure a preview would have caught.
+
+Undo has two halves, because they are different problems:
+
+1. **Rows the import created** carry an `import_id`. Undo deletes them.
+2. **Fields the import overwrote** have their previous value recorded before
+   the write. Undo restores them.
+
+Without the second half, undo would delete new candidates while leaving a
+hundred rewritten phone numbers in place — worse than no undo at all, because
+it would look complete.
+
+Undo refuses while an import is still parsing, and is safe to call twice: a
+second attempt finds nothing to reverse rather than trampling edits made since.
+
+## Storage
+
+**`candidate_imports`**, inheriting `TenantScoped`, shaped like
+`candidate_documents`: `filename`, `content_type`, `byte_size`, `object_key`,
+a state of `pending` | `parsing` | `done` | `failed`, per-outcome counts
+(candidates created and updated, roles created and updated, rows failed),
+`error_report_key`, `uploaded_by` and timestamps.
+
+The error report is a file in R2 beside the upload, not a column. A
+five-hundred-row migration can produce hundreds of problems, and the same
+reasoning applies that kept CV text out of Postgres.
+
+Both keys begin `{tenant_id}/`, the prefix a tenant erasure sweep purges by.
+
+## Reading the file
+
+**The type comes from the bytes.** XLSX is a zip, so `PK` proves nothing on its
+own — it is XLSX only if the archive contains `xl/workbook.xml`, exactly the
+test DOCX needed. CSV has no magic number and is the fallback once the file
+decodes as text.
+
+**XLSX therefore goes through piece 2's bounded inflate**
+(`app/services/cv/text.py`). A spreadsheet is a decompression-bomb vector in
+precisely the way a DOCX is, and that code already refuses to trust a member's
+declared uncompressed size. Handing bytes straight to `openpyxl` would reopen a
+hole that took two review rounds to close.
+
+**Columns are named, never guessed** — fixed headers matched
+case-insensitively, with a downloadable template. Positional guessing is how a
+mis-mapped column writes hundreds of wrong rows, which is the failure this
+design is already paying for with undo.
+
+An XLSX carries a `Candidates` sheet and a `History` sheet. CSV users send one
+or two files. A history row names its candidate by repeating that person's
+email or phone.
+
+`openpyxl` is a new dependency. CSV is standard library.
+
+## Matching
+
+Nothing new is invented here; both rules already exist and are tested.
+
+- **A candidate** matches on **email or phone, either alone** — `find_candidate`
+  in `app/services/candidate_matching.py`, the same identity resolution the
+  manual path uses. Requiring both to agree would duplicate a person every time
+  an old sheet carried a personal address and a new one a work address.
+- **A history row** matches on **employer plus overlapping dates** — the rule
+  piece 2 built, including its corrections: months pinned before comparison,
+  half-open overlap so adjacent roles stay two roles, and live roles consulted
+  before rejected ones.
+
+On a match the row is updated, **except on any field a human edited**. Only
+genuinely new rows are created.
+
+### Why imported rows are confirmed
+
+`unconfirmed` means a model proposed something and no person has looked at it.
+A spreadsheet is the agency's own record, written by people. Importing five
+hundred rows into a review queue nobody asked for would misuse the state and
+bury the CV proposals that actually need a decision. `source` stays `import`,
+so provenance is still exact.
+
+### Dates keep the precision the cell had
+
+A cell reading "Mar 2019" is month precision; a real date cell is day
+precision. No component is invented — the same §15 rule the CV parser follows,
+and the reason `started_precision` exists at all.
+
+## API
+
+A new file, `app/api/candidate_imports.py`.
+
+- `POST /api/candidates/imports` — the upload, answering **202**.
+- `GET /api/candidates/imports` — recent imports with state and counts, so a
+  migration is visible while it runs.
+- `GET /api/candidates/imports/{id}/errors` — a short-TTL presigned URL to the
+  report.
+- `GET /api/candidates/imports/template` — the file with the headers we accept,
+  because the alternative is asking an agency to guess.
+- `POST /api/candidates/imports/{id}/undo`.
+
+Another agency's import is **404, never 403**. Row and file caps come from
+`settings`, and the job carries a timeout. The upload enqueues its job and, on
+a `False` return from `enqueue()`, marks the row `failed` with a retryable
+message rather than leaving it `pending` for ever — the hole piece 2 found.
+
+Imports stranded in `pending` or `parsing` join `rescan_stuck`
+(`app/workers/tasks.py:111`) the way `candidate_documents` already does — a
+second query and enqueue block inside that function, since it is welded to
+email rows and cannot simply be pointed at a new table.
+
+## UI
+
+On the candidates page, not the detail panel: this is a bulk action on the
+list. A recent-imports table shows state and counts while a migration runs, and
+is where a recruiter reaches the error report and the undo.
+
+Undo asks for confirmation and says what it will reverse, in counts.
+
+## Tests
+
+1. Agency A cannot see, download the errors of, or undo Agency B's import.
+2. An XLSX crafted as a decompression bomb is refused.
+3. Wrong type → 415; oversized → 413; too many rows → refused, naming the cap.
+4. A bad row is collected with its sheet and line number, and the run continues.
+5. A candidate matches on email alone; another on phone alone.
+6. A history row matching an existing role updates it and creates no duplicate.
+7. The import wins on an ordinary field and **loses** on one a human edited.
+8. Re-uploading the same file changes nothing and duplicates nothing.
+9. Undo deletes what the import created **and restores what it overwrote**.
+10. Undo twice is harmless.
+11. "Mar 2019" imports as month precision, with no day.
+12. RLS is enforced on every new table.
+
+## Out of scope
+
+CVs arriving as email attachments (piece 3) and ranking candidates against a
+job order (piece 5). Importing clients, opportunities or placements — this
+piece is candidates and their history only.
