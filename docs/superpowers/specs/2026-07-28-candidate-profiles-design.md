@@ -114,10 +114,24 @@ not.
 `(tenant_id, candidate_id, field_name, human_value, changed_by, changed_at)`,
 unique on `(tenant_id, candidate_id, field_name)`.
 
-Mirrors `opportunity_field_overrides`. A field named here was edited by a
-person, and an import may not overwrite it. Without this table the second upload
-of an older export silently discards a recruiter's correction — and there is
-nothing in the data afterwards that could tell it happened.
+A field named here was edited by a person, and an import may not overwrite it.
+Without this table the second upload of an older export silently discards a
+recruiter's correction, and nothing in the data afterwards could tell it
+happened.
+
+**This is new machinery, not a copy of a working one.** The shape is borrowed
+from `opportunity_field_overrides` (`app/models/extraction.py:65`), but that
+table is a model and nothing else: no endpoint writes it, no code reads it, and
+`persist.py:29` states it is "never read or written here". Only a test touches
+it, by raw SQL. So there is no reference implementation to follow — the
+write-on-PATCH and consult-on-import paths are both built here for the first
+time, and the implementer should not go looking for a precedent.
+
+The justification also differs from that table's. There, overrides guard against
+an AI re-extraction clobbering a human. Here every value is human-authored from
+the start, so the only thing an override protects against is **a later import**
+— which is precisely the operation a recruiter will repeat with a stale
+spreadsheet.
 
 ### `candidate_imports` and `candidate_import_rows`
 
@@ -128,8 +142,12 @@ The import run, recorded rather than merely performed.
   `updated_count`, `skipped_count`, `failed_count`, `column_mapping` (JSONB),
   `started_at`, `finished_at`, `error`.
 - `candidate_import_rows`: `import_id`, `row_number`, `raw_values` (JSONB),
-  `outcome` (`created | updated | skipped | failed`), `error`, `candidate_id`
-  (nullable, composite FK).
+  `outcome` (`pending | created | updated | skipped | failed`), `error`,
+  `candidate_id` (nullable, composite FK).
+
+`pending` is the state every row is written in, before the job reaches it. It is
+what makes a re-run after a dead worker safe: the job processes only `pending`
+rows, so nothing is applied twice.
 
 A recruiter who uploads 500 rows and reads "31 failed" needs to know *which* 31
 and why. Without the row table that is unanswerable, and the recruiter's only
@@ -147,6 +165,37 @@ values it resolves in order and stops at the first hit:
 Either key alone is sufficient. The common real case is a recruiter's older
 sheet carrying a personal Gmail and the newer one a work address, with the
 mobile unchanged; requiring both to agree would create a duplicate every time.
+
+### Two keys means no upsert
+
+The client matcher resolves a race with `INSERT ... ON CONFLICT`
+(`app/services/client_matching.py:54`), and that works because clients have
+exactly one identity key, so the statement can name one arbiter index whose
+predicate matches it exactly.
+
+**Postgres allows only one arbiter.** With unique indexes on both email and
+phone, no `ON CONFLICT` clause can cover both, and a row that collides on the
+key the clause does *not* name raises a unique violation that the statement
+cannot absorb. Copying the client pattern here produces a matcher that works
+until the day two sheets disagree, then fails a row with a raw
+`UniqueViolationError`.
+
+So candidate matching is **select-then-write**, with the unique violation caught
+per row as the backstop rather than the mechanism. The indexes still exist and
+are still authoritative — they are what makes the race safe — but the code does
+not pretend a single statement can resolve it.
+
+### When the two keys disagree
+
+A row's email matches candidate A and its phone matches candidate B. This is not
+exotic: it is what happens when two people share a phone, or when a stale sheet
+pairs one person's address with another's number.
+
+**Such a row creates nothing and updates nothing.** Its outcome is `failed`,
+with an error naming both candidates, and the recruiter resolves it by merging
+or by fixing the sheet. Picking a winner would be a guess, and the two available
+guesses are "silently attach a person's details to the wrong record" and
+"silently create a third" — both worse than a row the recruiter is told about.
 
 **Name is never a match key.** Two different people share a name far more often
 than intuition suggests, and merging two real people's records is a materially
@@ -185,14 +234,40 @@ already-merged row so chains cannot form.
 
 ## Import
 
-`POST /api/candidates/imports` accepts the file; **the work runs on arq.**
+`POST /api/candidates/imports` accepts the file. **The file is parsed in the
+request and never stored.** The request writes `candidate_imports` plus one
+`candidate_import_rows` row per spreadsheet row, then enqueues an arq job that
+processes those rows. The UI polls the import's status.
 
-The queue is already deployed and load-bearing (`tests/test_deployment.py` fails
-if the `arq` service stops being deployed). A 500-row file doing two dedupe
-lookups per row will outlive an HTTP timeout, and a half-finished import that
-returns a 504 is the worst available outcome: rows are committed, the recruiter
-sees an error, and nothing says how far it got. The UI polls the import's status
-instead.
+This split matters, and the obvious alternative is worse. Handing the *file* to
+the job would need somewhere to put it, and there is nowhere good: arq payloads
+travel through Redis (`app/workers/queue.py`), which is a capped, billed Upstash
+instance that a multi-megabyte spreadsheet has no business occupying, and the R2
+client (`app/services/storage/r2.py:100`) is typed `put(key, content: str)` —
+text only, so a binary XLSX would need new storage work before an import could
+run at all.
+
+Parsing in the request avoids all of it. Parsing is fast and bounded by the
+configured row cap; the slow part is the per-row dedupe lookups, and those are
+what the job does.
+
+It also closes a privacy hole. A stored spreadsheet is a second copy of every
+candidate's name, email and phone, sitting outside the tables the delete path
+knows about — so a PDPA erasure would clear the profile and leave the original
+file behind. A file that was never written cannot be missed.
+
+The queue itself is the right home for the row processing: it is deployed and
+load-bearing (`tests/test_deployment.py:38` fails if the `arq` service stops
+being deployed). A 500-row file doing two dedupe lookups per row will outlive an
+HTTP timeout, and a half-finished import that returns a 504 is the worst
+available outcome — rows are committed, the recruiter sees an error, and nothing
+says how far it got.
+
+**If the job dies halfway**, the import stays `running` with its rows partly
+resolved. Every row already carries its own outcome, so a re-run processes only
+rows still `pending` and is safe to repeat. An import left `running` past a
+configured timeout is reported as `failed` in the UI with its partial counts
+intact, rather than appearing to hang forever.
 
 **Each row is validated and committed independently.** A malformed date fails
 that row with a reason and the other 499 land. An import is not a transaction —
@@ -233,6 +308,31 @@ tenant so they do not shift while paging.
 Another agency's id returns **404, never 403**. Confirming that an id exists but
 belongs to someone else is itself a cross-tenant disclosure.
 
+### Who may delete
+
+Archive is open to every user of the tenant. **Hard delete requires the `owner`
+role.** Archiving is reversible and is the operation recruiters need daily;
+deletion is irreversible, covers personal data, and is rare.
+
+This introduces **the first role check in the codebase**, which is worth stating
+plainly rather than discovering later. `users.role` exists
+(`app/models/tenant.py:51`, `String(32)`, default `"recruiter"`) and is echoed
+back at `app/api/auth.py:867`, but nothing anywhere enforces it — every endpoint
+today is open to any signed-in user of the tenant.
+
+It also means **no owner currently exists.** No code path assigns `"owner"` to
+anybody, so gating on it as things stand would ship a deletion endpoint that no
+user in any tenant could call. Two pieces therefore come with this:
+
+- The tenant-provisioning path in `app/api/auth.py` assigns `"owner"` to the
+  first user of a new tenant; every later user stays `"recruiter"`.
+- A migration backfills the earliest user of each existing tenant as `"owner"`,
+  so tenants created before this change are not left without one.
+
+`role` has no CHECK constraint and is free text. This spec adds one — the column
+is about to start controlling access, and a typo silently granting or denying
+nothing is not a failure anyone would notice.
+
 ## UI
 
 At `/dashboard/candidates`, reusing the existing dashboard components rather
@@ -250,24 +350,34 @@ already establish the table, panel and pagination patterns.
 ## Personal data
 
 Candidates are the first genuinely personal records this system holds. Two
-endpoints ship with the feature rather than after it: **hard delete** and
-**single-candidate export**.
+endpoints ship with the feature rather than after it: **hard delete** (owner
+only) and **single-candidate export**.
 
 **Deleting a candidate must also scrub `candidate_import_rows`.** Those rows
 hold the original spreadsheet values — name, email, phone. A delete that clears
 the profile and leaves them satisfies the UI and not the law. The delete removes
-the candidate, its skills, its overrides, and nulls or purges the personal
-values in every import row that produced it, keeping the row itself so the
+the candidate, its skills and its overrides, and clears the personal values from
+every import row that produced it, keeping the row and its outcome so the
 import's counts still reconcile.
+
+That is tractable only because the uploaded file is never stored. Every copy of
+a candidate's personal data lives in a table this delete path knows by name; had
+the spreadsheet been kept, erasure would have to reach into object storage and
+find every file a person appeared in.
 
 **Notes are personal data with no structure.** They ship because a recruiter
 needs them, but they are covered by delete and export like every other field.
+
+**What delete does not reach:** `created_by` and `updated_by` hold user ids, not
+candidate data, so they survive and should. Application logs are outside this
+spec — if a candidate's email is ever logged, no database delete removes it, and
+that is worth checking before this feature carries real data.
 
 ### What this does not build
 
 **The retention purge worker.** `mailboxes.retention_months` and
 `email_messages.retention_until` are written on every message
-(`app/workers/jobs.py:935`) and **nothing reads them** — there is no purge job
+(`app/workers/jobs.py:122`) and **nothing reads them** — there is no purge job
 anywhere in the codebase, still true after the notification system merged. That
 worker is separate work covering email bodies as well as candidates. Recording
 it here so its absence is not mistaken for an oversight: candidate deletion is
@@ -284,6 +394,17 @@ aborts collection on a non-local host.
 - **Matching.** Email match; phone match; either alone is sufficient; an
   unparseable phone never matches; an office-line number never auto-matches; a
   shared name never matches.
+- **Split identity.** A row whose email matches one candidate and whose phone
+  matches another fails that row, names both in the error, and writes nothing.
+- **Concurrency.** Two imports processing the same new email at once produce one
+  candidate, not a unique violation — the case the client feature only found
+  because a test forced it.
+- **Authorisation.** A `recruiter` archiving succeeds and deleting is refused; an
+  `owner` may do both; the first user of a new tenant is created as `owner` and
+  the second is not; the backfill migration gives every existing tenant exactly
+  one owner.
+- **Resumability.** An import whose job dies mid-file leaves rows `pending`; a
+  re-run finishes it and applies nothing twice.
 - **Conflict.** An import updates an untouched field; an import does not
   overwrite an overridden field; the incoming value is still recoverable
   afterwards.
