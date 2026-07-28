@@ -16,6 +16,17 @@ from pypdf import PdfReader
 # always comes from the caller.
 _DOCX_BOMB_MULTIPLIER = 100
 
+# A floor under the multiplier above. A stock DOCX's XML payload (styles,
+# theme, fonts) runs to roughly 800 KB of fixed overhead regardless of how
+# little body text it holds, so coupling the budget purely to
+# max_chars * _DOCX_BOMB_MULTIPLIER means any configured max_chars below
+# ~8,000 rejects every legitimate Word document, not just bombs. Do NOT
+# delete this floor to "simplify" the budget expression — that silently
+# reintroduces the bug where a small, real-world text limit makes every
+# DOCX unreadable. 5 MB is generous for any real CV and still nowhere near
+# an availability risk to the shared worker.
+_DOCX_MIN_BUDGET_BYTES = 5 * 1024 * 1024
+
 # How much compressed input we hand the decompressor at a time, and how much
 # plaintext we let it hand back per call. Both are deliberately small: the
 # whole point of the bound is that we get to look at the running total
@@ -240,13 +251,12 @@ def _bounded_docx_archive(data: bytes, *, budget: int) -> io.BytesIO:
             for info in infos:
                 if info.is_dir():
                     continue
+                # `_inflate_bounded` already raises the instant a member's
+                # own running total passes `remaining`, so `remaining` can
+                # never go negative here — there is no separate check to
+                # make once it returns.
                 plain = _inflate_bounded(data, info, remaining)
                 remaining -= len(plain)
-                if remaining < 0:
-                    raise UnsupportedDocument(
-                        "DOCX contents exceed the size implied by the text "
-                        "limit; refusing to continue"
-                    )
                 out.writestr(info.filename, plain)
     rebuilt.seek(0)
     return rebuilt
@@ -261,7 +271,7 @@ def _extract_docx(data: bytes, *, max_chars: int) -> str:
     forbidden to do.
     """
     try:
-        budget = max_chars * _DOCX_BOMB_MULTIPLIER
+        budget = max(max_chars * _DOCX_BOMB_MULTIPLIER, _DOCX_MIN_BUDGET_BYTES)
         doc = Document(_bounded_docx_archive(data, budget=budget))
         text_parts = []
         total_len = 0

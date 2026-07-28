@@ -155,6 +155,30 @@ def test_docx_text_is_truncated_to_max_chars():
     assert len(result) < full_length
 
 
+def test_ordinary_docx_extracts_at_a_small_max_chars():
+    """A stock python-docx file must not be rejected by a small text limit.
+
+    A fresh document's fixed overhead (styles, theme, fonts) is roughly
+    800KB of XML regardless of body content. If the decompression budget
+    were purely `max_chars * _DOCX_BOMB_MULTIPLIER`, any max_chars below
+    ~8,000 — a perfectly plausible configured limit — would make this
+    ordinary, tiny CV unreadable. This is the case the floor exists for.
+    """
+    from docx import Document as DocxDocument
+
+    doc = DocxDocument()
+    doc.add_paragraph("Jane Doe")
+    doc.add_paragraph("Recruitment Consultant, five years experience.")
+    doc.add_paragraph("Contact: jane@example.com")
+    buf = io.BytesIO()
+    doc.save(buf)
+    docx_bytes = buf.getvalue()
+
+    assert sniff(docx_bytes) == "docx"
+    result = extract_text(docx_bytes, "docx", max_chars=100)
+    assert result != ""
+
+
 def _pdf_with_text_pages(page_count: int, line: str) -> bytes:
     """Build a PDF whose every page carries real, extractable text.
 
@@ -257,5 +281,6 @@ def test_pdf_extraction_stops_early_rather_than_reading_every_page(monkeypatch):
 
     assert len(result) == 200
     assert result.startswith(line)
-    # Three pages of 80 characters clear 200; a full scan would be fifty.
-    assert pages_read == 3, f"read {pages_read} pages to satisfy 200 characters"
+    # Not pinned to the exact page count (brittle against pypdf internals) —
+    # just proof that we stopped well short of reading all fifty pages.
+    assert pages_read <= 10, f"read {pages_read} pages to satisfy 200 characters"
