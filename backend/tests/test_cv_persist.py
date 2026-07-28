@@ -482,6 +482,114 @@ async def test_a_role_the_candidate_already_has_is_not_inserted_again(agency):  
     await _cleanup(tenant_id)
 
 
+# allow-hardcode: the INSERT statements below are test fixture setup rows
+# (shaping data for the scenario under test), not a detect-list or oracle.
+@pytest.mark.asyncio
+async def test_a_rejected_role_is_not_reinserted(agency):  # noqa: F811
+    """A recruiter rejected this role. The reject endpoint's own docstring
+    promises a re-parse will not bring it back — so a parsed role matching it
+    must create no row, and the rejected row must stay rejected."""
+    tenant_id, user_id = agency
+    candidate_id = await _a_candidate_row(tenant_id, user_id)
+    document_id = await _document(tenant_id, candidate_id)
+    async with AdminSessionLocal() as s:
+        await s.execute(
+            text(
+                "INSERT INTO candidate_roles (id, tenant_id, candidate_id, employer,"
+                " employer_normalized, title, title_normalized, started_on,"
+                " started_precision, ended_on, ended_precision, source, status)"
+                " VALUES (:i, :t, :c, 'Parkway Shenton', 'parkway shenton', 'Staff Nurse',"
+                " 'staff nurse', '2019-03-14', 'day', '2020-03-02', 'day', 'human',"
+                " 'rejected')"
+            ),
+            {"i": uuid.uuid4(), "t": tenant_id, "c": candidate_id},
+        )
+        await s.commit()
+
+    response, result = _response(
+        roles=[_role("Staff Nurse", "Parkway Shenton",
+                     ("Mar 2019", "Mar 2019", "month"),
+                     ("Mar 2020", "Mar 2020", "month"))]
+    )
+    await _run(tenant_id, candidate_id, document_id, response, result)
+
+    async with AdminSessionLocal() as s:
+        rows = (
+            await s.execute(
+                text("SELECT source, status FROM candidate_roles WHERE candidate_id = :c"),
+                {"c": candidate_id},
+            )
+        ).all()
+        # Not attached to the rejected row: it should not silently accumulate
+        # corroboration it will never show.
+        attached = (
+            await s.execute(
+                text(
+                    "SELECT count(*) FROM extraction_evidence"
+                    " WHERE tenant_id = :t AND candidate_role_id IS NOT NULL"
+                ),
+                {"t": tenant_id},
+            )
+        ).scalar_one()
+        # But not invisible either: the match is still on the extraction
+        # record, just pointed at no role.
+        unattached = (
+            await s.execute(
+                text(
+                    "SELECT count(*) FROM extraction_evidence"
+                    " WHERE tenant_id = :t AND candidate_role_id IS NULL"
+                ),
+                {"t": tenant_id},
+            )
+        ).scalar_one()
+    assert [(r.source, r.status) for r in rows] == [("human", "rejected")]
+    assert attached == 0
+    assert unattached > 0
+    await _cleanup(tenant_id)
+
+
+# allow-hardcode: the INSERT statement below is test fixture setup, not a
+# detect-list or oracle.
+@pytest.mark.asyncio
+async def test_reuploading_the_same_cv_does_not_resurrect_a_rejected_role(agency):  # noqa: F811
+    tenant_id, user_id = agency
+    candidate_id = await _a_candidate_row(tenant_id, user_id)
+    document_id = await _document(tenant_id, candidate_id)
+    async with AdminSessionLocal() as s:
+        await s.execute(
+            text(
+                "INSERT INTO candidate_roles (id, tenant_id, candidate_id, employer,"
+                " employer_normalized, title, title_normalized, started_on,"
+                " started_precision, ended_on, ended_precision, source, status)"
+                " VALUES (:i, :t, :c, 'Parkway Shenton', 'parkway shenton', 'Staff Nurse',"
+                " 'staff nurse', '2019-03-14', 'day', '2020-03-02', 'day', 'human',"
+                " 'rejected')"
+            ),
+            {"i": uuid.uuid4(), "t": tenant_id, "c": candidate_id},
+        )
+        await s.commit()
+
+    response, result = _response(
+        roles=[_role("Staff Nurse", "Parkway Shenton",
+                     ("Mar 2019", "Mar 2019", "month"),
+                     ("Mar 2020", "Mar 2020", "month"))]
+    )
+    # Two uploads of the same CV, same as a recruiter re-parsing it by mistake.
+    document_id_2 = await _document(tenant_id, candidate_id)
+    await _run(tenant_id, candidate_id, document_id, response, result)
+    await _run(tenant_id, candidate_id, document_id_2, response, result)
+
+    async with AdminSessionLocal() as s:
+        rows = (
+            await s.execute(
+                text("SELECT source, status FROM candidate_roles WHERE candidate_id = :c"),
+                {"c": candidate_id},
+            )
+        ).all()
+    assert [(r.source, r.status) for r in rows] == [("human", "rejected")]
+    await _cleanup(tenant_id)
+
+
 @pytest.mark.asyncio
 async def test_a_second_stint_at_the_same_employer_is_a_second_role(agency):  # noqa: F811
     tenant_id, user_id = agency

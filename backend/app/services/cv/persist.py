@@ -28,6 +28,12 @@ An existing role that itself carries no dates is deliberately not compared
 against a dated parsed role: there is no span to compare, and matching on the
 employer alone in that direction would silently absorb a second, real
 position at the same company.
+
+A rejected role is still a candidate for this match — the reject endpoint
+promises a re-parse will not resurrect what a recruiter threw out, and that
+only holds if a rejected row can still be recognised. A match against one
+does not reopen it: nothing is inserted, and the rejected row is left
+exactly as rejected.
 """
 
 import json
@@ -79,9 +85,9 @@ _INSERT_EVIDENCE = text(
 _EXISTING_ROLES = text(
     """
     SELECT id, employer_normalized, started_on, started_precision,
-           ended_on, ended_precision
+           ended_on, ended_precision, status
     FROM candidate_roles
-    WHERE candidate_id = :candidate_id AND status <> 'rejected'
+    WHERE candidate_id = :candidate_id
     """
 )
 
@@ -404,10 +410,16 @@ async def persist_cv(
     # so the open-ended-role path can be tested without waiting on the clock.
     today = today or date.today()
 
+    # `existing` now carries rejected rows too, purely so a parsed role that
+    # matches one can be recognised — the lookup below is what keeps the
+    # rejection standing rather than the match itself.
+    rejected_ids = {row.id for row in existing if row.status == CandidateRole.REJECTED}
+
     dropped, reason = _dropped_by_verification(response, result)
     unusable = 0
     inserted_roles = 0
     matched_roles = 0
+    rejected_matches = 0
 
     for role in response.roles:
         employer = _stated(role.company)
@@ -439,6 +451,20 @@ async def persist_cv(
             existing,
             today,
         )
+        if match is not None and match in rejected_ids:
+            # A recruiter already looked at this role and threw it out, and
+            # the reject endpoint's own docstring promises a re-parse will not
+            # bring it back. The row itself is left exactly as rejected, but
+            # the evidence is *not* attached to it: a rejected role showing no
+            # evidence in the UI would otherwise quietly grow a pile of
+            # corroboration nobody who rejected it will ever see. Writing it
+            # with no role instead keeps the match visible in the extraction
+            # record — the same place an unusable role's evidence goes — and
+            # counted below, without pretending the rejection reopened it.
+            await _insert_evidence(session, tenant_id, extraction_id, None, fields, text)
+            rejected_matches += 1
+            continue
+
         if match is not None:
             # The row already exists and may carry a human's corrections, so
             # nothing about it is touched. The evidence still points at it:
@@ -477,7 +503,7 @@ async def persist_cv(
         # row on the second pass and silently collapse two positions into one.
         existing.append(
             _NewRole(role_id, employer_normalized, started_on, started_precision,
-                     ended_on, ended_precision)
+                     ended_on, ended_precision, CandidateRole.UNCONFIRMED)
         )
 
     inserted_skills = 0
@@ -515,6 +541,14 @@ async def persist_cv(
         reason = f"{reason} {note}" if reason else note
         dropped += unusable
 
+    if rejected_matches:
+        note = (
+            f"{rejected_matches} role(s) were left out because they match one "
+            "you already rejected."
+        )
+        reason = f"{reason} {note}" if reason else note
+        dropped += rejected_matches
+
     if blank_skills:
         note = f"{blank_skills} skill(s) were left out because the CV named none."
         reason = f"{reason} {note}" if reason else note
@@ -529,7 +563,7 @@ async def persist_cv(
     # `response.roles`, which still holds roles too incomplete to be a row.
     document.parse_state = (
         CandidateDocument.PARSED
-        if inserted_roles or matched_roles or inserted_skills
+        if inserted_roles or matched_roles or inserted_skills or rejected_matches
         else CandidateDocument.EMPTY
     )
 
@@ -546,20 +580,23 @@ async def persist_cv(
 class _NewRole:
     """A row this run just inserted, shaped like one read back from the table.
 
-    Only the six attributes `match_existing_role` reads. A real read-back
-    would cost a query per role for information we already hold.
+    The six attributes `match_existing_role` reads, plus `status` so this run's
+    own inserts can sit in the same `existing` list as rows read from the
+    table without a second, differently-shaped rejected-row check. A real
+    read-back would cost a query per role for information we already hold.
     """
 
     __slots__ = (
         "id", "employer_normalized", "started_on", "started_precision",
-        "ended_on", "ended_precision",
+        "ended_on", "ended_precision", "status",
     )
 
     def __init__(self, id, employer_normalized, started_on, started_precision,
-                 ended_on, ended_precision):
+                 ended_on, ended_precision, status):
         self.id = id
         self.employer_normalized = employer_normalized
         self.started_on = started_on
         self.started_precision = started_precision
         self.ended_on = ended_on
         self.ended_precision = ended_precision
+        self.status = status

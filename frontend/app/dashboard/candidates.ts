@@ -67,12 +67,10 @@ export type CandidateRole = {
   source: string;
   status: "unconfirmed" | "confirmed" | "rejected";
   is_current: boolean;
-  /** The line of the CV the model quoted for this role, once the server
-   *  carries it. Optional and absent today: the extraction stores its evidence
-   *  spans, but `GET /candidates/{id}` does not yet serialise them onto a
-   *  role, so the panel falls back to offering the source file itself. Typed
-   *  here rather than later so that surfacing it is a serializer change and
-   *  not a second redesign of this section. */
+  /** The line of the CV the model quoted for this role. Optional rather than
+   *  always-present: a role a recruiter typed by hand has no evidence row,
+   *  and the panel falls back to offering the source file itself in that
+   *  case. */
   evidence?: string | null;
 };
 

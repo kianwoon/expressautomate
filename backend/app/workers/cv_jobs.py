@@ -50,13 +50,20 @@ def body_store():
 
 
 async def _terminal(
-    tenant: uuid.UUID, document_id: uuid.UUID, state: str, error: str
+    tenant: uuid.UUID, document_id: uuid.UUID, state: str, error: str,
+    text_key: str | None = None,
 ) -> None:
     """Park the document in a terminal state with a sentence saying why.
 
     Truncated because `parse_error` is read by a person, and an unbounded
     parser message would otherwise put a chunk of a document in a column meant
     for one line of diagnosis.
+
+    `text_key` is only passed when the extracted text was already written to
+    R2 before the failure — an invalid-JSON model answer, say. Recording it
+    here is what lets a later delete of this document find that object;
+    without it the row has no memory of a key it wrote, and the object
+    outlives the row with nothing left that names it.
     """
     async with tenant_session(tenant) as session:
         document = await session.get(CandidateDocument, document_id)
@@ -64,6 +71,8 @@ async def _terminal(
             return
         document.parse_state = state
         document.parse_error = error[:2000]
+        if text_key is not None:
+            document.text_key = text_key
 
 
 async def parse_candidate_cv(
@@ -197,6 +206,7 @@ async def parse_candidate_cv(
             document,
             CandidateDocument.FAILED,
             f"Reading this CV did not produce a usable answer: {exc}",
+            text_key=text_key,
         )
         return
 
