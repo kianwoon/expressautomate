@@ -41,6 +41,7 @@ from app.core.config import settings
 from app.core.logging import get_logger
 from app.db.rls import tenant_session
 from app.services.client_matching import match_client
+from app.services.events import KIND_EXTRACTION, publish
 from app.services.ingest.evidence import parse_salary, quality_state, verify
 from app.services.ingest.glossary import DetectedCode, GlossaryEntry, detect
 from app.services.ingest.schema import ExtractedField, ExtractedJob, ExtractionResponse
@@ -309,6 +310,14 @@ async def persist(
     # retrying. `enqueue` fails soft; `flush_notifications` is what turns a
     # lost job back into a queued one.
     await enqueue_deliveries(tenant_id, delivery_ids)
+
+    # Same reasoning, for the dashboard rather than the queue: the transaction
+    # above has committed, so a browser that refetches on this nudge sees the
+    # extraction and its vacancies. Sent even when the email described no
+    # vacancy — the email's own status moved to `no_opportunity`, which is
+    # visible on the dashboard and is the answer someone watching is waiting
+    # for.
+    await publish(tenant_id, KIND_EXTRACTION)
 
     return opportunity_ids
 

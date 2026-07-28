@@ -15,6 +15,7 @@ import uuid
 from sqlalchemy import text
 
 from app.db.rls import tenant_session
+from app.services.events import KIND_MAIL, publish
 
 _INSERT = text(
     """
@@ -45,4 +46,16 @@ async def record_notification(
                 "graph_id": graph_message_id,
             },
         )
-        return result.scalar_one_or_none()
+        row_id = result.scalar_one_or_none()
+
+    # Outside the `async with`, so the transaction has committed and the row is
+    # visible to the refetch this nudge provokes. Inside it, a fast browser
+    # could ask before the commit landed and be told there is nothing new —
+    # which looks exactly like a broken feature.
+    #
+    # Only for a genuinely new row: every path here is allowed to replay the
+    # same message (Graph retries, the delta sweep, onboarding's backfill), and
+    # nudging on a replay would refetch a dashboard that already has the data.
+    if row_id is not None:
+        await publish(tenant_id, KIND_MAIL)
+    return row_id

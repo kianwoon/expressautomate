@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { OPPORTUNITIES_PATH, opportunityReviewPath } from "../api";
+import { useLive } from "../events";
 
 /**
  * One page of job orders, and the one place that talks to the opportunities
@@ -132,33 +133,98 @@ export function useOpportunities(): Opportunities {
   const [offset, setOffset] = useState(0);
   const [counts, setCounts] = useState<Counts>(ZERO_COUNTS);
 
-  useEffect(() => {
-    const controller = new AbortController();
-    setState({ status: "loading" });
-    (async () => {
-      try {
-        const res = await fetch(listUrl(filter, offset), {
-          credentials: "include",
-          headers: { Accept: "application/json" },
-          signal: controller.signal,
-        });
-        if (!res.ok) {
-          setState({ status: "unreadable", message: messageFor(res.status) });
-          return;
-        }
-        const page = (await res.json()) as Page;
-        setState({ status: "ready", page });
-        setCounts(page.counts);
-      } catch {
-        // An aborted fetch is this component unmounting or the filter moving
-        // on, not a failure. Left in "loading": there is nobody to tell.
-        if (!controller.signal.aborted) {
-          setState({ status: "unreadable", message: "We could not reach the server." });
-        }
+  // What the current request is for, readable from a callback that must not
+  // change identity when the filter does. Assigned during render so a poll
+  // firing between renders can never ask for the page we have just left.
+  const asked = useRef({ filter, offset });
+  asked.current = { filter, offset };
+
+  // Every load takes a ticket, and only the newest one is allowed to write.
+  // Three things race here — a filter change, a page change, and the poll — and
+  // without this the slowest response wins regardless of which page the user is
+  // actually on. `review` bumps it too, so a poll issued before a write cannot
+  // land after it and put the old badge back.
+  const generation = useRef(0);
+
+  // How many visible loads are unresolved. A background refresh must not
+  // overtake one: it would take the newer ticket, void the response the empty
+  // table is waiting for, and then — since a quiet failure deliberately keeps
+  // what is on screen — leave "Loading your job orders." there for good.
+  // Declining costs nothing, because the request it would make is the one
+  // already in flight. Very reachable: an event or a tab refocus arrives on the
+  // server's schedule, which is exactly as likely to be mid-load as not.
+  //
+  // A count rather than a flag, and released unconditionally. Ownership by
+  // "am I still the newest ticket?" looked tidier and was wrong: `review`
+  // invalidates tickets too, so a write landing while a filter change was in
+  // flight left the load superseded with no newer load to hand the flag to. It
+  // stuck, and every later refresh declined forever — the exact stall the guard
+  // exists to prevent, reached through the guard itself.
+  const loud = useRef(0);
+
+  const load = useCallback(async (quiet: boolean): Promise<void> => {
+    if (quiet && loud.current > 0) return;
+    if (!quiet) loud.current += 1;
+
+    const mine = ++generation.current;
+    const superseded = () => mine !== generation.current;
+    const settle = () => {
+      if (!quiet) loud.current -= 1;
+    };
+
+    // A background refresh never shows the loading state. Blanking the table
+    // every fifteen seconds to fetch rows that are usually identical is worse
+    // than the manual reload this replaces.
+    if (!quiet) setState({ status: "loading" });
+
+    try {
+      const { filter: forFilter, offset: forOffset } = asked.current;
+      const res = await fetch(listUrl(forFilter, forOffset), {
+        credentials: "include",
+        headers: { Accept: "application/json" },
+      });
+      if (superseded()) return;
+      if (!res.ok) {
+        // A failed poll keeps the page it has. The rows on screen were true
+        // when they were fetched and are still the best thing we know; throwing
+        // them away for a message about a blip that self-heals in fifteen
+        // seconds loses real information to report a transient one. A 401 is
+        // the exception — the session is gone, and every later poll will fail
+        // the same way, so it has to be said.
+        if (quiet && res.status !== 401) return;
+        setState({ status: "unreadable", message: messageFor(res.status) });
+        return;
       }
-    })();
-    return () => controller.abort();
-  }, [filter, offset]);
+      const page = (await res.json()) as Page;
+      if (superseded()) return;
+      setState({ status: "ready", page });
+      setCounts(page.counts);
+    } catch {
+      // A dropped connection on a poll is silent for the same reason: nothing
+      // has changed about what we know, only about what we could confirm.
+      if (superseded() || quiet) return;
+      setState({ status: "unreadable", message: "We could not reach the server." });
+    } finally {
+      settle();
+    }
+  }, []);
+
+  useEffect(() => {
+    void load(false);
+    // Unmounting invalidates whatever is in flight, which is what the
+    // AbortController used to do — the ticket is void, so nothing writes.
+    return () => {
+      generation.current += 1;
+    };
+  }, [filter, offset, load]);
+
+  // The table keeps up because the server says when to look, not because a timer
+  // fired. `extraction` is the only kind that can add a row here — `mail` means
+  // an email arrived, which becomes a vacancy only later, if at all, and
+  // refetching on it would be two round trips to show the same page twice.
+  useLive((nudge) => {
+    if (nudge === "extraction" || nudge === "open") void load(true);
+  });
 
   // Changing the filter must reset the page. Left alone, someone on page four
   // of "All" who clicks "Needs review" gets offset 150 of five rows — an empty
@@ -187,6 +253,13 @@ export function useOpportunities(): Opportunities {
           : "We could not save that just now. Nothing has changed.";
       }
       const body = (await res.json()) as { review_status: ReviewStatus };
+
+      // The write is now the newest truth, so any load still in flight — in
+      // practice a poll issued a moment before the click — is void. Without
+      // this, a response fetched before the POST can arrive after it and paint
+      // the row back to unreviewed, and the next poll fifteen seconds later
+      // would appear to fix it by itself.
+      generation.current += 1;
 
       // Patch the row in place rather than refetching the page. A refetch
       // under an active "Needs review" filter would pull the row out from
@@ -254,19 +327,43 @@ export type ActivityState =
   | { status: "ready"; events: ActivityEvent[] }
   | { status: "unreadable"; message: string };
 
+/**
+ * Follows the stream unconditionally, because this panel is the one that answers
+ * "is it working right now?" — the question most obviously wrong to answer with
+ * a snapshot taken whenever the page happened to open. It listens to every kind:
+ * it is a log of what ingestion did, and every kind is something ingestion did.
+ */
 export function useActivity(path: string): ActivityState {
   const [state, setState] = useState<ActivityState>({ status: "loading" });
+  const generation = useRef(0);
+  // Same rule as the list above: a background refresh that overtook the first
+  // load and then failed quietly would leave this panel reading "Loading recent
+  // activity." with nothing left in flight to replace it. A count, released
+  // unconditionally, for the reason given there.
+  const loud = useRef(0);
 
-  useEffect(() => {
-    const controller = new AbortController();
-    (async () => {
+  const load = useCallback(
+    async (quiet: boolean): Promise<void> => {
+      if (quiet && loud.current > 0) return;
+      if (!quiet) loud.current += 1;
+
+      const mine = ++generation.current;
+      const superseded = () => mine !== generation.current;
+      const settle = () => {
+        if (!quiet) loud.current -= 1;
+      };
+
       try {
         const res = await fetch(path, {
           credentials: "include",
           headers: { Accept: "application/json" },
-          signal: controller.signal,
         });
+        if (superseded()) return;
         if (!res.ok) {
+          // Same rule as the list: a poll that fails keeps the events it has
+          // rather than replacing a working panel with an error. An expired
+          // session is permanent and gets said.
+          if (quiet && res.status !== 401) return;
           setState({
             status: "unreadable",
             message:
@@ -277,15 +374,26 @@ export function useActivity(path: string): ActivityState {
           return;
         }
         const body = (await res.json()) as { events: ActivityEvent[] };
+        if (superseded()) return;
         setState({ status: "ready", events: body.events ?? [] });
       } catch {
-        if (!controller.signal.aborted) {
-          setState({ status: "unreadable", message: "We could not reach the server." });
-        }
+        if (superseded() || quiet) return;
+        setState({ status: "unreadable", message: "We could not reach the server." });
+      } finally {
+        settle();
       }
-    })();
-    return () => controller.abort();
-  }, [path]);
+    },
+    [path],
+  );
+
+  useEffect(() => {
+    void load(false);
+    return () => {
+      generation.current += 1;
+    };
+  }, [load]);
+
+  useLive(() => void load(true));
 
   return state;
 }

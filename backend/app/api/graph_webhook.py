@@ -18,6 +18,7 @@ how long the handler runs or what it discloses.
 """
 
 import hmac
+import uuid
 
 from fastapi import APIRouter, Request, Response
 from sqlalchemy import text
@@ -25,6 +26,7 @@ from sqlalchemy import text
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.db.session import SessionLocal
+from app.services.events import KIND_MAIL, publish
 from app.services.ingest.intake import record_notification
 from app.workers.queue import enqueue
 
@@ -154,14 +156,27 @@ async def notifications(request: Request) -> Response:
     if (validation := _validation_response(request)) is not None:
         return validation
 
+    # Tenants Graph told us about in this batch, and those `record_notification`
+    # already nudged. Graph only sends a notification because something moved,
+    # so a batch that recorded nothing new is still the most reliable signal the
+    # api process gets — the row it duplicates may have been written by the
+    # delta sweep in another process, whose nudge we cannot order against this
+    # request. The set difference is what keeps a single arrival from waking the
+    # dashboard twice, which would double every refetch on a busy mailbox.
+    tenants_seen: set[uuid.UUID] = set()
+    tenants_nudged: set[uuid.UUID] = set()
+
     async for item, record in _authorised(await _notifications(request)):
         message_id = (item.get("resourceData") or {}).get("id")
         if not message_id:
             continue
 
+        tenants_seen.add(record.tenant_id)
         row_id = await record_notification(
             record.tenant_id, record.mailbox_id, message_id
         )
+        if row_id is not None:
+            tenants_nudged.add(record.tenant_id)
         if row_id is None:
             # Already known. Replay is free by design, and re-queueing would
             # only duplicate work the pipeline already has in hand.
@@ -175,6 +190,9 @@ async def notifications(request: Request) -> Response:
             tenant_id=str(record.tenant_id),
             mailbox_id=str(record.mailbox_id),
         )
+
+    for tenant_id in tenants_seen - tenants_nudged:
+        await publish(tenant_id, KIND_MAIL)
 
     return Response(status_code=202)
 

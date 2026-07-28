@@ -44,6 +44,7 @@ from app.models.sync_event import (
     OUTCOME_FAILED,
     OUTCOME_SUCCEEDED,
 )
+from app.services.events import KIND_MAILBOX, publish
 from app.services.graph.client import (
     MAILBOX_ROOT,
     GraphAuthError,
@@ -1104,6 +1105,12 @@ async def mark_needs_reauth(
     async with tenant_session(tenant_id) as session:
         await session.execute(_MARK_NEEDS_REAUTH, {"id": mailbox_id})
     log.warning("mailbox_needs_reauth", mailbox_id=str(mailbox_id), reason=reason[:200])
+    # After the commit, and before the sync event below so the dashboard is
+    # already refetching while that row is written. This is the one failure the
+    # user can fix themselves, and until they do nothing else arrives — so it
+    # is precisely the state that must not wait for someone to reload the page
+    # out of curiosity about a quiet week.
+    await publish(tenant_id, KIND_MAILBOX)
     # The one failure the user can actually fix, and the one that otherwise
     # reads as a quiet week: ingestion stops here until they reconnect.
     await record_sync_event(

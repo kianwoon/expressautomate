@@ -15,6 +15,7 @@ from app.api import (
     auth,
     candidates,
     clients,
+    events,
     glossary,
     graph_webhook,
     mailbox,
@@ -28,6 +29,7 @@ from app.core.logging import configure_logging, get_logger
 from app.db.rls import verify_rls_enforced
 from app.db.session import SessionLocal, engine
 from app.models import EarlyAccessSignup
+from app.services.events import close_client
 from app.services.graph.client import warn_if_unconfigured
 
 log = get_logger(__name__)
@@ -49,6 +51,10 @@ async def lifespan(app: FastAPI):
     if settings.microsoft_configured():
         warn_if_unconfigured("api")
     yield
+    # Before the engine, so an open dashboard stream unwinds while its Redis
+    # client still exists rather than logging a closed-transport error on the
+    # way out.
+    await close_client()
     await engine.dispose()
     log.info("shutdown")
 
@@ -85,6 +91,7 @@ api.include_router(glossary.router)
 api.include_router(candidates.router)
 api.include_router(clients.router)
 api.include_router(notifications.router)
+api.include_router(events.router)
 api.include_router(telegram_webhook.router)
 api.include_router(whatsapp_webhook.router)
 

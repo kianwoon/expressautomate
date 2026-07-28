@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { CHOOSE_ACCOUNT_PARAM, ME_PATH, SIGN_IN_PATH, SWITCH_ACCOUNT_PATH } from "./api";
+import { useLive } from "./events";
 
 export type Me = {
   user: { id: string; email: string; display_name: string | null; role: string };
@@ -57,38 +58,83 @@ export type AuthState =
   | { status: "anonymous" }
   | { status: "unreachable" };
 
-/** The site is a static export, so this is the only way to learn who is signed in. */
-export function useAuth(): AuthState {
+/**
+ * The site is a static export, so this is the only way to learn who is signed in.
+ *
+ * `live` is opt-in and off by default. Most callers — the nav, the footer, a
+ * marketing page checking whether to offer "Sign in" — ask once, because the
+ * answer does not change while the page is open. Following the stream from all
+ * of them would open a long-lived connection on behalf of every component that
+ * merely wanted a name. The dashboard opts in, because for that page the mailbox
+ * block inside `me` is live data: the counts, the ingestion state, and the
+ * "Starting up" → "Reading new mail" transition all live there.
+ */
+export function useAuth(live = false): AuthState {
   const [state, setState] = useState<AuthState>({ status: "loading" });
+  const generation = useRef(0);
+  // A poll must not overtake the first, visible load. If it did and then failed
+  // quietly — the rule below, which exists to protect a signed-in user from a
+  // blip — the discarded response would be the one the page is waiting on, and
+  // the dashboard would sit on "Checking your session."
+  // A count, released unconditionally — see the note in
+  // dashboard/opportunities.ts for why ownership-by-newest-ticket was wrong.
+  const loud = useRef(0);
+
+  const load = useCallback(async (quiet: boolean): Promise<void> => {
+    if (quiet && loud.current > 0) return;
+    if (!quiet) loud.current += 1;
+
+    const mine = ++generation.current;
+    const superseded = () => mine !== generation.current;
+    const settle = () => {
+      if (!quiet) loud.current -= 1;
+    };
+
+    try {
+      // credentials: "include" — without it the session cookie is not sent
+      // when the API is on another origin in local development.
+      const res = await fetch(ME_PATH, {
+        credentials: "include",
+        headers: { Accept: "application/json" },
+      });
+      if (superseded()) return;
+      if (res.status === 401) {
+        // Said even on a background refresh, and deliberately: the session is
+        // genuinely gone, and the guarded page above this hook has to stop
+        // showing one tenant's mailbox to whoever is now at the keyboard.
+        setState({ status: "anonymous" });
+        return;
+      }
+      if (!res.ok) {
+        // A refresh that fails leaves a signed-in user signed in. Demoting them
+        // to "unreachable" would swap the whole dashboard for an outage notice
+        // over one bad response, when the next event or tab refocus will correct
+        // it and the user has lost nothing in the meantime.
+        if (quiet) return;
+        setState({ status: "unreachable" });
+        return;
+      }
+      const me = (await res.json()) as Me;
+      if (superseded()) return;
+      setState({ status: "signed-in", me });
+    } catch {
+      if (superseded() || quiet) return;
+      setState({ status: "unreachable" });
+    } finally {
+      settle();
+    }
+  }, []);
 
   useEffect(() => {
-    const controller = new AbortController();
+    void load(false);
+    return () => {
+      generation.current += 1;
+    };
+  }, [load]);
 
-    (async () => {
-      try {
-        // credentials: "include" — without it the session cookie is not sent
-        // when the API is on another origin in local development.
-        const res = await fetch(ME_PATH, {
-          credentials: "include",
-          headers: { Accept: "application/json" },
-          signal: controller.signal,
-        });
-        if (res.status === 401) {
-          setState({ status: "anonymous" });
-          return;
-        }
-        if (!res.ok) {
-          setState({ status: "unreachable" });
-          return;
-        }
-        setState({ status: "signed-in", me: (await res.json()) as Me });
-      } catch {
-        if (!controller.signal.aborted) setState({ status: "unreachable" });
-      }
-    })();
-
-    return () => controller.abort();
-  }, []);
+  // Every kind changes something in here — the counts, the mailbox state, the
+  // grant — so this one listens to all of them rather than picking.
+  useLive(() => void load(true), live);
 
   return state;
 }

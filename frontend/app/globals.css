@@ -714,6 +714,49 @@ section { padding: 60px 0; }
   color: var(--amber-700); background: var(--amber-050);
   border: 1px solid var(--amber-200); border-radius: 999px;
 }
+/* Available to anything, but added for the status light: the light says its
+   state in a word for the eye and in a sentence for a screen reader, and the
+   sentence must not take a header's worth of room to do it. Not
+   `display: none`, which would hide it from the screen reader too. */
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0;
+}
+
+/* Is this page still being told things?
+   Sits with the bell because both are status rather than content, and reads as
+   quiet by default: a working connection is the normal case and should not
+   compete with the numbers it is vouching for. */
+.jo-live {
+  margin-left: auto; display: inline-flex; align-items: center; gap: 8px;
+  padding: 8px 14px; font-size: 0.875rem; border-radius: 999px;
+  border: 1px solid transparent; white-space: nowrap;
+}
+.jo-live-dot { width: 8px; height: 8px; border-radius: 999px; flex: none; }
+.jo-live[data-status="live"] { color: var(--ink-500); }
+.jo-live[data-status="live"] .jo-live-dot { background: var(--teal-500); }
+.jo-live[data-status="waiting"] { color: var(--ink-500); }
+.jo-live[data-status="waiting"] .jo-live-dot { background: var(--ink-300); }
+/* The only one that earns a border and a colour. Amber, not red: the page is
+   stale, which is a caveat on what is shown — it is not an error, and nothing
+   the user did caused it. */
+.jo-live[data-status="offline"] {
+  color: var(--amber-700); background: var(--amber-050); border-color: var(--amber-200);
+}
+.jo-live[data-status="offline"] .jo-live-dot { background: var(--amber-600); }
+
+/* A slow breath, so "live" is legible as live without a spinner's urgency. */
+@keyframes jo-live-pulse { 50% { opacity: 0.35; } }
+.jo-live[data-status="live"] .jo-live-dot { animation: jo-live-pulse 2.4s ease-in-out infinite; }
+.jo-live[data-status="waiting"] .jo-live-dot { animation: jo-live-pulse 1.2s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .jo-live .jo-live-dot { animation: none; }
+}
+
+/* The bell keeps its own place when the light is beside it: two elements both
+   claiming `margin-left: auto` would put all the space before the first. */
+.jo-live + .jo-bell, .jo-bell + .jo-live { margin-left: 0; }
+
 .jo-bell:hover { border-color: var(--amber-600); }
 .jo-bell:focus-visible { outline: 2px solid var(--blue-500); outline-offset: 2px; }
 .jo-bell-n { font-weight: 700; }
