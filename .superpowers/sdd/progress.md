@@ -29,11 +29,10 @@ P2 Task 4: complete (31d7802..bccdd91). Fable 8.5/10 APPROVE WITH CHANGES; preci
   CARRY TO TASK 5 (from Fable): record dropped roles/skills with count+reason rather than
     silently removing; make an empty extraction a visible state; persist precision, never widen it.
 
-ENVIRONMENT BROKEN — 2026-07-29. I recreated the ea-test-db container and could not restore
-  a clean full-suite run. Best result 866 passed / 10 failed; repeat runs vary (10/23/27
-  failures), all InvalidPasswordError for expressautomate_app on connections opened later in
-  the run. Cause: the RLS migration (20260726_1800) ALTERs the app role's password to
-  settings.DATABASE_APP_PASSWORD, which comes from the production .env symlink, so anything
-  re-running it mid-suite invalidates fresh connections. Failures are confined to concurrency
-  and worker-sweep tests, none of which piece 2 touches. NOT verified as green locally.
-  Next step: provision the DB the way CI does (see .github/workflows), or push and let CI judge.
+ENVIRONMENT FIXED — backend/scripts/test-env.sh. 875 passed, 1 skipped, repeatable.
+  Root cause was TWO things, neither of which was what I first blamed:
+  (1) backend/.env.test is the local convention (DATABASE_APP_PASSWORD=test-app-password,
+      port 5433). I forced CI's ci-app-password over it, so every connection failed auth.
+  (2) An interrupted run leaves stranded rows; rescan_stuck then counts 140 where a test
+      expects 0. Looks like an auth storm, is actually data pollution. Rebuild the container.
+  The script sources .env.test and hides any root .env for the run.
