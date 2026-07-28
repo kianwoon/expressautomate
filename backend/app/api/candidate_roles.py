@@ -161,17 +161,30 @@ async def apply_derived(session, candidate: Candidate) -> None:
     exists to prevent.
     """
     roles = await roles_for(session, candidate.id)
+    overridden = await overridden_fields(session, candidate.id)
     # `derive` itself drops rejected roles, so a candidate whose every role is
     # rejected has nothing for it to work from. Checking the raw list here
     # would take the "has roles" branch anyway and derive from an empty set —
     # match derive's own idea of "has roles" instead of the row count.
     if not [role for role in roles if role.status != CandidateRole.REJECTED]:
-        # Deliberately not clearing the columns. Emptying a recruiter's screen
-        # because they tidied one history entry is worse than slight staleness.
+        # Null the derived columns rather than leaving them stale. A value like
+        # `current_employer` was derived from the very role the recruiter just
+        # removed — if they deleted it because it was wrong, keeping the
+        # derived value preserves precisely the wrong data, and with no
+        # CandidateFieldOverride recorded it is indistinguishable from the
+        # truth. §15 forbids asserting a fact no source states; a candidate
+        # with no source for these fields must not keep displaying one.
+        # Overridden fields are a person's own assertion, not derivation's, so
+        # they survive here exactly as they survive normal re-derivation.
+        if "current_title" not in overridden:
+            candidate.current_title = None
+        if "current_employer" not in overridden:
+            candidate.current_employer = None
+        if "years_experience" not in overridden:
+            candidate.years_experience = None
         return
 
     profile = derive(roles, today=date.today())
-    overridden = await overridden_fields(session, candidate.id)
 
     if "current_title" not in overridden and profile.current_title:
         candidate.current_title = profile.current_title

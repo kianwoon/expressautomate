@@ -91,9 +91,16 @@ asserted this, do not let an import overwrite it"
 candidate's override set, the computed value is discarded. No new mechanism,
 and the same promise the import path already makes.
 
-**Deleting the last role does not null the columns.** Whatever was last derived
-stays. Emptying a recruiter's screen because they tidied one history entry is
-worse than data that is slightly stale.
+**Deleting the last role nulls the columns.** `current_title`,
+`current_employer` and `years_experience` were derived from the very role the
+recruiter just removed. If they deleted it because it was mistyped, keeping
+the stale value preserves precisely the wrong data — and with no
+`CandidateFieldOverride` recorded for it, that value is indistinguishable
+from derived truth. §15 forbids asserting a fact no source states, so a
+candidate with no remaining non-rejected role must not keep displaying one.
+Any of the three fields that does carry an override is left alone, exactly as
+it would be during ordinary re-derivation — the override is a person's own
+assertion, not derivation's, in both directions.
 
 ## API
 
@@ -158,7 +165,8 @@ through the build.
 3. Gaps are excluded; an open-ended role counts to today; year precision counts
    from mid-year.
 4. A `years_experience` override survives derivation.
-5. Deleting the last role leaves the cached columns alone.
+5. Deleting the last role nulls the cached columns, except any that carry an
+   override.
 6. `ended_on` before `started_on` is a 422 carrying a readable message.
 7. Roles order current-first, then newest by `started_on`.
 8. RLS is enforced on the new table — `verify_rls_enforced()` covers this, and

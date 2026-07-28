@@ -215,7 +215,14 @@ async def test_a_years_experience_override_survives_derivation(agency):
 
 
 @pytest.mark.asyncio
-async def test_deleting_the_last_role_leaves_the_cached_columns_alone(agency):
+async def test_deleting_the_last_role_clears_the_cached_columns(agency):
+    """The stale value came from the very role the recruiter just removed.
+
+    If it was deleted because it was wrong, keeping the derived value would
+    preserve exactly the wrong data, and with no override recorded it would be
+    indistinguishable from truth. Better to show nothing than a fact nobody
+    can vouch for.
+    """
     async with await _client_for(*agency) as client:
         candidate = await _a_candidate(client, full_name="Tan Hui Ling")
         created = (
@@ -235,7 +242,41 @@ async def test_deleting_the_last_role_leaves_the_cached_columns_alone(agency):
 
         body = (await client.get(f"/api/candidates/{candidate['id']}")).json()
     assert body["roles"] == []
-    assert body["current_employer"] == "Raffles Medical"
+    assert body["current_employer"] is None
+    assert body["current_title"] is None
+    assert body["years_experience"] is None
+
+
+@pytest.mark.asyncio
+async def test_deleting_the_last_role_preserves_an_override(agency):
+    """An overridden field is a person's own assertion, not derivation's.
+
+    Clearing the derived columns on last-role deletion must still leave an
+    overridden `years_experience` untouched — the override is deliberately
+    outside derivation's authority in both directions.
+    """
+    async with await _client_for(*agency) as client:
+        candidate = await _a_candidate(client, full_name="Tan Hui Ling")
+        await client.patch(f"/api/candidates/{candidate['id']}", json={"years_experience": 20})
+        created = (
+            await client.post(
+                f"/api/candidates/{candidate['id']}/roles",
+                json={
+                    "employer": "Raffles Medical",
+                    "title": "Enrolled Nurse",
+                    "started_on": "2019-03-01",
+                    "started_precision": "month",
+                },
+            )
+        ).json()
+
+        gone = await client.delete(f"/api/candidates/{candidate['id']}/roles/{created['id']}")
+        assert gone.status_code == 204
+
+        body = (await client.get(f"/api/candidates/{candidate['id']}")).json()
+    assert body["roles"] == []
+    assert body["current_employer"] is None
+    assert body["years_experience"] == 20
 
 
 @pytest.mark.asyncio
