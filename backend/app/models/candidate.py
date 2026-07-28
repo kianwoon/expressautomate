@@ -148,6 +148,14 @@ class CandidateSkill(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
     skill: Mapped[str] = mapped_column(Text, nullable=False)
     skill_normalized: Mapped[str] = mapped_column(Text, nullable=False, index=True)
 
+    # Mirrors `CandidateRole.source`/`.status`: every existing row is
+    # human-typed, so the server defaults make the backfill correct with no
+    # data migration. Once the CV parser lands (Task 4) a skill can arrive as
+    # a proposal instead — `source="cv_upload"`, `status="unconfirmed"` —
+    # and wait for a person to confirm or reject it, same lifecycle a role has.
+    source: Mapped[str] = mapped_column(String(24), nullable=False, default="human")
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="confirmed")
+
     __table_args__ = (
         ForeignKeyConstraint(
             ["tenant_id", "candidate_id"],
@@ -285,5 +293,70 @@ class CandidateFieldOverride(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
             "candidate_id",
             "field_name",
             name="uq_candidate_overrides_one_per_field",
+        ),
+    )
+
+
+class CandidateDocument(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
+    """A CV a candidate came with.
+
+    The extracted text is stored (`text_key`, `text_chars`) rather than
+    re-derived on demand, because an evidence span (`ExtractionEvidence.
+    start_char`/`end_char`) is an offset into it — the exact bytes the
+    extraction saw have to still exist for that offset to mean anything
+    later. The original file (`object_key`) is kept separately for that same
+    reason: re-extracting text from a re-parsed PDF is not guaranteed to
+    reproduce the same offsets a stored extraction already points into.
+
+    `unreadable` and `failed` are two different terminal states, not one,
+    because they answer different questions. A corrupt or scanned-image PDF
+    is `unreadable` — asking again gets the same answer forever, so the UI
+    should stop offering retry. A timeout or a transient parser crash is
+    `failed` — a bad minute, worth trying again without anyone editing
+    anything.
+    """
+
+    __tablename__ = "candidate_documents"
+
+    PENDING = "pending"
+    PARSING = "parsing"
+    PARSED = "parsed"
+    UNREADABLE = "unreadable"
+    FAILED = "failed"
+    PARSE_STATES = (PENDING, PARSING, PARSED, UNREADABLE, FAILED)
+
+    candidate_id: Mapped[uuid.UUID] = mapped_column(
+        PgUUID(as_uuid=True), nullable=False, index=True
+    )
+
+    filename: Mapped[str] = mapped_column(Text, nullable=False)
+    content_type: Mapped[str] = mapped_column(String(128), nullable=False)
+    byte_size: Mapped[int] = mapped_column(Integer, nullable=False)
+    # The R2 object key for the uploaded file as received.
+    object_key: Mapped[str] = mapped_column(Text, nullable=False)
+    # The R2 object key for the extracted plain text, set once parsing
+    # succeeds. Nullable because most of a document's life is spent before
+    # that — `pending`, `parsing`, or a terminal failure that never produced
+    # text.
+    text_key: Mapped[str | None] = mapped_column(Text)
+    text_chars: Mapped[int | None] = mapped_column(Integer)
+
+    parse_state: Mapped[str] = mapped_column(String(16), nullable=False, default=PENDING)
+    parse_error: Mapped[str | None] = mapped_column(Text)
+
+    uploaded_by: Mapped[uuid.UUID | None] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL")
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "candidate_id"],
+            ["candidates.tenant_id", "candidates.id"],
+            name="fk_candidate_documents_candidate_same_tenant",
+            ondelete="CASCADE",
+        ),
+        CheckConstraint(
+            "parse_state IN ('pending','parsing','parsed','unreadable','failed')",
+            name="ck_candidate_documents_parse_state",
         ),
     )

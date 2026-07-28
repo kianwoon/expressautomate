@@ -33,12 +33,12 @@ class Extraction(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
         ForeignKey("email_messages.id", ondelete="CASCADE"),
         index=True,
     )
-    # Bare column, no FK yet: `candidate_documents` is Task 2's table, and a
-    # string FK to a table absent from the metadata breaks mapper
-    # configuration rather than merely failing at the database. Task 2 adds
-    # the ForeignKey here alongside the migration that creates the table.
+    # `candidate_documents` now exists (Task 2), so the ForeignKey can be
+    # declared here alongside the migration that creates the table and adds
+    # the DB-level constraint.
     candidate_document_id: Mapped[uuid.UUID | None] = mapped_column(
         PgUUID(as_uuid=True),
+        ForeignKey("candidate_documents.id", ondelete="CASCADE"),
         index=True,
     )
     model_name: Mapped[str] = mapped_column(String(128), nullable=False)
