@@ -5,13 +5,16 @@ spreadsheet a person uploaded, so there is no confidence, no evidence, and no
 review queue — only records and the people who edited them.
 """
 
+import re
+import string
+import unicodedata
 import uuid
 from datetime import date
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 from pydantic import BaseModel, field_validator
-from sqlalchemy import delete, func, insert, or_, select, text, update
+from sqlalchemy import case, delete, func, insert, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 
@@ -33,6 +36,108 @@ router = APIRouter(tags=["candidates"])
 
 StageFilter = Literal["new", "contacted", "submitted", "placed", "rejected"]
 RecordStatusFilter = Literal["active", "archived", "merged"]
+
+# The bucket a name falls into in the A–Z index bar. `#` is everything that is
+# not a Latin letter: digits, punctuation, and every non-Latin script an agency
+# in Singapore actually stores.
+_OTHER_INITIAL = "#"
+_LETTERS = tuple(string.ascii_uppercase)
+
+_LATIN_LETTER_NAME = re.compile(r"^LATIN CAPITAL LETTER ([A-Z]) WITH ")
+
+
+def _accent_fold_table() -> tuple[str, str]:
+    """The accented Latin letters, paired with the plain ones they fold onto.
+
+    Derived from Unicode decomposition rather than typed out: É is E plus a
+    combining acute, so stripping the marks recovers the letter a recruiter
+    would actually click. Postgres' `unaccent()` would say the same thing in
+    one call, but it is an extension this database does not have installed and
+    enabling it would need a migration this change is not entitled to add.
+
+    Only Latin scripts fold. CJK and Tamil have no A–Z letter to fold onto and
+    belong in `#` — that is the bucket's whole purpose, not a gap in this table.
+
+    Two ranges, because one is not enough for this vertical: the first covers
+    Latin-1 and Latin Extended A/B, the second Latin Extended Additional, which
+    is where Vietnamese lives. A Singapore agency places Vietnamese candidates,
+    and without the second range every Nguyễn in the database sits under `#`.
+
+    Both cases are emitted even though the expression uppercases first. Whether
+    `upper('é')` yields `'É'` is the database's collation's business, and under
+    C collation it does not — folding the lowercase form too costs a few
+    characters in a `translate()` argument and removes the dependency.
+
+    Two passes, because decomposition alone is not enough. É is E plus a
+    combining acute and decomposes; Đ, Ø and Ł are atomic codepoints that do
+    not, so stripping marks leaves them untouched and they would land in `#`.
+    That is not an edge case here — Đặng and Đỗ are among the commonest
+    Vietnamese surnames. The second pass reads the letter out of the
+    character's own Unicode name, which is where that fact is recorded.
+    """
+    accented, plain = [], []
+    for codepoint in [*range(0xC0, 0x250), *range(0x1E00, 0x1F00)]:
+        char = chr(codepoint)
+        upper = char.upper()
+        base = "".join(
+            part for part in unicodedata.normalize("NFD", upper)
+            if not unicodedata.combining(part)
+        )
+        if len(base) != 1 or base not in _LETTERS:
+            # e.g. "LATIN CAPITAL LETTER D WITH STROKE" — the letter is the
+            # word before WITH. Anything not shaped like that (Æ, the IPA
+            # block) has no single letter to fold onto and belongs in `#`.
+            # The length check catches ß, whose uppercase is the two-character
+            # "SS" and so names no single codepoint to ask about.
+            name = unicodedata.name(upper, "") if len(upper) == 1 else ""
+            match = _LATIN_LETTER_NAME.match(name)
+            if match is None:
+                continue
+            base = match.group(1)
+        accented.append(char)
+        plain.append(base)
+
+    # Ð (U+00D0 ETH) is not Đ (U+0110 D WITH STROKE), but on screen it is the
+    # same glyph, and its Unicode name says only "ETH" — no "WITH", so neither
+    # pass above reaches it. A Vietnamese name typed on a Latin-1 keyboard
+    # lands on this codepoint, and leaving it in `#` would file two identical-
+    # looking surnames in two different places. Named explicitly because it is
+    # a judgement about our data, not a rule Unicode states.
+    for char, base in (("Ð", "D"), ("ð", "D")):
+        accented.append(char)
+        plain.append(base)
+    return "".join(accented), "".join(plain)
+
+
+_FOLD_FROM, _FOLD_TO = _accent_fold_table()
+
+
+# Takes the column rather than closing over `Candidate.full_name`, because the
+# availability aggregate reads it off a subquery, and an expression bound to
+# the table there would join the table in a second time. Both the filter and
+# the aggregate must call this same function: two expressions that disagreed
+# by one character would put a letter in the bar that returns nothing.
+def _initial_of(name_column):
+    # The first *non-whitespace* character, via Postgres' regex form of
+    # `substring`. Trimming matters: a name imported as " alice" would
+    # otherwise index under `#`, and nobody would think to look there.
+    first = func.upper(func.substring(name_column, "[^[:space:]]"))
+    first = func.translate(first, _FOLD_FROM, _FOLD_TO)
+    # Membership rather than `BETWEEN 'A' AND 'Z'`: a range comparison is
+    # resolved by the database's collation, under which accented letters sort
+    # inside the range and would be mislabelled as plain Latin ones.
+    return case((first.in_(_LETTERS), first), else_=_OTHER_INITIAL)
+
+# A single letter or `#`; anything else is a 422 from the framework rather than
+# a hand-rolled check, so the contract lives in the OpenAPI schema too.
+InitialFilter = Query(default=None, pattern=r"^([A-Za-z]|#)$")
+
+
+def _sorted_initials(found: list[str]) -> list[str]:
+    """Letters ascending, `#` last — the reading order of the bar itself."""
+    letters = sorted(value for value in found if value != _OTHER_INITIAL)
+    return letters + ([_OTHER_INITIAL] if _OTHER_INITIAL in found else [])
+
 
 # No `_LEGAL_SOURCES` whitelist here, unlike clients.py: a candidate only has
 # `active | archived | merged`, and archive/restore are exact inverses of each
@@ -83,6 +188,7 @@ async def list_candidates(
     pipeline_stage: StageFilter | None = None,
     record_status: RecordStatusFilter | None = None,
     q: str | None = None,
+    initial: str | None = InitialFilter,
 ) -> dict:
     _user_uuid, tenant_uuid = _require_session(request)
     ceiling = settings.CANDIDATES_PAGE_LIMIT
@@ -134,15 +240,43 @@ async def list_candidates(
                 )
             )
 
+        # Deliberately computed from `base` *before* `initial` narrows it: the
+        # bar answers "which letters could I click next", and applying the
+        # letter already clicked would leave a bar of exactly one letter with
+        # no way back to the rest. One aggregate over the whole filtered set,
+        # not twenty-seven counting queries.
+        unfiltered = base.subquery()
+        initials = _sorted_initials(
+            list(
+                (
+                    await session.execute(
+                        select(_initial_of(unfiltered.c.full_name))
+                        .select_from(unfiltered)
+                        .distinct()
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        )
+
+        if initial is not None:
+            base = base.where(_initial_of(Candidate.full_name) == initial.upper())
+
         total = (
             await session.execute(select(func.count()).select_from(base.subquery()))
         ).scalar_one()
+        # The order follows what the reader is doing. Browsing the whole list
+        # is a "what changed lately" question, so recency wins. Clicking a
+        # letter is a "find this person" question, and recency inside a letter
+        # reads as no order at all — you cannot scan for a surname in it.
+        order = (
+            func.lower(Candidate.full_name).asc()
+            if initial is not None
+            else Candidate.updated_at.desc()
+        )
         rows = (
-            (
-                await session.execute(
-                    base.order_by(Candidate.updated_at.desc()).limit(page_limit).offset(offset)
-                )
-            )
+            (await session.execute(base.order_by(order).limit(page_limit).offset(offset)))
             .scalars()
             .all()
         )
@@ -153,6 +287,7 @@ async def list_candidates(
         "limit": page_limit,
         "offset": offset,
         "counts": counts,
+        "initials": initials,
     }
 
 

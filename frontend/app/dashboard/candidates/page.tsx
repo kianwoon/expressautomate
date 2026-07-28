@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-import { LANDING_PATH } from "../../api";
+import { CANDIDATES_PAGE_SIZE, LANDING_PATH } from "../../api";
 import { useAuth } from "../../auth";
 import { SiteFooter } from "../../site-footer";
 import { SiteNav } from "../../site-nav";
@@ -39,6 +39,15 @@ const CHIPS: { key: Filter; label: string }[] = [
   // list and the pointer runs loser -> survivor, so this is the only route
   // back to a wrongly merged person.
   { key: "merged", label: "Merged" },
+];
+
+/** Everything the bar can ever offer, in the order it is always drawn. `#` is
+ *  the server's own name for a name that does not start with an A–Z letter —
+ *  a Chinese or Tamil name, or one recorded with a leading digit. */
+const NON_ALPHA_INITIAL = "#";
+const INITIALS: string[] = [
+  ...Array.from({ length: 26 }, (_, i) => String.fromCharCode(65 + i)),
+  NON_ALPHA_INITIAL,
 ];
 
 export default function CandidatesPage() {
@@ -90,8 +99,21 @@ function Notice({ eyebrow, heading, body }: { eyebrow: string; heading: string; 
 type View = { mode: "list" } | { mode: "create" } | { mode: "edit"; row: Candidate };
 
 function Workspace({ role }: { role: string }) {
-  const { state, filter, offset, q, counts, refreshing, setFilter, setOffset, setQ, reload } =
-    useCandidates();
+  const {
+    state,
+    filter,
+    offset,
+    q,
+    initial,
+    counts,
+    initials,
+    refreshing,
+    setFilter,
+    setOffset,
+    setQ,
+    setInitial,
+    reload,
+  } = useCandidates();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<Candidate | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
@@ -99,7 +121,7 @@ function Workspace({ role }: { role: string }) {
 
   const items = state.status === "ready" ? state.page.items : EMPTY;
   const total = state.status === "ready" ? state.page.total : 0;
-  const limit = state.status === "ready" ? state.page.limit : 50;
+  const limit = state.status === "ready" ? state.page.limit : CANDIDATES_PAGE_SIZE;
 
   // Open on the first row once the page loads, the same fallback job orders
   // uses: a panel that starts blank spends the first screenful asking to be
@@ -159,6 +181,17 @@ function Workspace({ role }: { role: string }) {
     await restoreCandidate(detail.id);
     refreshDetail();
   }
+
+  // Clears the selection along with the letter, exactly as paging does: the
+  // open panel is almost certainly showing someone the new letter does not
+  // contain, and leaving it there reads as a row that refuses to deselect.
+  const pickInitial = useCallback(
+    (next: string | null) => {
+      setInitial(next);
+      setSelectedId(null);
+    },
+    [setInitial],
+  );
 
   const canDelete = role === "owner";
   async function doDelete() {
@@ -237,6 +270,38 @@ function Workspace({ role }: { role: string }) {
         />
       </div>
 
+      {/* Always the whole alphabet, never only the letters in use: a bar whose
+          buttons appear and disappear as the filters change moves the letter
+          you were aiming at out from under the pointer. Absent letters are
+          disabled instead — still in place, visibly not worth clicking. */}
+      <nav className="jo-index" aria-label="Jump to candidates by first letter">
+        <button
+          type="button"
+          className="jo-index-key"
+          data-active={initial === null ? "yes" : undefined}
+          aria-pressed={initial === null}
+          onClick={() => pickInitial(null)}
+        >
+          All
+        </button>
+        {INITIALS.map((letter) => {
+          const active = initial === letter;
+          return (
+            <button
+              key={letter}
+              type="button"
+              className="jo-index-key"
+              data-active={active ? "yes" : undefined}
+              aria-pressed={active}
+              disabled={!initials.includes(letter)}
+              onClick={() => pickInitial(letter)}
+            >
+              {letter}
+            </button>
+          );
+        })}
+      </nav>
+
       {state.status === "loading" ? (
         <p className="body jo-note">Loading your candidates.</p>
       ) : state.status === "unreadable" ? (
@@ -245,7 +310,7 @@ function Workspace({ role }: { role: string }) {
         </p>
       ) : items.length === 0 ? (
         <p className="body jo-note" aria-live="polite">
-          {emptyLine(filter)}
+          {emptyLine(filter, initial)}
         </p>
       ) : (
         <>
@@ -286,7 +351,11 @@ function Workspace({ role }: { role: string }) {
 
 const EMPTY: Candidate[] = [];
 
-function emptyLine(filter: Filter): string {
+function emptyLine(filter: Filter, initial: string | null): string {
+  // The letter comes first: with one selected, "Nobody is at this stage yet."
+  // is simply untrue — someone may well be, just not under this letter.
+  if (initial === NON_ALPHA_INITIAL) return "No names outside A–Z match the rest of your filters.";
+  if (initial) return `No names beginning with ${initial} match the rest of your filters.`;
   if (filter === "merged") return "Nothing has been merged.";
   if (filter) return "Nobody is at this stage yet.";
   return "No candidates yet. Add the first one, or import a spreadsheet once that lands.";

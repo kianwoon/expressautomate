@@ -127,6 +127,28 @@
 }
 .jo-chip-n { font-variant-numeric: tabular-nums; opacity: 0.75; }
 
+/* The A–Z bar. Twenty-seven targets, so they wrap rather than scroll
+   sideways — a horizontal scroller hides half the alphabet on a phone, and a
+   letter you cannot see is a letter you cannot jump to. */
+.jo-index { margin-top: 14px; display: flex; gap: 4px; flex-wrap: wrap; }
+.jo-index-key {
+  min-width: 32px; padding: 5px 8px; font: inherit; font-size: 0.8125rem;
+  font-variant-numeric: tabular-nums; cursor: pointer; color: var(--ink-700);
+  background: var(--surface); border: 1px solid var(--line); border-radius: 8px;
+}
+.jo-index-key:hover:not(:disabled) { background: var(--surface-alt); }
+.jo-index-key:focus-visible { outline: 2px solid var(--blue-500); outline-offset: 2px; }
+.jo-index-key[data-active="yes"] {
+  color: var(--surface); background: var(--blue-600); border-color: var(--blue-600);
+}
+/* An empty letter has to read as *empty*, not as merely unpicked, or the bar
+   invites twenty clicks that each return nothing. Faded text on a recessed,
+   borderless key — three signals, none of them colour alone. */
+.jo-index-key:disabled {
+  color: var(--ink-300); background: var(--surface-alt); border-color: transparent;
+  cursor: default;
+}
+
 /* Master and detail. The list is the wider half; below 1080px the panel drops
    under it rather than squeezing a paragraph into 240px. */
 .jo-split {
