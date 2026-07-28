@@ -206,7 +206,12 @@ async def get_candidate(request: Request, candidate_id: uuid.UUID) -> dict:
     # written. Not persisted here — a GET that writes is a GET that deadlocks
     # under load, and the column stays the cache the list and search read.
     profile = derive(roles, today=date.today())
-    if profile.years_experience is not None and "years_experience" not in set(overrides):
+    # Not gated on `is not None`: a candidate whose surviving roles are all
+    # undated derives `years_experience=None` even though the roles list is
+    # non-empty, and skipping the write here would serve the stale cached
+    # column instead — the same §15 gap `apply_derived` guards against on the
+    # write side. The override check is what must gate this, not the value.
+    if "years_experience" not in set(overrides):
         payload["years_experience"] = profile.years_experience
     # What lets the panel say "Most recently" instead of "Current" for a
     # candidate who is between jobs.

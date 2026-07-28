@@ -434,6 +434,111 @@ async def test_a_patch_that_ends_before_the_stored_start_is_a_422(agency):
 
 
 @pytest.mark.asyncio
+async def test_an_undated_remaining_role_clears_years_experience(agency):
+    """`derive` returns `years_experience=None` even with a live role, when
+    that role has no dates to span. The cached number must not survive that —
+    it was derived from a role that no longer supports it.
+    """
+    async with await _client_for(*agency) as client:
+        candidate = await _a_candidate(client, full_name="Tan Hui Ling")
+        dated = (
+            await client.post(
+                f"/api/candidates/{candidate['id']}/roles",
+                json={
+                    "employer": "Raffles Medical",
+                    "title": "Enrolled Nurse",
+                    "started_on": "2019-03-01",
+                    "started_precision": "month",
+                },
+            )
+        ).json()
+        await client.post(
+            f"/api/candidates/{candidate['id']}/roles",
+            json={"employer": "Parkway Shenton", "title": "Staff Nurse"},
+        )
+
+        gone = await client.delete(f"/api/candidates/{candidate['id']}/roles/{dated['id']}")
+        assert gone.status_code == 204
+
+        body = (await client.get(f"/api/candidates/{candidate['id']}")).json()
+    assert body["years_experience"] is None
+
+
+@pytest.mark.asyncio
+async def test_an_overridden_years_experience_survives_an_undated_remainder(agency):
+    """Same setup as above, but the human asserted a number — it must stay."""
+    async with await _client_for(*agency) as client:
+        candidate = await _a_candidate(client, full_name="Tan Hui Ling")
+        await client.patch(f"/api/candidates/{candidate['id']}", json={"years_experience": 20})
+        dated = (
+            await client.post(
+                f"/api/candidates/{candidate['id']}/roles",
+                json={
+                    "employer": "Raffles Medical",
+                    "title": "Enrolled Nurse",
+                    "started_on": "2019-03-01",
+                    "started_precision": "month",
+                },
+            )
+        ).json()
+        await client.post(
+            f"/api/candidates/{candidate['id']}/roles",
+            json={"employer": "Parkway Shenton", "title": "Staff Nurse"},
+        )
+
+        gone = await client.delete(f"/api/candidates/{candidate['id']}/roles/{dated['id']}")
+        assert gone.status_code == 204
+
+        body = (await client.get(f"/api/candidates/{candidate['id']}")).json()
+    assert body["years_experience"] == 20
+
+
+@pytest.mark.asyncio
+async def test_deleting_the_current_role_falls_back_to_the_next_most_recent(agency):
+    """Deleting only the *current* role, with an older one still on file.
+
+    `current_employer`/`current_title` must move to the surviving role rather
+    than being cleared (there is still a source for them) or left stale
+    (pointing at the role that was just deleted).
+    """
+    async with await _client_for(*agency) as client:
+        candidate = await _a_candidate(client, full_name="Tan Hui Ling")
+        older = (
+            await client.post(
+                f"/api/candidates/{candidate['id']}/roles",
+                json={
+                    "employer": "Raffles Medical",
+                    "title": "Enrolled Nurse",
+                    "started_on": "2015-01-01",
+                    "started_precision": "month",
+                    "ended_on": "2019-01-01",
+                    "ended_precision": "month",
+                },
+            )
+        ).json()
+        current = (
+            await client.post(
+                f"/api/candidates/{candidate['id']}/roles",
+                json={
+                    "employer": "Parkway Shenton",
+                    "title": "Staff Nurse",
+                    "started_on": "2019-06-01",
+                    "started_precision": "month",
+                },
+            )
+        ).json()
+
+        gone = await client.delete(f"/api/candidates/{candidate['id']}/roles/{current['id']}")
+        assert gone.status_code == 204
+
+        body = (await client.get(f"/api/candidates/{candidate['id']}")).json()
+    assert body["current_employer"] == "Raffles Medical"
+    assert body["current_title"] == "Enrolled Nurse"
+    assert body["is_current"] is False
+    assert older["employer"] == "Raffles Medical"  # sanity: the surviving role
+
+
+@pytest.mark.asyncio
 async def test_a_candidate_with_only_rejected_roles_has_no_derived_profile(agency):
     """`derive` drops rejected roles; the "has roles" guard must agree.
 

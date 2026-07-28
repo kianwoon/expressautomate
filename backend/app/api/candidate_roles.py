@@ -190,7 +190,16 @@ async def apply_derived(session, candidate: Candidate) -> None:
         candidate.current_title = profile.current_title
     if "current_employer" not in overridden and profile.current_employer:
         candidate.current_employer = profile.current_employer
-    if "years_experience" not in overridden and profile.years_experience is not None:
+    # Not `and profile.years_experience is not None`: unlike `current_title`
+    # and `current_employer`, which `derive` always fills in from `latest`
+    # whenever this branch is reached (there is always a live role to name),
+    # `years_experience` legitimately comes back `None` here — every
+    # surviving role is undated, so there is nothing to sum a span from. A
+    # guard that skips the write on `None` would leave whatever tenure was
+    # cached from a role that no longer supports it, which is exactly the
+    # stale-assertion §15 forbids. So the write always happens; only the
+    # override check gates it.
+    if "years_experience" not in overridden:
         candidate.years_experience = profile.years_experience
 
 

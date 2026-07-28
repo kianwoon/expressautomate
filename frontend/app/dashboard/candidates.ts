@@ -49,9 +49,9 @@ export type DatePrecision = "year" | "month" | "day";
 export type CandidateRole = {
   id: string;
   employer: string;
-  employer_normalized: string | null;
+  employer_normalized: string;
   title: string;
-  title_normalized: string | null;
+  title_normalized: string;
   started_on: string | null;
   started_precision: DatePrecision | null;
   ended_on: string | null;
