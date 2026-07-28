@@ -65,6 +65,19 @@ export function JobOrders({ me, heading = "h2" }: { me: Me; heading?: "h1" | "h2
     if (fresh && fresh !== selected) setSelected(fresh);
   }, [items, selected]);
 
+  // Open on the first row rather than on an empty panel: a panel that starts
+  // blank spends the first screenful asking to be clicked.
+  //
+  // Derived, never stored. An effect that selected the first row on seeing an
+  // empty selection would fire on the paging render too — `setOffset` and
+  // `setSelected(null)` batch together, so that render still holds the page
+  // being left, and the effect would store one of its rows just as the fetch
+  // for the next page began. Nothing would clear it afterwards, and the panel
+  // would sit on a row the table no longer lists. Falling back during render
+  // has nothing to go stale: while the next page loads there are no rows and
+  // the fallback is empty, and when it arrives the fallback is its first row.
+  const shown = selected ?? visible[0] ?? null;
+
   const total = state.status === "ready" ? state.page.total : 0;
   const limit = state.status === "ready" ? state.page.limit : PAGE_SIZE;
   const filtered = visible.length !== items.length;
@@ -88,7 +101,7 @@ export function JobOrders({ me, heading = "h2" }: { me: Me; heading?: "h1" | "h2
 
       <p className="body jo-head-body">
         Each row is what one email actually said — where it said nothing, it says so rather than
-        guessing. Select a row to read it in full.
+        guessing. The first one is open beside the list; select any other to read that instead.
       </p>
 
       <div className="jo-controls">
@@ -158,10 +171,21 @@ export function JobOrders({ me, heading = "h2" }: { me: Me; heading?: "h1" | "h2
                 rows={visible}
                 sort={sort}
                 onSort={setSort}
-                selectedId={selected?.id ?? null}
+                selectedId={shown?.id ?? null}
                 onSelect={setSelected}
               />
-              <DetailPanel row={selected} onReview={review} />
+              {/* Reviewing the row the fallback offered pins it first. Under
+                  "Needs review" the act of reviewing takes it out of the list,
+                  and an unpinned fallback would slide the panel onto the next
+                  row mid-read — the same disappearing-panel the stored
+                  selection above exists to prevent. */}
+              <DetailPanel
+                row={shown}
+                onReview={(id, reviewed) => {
+                  if (!selected && shown) setSelected(shown);
+                  return review(id, reviewed);
+                }}
+              />
             </div>
           )}
 
