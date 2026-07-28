@@ -784,14 +784,136 @@ select.gl-input:focus-visible { outline: 2px solid var(--blue-500); outline-offs
   font-size: 0.8125rem;
   color: var(--ink-700);
 }
+/* Confirming is the ordinary answer, so it is a quiet control like the rest —
+   green only on hover, where the meaning is being asked for. */
+.ch-confirm:hover:not(:disabled) { color: #2f7d54; background: none; }
+/* The quote, set apart from the row's own words: this is the CV speaking, not
+   us. A rule down the left rather than quotation marks, which would fight the
+   punctuation already inside the line. */
+.ch-evidence > summary { color: var(--amber-700); }
+.ch-quote {
+  margin: 6px 0 0;
+  padding: 4px 0 4px 10px;
+  border-left: 2px solid var(--amber-700);
+  font-size: 0.875rem;
+  font-style: italic;
+  color: var(--ink-700);
+  white-space: pre-wrap;
+}
+.ch-rejected { margin-top: 6px; font-size: 0.8125rem; color: var(--ink-500); }
+
+/* The CV panel. Same bargain as everything above it: the panel is the control,
+   the per-document tools sit on the document and come up on hover or focus,
+   and nothing here is a grey button pair. */
+.cv-section {
+  margin-top: 22px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+.cv-drop {
+  margin-top: 10px;
+  border: 1px dashed var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-alt);
+  transition: border-color 150ms ease, background-color 150ms ease;
+}
+.cv-trigger {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  align-items: center;
+  padding: 14px 12px;
+  cursor: pointer;
+  text-align: center;
+}
+.cv-invite { font-size: 0.875rem; color: var(--ink-700); }
+.cv-kinds { font-size: 0.75rem; color: var(--ink-500); }
+.cv-drop:hover { border-color: var(--blue-500); }
+/* The ring goes on the panel, not on the visually hidden input inside it, or a
+   keyboard user gets an outline around nothing they can see. */
+.cv-drop:focus-within {
+  outline: 2px solid var(--blue-500);
+  outline-offset: 2px;
+  border-color: var(--blue-500);
+}
+.cv-drop[data-drop="yes"] {
+  border-color: var(--blue-500);
+  border-style: solid;
+}
+.cv-drop[data-busy="yes"] .cv-trigger { cursor: default; opacity: 0.65; }
+
+.cv-list { list-style: none; margin: 12px 0 0; padding: 0; }
+/* One rail per document, coloured by how the reading of it went — the same
+   left-border vocabulary the roles use, so the two sections read as one page
+   rather than two designs. */
+.cv-doc {
+  padding: 8px 0 8px 12px;
+  border-left: 2px solid var(--line);
+}
+.cv-doc[data-tone="good"] { border-left-color: #2f7d54; }
+.cv-doc[data-tone="warn"] { border-left-color: var(--amber-700); }
+.cv-doc[data-tone="bad"] { border-left-color: #c74f4f; }
+.cv-doc-line { display: flex; align-items: baseline; gap: 8px; }
+.cv-doc-name {
+  font-size: 0.875rem;
+  font-weight: 650;
+  color: var(--ink-900);
+  overflow-wrap: anywhere;
+}
+.cv-doc-size { font-size: 0.75rem; color: var(--ink-500); white-space: nowrap; }
+/* Faint, never gone: `opacity` keeps them rendered, focusable and announced,
+   where `display: none` would take them from the keyboard entirely. */
+.cv-doc-tools {
+  margin-left: auto;
+  display: flex;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity 150ms ease;
+}
+.cv-doc:hover .cv-doc-tools,
+.cv-doc:focus-within .cv-doc-tools {
+  opacity: 1;
+}
+.cv-state {
+  margin-top: 2px;
+  font-size: 0.8125rem;
+  color: var(--ink-700);
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+.cv-detail { margin-top: 4px; font-size: 0.8125rem; color: var(--ink-500); }
+.cv-dropped { color: var(--amber-700); }
+.cv-error { color: #c74f4f; }
+/* A slow pulse, not a spinner: the parse takes as long as it takes, and a
+   spinning thing implies a wait measured in the moment. */
+.cv-pip {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--blue-500);
+  animation: cv-pulse 1400ms ease-in-out infinite;
+}
+@keyframes cv-pulse {
+  0%, 100% { opacity: 0.3; }
+  50% { opacity: 1; }
+}
+
 /* Someone who has asked for less movement gets none of it: the controls appear
    at full strength instead of fading, and the disclosure simply is open. */
 @media (prefers-reduced-motion: reduce) {
   .ch-tools,
   .ch-add,
-  .ch-tool {
+  .ch-tool,
+  .cv-drop,
+  .cv-doc-tools {
     transition: none;
   }
-  .ch-tools { opacity: 1; }
+  .ch-tools,
+  .cv-doc-tools { opacity: 1; }
   .ch-more[open] > .ch-desc { animation: none; }
+  /* The pip stops moving but stays visible, because it is the only thing
+     saying the parse is still running. */
+  .cv-pip { animation: none; opacity: 1; }
 }

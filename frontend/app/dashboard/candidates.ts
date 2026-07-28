@@ -6,10 +6,15 @@ import {
   CANDIDATES_PATH,
   candidateArchivePath,
   candidateAvatarPath,
+  candidateDocumentDownloadPath,
+  candidateDocumentPath,
+  candidateDocumentsPath,
   candidateMergePath,
   candidatePath,
   candidateRestorePath,
+  candidateRoleConfirmPath,
   candidateRolePath,
+  candidateRoleRejectPath,
   candidateRolesPath,
   candidateUnmergePath,
 } from "../api";
@@ -62,6 +67,43 @@ export type CandidateRole = {
   source: string;
   status: "unconfirmed" | "confirmed" | "rejected";
   is_current: boolean;
+  /** The line of the CV the model quoted for this role, once the server
+   *  carries it. Optional and absent today: the extraction stores its evidence
+   *  spans, but `GET /candidates/{id}` does not yet serialise them onto a
+   *  role, so the panel falls back to offering the source file itself. Typed
+   *  here rather than later so that surfacing it is a serializer change and
+   *  not a second redesign of this section. */
+  evidence?: string | null;
+};
+
+/** How far the reading of one uploaded CV has got.
+ *
+ * These are not five flavours of failure and they must not read as one.
+ * `unreadable` is permanent and has a cause a recruiter can act on — a scan
+ * carries no text layer. `empty` is a file we read fine that yielded nothing
+ * that survived checking. `failed` is transient and worth retrying. The
+ * difference between them is the whole difference between a product that is
+ * broken and one that is telling you what happened. */
+export type ParseState = "pending" | "parsing" | "parsed" | "unreadable" | "empty" | "failed";
+
+/** One CV uploaded against a candidate.
+ *
+ * `dropped_count` and `dropped_reason` stay set on a *successful* parse: they
+ * are the note that says the model proposed things whose quoted text could not
+ * be found in the document and they were thrown away. Without it a recruiter
+ * whose CV lists five jobs and whose panel shows three concludes the parser
+ * cannot count. */
+export type CandidateDocument = {
+  id: string;
+  filename: string;
+  content_type: string;
+  byte_size: number;
+  parse_state: ParseState;
+  parse_error: string | null;
+  text_chars: number | null;
+  dropped_count: number | null;
+  dropped_reason: string | null;
+  created_at: string | null;
 };
 
 /** What a create sends, and — one key at a time — what a patch sends. */
@@ -104,6 +146,12 @@ export type Candidate = {
    *  about its roles — absent must read as "not loaded", never as "none".
    *  Already ordered current-first then newest by the server. */
   roles?: CandidateRole[];
+  /** Only present on the single-record GET, not on a list row. Optional for
+   *  the same reason `roles` is: a table row has never been asked about its
+   *  uploads, and absent has to mean "not loaded" rather than "none" — the
+   *  difference between saying nothing and asserting there is no CV.
+   *  Newest first, as the server orders them. */
+  documents?: CandidateDocument[];
   /** Only present on the single-record GET, not on a list row. */
   overridden_fields?: string[];
   /** Set once a photo has been uploaded; `null` means "show the initials
@@ -369,6 +417,81 @@ export async function deleteCandidateRole(id: string, roleId: string): Promise<v
     headers: { Accept: "application/json" },
   });
   if (!res.ok) throw new ApiError(await readError(res));
+}
+
+/** A person vouches for what the parse read off the CV. Returns the updated
+ *  role; the caller still refetches the candidate, because confirming can move
+ *  the derived title, employer and years above. */
+export async function confirmCandidateRole(id: string, roleId: string): Promise<CandidateRole> {
+  const res = await fetch(candidateRoleConfirmPath(id, roleId), {
+    method: "POST",
+    credentials: "include",
+    headers: { Accept: "application/json" },
+  });
+  if (!res.ok) throw new ApiError(await readError(res));
+  return (await res.json()) as CandidateRole;
+}
+
+/** A person says the parse got this one wrong. The row is kept rather than
+ *  deleted — it is the record of what the model claimed, and a re-parse of the
+ *  same CV must not resurrect something already thrown out. */
+export async function rejectCandidateRole(id: string, roleId: string): Promise<CandidateRole> {
+  const res = await fetch(candidateRoleRejectPath(id, roleId), {
+    method: "POST",
+    credentials: "include",
+    headers: { Accept: "application/json" },
+  });
+  if (!res.ok) throw new ApiError(await readError(res));
+  return (await res.json()) as CandidateRole;
+}
+
+/** Uploads a CV. 202, not 201: the file is stored and queued, and the reading
+ *  of it happens afterwards — which is why the document comes back in a
+ *  `pending` state rather than with roles attached. */
+export async function uploadCandidateDocument(
+  id: string,
+  file: File,
+): Promise<CandidateDocument> {
+  const form = new FormData();
+  form.append("file", file);
+  const res = await fetch(candidateDocumentsPath(id), {
+    method: "POST",
+    credentials: "include",
+    headers: { Accept: "application/json" },
+    body: form,
+  });
+  // Oversized, wrong type and over-quota all arrive as a readable sentence the
+  // server wrote; `readError` surfaces it rather than replacing it with a
+  // guess about which of the three it was.
+  if (!res.ok) throw new ApiError(await readError(res));
+  return (await res.json()) as CandidateDocument;
+}
+
+export async function deleteCandidateDocument(id: string, documentId: string): Promise<void> {
+  const res = await fetch(candidateDocumentPath(id, documentId), {
+    method: "DELETE",
+    credentials: "include",
+    headers: { Accept: "application/json" },
+  });
+  if (!res.ok) throw new ApiError(await readError(res));
+}
+
+export type DocumentUrl = { url: string; expires_in: number };
+
+/** A short-lived presigned URL for the original file. Fetched at the moment
+ *  the recruiter asks for it and never held: the link stops working within
+ *  minutes, so anything longer-lived than the click is a broken link waiting
+ *  to be found. */
+export async function getCandidateDocumentUrl(
+  id: string,
+  documentId: string,
+): Promise<DocumentUrl> {
+  const res = await fetch(candidateDocumentDownloadPath(id, documentId), {
+    credentials: "include",
+    headers: { Accept: "application/json" },
+  });
+  if (!res.ok) throw new ApiError(await readError(res));
+  return (await res.json()) as DocumentUrl;
 }
 
 export type AvatarUrl = { url: string; expires_in: number };

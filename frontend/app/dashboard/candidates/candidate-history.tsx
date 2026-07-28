@@ -3,7 +3,13 @@
 import { useEffect, useRef, useState } from "react";
 
 import type { Candidate, CandidateRole, CandidateRoleBody, DatePrecision } from "../candidates";
-import { createCandidateRole, deleteCandidateRole, updateCandidateRole } from "../candidates";
+import {
+  confirmCandidateRole,
+  createCandidateRole,
+  deleteCandidateRole,
+  rejectCandidateRole,
+  updateCandidateRole,
+} from "../candidates";
 
 /**
  * The candidate's career, rather than the one line of it the record used to
@@ -420,6 +426,8 @@ function RoleItem({
   focused,
   onEdit,
   onRemove,
+  onConfirm,
+  onReject,
 }: {
   role: CandidateRole;
   now: Date;
@@ -430,6 +438,11 @@ function RoleItem({
   focused: boolean;
   onEdit: () => void;
   onRemove: () => void;
+  /** Both remove the buttons that triggered them — the verify strip only
+   *  exists while the row is unconfirmed — so both hand focus back through
+   *  `focused` above, to the edit control that is always on the row. */
+  onConfirm: () => void;
+  onReject: () => void;
 }) {
   const editRef = useRef<HTMLButtonElement | null>(null);
   // The edit button is `disabled={busy}` below, and a disabled element cannot
@@ -499,21 +512,57 @@ function RoleItem({
         </details>
       )}
 
+      {/* allow-hardcode: the strings below are UI copy and CSS class names —
+          labels a recruiter reads, not values anything is matched against. */}
       {role.status === "unconfirmed" && (
-        // Nothing writes this status yet — a recruiter typing a role gets
-        // `confirmed`. It renders now so that the CV parser which will write
-        // `unconfirmed` rows is an endpoint rather than a redesign, and the
-        // buttons are disabled rather than absent so the shape of that future
-        // is visible and honest about not working today.
-        <div className="ch-verify">
-          <span className="ch-flag">From a CV, not yet checked</span>
-          <button type="button" className="ch-tool" disabled title="Confirming arrives with CV parsing">
-            Confirm
-          </button>
-          <button type="button" className="ch-tool" disabled title="Rejecting arrives with CV parsing">
-            Reject
-          </button>
-        </div>
+        <>
+          {/* What the CV actually said, where the server carries it. This is
+              the point of the whole parse: not "the model says she worked at
+              Parkway Shenton", but the line of her CV that says so, quoted
+              beside the claim, so confirming is a reading rather than an act
+              of faith. A native disclosure, so it is keyboard-operable and
+              announced as expanded without anything of ours in the way. */}
+          {role.evidence && (
+            <details className="ch-more ch-evidence">
+              <summary>What the CV said</summary>
+              <blockquote className="body ch-quote">{role.evidence}</blockquote>
+            </details>
+          )}
+          <div className="ch-verify">
+            <span className="ch-flag">From a CV, not yet checked</span>
+            {/* Confirm first and reject beside it, both quiet: agreeing with
+                the parse is the common answer, and neither is weighty enough
+                to earn a filled button on a row this small. */}
+            <button
+              type="button"
+              className="ch-tool ch-confirm"
+              onClick={onConfirm}
+              disabled={busy}
+              title="This is right"
+              aria-label={`Confirm ${role.title} at ${role.employer}`}
+            >
+              Confirm
+            </button>
+            <button
+              type="button"
+              className="ch-tool ch-tool-remove"
+              onClick={onReject}
+              disabled={busy}
+              title="This is wrong"
+              aria-label={`Reject ${role.title} at ${role.employer}`}
+            >
+              Reject
+            </button>
+          </div>
+        </>
+      )}
+
+      {/* A rejected row is kept rather than deleted — it is the record of what
+          the model claimed, and a re-parse of the same CV must not bring it
+          back. Saying so is the difference between a row somebody dismissed
+          and a row that is quietly still being counted. */}
+      {role.status === "rejected" && (
+        <p className="ch-rejected">Rejected. Not counted towards their experience.</p>
       )}
     </li>
   );
@@ -586,6 +635,26 @@ export function CandidateHistory({
       setAdding(false);
       setRefocus(roleId);
       if (!roleId) setFocusAdd(true);
+      onChanged();
+    });
+  }
+
+  /**
+   * A person agrees with what the parse read off the CV, or says it is wrong.
+   *
+   * No confirmation dialog on either: both are reversible from this same row —
+   * a rejected role can be confirmed and back again — and a modal in front of
+   * a recruiter working through six roles on one CV would be six modals.
+   *
+   * Focus is handed to the row's edit button rather than left where it was:
+   * the button just pressed lives in the verify strip, and that strip is gone
+   * the moment the status is no longer `unconfirmed`.
+   */
+  function setStatus(role: CandidateRole, confirmed: boolean) {
+    void run(async () => {
+      if (confirmed) await confirmCandidateRole(row.id, role.id);
+      else await rejectCandidateRole(row.id, role.id);
+      setRefocus(role.id);
       onChanged();
     });
   }
@@ -663,6 +732,8 @@ export function CandidateHistory({
                   setAdding(false);
                 }}
                 onRemove={() => remove(role)}
+                onConfirm={() => setStatus(role, true)}
+                onReject={() => setStatus(role, false)}
               />
             ),
           )}

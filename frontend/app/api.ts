@@ -233,6 +233,36 @@ export function candidateRolePath(id: string, roleId: string): string {
   return `${candidateRolesPath(id)}/${encodeURIComponent(roleId)}`;
 }
 
+/** A role a person has vouched for, or thrown out. POST-only, and idempotent
+ *  on the server, so a double-click is not an error. Both ids are encoded for
+ *  the reason `candidateRolePath` encodes them. */
+export function candidateRoleConfirmPath(id: string, roleId: string): string {
+  return `${candidateRolePath(id, roleId)}/confirm`;
+}
+
+export function candidateRoleRejectPath(id: string, roleId: string): string {
+  return `${candidateRolePath(id, roleId)}/reject`;
+}
+
+/** The CVs uploaded against a candidate. POST (multipart) lives here; the
+ *  collection is never fetched directly, since `GET /candidates/{id}` already
+ *  embeds it beside the roles it produced. */
+export function candidateDocumentsPath(id: string): string {
+  return `${candidatePath(id)}/documents`;
+}
+
+/** One uploaded CV, for DELETE. */
+export function candidateDocumentPath(id: string, documentId: string): string {
+  return `${candidateDocumentsPath(id)}/${encodeURIComponent(documentId)}`;
+}
+
+/** A short-lived presigned URL for the original file — the bytes the recruiter
+ *  uploaded, not the text we extracted from them. Fetched at the moment it is
+ *  needed and never stored, exactly as the avatar's URL is. */
+export function candidateDocumentDownloadPath(id: string, documentId: string): string {
+  return `${candidateDocumentPath(id, documentId)}/download`;
+}
+
 /** The client list. A site route, so no API_BASE prefix. */
 export const CLIENTS_DASHBOARD_PATH = "/dashboard/clients";
 

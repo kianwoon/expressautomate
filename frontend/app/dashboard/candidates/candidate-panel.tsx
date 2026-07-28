@@ -8,6 +8,7 @@ import type { Candidate, CandidatePage } from "../candidates";
 import { mergeCandidate, unmergeCandidate } from "../candidates";
 import { Value, day } from "../format";
 import { CandidateAvatar } from "./candidate-avatar";
+import { CandidateCv } from "./candidate-cv";
 import { CandidateHistory } from "./candidate-history";
 
 /**
@@ -232,6 +233,11 @@ function Detail({
               fields — title, employer, experience — are derived from these
               rows. The reader meets the summary first and then what it was
               computed from. */}
+          {/* Above the history, because it is what fills the history in: the
+              reader meets the CV, then the roles read out of it, then the
+              summary those roles were derived from. */}
+          <CandidateCv row={row} onChanged={onDetailChanged} />
+
           <CandidateHistory row={row} onChanged={onDetailChanged} />
 
           <MergePicker candidateId={row.id} onMerged={onChanged} />
