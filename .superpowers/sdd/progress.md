@@ -42,3 +42,7 @@ P2 Task 5: complete (2e8e075..2d0847f, 901 passed). Fable 8.5/10 APPROVE WITH CH
   ACCEPTANCE CRITERION FOR TASK 6: the upload route must enqueue parse_candidate_cv.
     Today only rescan_stuck does, so an uploaded CV would sit until the sweep found it.
   DEFERRED: get_bytes and the arq timeout are covered by doubles only - needs a staging smoke.
+P2 Task 6: complete (a6a6920..62dc217, 918 passed). Fable 9/10 APPROVE, no fix-now findings.
+  Deferred by owner ruling: quota window is UTC (8am SGT) - accepted, revisit if a tenant
+    ever hits the cap; R2 exercised via doubles only; multipart is spooled to disk before
+    the 413 (Starlette behaviour, matches the avatar precedent).
