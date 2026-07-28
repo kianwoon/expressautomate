@@ -432,9 +432,14 @@ function RoleItem({
   onRemove: () => void;
 }) {
   const editRef = useRef<HTMLButtonElement | null>(null);
+  // The edit button is `disabled={busy}` below, and a disabled element cannot
+  // receive focus — a request that lands while the save/delete it is waiting
+  // on is still in flight would silently do nothing. Waiting for `!busy` too
+  // means this fires again once the button re-enables, rather than only on
+  // the render where `focused` first became true.
   useEffect(() => {
-    if (focused) editRef.current?.focus();
-  }, [focused]);
+    if (focused && !busy) editRef.current?.focus();
+  }, [focused, busy]);
 
   const months = durationMonths(role, now);
   const meta = [role.employment_type, role.location].filter(Boolean).join(" · ");
@@ -530,7 +535,20 @@ export function CandidateHistory({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [refocus, setRefocus] = useState<string | null>(null);
+  // Set instead of calling `.focus()` directly: the add button is
+  // `disabled={busy || adding}` below, and both `save` and `remove` want it
+  // focused while `busy` is still true (the call happens before `run`'s
+  // `finally` clears it), which a disabled element silently refuses. The
+  // effect below waits for `busy` to actually clear before trying.
+  const [focusAdd, setFocusAdd] = useState(false);
   const addRef = useRef<HTMLButtonElement | null>(null);
+
+  useEffect(() => {
+    if (focusAdd && !busy) {
+      addRef.current?.focus();
+      setFocusAdd(false);
+    }
+  }, [focusAdd, busy]);
 
   // Today, read once per render rather than per role, so a list of durations
   // is computed against one moment instead of a dozen slightly different ones.
@@ -567,7 +585,7 @@ export function CandidateHistory({
       setEditing(null);
       setAdding(false);
       setRefocus(roleId);
-      if (!roleId) addRef.current?.focus();
+      if (!roleId) setFocusAdd(true);
       onChanged();
     });
   }
@@ -577,8 +595,9 @@ export function CandidateHistory({
     void run(async () => {
       await deleteCandidateRole(row.id, role.id);
       // The button that was pressed is gone with the row. Hand focus to the
-      // one control on this section that is always there.
-      addRef.current?.focus();
+      // one control on this section that is always there — once `busy`
+      // actually clears and it is enabled again (see `focusAdd` above).
+      setFocusAdd(true);
       onChanged();
     });
   }
