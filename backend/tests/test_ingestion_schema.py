@@ -348,7 +348,7 @@ async def test_deleting_a_user_keeps_their_mailbox_and_mail(admin_session, tenan
     await admin_session.execute(
         text(
             "INSERT INTO users (id, tenant_id, email, display_name, role)"
-            " VALUES (:id, :tenant, :email, 'Departing Recruiter', 'member')"
+            " VALUES (:id, :tenant, :email, 'Departing Recruiter', 'recruiter')"
         ),
         {"id": user_id, "tenant": tenant, "email": f"leaver-{user_id.hex[:8]}@example.com"},
     )

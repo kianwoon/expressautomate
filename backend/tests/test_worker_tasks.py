@@ -57,7 +57,7 @@ async def _add_mailbox(session, tenant_id, *, status="active", ms_user_id=None):
     await session.execute(
         text(
             "INSERT INTO users (id, tenant_id, email, role)"
-            " VALUES (:id, :tenant, :email, 'member')"
+            " VALUES (:id, :tenant, :email, 'recruiter')"
         ),
         {"id": user_id, "tenant": tenant_id, "email": f"u-{user_id.hex[:8]}@example.com"},
     )

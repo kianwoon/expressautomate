@@ -78,7 +78,7 @@ async def agencies(admin_session):
         await admin_session.execute(
             text(
                 "INSERT INTO users (id, tenant_id, email, role)"
-                " VALUES (:id, :t, :e, 'member')"
+                " VALUES (:id, :t, :e, 'recruiter')"
             ),
             {"id": user_id, "t": tenant_id, "e": f"{tenant_id.hex[:8]}@{slug}.sg"},
         )
@@ -307,7 +307,7 @@ async def test_the_trim_never_reaches_another_mailbox(agencies) -> None:
         await session.execute(
             text(
                 "INSERT INTO users (id, tenant_id, email, role)"
-                " VALUES (:id, :t, :e, 'member')"
+                " VALUES (:id, :t, :e, 'recruiter')"
             ),
             {"id": user_second, "t": tenant_id, "e": f"{mailbox_second.hex[:8]}@a.sg"},
         )

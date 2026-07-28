@@ -423,6 +423,28 @@ async def microsoft_callback(request: Request) -> RedirectResponse:
         )
 
         now = datetime.now(UTC)
+
+        # The person who signs in first is the one who set the agency up, and
+        # is the only one who can delete a candidate.
+        #
+        # The lock is taken on the TENANT row, not on `users`. Two colleagues
+        # signing in for the first time simultaneously both see an empty
+        # `users` table, and `SELECT ... FROM users ... FOR UPDATE` locks
+        # nothing at all when it matches no rows — so both would be made
+        # owner. The tenant row exists by this point (it is upserted just
+        # above), so locking it serialises the two transactions and the second
+        # one sees the first one's user.
+        await session.execute(
+            text("SELECT 1 FROM tenants WHERE id = :t FOR UPDATE"), {"t": tenant_uuid}
+        )
+        existing = (
+            await session.execute(
+                text("SELECT 1 FROM users WHERE tenant_id = :t LIMIT 1"),
+                {"t": tenant_uuid},
+            )
+        ).first()
+        role = "recruiter" if existing else "owner"
+
         user_id = (
             await session.execute(
                 pg_insert(User)
@@ -432,7 +454,7 @@ async def microsoft_callback(request: Request) -> RedirectResponse:
                     email=email,
                     display_name=claims.get("name"),
                     ms_object_id=str(oid),
-                    role="recruiter",
+                    role=role,
                     last_login_at=now,
                 )
                 # Identity is the immutable Entra object id, never the mail

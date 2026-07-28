@@ -31,7 +31,7 @@ async def mailbox_with_grant(admin_session):
     await admin_session.execute(
         text(
             "INSERT INTO users (id, tenant_id, email, role)"
-            " VALUES (:id, :tenant, :email, 'member')"
+            " VALUES (:id, :tenant, :email, 'recruiter')"
         ),
         {"id": user_id, "tenant": tenant_id, "email": f"u-{user_id.hex[:8]}@example.com"},
     )
