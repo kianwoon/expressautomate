@@ -2,19 +2,17 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { OPPORTUNITIES_PATH, opportunityReviewPath } from "../api";
+import { OPPORTUNITIES_PAGE_SIZE, OPPORTUNITIES_PATH, opportunityReviewPath } from "../api";
 import { useLive } from "../events";
+import { DEFAULT_SORT, type Sort } from "./job-orders-table";
 
 /**
  * One page of job orders, and the one place that talks to the opportunities
  * endpoint.
  *
- * The endpoint pages server-side now, so the page number is part of the
- * request rather than something the browser slices out of a complete list.
- * That has a consequence the UI has to be honest about: the search box and the
- * column sort below still work on what has been fetched, which is this page
- * and not the whole set. The table says so beside the count rather than
- * letting a filtered page of fifty pass for a filtered database.
+ * Search and sort are server-side, same as `candidates.ts`: `q`, `sort` and
+ * `descending` are query parameters, not something the browser slices out of
+ * a page it already has.
  *
  * allow-hardcode: the strings here are user-facing copy, not a list anything
  * is matched against.
@@ -93,15 +91,17 @@ export type ListState =
   // server.
   | { status: "unreadable"; message: string };
 
-/** Fifty rows is about as much as anyone scans before paging anyway, and it
- *  keeps the client-side search over a page that is genuinely a page. */
-export const PAGE_SIZE = 50;
-
 const ZERO_COUNTS: Counts = { all: 0, new: 0, needs_review: 0, reviewed: 0 };
 
-function listUrl(filter: Filter, offset: number): string {
-  const params = new URLSearchParams({ limit: String(PAGE_SIZE), offset: String(offset) });
+function listUrl(filter: Filter, offset: number, q: string, sort: Sort): string {
+  const params = new URLSearchParams({
+    limit: String(OPPORTUNITIES_PAGE_SIZE),
+    offset: String(offset),
+    sort: sort.key,
+    descending: String(sort.descending),
+  });
   if (filter) params.set("status", filter);
+  if (q.trim()) params.set("q", q.trim());
   return `${OPPORTUNITIES_PATH}?${params.toString()}`;
 }
 
@@ -118,26 +118,54 @@ export type Opportunities = {
   state: ListState;
   filter: Filter;
   offset: number;
+  /** The box's own value, updated on every keystroke so typing never feels
+   *  laggy. What actually reaches the server is `debouncedQ`, below. */
+  q: string;
+  sort: Sort;
   /** The last counts we were told, kept across a reload so the chips do not
    *  blink back to nothing every time a filter changes. */
   counts: Counts;
+  /** A visible load — filter, search, sort or page change — is in flight over
+   *  rows still on screen. Same reasoning as `candidates.ts`'s `refreshing`:
+   *  collapsing back to `loading` on every keystroke or header click would
+   *  unmount the table and the open detail panel for no reason. */
+  refreshing: boolean;
   setFilter: (filter: Filter) => void;
   setOffset: (offset: number) => void;
+  setQ: (q: string) => void;
+  setSort: (sort: Sort) => void;
   /** Marks one row reviewed or not, and reports whether it worked. */
   review: (id: string, reviewed: boolean) => Promise<string | null>;
 };
+
+/** How long to wait after the last keystroke before the search actually
+ *  reaches the server. Short enough that it still feels live, long enough
+ *  that a five-letter word is one request, not five. */
+const SEARCH_DEBOUNCE_MS = 300;
 
 export function useOpportunities(): Opportunities {
   const [state, setState] = useState<ListState>({ status: "loading" });
   const [filter, setFilterRaw] = useState<Filter>(null);
   const [offset, setOffset] = useState(0);
+  const [q, setQRaw] = useState("");
+  const [debouncedQ, setDebouncedQ] = useState("");
+  const [sort, setSortRaw] = useState<Sort>(DEFAULT_SORT);
   const [counts, setCounts] = useState<Counts>(ZERO_COUNTS);
+  const [refreshing, setRefreshing] = useState(true);
+
+  // The value that actually reaches the server, held back from every
+  // keystroke by `SEARCH_DEBOUNCE_MS`. Cleared on unmount of the timer, not
+  // of the component, so a fast typist only ever fires the last one.
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedQ(q), SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [q]);
 
   // What the current request is for, readable from a callback that must not
   // change identity when the filter does. Assigned during render so a poll
   // firing between renders can never ask for the page we have just left.
-  const asked = useRef({ filter, offset });
-  asked.current = { filter, offset };
+  const asked = useRef({ filter, offset, q: debouncedQ, sort });
+  asked.current = { filter, offset, q: debouncedQ, sort };
 
   // Every load takes a ticket, and only the newest one is allowed to write.
   // Three things race here — a filter change, a page change, and the poll — and
@@ -164,22 +192,30 @@ export function useOpportunities(): Opportunities {
 
   const load = useCallback(async (quiet: boolean): Promise<void> => {
     if (quiet && loud.current > 0) return;
-    if (!quiet) loud.current += 1;
+    if (!quiet) {
+      loud.current += 1;
+      setRefreshing(true);
+    }
 
     const mine = ++generation.current;
     const superseded = () => mine !== generation.current;
     const settle = () => {
-      if (!quiet) loud.current -= 1;
+      if (!quiet) {
+        loud.current -= 1;
+        if (loud.current === 0) setRefreshing(false);
+      }
     };
 
-    // A background refresh never shows the loading state. Blanking the table
-    // every fifteen seconds to fetch rows that are usually identical is worse
-    // than the manual reload this replaces.
-    if (!quiet) setState({ status: "loading" });
+    // A background refresh never shows the loading state, and neither does a
+    // visible one once there are rows on screen — the same reasoning as
+    // `candidates.ts`: a filter, search or sort change is a reload over what
+    // is already showing, not a blank page. Only the genuine first load, with
+    // nothing on screen yet, is a `loading` state.
+    if (!quiet) setState((prev) => (prev.status === "ready" ? prev : { status: "loading" }));
 
     try {
-      const { filter: forFilter, offset: forOffset } = asked.current;
-      const res = await fetch(listUrl(forFilter, forOffset), {
+      const { filter: forFilter, offset: forOffset, q: forQ, sort: forSort } = asked.current;
+      const res = await fetch(listUrl(forFilter, forOffset, forQ, forSort), {
         credentials: "include",
         headers: { Accept: "application/json" },
       });
@@ -216,7 +252,7 @@ export function useOpportunities(): Opportunities {
     return () => {
       generation.current += 1;
     };
-  }, [filter, offset, load]);
+  }, [filter, offset, debouncedQ, sort, load]);
 
   // The table keeps up because the server says when to look, not because a timer
   // fired. `extraction` is the only kind that can add a row here — `mail` means
@@ -226,11 +262,20 @@ export function useOpportunities(): Opportunities {
     if (nudge === "extraction" || nudge === "open") void load(true);
   });
 
-  // Changing the filter must reset the page. Left alone, someone on page four
-  // of "All" who clicks "Needs review" gets offset 150 of five rows — an empty
-  // page that reads exactly like "there are none".
+  // Changing the filter, search or sort must reset the page. Left alone,
+  // someone on page four of "All" who clicks "Needs review" — or types a
+  // search that only matches five rows — gets offset 150 of five results, an
+  // empty page that reads exactly like "there are none".
   const setFilter = useCallback((next: Filter) => {
     setFilterRaw(next);
+    setOffset(0);
+  }, []);
+  const setQ = useCallback((next: string) => {
+    setQRaw(next);
+    setOffset(0);
+  }, []);
+  const setSort = useCallback((next: Sort) => {
+    setSortRaw(next);
     setOffset(0);
   }, []);
 
@@ -288,7 +333,7 @@ export function useOpportunities(): Opportunities {
     }
   }, []);
 
-  return { state, filter, offset, counts, setFilter, setOffset, review };
+  return { state, filter, offset, q, sort, counts, refreshing, setFilter, setOffset, setQ, setSort, review };
 }
 
 /**

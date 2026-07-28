@@ -55,6 +55,13 @@ export const MAILBOX_PREVIEW_PATH = `${API_BASE}/api/mailbox/preview`;
  */
 export const OPPORTUNITIES_PATH = `${API_BASE}/api/opportunities`;
 
+/** How many job orders one page of the list asks for. Same env-override and
+ *  NaN-guard reasoning as `CANDIDATES_PAGE_SIZE` below: search and sort now
+ *  run on the server, so a smaller page is a deployment decision, not a
+ *  correctness one. */
+export const OPPORTUNITIES_PAGE_SIZE =
+  Number(process.env.NEXT_PUBLIC_OPPORTUNITIES_PAGE_SIZE) || 10;
+
 /**
  * Marks one job order as checked by a human, or un-marks it.
  *
@@ -190,6 +197,20 @@ export function glossaryEntryPath(id: string): string {
  * person or came from a spreadsheet a person uploaded.
  */
 export const CANDIDATES_PATH = `${API_BASE}/api/candidates`;
+
+/**
+ * How many candidates one page of the list asks for.
+ *
+ * Env-overridable for the same reason as `API_BASE`: an agency with a wall
+ * display wants more rows per page than one working on a laptop, and that is a
+ * deployment decision, not a code change. Static export, so it is baked in at
+ * build time.
+ *
+ * `|| 10` rather than `??`: an unset variable parses to `NaN`, as does a typo
+ * like `ten`, and `limit=NaN` is a 422 from the API — a bad value must fall
+ * back to a working page, not break the screen.
+ */
+export const CANDIDATES_PAGE_SIZE = Number(process.env.NEXT_PUBLIC_CANDIDATES_PAGE_SIZE) || 10;
 
 /** One candidate, for GET/PATCH/DELETE. Encoded, so an id that is not the
  *  uuid we expect cannot walk out of its own path segment. */

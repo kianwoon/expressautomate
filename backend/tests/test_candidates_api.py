@@ -190,6 +190,211 @@ async def test_search_with_underscore_does_not_match_any_character(agency_with_c
     assert body["total"] == 0
 
 
+# --- The A–Z index bar. ------------------------------------------------------
+
+
+@pytest.fixture
+async def alphabet_names(agency_with_candidates):
+    """Extra rows chosen for the edges the bar has to get right.
+
+    Mixed casing, a leading space, a digit, and a non-Latin script — the four
+    ways a stored name can disagree with the letter a recruiter would click.
+    """
+    tid, uid, ids = agency_with_candidates
+    extra = {
+        "alice": ("alice ng", "new"),
+        "Alice": ("Alice Wong", "placed"),
+        "spaced": ("  aaron leading", "new"),
+        "digit": ("3M Recruiter", "new"),
+        "cjk": ("陈伟明", "new"),
+        "accented": ("Élise Chan", "new"),
+        # Lowercase, so the fold cannot lean on the database's `upper()`
+        # knowing what to do with an accent — under C collation it does not.
+        "accented_lower": ("ángel santos", "new"),
+        # Đ has no Unicode decomposition to strip: it is its own codepoint, so
+        # a decomposition-only fold files one of Vietnam's commonest surnames
+        # under `#`, where nobody looks for a D.
+        "stroke": ("Đặng Thu Hà", "new"),
+    }
+    created = {}
+    async with AdminSessionLocal() as s:
+        for key, (name, stage) in extra.items():
+            cid = uuid.uuid4()
+            created[key] = cid
+            await s.execute(
+                text(
+                    "INSERT INTO candidates (id, tenant_id, full_name, "
+                    "pipeline_stage, record_status) VALUES (:i, :t, :n, :st, 'active')"
+                ),
+                {"i": cid, "t": tid, "n": name, "st": stage},
+            )
+        await s.commit()
+    yield tid, uid, ids, created
+
+
+def _names(body) -> set[str]:
+    return {row["full_name"] for row in body["items"]}
+
+
+async def test_a_letter_matches_either_casing(alphabet_names) -> None:
+    tid, uid, _ids, _created = alphabet_names
+    async with await _client_for(tid, uid) as http:
+        lower = (await http.get("/api/candidates?initial=a")).json()
+        upper = (await http.get("/api/candidates?initial=A")).json()
+    assert _names(lower) == {"alice ng", "Alice Wong", "  aaron leading", "ángel santos"}
+    assert _names(upper) == _names(lower)
+    assert lower["total"] == 4
+
+
+async def test_the_hash_bucket_is_everything_that_is_not_a_letter(alphabet_names) -> None:
+    tid, uid, _ids, _created = alphabet_names
+    async with await _client_for(tid, uid) as http:
+        body = (await http.get("/api/candidates?initial=%23")).json()
+    assert _names(body) == {"3M Recruiter", "陈伟明"}
+
+
+async def test_the_available_letters_are_sorted_with_hash_last(alphabet_names) -> None:
+    tid, uid, _ids, _created = alphabet_names
+    async with await _client_for(tid, uid) as http:
+        body = (await http.get("/api/candidates")).json()
+    # J for Jane and John, A for the four A-names, D for Đặng, E for Élise;
+    # the merged row is hidden, so its "Jane T" contributes nothing beyond
+    # what J already has.
+    assert body["initials"] == ["A", "D", "E", "J", "#"]
+
+
+async def test_an_accented_name_indexes_under_its_plain_letter(alphabet_names) -> None:
+    """Élise is filed under E, where a recruiter would look for her — while
+    CJK stays in `#`, which is the only honest place for it in a Latin index.
+    """
+    tid, uid, _ids, _created = alphabet_names
+    async with await _client_for(tid, uid) as http:
+        under_e = (await http.get("/api/candidates?initial=e")).json()
+        other = (await http.get("/api/candidates?initial=%23")).json()
+    assert _names(under_e) == {"Élise Chan"}
+    assert "Élise Chan" not in _names(other)
+
+
+async def test_a_lowercase_accent_folds_without_help_from_the_collation(
+    alphabet_names,
+) -> None:
+    """The fold table carries both cases, so this cannot depend on whether the
+    database's `upper()` turns á into Á — under C collation it does not.
+    """
+    tid, uid, _ids, _created = alphabet_names
+    async with await _client_for(tid, uid) as http:
+        body = (await http.get("/api/candidates?initial=A")).json()
+    assert "ángel santos" in _names(body)
+
+
+async def test_a_stroked_letter_folds_onto_the_letter_it_is(alphabet_names) -> None:
+    """Đặng belongs under D.
+
+    Đ is an atomic codepoint with no decomposition, so stripping combining
+    marks leaves it alone; the letter is recoverable only from its Unicode
+    name. Vietnamese surnames make this routine for a Singapore agency, not an
+    exotic edge case — filing them under `#` would hide them from the bar.
+    """
+    tid, uid, _ids, _created = alphabet_names
+    async with await _client_for(tid, uid) as http:
+        under_d = (await http.get("/api/candidates?initial=d")).json()
+        other = (await http.get("/api/candidates?initial=%23")).json()
+    assert "Đặng Thu Hà" in _names(under_d)
+    assert "Đặng Thu Hà" not in _names(other)
+
+
+async def test_the_order_follows_what_the_reader_is_doing(alphabet_names) -> None:
+    """Alphabetical under a letter, newest-first without one."""
+    tid, uid, _ids, _created = alphabet_names
+    async with await _client_for(tid, uid) as http:
+        lettered = (await http.get("/api/candidates?initial=A")).json()
+        browsing = (await http.get("/api/candidates")).json()
+    # The rows sort by the name as stored, not by the folded initial: folding
+    # decides which letter files a name, never where it sits within that
+    # letter — which is why "ángel" comes last rather than sitting beside the
+    # other A-names.
+    #
+    # The exact order of "alice ng" against "Alice Wong" is the database's
+    # collation talking, not this endpoint's; the assertion is written for the
+    # locale-aware collation the test database is created with.
+    assert [row["full_name"] for row in lettered["items"]] == [
+        "  aaron leading",
+        "alice ng",
+        "Alice Wong",
+        "ángel santos",
+    ]
+    stamps = [row["updated_at"] for row in browsing["items"]]
+    assert stamps == sorted(stamps, reverse=True)
+
+
+async def test_choosing_a_letter_does_not_empty_the_bar(alphabet_names) -> None:
+    """The stranding regression: if `initials` were computed after `initial`,
+    clicking A would leave A as the only clickable letter and no way back.
+    """
+    tid, uid, _ids, _created = alphabet_names
+    async with await _client_for(tid, uid) as http:
+        unfiltered = (await http.get("/api/candidates")).json()
+        filtered = (await http.get("/api/candidates?initial=A")).json()
+    assert filtered["initials"] == unfiltered["initials"]
+
+
+async def test_the_letter_composes_with_the_other_filters(alphabet_names) -> None:
+    tid, uid, _ids, _created = alphabet_names
+    async with await _client_for(tid, uid) as http:
+        staged = (await http.get("/api/candidates?initial=A&pipeline_stage=placed")).json()
+        searched = (await http.get("/api/candidates?initial=A&q=lice%20ng")).json()
+    assert _names(staged) == {"Alice Wong"}
+    # The bar narrows with the stage, so a letter with nothing left in this
+    # stage is no longer offered.
+    assert staged["initials"] == ["A", "J"]
+    assert _names(searched) == {"alice ng"}
+
+
+@pytest.mark.parametrize("value", ["AB", "1", "", "%", "##"])
+async def test_a_nonsense_initial_is_a_422(agency_with_candidates, value) -> None:
+    tid, uid, _ = agency_with_candidates
+    async with await _client_for(tid, uid) as http:
+        r = await http.get("/api/candidates", params={"initial": value})
+    assert r.status_code == 422, r.text
+
+
+async def test_the_bar_never_shows_another_agencys_letters(alphabet_names) -> None:
+    tid, _uid, _ids, _created = alphabet_names
+    other_tid, other_uid = uuid.uuid4(), uuid.uuid4()
+    async with AdminSessionLocal() as s:
+        await s.execute(
+            text("INSERT INTO tenants (id, name, slug) VALUES (:i, :n, :n)"),
+            {"i": other_tid, "n": f"other-{other_tid.hex[:6]}"},
+        )
+        await s.execute(
+            text("INSERT INTO users (id, tenant_id, email, role) VALUES (:i, :t, :e, 'owner')"),
+            {"i": other_uid, "t": other_tid, "e": f"o{other_uid.hex[:6]}@other.sg"},
+        )
+        await s.execute(
+            text(
+                "INSERT INTO candidates (id, tenant_id, full_name, pipeline_stage, "
+                "record_status) VALUES (:i, :t, 'Zoe Foreign', 'new', 'active')"
+            ),
+            {"i": uuid.uuid4(), "t": other_tid},
+        )
+        await s.commit()
+    try:
+        async with await _client_for(tid, _uid) as http:
+            mine = (await http.get("/api/candidates")).json()
+        async with await _client_for(other_tid, other_uid) as http:
+            theirs = (await http.get("/api/candidates")).json()
+        assert "Z" not in mine["initials"]
+        assert theirs["initials"] == ["Z"]
+    finally:
+        async with AdminSessionLocal() as s:
+            for table in ("candidates", "users"):
+                await s.execute(
+                    text(f"DELETE FROM {table} WHERE tenant_id = :t"), {"t": other_tid}
+                )
+            await s.execute(text("DELETE FROM tenants WHERE id = :t"), {"t": other_tid})
+            await s.commit()
+
+
 async def test_creating_a_candidate_records_who_did_it(agency_with_candidates) -> None:
     tid, uid, _ = agency_with_candidates
     async with await _client_for(tid, uid) as http:

@@ -166,6 +166,74 @@ _INSERT_CODE = text(
 )
 
 
+# The vocabulary `salary_period` may hold. `week` is canonical even though the
+# prompt in extract.py does not ask for it, because emails say "weekly" and the
+# salary sort already knows how to weigh one. Adding a period here means adding
+# it to the CHECK constraint and to the sort's per-period factors in the same
+# breath, which is why the vocabulary lives in code beside them rather than in
+# settings — it is the shape of the data, not a setting anyone tunes.
+_SALARY_PERIODS = ("hour", "day", "week", "month", "year")
+
+# The words that do not contain the period they mean, so no amount of matching
+# on the vocabulary above will find them.
+#
+# allow-hardcode: this is English irregularity, not a detect-list — "daily" is
+# not spelled with "day" in it and "per annum" is not spelled with "year" in
+# it. Everything regular ("monthly", "hourly", "per week") is derived from
+# `_SALARY_PERIODS` rather than listed, so this stays short by construction
+# instead of growing a line per phrasing a model happens to emit.
+#
+# Stems, not whole words, so one entry covers "annual", "annually", "annum"
+# and "per annum". Both are long enough not to appear inside an unrelated
+# word — which is why "p.a." is deliberately absent: a two-letter stem would
+# match far more than it should, and an unread period is NULL, not a guess.
+_IRREGULAR_PERIODS = {"dail": "day", "annu": "year"}
+
+# Stems that contain a period but do not mean it. "biweekly" and "fortnightly"
+# both carry "week", and reading either as a week values the salary at roughly
+# twice what it pays — a wrong figure ranked confidently, which is worse than
+# the missing one that a NULL produces. There is no `fortnight` in the
+# vocabulary to map them onto, so they are refused outright.
+_NOT_A_PERIOD = (
+    "biweek", "fortnight", "bimonth", "semimonth", "semiannu", "biannu",
+)
+
+
+def _salary_period(field: ExtractedField | None) -> str | None:
+    """The period as one of a known few, or nothing at all.
+
+    A model asked for "month" will sometimes answer "Monthly" or "per month",
+    and storing that verbatim is what made the salary sort drop those rows: it
+    looked the period up in a table keyed on the canonical word and found
+    nothing. Normalising here means the column holds one spelling of each
+    period, which is what lets a CHECK constraint state that as a rule.
+
+    An unrecognised word becomes NULL rather than a guess. That is the §15
+    line — "the email said something we could not read" is not the same as
+    "the email said monthly" — and nothing is lost by admitting it: the
+    sentence the model read still sits in `salary_raw` and on the evidence row.
+    """
+    raw = _value(field)
+    if raw is None:
+        return None
+    # Letters only, so "p.a.", "per-month" and "  Monthly " all reduce to the
+    # word underneath the punctuation the model chose to decorate it with.
+    cleaned = "".join(char for char in raw.lower() if char.isalpha())
+    if not cleaned:
+        return None
+    if any(stem in cleaned for stem in _NOT_A_PERIOD):
+        return None
+    # Every period the answer mentions, not the first one found: "annual, paid
+    # monthly" names two, and nothing here can say which one the figure is in.
+    found = {period for period in _SALARY_PERIODS if period in cleaned}
+    found |= {
+        period for irregular, period in _IRREGULAR_PERIODS.items() if irregular in cleaned
+    }
+    if len(found) == 1:
+        return found.pop()
+    return None
+
+
 def _value(field: ExtractedField | None) -> str | None:
     """`Not mentioned` becomes NULL in the column.
 
@@ -418,7 +486,7 @@ async def _insert_opportunity(
         "salary_min": salary_min,
         "salary_max": salary_max,
         "salary_currency": currency,
-        "salary_period": _value(job.salary_period),
+        "salary_period": _salary_period(job.salary_period),
         "salary_raw": _value(job.salary),
         "skills": _skills(job),
         "quality_state": state,

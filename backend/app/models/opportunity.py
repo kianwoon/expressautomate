@@ -15,7 +15,7 @@ disagreement with the source impossible to see.
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, Numeric, String, Text
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Integer, Numeric, String, Text
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.dialects.postgresql import UUID as PgUUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -71,3 +71,32 @@ class Opportunity(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
         String(16), nullable=False, default="ready", index=True
     )
     quality_state: Mapped[str] = mapped_column(String(16), nullable=False, default="likely")
+
+    __table_args__ = (
+        # Both vocabularies were guaranteed only by the function that wrote
+        # them, and a guarantee that lives in one caller is one direct INSERT
+        # away from being untrue. That is not hypothetical here: `salary_period`
+        # went in raw from the extraction for months, so "Month" and " month "
+        # reached the column, and the salary sort silently dropped those rows
+        # to the bottom of the list because it looked the period up by the
+        # canonical word.
+        #
+        # Stated here so the database refuses what the readers cannot handle.
+        # `_salary_period` in ingest/persist.py is what keeps writes inside
+        # this set — it maps what a model answers onto one of these words and
+        # yields NULL for anything it cannot read, so an odd phrasing is a
+        # missing period rather than a failed ingestion.
+        CheckConstraint(
+            "salary_period IS NULL OR salary_period IN "
+            "('hour', 'day', 'week', 'month', 'year')",
+            name="ck_opportunities_salary_period_known",
+        ),
+        # NOT NULL already; this pins the values. `quality_state()` in
+        # ingest/evidence.py is the sole writer and returns exactly these
+        # three, so this records a property the code already has rather than
+        # imposing a new one.
+        CheckConstraint(
+            "quality_state IN ('needs_review', 'likely', 'verified')",
+            name="ck_opportunities_quality_state_known",
+        ),
+    )

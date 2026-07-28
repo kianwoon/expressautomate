@@ -18,6 +18,7 @@ from datetime import UTC, datetime, timedelta
 import httpx
 import pytest
 from sqlalchemy import text
+from sqlalchemy.exc import DBAPIError
 
 from app.api.auth import SESSION_COOKIE, _session_serializer
 from app.core.config import settings
@@ -551,3 +552,307 @@ async def test_an_anonymous_caller_cannot_mark_anything_reviewed(client) -> None
         f"/api/opportunities/{uuid.uuid4()}/review", json={"reviewed": True}
     )
     assert response.status_code == 401
+
+
+# --- server-side search and sort -------------------------------------------------
+#
+# allow-hardcode: the literal strings below (company names, job titles, search
+# terms) are test fixture data — human-authored inputs asserting the API's
+# search/sort behaviour — not a detection, scoring, or allow-list oracle.
+
+
+async def test_salary_sort_normalises_to_monthly_both_directions(client, seeded) -> None:
+    """The test that catches a wrong per-period conversion factor.
+
+    5000/month, 30000/year (=2500/month) and 200/day (=200*21.75=4350/month):
+    ranked by what the job actually pays, not by the raw figure.
+    """
+    make_tenant, make_opportunity, _make_evidence = seeded
+    tenant_id, user_id, mailbox_id = await make_tenant("agency-a")
+    monthly = await make_opportunity(
+        tenant_id, mailbox_id, company_name_raw="Monthly",
+        salary_min=5000, salary_period="month",
+    )
+    yearly = await make_opportunity(
+        tenant_id, mailbox_id, company_name_raw="Yearly",
+        salary_min=30000, salary_period="year",
+    )
+    daily = await make_opportunity(
+        tenant_id, mailbox_id, company_name_raw="Daily",
+        salary_min=200, salary_period="day",
+    )
+
+    sign_in(client, user_id, tenant_id)
+    asc = (await client.get("/api/opportunities?sort=salary&descending=false")).json()
+    desc = (await client.get("/api/opportunities?sort=salary&descending=true")).json()
+
+    # yearly=30000/12=2500, daily=200*21.75=4350, monthly=5000 per month.
+    assert [row["id"] for row in asc["items"]] == [str(yearly), str(daily), str(monthly)]
+    assert [row["id"] for row in desc["items"]] == [str(monthly), str(daily), str(yearly)]
+
+
+async def test_the_column_refuses_a_period_no_reader_understands(seeded) -> None:
+    """The guarantee the salary sort now relies on, stated by the database.
+
+    The sort matches `salary_period` exactly against its per-period factors, so
+    a "Month" in the column would sink a row that should rank. That used to be
+    reachable — the extraction's answer went in verbatim — and this is the
+    constraint that closed it, rather than a convention the next writer has to
+    know about.
+    """
+    make_tenant, make_opportunity, _make_evidence = seeded
+    tenant_id, _user_id, mailbox_id = await make_tenant("agency-a")
+
+    # A canonical period is fine, and so is no period at all: an email that
+    # names a figure without a period is ordinary, not an error.
+    await make_opportunity(tenant_id, mailbox_id, salary_min=5000, salary_period="month")
+    await make_opportunity(tenant_id, mailbox_id, salary_min=5000, salary_period=None)
+
+    for refused in ("Month", " month ", "fortnight"):
+        with pytest.raises(DBAPIError) as caught:
+            await make_opportunity(
+                tenant_id, mailbox_id, salary_min=5000, salary_period=refused
+            )
+        assert "ck_opportunities_salary_period_known" in str(caught.value), refused
+
+
+async def test_the_column_refuses_a_quality_state_no_reader_understands(seeded) -> None:
+    """What the quality sort's rank table is entitled to assume.
+
+    `quality_state()` in ingest/evidence.py was always the only writer and
+    always returned one of these three, but nothing said so to the database.
+    Now something does, which is why `_quality_rank` can rank exactly three
+    states and treat a fourth as impossible rather than as a case to guess at.
+    """
+    make_tenant, make_opportunity, _make_evidence = seeded
+    tenant_id, _user_id, mailbox_id = await make_tenant("agency-a")
+
+    for state in ("needs_review", "likely", "verified"):
+        await make_opportunity(tenant_id, mailbox_id, quality_state=state)
+
+    with pytest.raises(DBAPIError) as caught:
+        await make_opportunity(tenant_id, mailbox_id, quality_state="speculative")
+    assert "ck_opportunities_quality_state_known" in str(caught.value)
+
+
+async def test_the_quality_sort_puts_the_rows_needing_a_human_first(client, seeded) -> None:
+    """Worst first when ascending — the reason anyone sorts this column."""
+    make_tenant, make_opportunity, _make_evidence = seeded
+    tenant_id, user_id, mailbox_id = await make_tenant("agency-a")
+    needs_review = await make_opportunity(
+        tenant_id, mailbox_id, company_name_raw="NeedsReview", quality_state="needs_review"
+    )
+    likely = await make_opportunity(
+        tenant_id, mailbox_id, company_name_raw="Likely", quality_state="likely"
+    )
+    verified = await make_opportunity(
+        tenant_id, mailbox_id, company_name_raw="Verified", quality_state="verified"
+    )
+
+    sign_in(client, user_id, tenant_id)
+    asc = (await client.get("/api/opportunities?sort=quality&descending=false")).json()
+    assert [row["id"] for row in asc["items"]] == [
+        str(needs_review), str(likely), str(verified),
+    ]
+
+
+async def test_null_sort_values_sink_in_both_directions(client, seeded) -> None:
+    make_tenant, make_opportunity, _make_evidence = seeded
+    tenant_id, user_id, mailbox_id = await make_tenant("agency-a")
+    priced = await make_opportunity(
+        tenant_id, mailbox_id, company_name_raw="Priced", salary_min=1000, salary_period="month"
+    )
+    no_period = await make_opportunity(
+        tenant_id, mailbox_id, company_name_raw="NoPeriod", salary_min=1000, salary_period=None,
+        received_datetime=NOW - timedelta(days=1),
+    )
+    no_amount = await make_opportunity(
+        tenant_id, mailbox_id, company_name_raw="NoAmount",
+        received_datetime=NOW - timedelta(days=2),
+    )
+
+    sign_in(client, user_id, tenant_id)
+    for descending in ("true", "false"):
+        body = (
+            await client.get(f"/api/opportunities?sort=salary&descending={descending}")
+        ).json()
+        ids = [row["id"] for row in body["items"]]
+        assert ids[0] == str(priced), descending
+        assert set(ids[1:]) == {str(no_period), str(no_amount)}, descending
+
+
+async def test_received_sort_ascending_still_sinks_null_dates(client, seeded) -> None:
+    make_tenant, make_opportunity, make_evidence = seeded
+    tenant_id, user_id, mailbox_id = await make_tenant("agency-a")
+    # `make_opportunity` always writes `received_datetime` (it defaults to
+    # NOW), so the null case is written directly through the admin session.
+    dated = await make_opportunity(
+        tenant_id, mailbox_id, company_name_raw="Dated", received_datetime=NOW - timedelta(days=1)
+    )
+    other = await make_opportunity(
+        tenant_id, mailbox_id, company_name_raw="Undated", received_datetime=NOW
+    )
+    async with AdminSessionLocal() as s:
+        await s.execute(
+            text("UPDATE opportunities SET received_datetime = NULL WHERE id = :i"),
+            {"i": other},
+        )
+        await s.commit()
+
+    sign_in(client, user_id, tenant_id)
+    body = (await client.get("/api/opportunities?sort=received&descending=false")).json()
+
+    assert [row["id"] for row in body["items"]] == [str(dated), str(other)]
+
+
+async def test_quality_sort_matches_the_intended_rank(client, seeded) -> None:
+    make_tenant, make_opportunity, _make_evidence = seeded
+    tenant_id, user_id, mailbox_id = await make_tenant("agency-a")
+    verified = await make_opportunity(
+        tenant_id, mailbox_id, company_name_raw="Verified", quality_state="verified"
+    )
+    likely = await make_opportunity(
+        tenant_id, mailbox_id, company_name_raw="Likely", quality_state="likely"
+    )
+    needs_review = await make_opportunity(
+        tenant_id, mailbox_id, company_name_raw="NeedsReview", quality_state="needs_review"
+    )
+
+    sign_in(client, user_id, tenant_id)
+    body = (await client.get("/api/opportunities?sort=quality&descending=false")).json()
+
+    assert [row["id"] for row in body["items"]] == [
+        str(needs_review),
+        str(likely),
+        str(verified),
+    ]
+
+
+async def test_each_text_sort_key_orders_case_insensitively_and_sinks_nulls(client, seeded) -> None:
+    make_tenant, make_opportunity, _make_evidence = seeded
+    for key, column in (
+        ("company", "company_name_raw"),
+        ("position", "job_title_raw"),
+        ("hours", "working_hours_raw"),
+        ("duration", "duration_raw"),
+        ("location", "location_raw"),
+    ):
+        # A fresh tenant per key: reusing one tenant would leave prior
+        # iterations' rows in the list and corrupt the position assertion
+        # below, which is not itself under test here.
+        tenant_id, user_id, mailbox_id = await make_tenant(f"sort-{key}")
+
+        # `company_name_raw` doubles as a label for the other columns' rows,
+        # so when the sorted column *is* company_name_raw, don't also set it
+        # for "blank" — that would give it a real value instead of the NULL
+        # this assertion needs.
+        def row(value, column=column):
+            fields = {column: value}
+            fields.setdefault("company_name_raw", "Base")
+            return fields
+
+        upper = await make_opportunity(tenant_id, mailbox_id, **row("Bravo"))
+        lower = await make_opportunity(tenant_id, mailbox_id, **row("alpha"))
+        blank_fields = {} if column == "company_name_raw" else {"company_name_raw": "Base"}
+        blank = await make_opportunity(tenant_id, mailbox_id, **blank_fields)
+
+        sign_in(client, user_id, tenant_id)
+        body = (await client.get(f"/api/opportunities?sort={key}&descending=false")).json()
+        ids = {row["id"]: i for i, row in enumerate(body["items"])}
+        assert ids[str(lower)] < ids[str(upper)] < ids[str(blank)], key
+
+
+async def test_search_matches_each_searched_column(client, seeded) -> None:
+    make_tenant, make_opportunity, _make_evidence = seeded
+    tenant_id, user_id, mailbox_id = await make_tenant("agency-a")
+    fields = {
+        "company_name_raw": "Acme Recruiting",
+        "job_title_raw": "Senior Recruiter",
+        "salary_raw": "6k neg.",
+        "working_hours_raw": "9 to 6",
+        "duration_raw": "Permanent",
+        "location_raw": "Raffles Place",
+        "requirements": "Must speak Mandarin",
+        "job_description": "Handles the full recruitment cycle",
+    }
+    for field, value in fields.items():
+        row_fields = {"company_name_raw": "Distinct Co", field: value}
+        oid = await make_opportunity(tenant_id, mailbox_id, **row_fields)
+        sign_in(client, user_id, tenant_id)
+        body = (await client.get(f"/api/opportunities?q={value.split()[0]}")).json()
+        assert str(oid) in [row["id"] for row in body["items"]], field
+
+    salary_row = await make_opportunity(
+        tenant_id, mailbox_id, company_name_raw="Salary Co", salary_min=4200, salary_max=5200
+    )
+    sign_in(client, user_id, tenant_id)
+    for needle in ("4200", "5200"):
+        body = (await client.get(f"/api/opportunities?q={needle}")).json()
+        assert str(salary_row) in [row["id"] for row in body["items"]]
+
+    # The currency and the period were searchable before, inside the rendered
+    # "SGD 5,000 per month" the client built and then searched. Nothing renders
+    # that string server-side, so the two columns behind it are searched
+    # directly — otherwise a recruiter who has always found a row by typing
+    # "SGD" would get nothing and conclude the row was gone.
+    priced = await make_opportunity(
+        tenant_id, mailbox_id, company_name_raw="Priced Co",
+        salary_min=5000, salary_currency="SGD", salary_period="month",
+    )
+    sign_in(client, user_id, tenant_id)
+    for needle in ("SGD", "sgd", "month"):
+        body = (await client.get(f"/api/opportunities?q={needle}")).json()
+        assert str(priced) in [row["id"] for row in body["items"]], needle
+
+
+async def test_search_treats_percent_and_underscore_literally(client, seeded) -> None:
+    make_tenant, make_opportunity, _make_evidence = seeded
+    tenant_id, user_id, mailbox_id = await make_tenant("agency-a")
+    await make_opportunity(tenant_id, mailbox_id, company_name_raw="Acme", salary_raw="6k neg.")
+    literal = await make_opportunity(
+        tenant_id, mailbox_id, company_name_raw="Acme", salary_raw="50%_bonus"
+    )
+
+    sign_in(client, user_id, tenant_id)
+    body = (await client.get("/api/opportunities?q=50%25_bonus")).json()
+
+    assert [row["id"] for row in body["items"]] == [str(literal)]
+
+
+async def test_search_composes_with_status_and_total_reflects_both(client, seeded) -> None:
+    make_tenant, make_opportunity, _make_evidence = seeded
+    tenant_id, user_id, mailbox_id = await make_tenant("agency-a")
+    await make_opportunity(
+        tenant_id, mailbox_id, company_name_raw="Acme Reviewed", review_status="reviewed"
+    )
+    await make_opportunity(tenant_id, mailbox_id, company_name_raw="Acme New")
+    await make_opportunity(tenant_id, mailbox_id, company_name_raw="Other New")
+
+    sign_in(client, user_id, tenant_id)
+    body = (await client.get("/api/opportunities?q=Acme&status=new")).json()
+
+    assert body["total"] == 1
+    assert [row["company_name_raw"] for row in body["items"]] == ["Acme New"]
+
+
+async def test_an_invalid_sort_is_rejected(client, seeded) -> None:
+    make_tenant, _make_opportunity, _make_evidence = seeded
+    tenant_id, user_id, _mailbox_id = await make_tenant("agency-a")
+
+    sign_in(client, user_id, tenant_id)
+    assert (await client.get("/api/opportunities?sort=bogus")).status_code == 422
+
+
+async def test_tenant_isolation_holds_with_q_and_sort_applied(client, seeded) -> None:
+    make_tenant, make_opportunity, _make_evidence = seeded
+    tenant_a, user_a, mailbox_a = await make_tenant("agency-a")
+    tenant_b, _user_b, mailbox_b = await make_tenant("agency-b")
+    await make_opportunity(tenant_a, mailbox_a, company_name_raw="Acme Pte Ltd")
+    await make_opportunity(tenant_b, mailbox_b, company_name_raw="Acme Rival")
+
+    sign_in(client, user_a, tenant_a)
+    body = (
+        await client.get("/api/opportunities?q=Acme&sort=company&descending=false")
+    ).json()
+
+    assert [row["company_name_raw"] for row in body["items"]] == ["Acme Pte Ltd"]

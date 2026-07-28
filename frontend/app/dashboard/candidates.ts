@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import {
+  CANDIDATES_PAGE_SIZE,
   CANDIDATES_PATH,
   candidateArchivePath,
   candidateAvatarPath,
@@ -165,6 +166,11 @@ export type CandidatePage = {
   limit: number;
   offset: number;
   counts: Record<string, number>;
+  /** Which first letters currently have anyone behind them, sorted, `#` last.
+   *  The server computes it with the stage, status and search filters applied
+   *  but *without* `initial`, so picking a letter can never empty the bar that
+   *  was used to pick it. */
+  initials: string[];
 };
 
 /** The chips. `null` is "All" (every non-merged record). `"merged"` is its
@@ -173,11 +179,15 @@ export type CandidatePage = {
  *  `pipeline_stage` one. */
 export type Filter = null | Stage | "merged";
 
-function listUrl(filter: Filter, offset: number, q: string): string {
-  const params = new URLSearchParams({ limit: "50", offset: String(offset) });
+function listUrl(filter: Filter, offset: number, q: string, initial: string | null): string {
+  const params = new URLSearchParams({
+    limit: String(CANDIDATES_PAGE_SIZE),
+    offset: String(offset),
+  });
   if (filter === "merged") params.set("record_status", "merged");
   else if (filter) params.set("pipeline_stage", filter);
   if (q.trim()) params.set("q", q.trim());
+  if (initial) params.set("initial", initial);
   return `${CANDIDATES_PATH}?${params.toString()}`;
 }
 
@@ -196,15 +206,22 @@ export type ListState =
   | { status: "unreadable"; message: string };
 
 const ZERO_COUNTS: Record<string, number> = { all: 0 };
+const NO_INITIALS: string[] = [];
 
 export type Candidates = {
   state: ListState;
   filter: Filter;
   offset: number;
   q: string;
+  /** The letter the list is narrowed to, or `null` for all of them. */
+  initial: string | null;
   /** The last counts we were told, kept across a reload so the chips do not
    *  blink back to nothing every time a filter changes. */
   counts: Record<string, number>;
+  /** The last letters we were told, kept across a reload for the same reason
+   *  as `counts`: an index bar that greys out entirely on every page change is
+   *  a bar nobody can aim at. */
+  initials: string[];
   /** A refetch is in flight over rows we are still showing. The same reasoning
    *  as `counts`, applied to the table: a reload that dropped `state` back to
    *  `loading` would unmount the table and the open detail panel, so archiving
@@ -215,6 +232,7 @@ export type Candidates = {
   setFilter: (filter: Filter) => void;
   setOffset: (offset: number) => void;
   setQ: (q: string) => void;
+  setInitial: (initial: string | null) => void;
   reload: () => void;
 };
 
@@ -223,7 +241,9 @@ export function useCandidates(): Candidates {
   const [filter, setFilterRaw] = useState<Filter>(null);
   const [offset, setOffset] = useState(0);
   const [q, setQRaw] = useState("");
+  const [initial, setInitialRaw] = useState<string | null>(null);
   const [counts, setCounts] = useState<Record<string, number>>(ZERO_COUNTS);
+  const [initials, setInitials] = useState<string[]>(NO_INITIALS);
   const [refreshing, setRefreshing] = useState(true);
   const [nonce, setNonce] = useState(0);
 
@@ -237,7 +257,7 @@ export function useCandidates(): Candidates {
     setRefreshing(true);
     (async () => {
       try {
-        const res = await fetch(listUrl(filter, offset, q), {
+        const res = await fetch(listUrl(filter, offset, q, initial), {
           credentials: "include",
           headers: { Accept: "application/json" },
           signal: controller.signal,
@@ -249,6 +269,7 @@ export function useCandidates(): Candidates {
         const page = (await res.json()) as CandidatePage;
         setState({ status: "ready", page });
         setCounts(page.counts);
+        setInitials(page.initials);
       } catch {
         if (!controller.signal.aborted) {
           setState({ status: "unreadable", message: "We could not reach the server." });
@@ -261,7 +282,7 @@ export function useCandidates(): Candidates {
       }
     })();
     return () => controller.abort();
-  }, [filter, offset, q, nonce]);
+  }, [filter, offset, q, initial, nonce]);
 
   // Changing the filter or the search must reset the page, for the same
   // reason as job orders: staying on offset 150 of five matching rows reads
@@ -274,9 +295,29 @@ export function useCandidates(): Candidates {
     setQRaw(next);
     setOffset(0);
   }, []);
+  // A letter is a filter like any other, so it resets the page for the reason
+  // above.
+  const setInitial = useCallback((next: string | null) => {
+    setInitialRaw(next);
+    setOffset(0);
+  }, []);
   const reload = useCallback(() => setNonce((n) => n + 1), []);
 
-  return { state, filter, offset, q, counts, refreshing, setFilter, setOffset, setQ, reload };
+  return {
+    state,
+    filter,
+    offset,
+    q,
+    initial,
+    counts,
+    initials,
+    refreshing,
+    setFilter,
+    setOffset,
+    setQ,
+    setInitial,
+    reload,
+  };
 }
 
 /** Turns a non-2xx response into the server's own message where it gave one,
