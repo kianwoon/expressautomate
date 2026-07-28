@@ -3,6 +3,7 @@
 import { useEffect, useId, useState } from "react";
 
 import {
+  CANDIDATES_DASHBOARD_PATH,
   DASHBOARD_PATH,
   LANDING_AFTER_SIGN_OUT,
   LANDING_PATH,
@@ -72,6 +73,7 @@ export function SiteNav({ sectionLinks = false }: { sectionLinks?: boolean }) {
   }, []);
   const onDashboard = path === DASHBOARD_PATH;
   const onSettings = path === SETTINGS_PATH;
+  const onCandidates = path === CANDIDATES_DASHBOARD_PATH;
 
   return (
     <nav className="nav">
@@ -128,6 +130,15 @@ export function SiteNav({ sectionLinks = false }: { sectionLinks?: boolean }) {
               {!onSettings && (
                 <a className="nav-dash" href={SETTINGS_PATH}>
                   Settings
+                </a>
+              )}
+              {/* Otherwise the candidates screen has no route to it from
+                  anywhere else on the site — reachable only by typing the
+                  URL. Hidden on the candidates page itself for the same
+                  reason as the other two links above. */}
+              {!onCandidates && (
+                <a className="nav-dash" href={CANDIDATES_DASHBOARD_PATH}>
+                  Candidates
                 </a>
               )}
               <AccountMenu

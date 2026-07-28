@@ -99,6 +99,9 @@ export const DASHBOARD_PATH = "/dashboard";
 /** Where the account menu points. A site route, so no API_BASE prefix. */
 export const SETTINGS_PATH = "/settings";
 
+/** The candidate list. A site route, so no API_BASE prefix. */
+export const CANDIDATES_DASHBOARD_PATH = "/dashboard/candidates";
+
 /**
  * The settings sub-routes. Site routes, so no API_BASE prefix.
  *
@@ -164,6 +167,31 @@ export const GLOSSARY_PATH = `${API_BASE}/api/glossary`;
  *  uuid we expect cannot walk out of its own path segment. */
 export function glossaryEntryPath(id: string): string {
   return `${GLOSSARY_PATH}/${encodeURIComponent(id)}`;
+}
+
+/**
+ * The agency's candidate list — the people it places, as opposed to the
+ * vacancies above. Nothing here is AI-derived: every value was typed by a
+ * person or came from a spreadsheet a person uploaded.
+ */
+export const CANDIDATES_PATH = `${API_BASE}/api/candidates`;
+
+/** One candidate, for GET/PATCH/DELETE. Encoded, so an id that is not the
+ *  uuid we expect cannot walk out of its own path segment. */
+export function candidatePath(id: string): string {
+  return `${CANDIDATES_PATH}/${encodeURIComponent(id)}`;
+}
+
+export function candidateArchivePath(id: string): string {
+  return `${candidatePath(id)}/archive`;
+}
+
+export function candidateMergePath(id: string): string {
+  return `${candidatePath(id)}/merge`;
+}
+
+export function candidateUnmergePath(id: string): string {
+  return `${candidatePath(id)}/unmerge`;
 }
 
 /** Where a visitor reaches a person. Used by the footer and every stub page,
