@@ -122,7 +122,17 @@ h3 { font-size: 1.125rem; letter-spacing: -0.01em; font-weight: 650; }
   align-items: center;
   gap: 28px;
 }
+/* The workspace links, at the left beside the wordmark. `margin-right: auto`
+   is what divides the bar: everything after this group — the section links and
+   the auth corner — is pushed to the right edge by the gap it opens. */
+.nav-work { display: flex; gap: 24px; align-items: center; margin-right: auto; }
+
 .nav-links { display: flex; gap: 24px; margin-left: auto; align-items: center; }
+/* Two auto margins would split the free space between them and leave the
+   section links stranded mid-bar. The workspace group already opens the gap,
+   so where both are present — a signed-in visitor on the landing page — the
+   section links give theirs up and stay hugging the auth corner. */
+.nav-work ~ .nav-links { margin-left: 0; }
 .nav-links a {
   font-size: 0.9375rem; color: var(--ink-700);
   /* A nav link is a finger target, not just text: pad it to the 44px minimum
@@ -1101,6 +1111,20 @@ footer { border-top: 1px solid var(--line); padding: 48px 0 40px; color: var(--i
   }
   .nav-links::-webkit-scrollbar { display: none; }
   .nav-links a { min-height: 44px; white-space: nowrap; font-size: 0.875rem; }
+
+  /* Same strip treatment, one row above the section links. Beside the wordmark
+     these three would push the account trigger off a phone; on their own row
+     they scroll instead, and `order` keeps the corner up on the first row
+     where it has always been. The auto margin goes: a full-width row has no
+     free space to open a gap with. */
+  .nav-work {
+    order: 2; flex-basis: 100%; margin-right: 0; gap: 20px;
+    overflow-x: auto; overscroll-behavior-x: contain;
+    scrollbar-width: none; -webkit-overflow-scrolling: touch;
+    border-top: 1px solid var(--line); margin-top: 2px;
+  }
+  .nav-work::-webkit-scrollbar { display: none; }
+  .nav-work .nav-dash { font-size: 0.875rem; }
 
   /* The two demo panels are illustrations of real records; at 13px — and 10px
      for the field labels — they stop being legible and become texture. */

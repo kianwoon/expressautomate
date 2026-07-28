@@ -22,6 +22,23 @@ import { Logo } from "./logo";
  *  every one of them, so removing a link here loses no destination. */
 const SECTION_LINKS = [{ href: "/pricing", label: "Pricing" }] as const;
 
+/** The product's own screens, for someone signed in.
+ *
+ *  They sit at the left beside the wordmark rather than in the auth corner,
+ *  because they are where the work is, not who you are — the corner is for
+ *  the account. Candidates and Clients have no route to them from anywhere
+ *  else on the site; without these they are reachable only by typing the URL.
+ *
+ *  Each hides on the page it points at: a link to where you already are is a
+ *  dead control. Left-aligned they cost nothing when they appear late — the
+ *  auth corner is held to the right edge by the gap between, so resolving from
+ *  signed-out to signed-in adds these without moving anything else. */
+const WORKSPACE_LINKS = [
+  { href: DASHBOARD_PATH, label: "Dashboard" },
+  { href: CANDIDATES_DASHBOARD_PATH, label: "Candidates" },
+  { href: CLIENTS_DASHBOARD_PATH, label: "Clients" },
+] as const;
+
 /**
  * The whole nav, shared by the landing page and the dashboard.
  *
@@ -72,10 +89,7 @@ export function SiteNav({ sectionLinks = false }: { sectionLinks?: boolean }) {
   useEffect(() => {
     setPath(window.location.pathname.replace(/\/$/, ""));
   }, []);
-  const onDashboard = path === DASHBOARD_PATH;
   const onSettings = path === SETTINGS_PATH;
-  const onCandidates = path === CANDIDATES_DASHBOARD_PATH;
-  const onClients = path === CLIENTS_DASHBOARD_PATH;
 
   return (
     <nav className="nav">
@@ -89,6 +103,15 @@ export function SiteNav({ sectionLinks = false }: { sectionLinks?: boolean }) {
             <span className="brand-tag">AI recruitment operations</span>
           </span>
         </a>
+        {auth.status === "signed-in" && (
+          <div className="nav-work">
+            {WORKSPACE_LINKS.filter((l) => l.href !== path).map((l) => (
+              <a className="nav-dash" href={l.href} key={l.href}>
+                {l.label}
+              </a>
+            ))}
+          </div>
+        )}
         {/* Section links and the auth corner are siblings rather than nested,
             so a phone can put them on separate rows: the auth button stays
             beside the wordmark and the links become their own scrollable
@@ -110,47 +133,16 @@ export function SiteNav({ sectionLinks = false }: { sectionLinks?: boolean }) {
         >
           {auth.status === "signed-in" ? (
             <>
-              {/* The way back. Signing in hands someone a dashboard and then,
-                  from every other page on the site, no route to it — the
-                  wordmark goes to the landing page and the only other control
-                  is their own name. It sits in the bar rather than inside the
-                  menu because returning to your work is not an account
-                  setting, and it should not cost a hover to find.
+              {/* Settings stays in the corner rather than joining the
+                  workspace links on the left. It is the one page you reach
+                  *as* this account rather than to do the work, so it belongs
+                  beside the name — but in the bar, not behind the menu's
+                  hover, which is what burying a page costs.
 
-                  Hidden on the dashboard itself: a link to the page you are
-                  already on is a dead control. */}
-              {!onDashboard && (
-                <a className="nav-dash" href={DASHBOARD_PATH}>
-                  Dashboard
-                </a>
-              )}
-              {/* Settings sits in the bar rather than behind the account menu.
-                  It is the only thing in that menu that is a page of the
-                  product rather than an act on the session, and burying a page
-                  behind a hover costs more than the width it takes here.
-                  Hidden on the settings page for the same reason as above. */}
+                  Hidden on the settings page itself, like the links opposite. */}
               {!onSettings && (
                 <a className="nav-dash" href={SETTINGS_PATH}>
                   Settings
-                </a>
-              )}
-              {/* Otherwise the candidates screen has no route to it from
-                  anywhere else on the site — reachable only by typing the
-                  URL. Hidden on the candidates page itself for the same
-                  reason as the other two links above. */}
-              {!onCandidates && (
-                <a className="nav-dash" href={CANDIDATES_DASHBOARD_PATH}>
-                  Candidates
-                </a>
-              )}
-              {/* Otherwise the clients review queue has no route to it from
-                  anywhere else on the site — reachable only by typing the
-                  URL, same as candidates before this link existed. Hidden on
-                  the clients page itself for the same reason as the other
-                  links above. */}
-              {!onClients && (
-                <a className="nav-dash" href={CLIENTS_DASHBOARD_PATH}>
-                  Clients
                 </a>
               )}
               <AccountMenu
