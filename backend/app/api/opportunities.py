@@ -31,7 +31,7 @@ from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
-from sqlalchemy import func, select, update
+from sqlalchemy import String, case, cast, func, or_, select, update
 from sqlalchemy.orm import aliased
 
 from app.api.auth import _require_session
@@ -59,6 +59,30 @@ _STORED_TO_FILTER = {stored: name for name, stored in _FILTER_TO_STORED.items()}
 
 StatusFilter = Literal["new", "needs_review", "reviewed"]
 
+SortKey = Literal[
+    "received", "company", "position", "salary", "hours", "duration", "location", "quality"
+]
+
+# How many of each period make a month, carried over verbatim from
+# `frontend/app/dashboard/job-orders-sort.ts` (`PER_MONTH`, ~line 55). A
+# different factor here would silently reorder a recruiter's list relative to
+# what the same column showed before the sort moved server-side. A period
+# absent from this map — including a NULL `salary_period` — is not assumed
+# monthly; it falls through to NULL in the CASE below and sinks with the rest
+# of the missing values, same as the client did.
+_SALARY_PER_MONTH = {
+    "hour": 1 / (40 * 4.35),
+    "day": 1 / 21.75,
+    "week": 1 / 4.35,
+    "month": 1,
+    "year": 12,
+}
+
+# Worst first when ascending, carried over verbatim from `QUALITY_RANK` in
+# job-orders-sort.ts (~line 84): the rows that need a human are the reason
+# anyone sorts this column at all.
+_QUALITY_RANK = {"needs_review": 0, "likely": 1, "verified": 2}
+
 
 class ReviewRequest(BaseModel):
     """Explicitly two-way: the same endpoint un-reviews.
@@ -79,6 +103,9 @@ async def list_opportunities(
     limit: int | None = Query(default=None, ge=1),
     offset: int = Query(default=0, ge=0),
     status: StatusFilter | None = None,
+    q: str | None = None,
+    sort: SortKey = "received",
+    descending: bool = True,
 ) -> dict:
     """The signed-in user's agency's vacancies, newest first.
 
@@ -131,26 +158,55 @@ async def list_opportunities(
         if status is not None:
             base = base.where(Opportunity.review_status == _FILTER_TO_STORED[status])
 
+        if q:
+            # Escape LIKE metacharacters (%, _) with backslash so they are
+            # treated as literals, not as SQL wildcards. Same approach as
+            # `candidates.py` — this is not a SQL-injection concern (the value
+            # is parameterized), but without escaping a recruiter searching
+            # for a literal "%" or "_" gets wrong results.
+            normalized = q.strip().lower()
+            escaped = (
+                normalized.replace("\\", "\\\\")
+                .replace("%", "\\%")
+                .replace("_", "\\_")
+            )
+            like = f"%{escaped}%"
+            base = base.where(
+                or_(
+                    func.lower(Opportunity.company_name_raw).like(like, escape="\\"),
+                    func.lower(Opportunity.job_title_raw).like(like, escape="\\"),
+                    func.lower(Opportunity.salary_raw).like(like, escape="\\"),
+                    func.lower(Opportunity.working_hours_raw).like(like, escape="\\"),
+                    func.lower(Opportunity.duration_raw).like(like, escape="\\"),
+                    func.lower(Opportunity.location_raw).like(like, escape="\\"),
+                    func.lower(Opportunity.requirements).like(like, escape="\\"),
+                    func.lower(Opportunity.job_description).like(like, escape="\\"),
+                    # `salaryRange` on the client used to be searchable text —
+                    # a rendered string like "SGD 5,000 per month". These four
+                    # cover everything in it that carries meaning: the figures,
+                    # the currency and the period, which is what made "SGD" and
+                    # "month" find a row before the search moved. The connective
+                    # words go ("per" no longer matches), and so does the
+                    # thousands separator, which the client itself called
+                    # locale-fragile — neither is something anyone searches for.
+                    cast(Opportunity.salary_min, String).like(like, escape="\\"),
+                    cast(Opportunity.salary_max, String).like(like, escape="\\"),
+                    func.lower(Opportunity.salary_currency).like(like, escape="\\"),
+                    func.lower(Opportunity.salary_period).like(like, escape="\\"),
+                )
+            )
+
         total = (
             await session.execute(
                 select(func.count()).select_from(base.subquery())
             )
         ).scalar_one()
 
+        order_expr = _order_by(sort, descending)
+
         rows = (
             await session.execute(
-                base
-                # `nulls_last`: an extraction that could not date the email
-                # belongs at the bottom of the list, not above this morning's
-                # mail. Postgres sorts NULLs first under DESC by default, which
-                # is the opposite of what "newest first" means to a reader.
-                # `id` breaks ties so paging is stable rather than arbitrary.
-                .order_by(
-                    Opportunity.received_datetime.desc().nulls_last(),
-                    Opportunity.id.desc(),
-                )
-                .limit(page_limit)
-                .offset(offset)
+                base.order_by(*order_expr).limit(page_limit).offset(offset)
             )
         ).all()
 
@@ -174,6 +230,81 @@ async def list_opportunities(
         "offset": offset,
         "counts": counts,
     }
+
+
+def _salary_monthly():
+    """`salary_min` normalised to a monthly figure, via `_SALARY_PER_MONTH`.
+
+    Mirrors `monthly()` in job-orders-sort.ts: `salary_min` is what the client
+    read (falling back to `salary_max` only when `salary_min` is itself null),
+    and an unrecognised or missing period yields NULL rather than assuming
+    monthly, so the row sinks instead of landing at a silently wrong position.
+
+    Currency is deliberately ignored, exactly as the client does today: there
+    is no FX rate to convert with, and inventing one is the fabrication §15
+    forbids.
+    """
+    amount = func.coalesce(Opportunity.salary_min, Opportunity.salary_max)
+    # Matched exactly, which is only safe because the column is now pinned to
+    # this vocabulary: `ck_opportunities_salary_period_known` refuses anything
+    # else, and `_salary_period` in ingest/persist.py maps what a model answers
+    # onto one of these words before the row is written. Before that pair
+    # existed this had to lowercase and trim the column, because "Month" went
+    # in verbatim and an exact match sank the row.
+    factor = case(
+        *[
+            (Opportunity.salary_period == period, value)
+            for period, value in _SALARY_PER_MONTH.items()
+        ],
+        else_=None,
+    )
+    return amount / factor
+
+
+def _quality_rank():
+    # `else_=0` rather than NULL, matching the client's `QUALITY_RANK[state] ?? 0`
+    # (job-orders-sort.ts:107 before it was deleted): an unranked state sorted
+    # as worst, at the top of an ascending list, not sunk to the bottom. It is
+    # the coherent reading — a state the code cannot classify is precisely a row
+    # that needs a human, which is what the top of this sort is for.
+    #
+    # Unreachable now that `ck_opportunities_quality_state_known` refuses a
+    # fourth state, and kept anyway: `case` needs some else, and an else that
+    # agrees with the sort's purpose is better than one that contradicts it.
+    return case(
+        *[(Opportunity.quality_state == state, rank) for state, rank in _QUALITY_RANK.items()],
+        else_=0,
+    )
+
+
+# Column (or expression) each sort key orders by, text columns lowered so the
+# order is case-insensitive — "acme" and "Acme" are the same company and an
+# uppercase-first ordering would file them pages apart.
+_SORT_COLUMN = {
+    "received": Opportunity.received_datetime,
+    "company": func.lower(Opportunity.company_name_raw),
+    "position": func.lower(Opportunity.job_title_raw),
+    "salary": _salary_monthly,
+    "hours": func.lower(Opportunity.working_hours_raw),
+    "duration": func.lower(Opportunity.duration_raw),
+    "location": func.lower(Opportunity.location_raw),
+    "quality": _quality_rank,
+}
+
+
+def _order_by(sort: str, descending: bool) -> tuple:
+    """The ORDER BY clause for a sort key, nulls sinking in both directions.
+
+    SQL does not sink NULLs for you: Postgres puts them first under ASC by
+    default, so both directions are spelled out explicitly here rather than
+    relying on either default. `id.desc()` breaks ties so paging stays stable
+    regardless of which column is being sorted.
+    """
+    column = _SORT_COLUMN[sort]
+    if callable(column):
+        column = column()
+    ordered = column.desc().nulls_last() if descending else column.asc().nulls_last()
+    return (ordered, Opportunity.id.desc())
 
 
 async def _evidence_counts(session, opportunity_ids: list[uuid.UUID]) -> dict:

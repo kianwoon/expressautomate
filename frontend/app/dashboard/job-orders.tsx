@@ -1,13 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 
+import { OPPORTUNITIES_PAGE_SIZE } from "../api";
 import type { Me } from "../auth";
 import { DetailPanel } from "./detail-panel";
 import { LiveLight } from "./live-light";
-import { compare, haystack } from "./job-orders-sort";
-import { DEFAULT_SORT, JobOrdersTable, type Sort } from "./job-orders-table";
-import { PAGE_SIZE, useOpportunities, type Filter, type Opportunity } from "./opportunities";
+import { JobOrdersTable } from "./job-orders-table";
+import { useOpportunities, type Filter, type Opportunity } from "./opportunities";
 import { ReviewBell, StatCards } from "./stat-cards";
 import { MailboxOverview, SyncActivity } from "./sync-activity";
 
@@ -36,9 +36,8 @@ const CHIPS: { key: Filter; label: string; countKey: "all" | "new" | "needs_revi
 export function JobOrders({ me, heading = "h2" }: { me: Me; heading?: "h1" | "h2" }) {
   const Heading = heading;
 
-  const { state, filter, offset, counts, setFilter, setOffset, review } = useOpportunities();
-  const [query, setQuery] = useState("");
-  const [sort, setSort] = useState<Sort>(DEFAULT_SORT);
+  const { state, filter, offset, q, sort, counts, refreshing, setFilter, setOffset, setQ, setSort, review } =
+    useOpportunities();
   // The whole row, not the id. Marking something reviewed under a "Needs
   // review" filter can take it out of the page it was selected from, and the
   // panel someone is mid-way through reading should not empty itself as a
@@ -46,16 +45,6 @@ export function JobOrders({ me, heading = "h2" }: { me: Me; heading?: "h1" | "h2
   const [selected, setSelected] = useState<Opportunity | null>(null);
 
   const items = state.status === "ready" ? state.page.items : EMPTY;
-
-  // Filter first, then sort, and never in place. `.sort` mutates its receiver,
-  // so sorting the fetched array directly would reorder the array React holds
-  // as state — the next render compares it to itself, sees no change, and
-  // paints the old order.
-  const visible = useMemo(() => {
-    const needle = query.trim().toLowerCase();
-    const matched = needle ? items.filter((row) => haystack(row).includes(needle)) : items;
-    return [...matched].sort((a, b) => compare(a, b, sort));
-  }, [items, query, sort]);
 
   // The selected row has to follow the data. Without this, marking a row
   // reviewed updates the table underneath a panel still showing the old badge
@@ -77,11 +66,13 @@ export function JobOrders({ me, heading = "h2" }: { me: Me; heading?: "h1" | "h2
   // would sit on a row the table no longer lists. Falling back during render
   // has nothing to go stale: while the next page loads there are no rows and
   // the fallback is empty, and when it arrives the fallback is its first row.
-  const shown = selected ?? visible[0] ?? null;
+  const shown = selected ?? items[0] ?? null;
 
   const total = state.status === "ready" ? state.page.total : 0;
-  const limit = state.status === "ready" ? state.page.limit : PAGE_SIZE;
-  const filtered = visible.length !== items.length;
+  const limit = state.status === "ready" ? state.page.limit : OPPORTUNITIES_PAGE_SIZE;
+  // The server has already filtered by `q`; a page shorter than the full set
+  // is what "some rows matched" looks like now, not something computed here.
+  const searched = q.trim().length > 0;
 
   return (
     <section className="jo-workspace" data-lead={heading === "h1" ? "yes" : undefined}>
@@ -132,10 +123,10 @@ export function JobOrders({ me, heading = "h2" }: { me: Me; heading?: "h1" | "h2
         <input
           className="jo-search"
           type="search"
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
+          value={q}
+          onChange={(event) => setQ(event.target.value)}
           placeholder="Search company, role, salary, location…"
-          aria-label="Search the job orders on this page"
+          aria-label="Search all job orders"
         />
       </div>
 
@@ -151,29 +142,30 @@ export function JobOrders({ me, heading = "h2" }: { me: Me; heading?: "h1" | "h2
         <>
           <p className="body jo-note" aria-live="polite">
             {items.length === 0
-              ? emptyLine(filter)
-              : filtered
-                ? `${visible.length} of ${items.length} on this page match “${query.trim()}”. The search covers this page, including the requirements and description, not all ${total.toLocaleString()}.`
+              ? searched
+                ? `Nothing matches “${q.trim()}”.`
+                : emptyLine(filter)
+              : searched
+                ? `${total.toLocaleString()} match${total === 1 ? "" : "es"} “${q.trim()}”, including the requirements and description.`
                 : `Showing ${offset + 1}–${offset + items.length} of ${total.toLocaleString()}.`}
           </p>
 
-          {items.length > 0 && visible.length === 0 && (
+          {items.length === 0 && searched && (
             <div className="card jo-note-card">
               <p className="body">
-                Nothing on this page mentions <strong>{query.trim()}</strong>. Only what the emails
-                themselves said is searchable — a detail the sender left out is not in here to be
-                found.
+                Nothing mentions <strong>{q.trim()}</strong>. Only what the emails themselves said
+                is searchable — a detail the sender left out is not in here to be found.
               </p>
-              <button type="button" className="btn btn-secondary" onClick={() => setQuery("")}>
+              <button type="button" className="btn btn-secondary" onClick={() => setQ("")}>
                 Clear the search
               </button>
             </div>
           )}
 
-          {visible.length > 0 && (
-            <div className="jo-split">
+          {items.length > 0 && (
+            <div className="jo-split" aria-busy={refreshing || undefined}>
               <JobOrdersTable
-                rows={visible}
+                rows={items}
                 sort={sort}
                 onSort={setSort}
                 selectedId={shown?.id ?? null}

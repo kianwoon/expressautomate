@@ -55,6 +55,13 @@ export const MAILBOX_PREVIEW_PATH = `${API_BASE}/api/mailbox/preview`;
  */
 export const OPPORTUNITIES_PATH = `${API_BASE}/api/opportunities`;
 
+/** How many job orders one page of the list asks for. Same env-override and
+ *  NaN-guard reasoning as `CANDIDATES_PAGE_SIZE` below: search and sort now
+ *  run on the server, so a smaller page is a deployment decision, not a
+ *  correctness one. */
+export const OPPORTUNITIES_PAGE_SIZE =
+  Number(process.env.NEXT_PUBLIC_OPPORTUNITIES_PAGE_SIZE) || 10;
+
 /**
  * Marks one job order as checked by a human, or un-marks it.
  *
