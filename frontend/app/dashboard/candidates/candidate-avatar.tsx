@@ -66,11 +66,18 @@ type PhotoState =
 export function CandidateAvatar({
   row,
   onChanged,
+  children,
 }: {
   row: Candidate;
   /** Called after an upload or removal succeeds, so the caller can refetch
    *  the candidate record (`avatar_key` changed). */
   onChanged: () => void;
+  /** Who this is — the name and current title, rendered beside the circle.
+   *  They belong to the panel, not to the avatar, but they sit in the space
+   *  the avatar already occupies: a photo with a name next to it reads as a
+   *  person, while a photo next to a sentence about uploading reads as a
+   *  form control that happens to be round. */
+  children?: React.ReactNode;
 }) {
   const [photo, setPhoto] = useState<PhotoState>({ status: "loading" });
   const [busy, setBusy] = useState(false);
@@ -229,9 +236,15 @@ export function CandidateAvatar({
       </div>
 
       <div className="ca-side">
-        <span className="ca-hint">
-          {busy ? "Saving the photo…" : "Drop a photo here, or click the circle."}
-        </span>
+        {children}
+        {/* The invitation is only worth the line while there is nothing to
+            show. Once a photo is there the circle explains itself on hover,
+            and the space belongs to the person's name. */}
+        {(busy || photo.status === "none") && (
+          <span className="ca-hint">
+            {busy ? "Saving the photo…" : "Drop a photo here, or click the circle."}
+          </span>
+        )}
         {photo.status === "unreadable" && (
           <span className="body muted">Could not load the photo just now.</span>
         )}

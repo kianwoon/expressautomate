@@ -170,15 +170,18 @@ function Detail({
         )}
       </div>
 
-      <CandidateAvatar row={row} onChanged={onAvatarChanged} />
-
-      <h3 className="jo-detail-title">{row.full_name}</h3>
-      {row.current_title && (
-        <p className="jo-detail-company">
-          <Value text={row.current_title} />
-          {row.current_employer && <> at {row.current_employer}</>}
-        </p>
-      )}
+      {/* The name sits beside the photo rather than under it: the two
+          together are the answer to "who am I looking at", and splitting
+          them left the circle paired with a sentence about uploading. */}
+      <CandidateAvatar row={row} onChanged={onAvatarChanged}>
+        <h3 className="jo-detail-title ca-name">{row.full_name}</h3>
+        {row.current_title && (
+          <p className="jo-detail-company">
+            <Value text={row.current_title} />
+            {row.current_employer && <> at {row.current_employer}</>}
+          </p>
+        )}
+      </CandidateAvatar>
 
       {row.record_status === "merged" ? (
         <MergedInto row={row} onUnmerge={unmerge} busy={busy} />

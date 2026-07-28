@@ -1338,6 +1338,13 @@ footer { border-top: 1px solid var(--line); padding: 48px 0 40px; color: var(--i
   gap: 4px;
   min-width: 0;
 }
+/* The heading and the title carry their own top margins for the stacked
+   layout they used to sit in. Beside the circle the column's own gap does
+   that job, and the margins would push the name off centre. */
+.ca-side .ca-name,
+.ca-side .jo-detail-company {
+  margin-top: 0;
+}
 .ca-hint {
   font-size: 0.8125rem;
   color: var(--ink-500);
