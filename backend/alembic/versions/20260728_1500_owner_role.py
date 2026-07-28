@@ -6,7 +6,6 @@ Create Date: 2026-07-28 15:00:00.000000+00:00
 """
 from collections.abc import Sequence
 
-import sqlalchemy as sa
 from alembic import op
 
 revision: str = 'f1c40a9d5e72'
@@ -19,12 +18,20 @@ def upgrade() -> None:
     # Backfill before constraining: a tenant whose users all predate this
     # change has no owner, and its personal-data deletion would be
     # unreachable — the exact failure this task exists to prevent.
+    # Only touch tenants that have no owner yet. A tenant whose owner is not
+    # its earliest user (e.g. after an ownership transfer) must be left
+    # alone, or this would promote a second owner and the unique index
+    # below would fail to create.
     op.execute(
         """
         UPDATE users SET role = 'owner'
         WHERE id IN (
             SELECT DISTINCT ON (tenant_id) id
             FROM users
+            WHERE NOT EXISTS (
+                SELECT 1 FROM users u2
+                WHERE u2.tenant_id = users.tenant_id AND u2.role = 'owner'
+            )
             ORDER BY tenant_id, created_at ASC, id ASC
         )
         """
