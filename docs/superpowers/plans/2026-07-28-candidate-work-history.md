@@ -75,12 +75,18 @@ from app.models.candidate import CandidateRole
 
 
 @pytest.mark.asyncio
-async def test_a_role_belongs_to_one_tenant_only(tenant_session_factory, candidate_factory):
-    """Agency B cannot see Agency A's role even knowing its id."""
-    a_candidate, a_tenant = await candidate_factory()
-    _b_candidate, b_tenant = await candidate_factory()
+async def test_a_role_belongs_to_one_tenant_only(agency, other_agency):
+    """Agency B cannot see Agency A's role even knowing its id.
 
-    async with tenant_session_factory(a_tenant) as session:
+    `agency` and `other_agency` each yield `(tenant_id, user_id)` and are
+    defined in this module — see Task 3 Step 1 for the body. `tenant_session`
+    is the real scoped session from `app.db.rls`, the same one the API uses.
+    """
+    a_tenant, a_user = agency
+    b_tenant, _b_user = other_agency
+    a_candidate = await _a_candidate_row(a_tenant, a_user)
+
+    async with tenant_session(a_tenant) as session:
         session.add(
             CandidateRole(
                 tenant_id=a_tenant,
@@ -97,10 +103,15 @@ async def test_a_role_belongs_to_one_tenant_only(tenant_session_factory, candida
         )
         await session.commit()
 
-    async with tenant_session_factory(b_tenant) as session:
+    async with tenant_session(b_tenant) as session:
         rows = (await session.execute(select(CandidateRole))).scalars().all()
         assert rows == []
 ```
+
+`_a_candidate_row(tenant_id, user_id)` inserts one candidate through
+`AdminSessionLocal` and returns its id — two lines, and it saves every test
+below from going through the HTTP layer just to have somebody to attach a role
+to.
 
 - [ ] **Step 2: Run it and watch it fail**
 
@@ -110,7 +121,12 @@ cd backend && DATABASE_ADMIN_URL=postgresql://postgres:postgres@localhost:5433/e
 
 Expected: `ImportError: cannot import name 'CandidateRole'`.
 
-If `tenant_session_factory` or `candidate_factory` do not exist in `backend/tests/conftest.py`, read that file and use whatever fixtures the neighbouring `tests/test_candidate_isolation.py` uses instead — match the existing suite, do not invent fixtures.
+**Note for the implementer.** The fixtures above (`agency`, `other_agency`,
+`_a_candidate_row`) do not exist yet — write them here, in this module, and let
+Task 3 import them. Their bodies are spelled out in Task 3 Step 1. Use
+`AdminSessionLocal` for setup and `tenant_session(tid)` for the scoped read.
+Read `tests/test_candidate_isolation.py` for how an isolation test is phrased
+in this codebase before writing yours.
 
 - [ ] **Step 3: Add the model**
 
@@ -384,6 +400,12 @@ def test_partly_overlapping_roles_count_the_covered_months():
     assert union_months(spans) == 9
 
 
+def test_a_role_wholly_inside_another_adds_nothing():
+    """A six-month contract taken during a three-year job is not extra time."""
+    spans = [(date(2020, 1, 1), date(2023, 1, 1)), (date(2021, 1, 1), date(2021, 7, 1))]
+    assert union_months(spans) == 36
+
+
 def test_a_gap_between_roles_is_not_counted():
     spans = [(date(2018, 1, 1), date(2019, 1, 1)), (date(2021, 1, 1), date(2022, 1, 1))]
     assert union_months(spans) == 24
@@ -557,7 +579,7 @@ def derive(roles: list, today: date) -> DerivedProfile:
 cd backend && DATABASE_ADMIN_URL=postgresql://postgres:postgres@localhost:5433/expressautomate DATABASE_URL=postgresql://expressautomate_app:ci-app-password@localhost:5433/expressautomate uv run pytest tests/test_candidate_tenure.py -q
 ```
 
-Expected: `9 passed`.
+Expected: `10 passed`.
 
 - [ ] **Step 5: Commit**
 
@@ -582,11 +604,80 @@ git commit -m "Count experience as the months worked, not the months summed"
 
 - [ ] **Step 1: Write the failing tests**
 
-Append to `backend/tests/test_candidate_roles_api.py`. Match the client style used in `tests/test_candidates_api.py` — read it first and reuse its auth fixture rather than inventing one.
+Append to `backend/tests/test_candidate_roles_api.py`.
+
+**Use the suite's real fixtures.** There is no `client`, `signed_in`, or
+`candidate_factory` in `conftest.py`. The established idiom, from
+`tests/test_candidates_api.py:18-22,67`, is:
+
+```python
+import uuid
+
+import pytest
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy import text
+
+from app.main import app
+from tests.conftest import AdminSessionLocal
+from tests.test_clients_api import sign_in  # the real session cookie, not a copy
+
+
+async def _client_for(tid, uid) -> AsyncClient:
+    c = AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
+    sign_in(c, uid, tid)
+    return c
+
+
+@pytest.fixture
+async def agency():
+    """One tenant, one user, torn down afterwards.
+
+    Copy the insert-and-delete body of `agency_with_candidates`
+    (`tests/test_candidates_api.py:22`) rather than importing it: that fixture
+    seeds candidates these tests do not want.
+    """
+    tid, uid = uuid.uuid4(), uuid.uuid4()
+    async with AdminSessionLocal() as s:
+        await s.execute(
+            text("INSERT INTO tenants (id, name, slug) VALUES (:i, :n, :n)"),
+            {"i": tid, "n": f"agency-{tid.hex[:6]}"},
+        )
+        # ... the user insert and the commit, copied from that fixture
+        await s.commit()
+    yield tid, uid
+    # ... the same DELETE sweep, with `candidate_roles` added to the table list
+
+
+@pytest.fixture
+async def other_agency(agency):
+    """A second tenant, so cross-tenant tests have somewhere to point.
+
+    Depends on nothing in `agency` beyond needing to be a different tenant;
+    written as its own fixture so a test reads as two agencies rather than as
+    one agency and some loose ids.
+    """
+    # Same body as `agency`. Two fixtures rather than a parametrised one,
+    # because a test that says `agency, other_agency` says what it means.
+
+
+async def _a_candidate_row(tenant_id, user_id) -> uuid.UUID:
+    """Insert one candidate directly and return its id.
+
+    Through `AdminSessionLocal`, not the API: these tests are about roles, and
+    routing every one of them through candidate creation would make a failure
+    in that endpoint look like a failure here.
+    """
+```
+
+Every test below takes `agency`, builds its client with `_client_for`, and
+creates its candidate through `POST /api/candidates` — there is no factory.
+`_a_candidate(client, full_name=...)` is a two-line helper wrapping that POST.
+The cross-tenant test builds a **second** `agency` and uses its candidate id.
 
 ```python
 @pytest.mark.asyncio
-async def test_adding_a_role_updates_the_candidate_row(client, signed_in):
+async def test_adding_a_role_updates_the_candidate_row(agency):
+    client = await _client_for(*agency)
     candidate = await _a_candidate(client, full_name="Tan Hui Ling")
 
     res = await client.post(
@@ -608,7 +699,8 @@ async def test_adding_a_role_updates_the_candidate_row(client, signed_in):
 
 
 @pytest.mark.asyncio
-async def test_a_role_that_ends_before_it_starts_is_a_422(client, signed_in):
+async def test_a_role_that_ends_before_it_starts_is_a_422(agency):
+    client = await _client_for(*agency)
     candidate = await _a_candidate(client, full_name="Tan Hui Ling")
     res = await client.post(
         f"/api/candidates/{candidate['id']}/roles",
@@ -624,7 +716,9 @@ async def test_a_role_that_ends_before_it_starts_is_a_422(client, signed_in):
 
 
 @pytest.mark.asyncio
-async def test_another_agencys_candidate_is_a_404_not_a_403(client, signed_in, other_tenant_candidate_id):
+async def test_another_agencys_candidate_is_a_404_not_a_403(agency, other_agency):
+    client = await _client_for(*agency)
+    other_tenant_candidate_id = await _a_candidate_row(*other_agency)
     res = await client.post(
         f"/api/candidates/{other_tenant_candidate_id}/roles",
         json={"employer": "Coda", "title": "Engineer"},
@@ -633,7 +727,8 @@ async def test_another_agencys_candidate_is_a_404_not_a_403(client, signed_in, o
 
 
 @pytest.mark.asyncio
-async def test_a_years_experience_override_survives_derivation(client, signed_in):
+async def test_a_years_experience_override_survives_derivation(agency):
+    client = await _client_for(*agency)
     """A person asserted this. Adding a role must not quietly overwrite it."""
     candidate = await _a_candidate(client, full_name="Tan Hui Ling")
     await client.patch(
@@ -653,7 +748,8 @@ async def test_a_years_experience_override_survives_derivation(client, signed_in
 
 
 @pytest.mark.asyncio
-async def test_deleting_the_last_role_leaves_the_cached_columns_alone(client, signed_in):
+async def test_deleting_the_last_role_leaves_the_cached_columns_alone(agency):
+    client = await _client_for(*agency)
     candidate = await _a_candidate(client, full_name="Tan Hui Ling")
     created = (
         await client.post(
@@ -675,7 +771,8 @@ async def test_deleting_the_last_role_leaves_the_cached_columns_alone(client, si
 
 
 @pytest.mark.asyncio
-async def test_roles_come_back_current_first_then_newest(client, signed_in):
+async def test_roles_come_back_current_first_then_newest(agency):
+    client = await _client_for(*agency)
     candidate = await _a_candidate(client, full_name="Tan Hui Ling")
     for employer, started, ended in [
         ("Oldest", "2010-01-01", "2013-01-01"),
@@ -726,8 +823,8 @@ from app.api.auth import _require_session
 from app.api.candidates import _load
 from app.db.rls import tenant_session
 from app.models.candidate import Candidate, CandidateFieldOverride, CandidateRole
-from app.services.candidate_naming import normalize_company_name
 from app.services.candidate_tenure import derive
+from app.services.client_naming import normalize_company_name
 
 router = APIRouter(tags=["candidate-roles"])
 
@@ -805,23 +902,67 @@ Then the three routes. Each one: `_require_session`, `async with tenant_session(
 
 `POST` returns 201 with the created role. `PATCH` loads the role scoped by both `candidate_id` and its own id, 404 if absent. `DELETE` returns 204.
 
-Set `employer_normalized` and `title_normalized` with `normalize_company_name` — check that function's real name in `app/services/candidate_naming.py` and use whatever normaliser already exists rather than writing a new one.
+**Normalising the two twin columns.** `employer_normalized` uses
+`normalize_company_name` from `app/services/client_naming.py:39` — the same
+function that normalises a client's name, which is the point: an employer on a
+CV and a client in the agency's list are the same kind of string, and matching
+them later only works if they were normalised identically.
+
+There is **no title normaliser in this codebase**. `candidate_naming.py` holds
+only phone, email and skill. Rather than inventing one, `title_normalized` is
+`title.strip().lower()`, written inline with a comment saying so — a title is
+free text and any cleverer rule would need evidence this plan does not have.
+
+```python
+from app.services.client_naming import normalize_company_name
+
+employer_normalized = normalize_company_name(body.employer)
+# Titles get the plainest normalisation there is. `normalize_skill` exists
+# nearby but is tuned for skill tokens, and borrowing it would quietly apply
+# rules nobody chose for job titles.
+title_normalized = body.title.strip().lower()
+```
 
 - [ ] **Step 4: Register the router**
 
-In `backend/app/main.py`, beside the other `include_router` calls:
+In `backend/app/main.py`, beside the other calls at lines 117-121. The prefix is
+**not** passed here — routers are mounted on an `api` router that already
+carries it, and passing it again would produce `/api/api/...` and fail
+`tests/test_routing.py`:
 
 ```python
 from app.api import candidate_roles
 
-app.include_router(candidate_roles.router, prefix="/api")
+api.include_router(candidate_roles.router)
 ```
-
-Match the exact prefix idiom the neighbouring routers use.
 
 - [ ] **Step 5: Embed roles in the candidate GET**
 
-In `backend/app/api/candidates.py`, the single-record GET adds `"roles"` to its response, ordered current-first then newest by `started_on` with NULLs last. The list endpoint does **not** — a table of fifty candidates does not need everybody's career.
+In `backend/app/api/candidates.py`, the single-record GET adds `"roles"` to its
+response, ordered current-first then newest by `started_on` with NULLs last.
+The list endpoint does **not** — a table of fifty candidates does not need
+everybody's career.
+
+**The GET also recomputes `years_experience` before answering.** An open-ended
+role gains a month every month, so a value written once at role-creation is
+wrong by the following month. The recompute is in the response only — the GET
+does not write. The stored column stays as the cache the list and search read,
+and the detail panel shows the current truth.
+
+```python
+# Derived fresh rather than read from the column: a role with no end date is
+# still accruing, so the cached value is stale the month after it was written.
+# Not persisted here — a GET that writes is a GET that deadlocks under load.
+profile = derive(roles, today=date.today())
+if profile.years_experience is not None and "years_experience" not in overridden:
+    payload["years_experience"] = profile.years_experience
+payload["is_current"] = profile.is_current
+```
+
+`is_current` is what lets the panel say "Most recently" instead of "Current"
+for a candidate between jobs. Add a test that an open-ended role started
+exactly two years ago reports `years_experience == 2` from the GET without any
+role having been touched since creation.
 
 - [ ] **Step 6: Run the tests, then the whole suite**
 
