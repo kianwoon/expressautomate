@@ -60,6 +60,39 @@ it would look complete.
 Undo refuses while an import is still parsing, and is safe to call twice: a
 second attempt finds nothing to reverse rather than trampling edits made since.
 
+### Where the record lives
+
+**`candidate_import_changes`**, `TenantScoped`, one row per thing the import
+touched:
+
+| Column | Notes |
+|---|---|
+| `import_id` | The import that made the change |
+| `entity_type`, `entity_id` | `candidate` or `candidate_role`, and which one |
+| `action` | `created` or `updated` |
+| `field_name`, `previous_value` | Null on a `created` row — there was nothing before |
+
+A created row also carries its `import_id` directly on `candidates` /
+`candidate_roles`, so the common case — undo everything this import made —
+needs no join.
+
+The cost is small: five hundred candidates with a few changed fields each is a
+few thousand narrow rows, written once and read only by an undo.
+
+### The restore rule, which is what makes undo safe
+
+**A field is restored only if its current value still equals what the import
+wrote.** If a recruiter has since corrected it by hand, the import's undo has
+no business reaching in — their edit is newer and better, and reverting it
+would be the import damaging exactly the data a person cared enough to fix.
+
+That single rule is what makes the two promises above true: calling undo twice
+is harmless because the second pass finds nothing matching, and edits made
+after the import survive it.
+
+Skipped fields are counted and named in the report, so an undo that reversed
+less than the whole import says so rather than implying a clean reversal.
+
 ## Storage
 
 **`candidate_imports`**, inheriting `TenantScoped`, shaped like
@@ -82,10 +115,16 @@ test DOCX needed. CSV has no magic number and is the fallback once the file
 decodes as text.
 
 **XLSX therefore goes through piece 2's bounded inflate**
-(`app/services/cv/text.py`). A spreadsheet is a decompression-bomb vector in
-precisely the way a DOCX is, and that code already refuses to trust a member's
-declared uncompressed size. Handing bytes straight to `openpyxl` would reopen a
-hole that took two review rounds to close.
+(`_inflate_bounded` and `_bounded_docx_archive`, `app/services/cv/text.py:162`
+and `:235`). A spreadsheet is a decompression-bomb vector in precisely the way
+a DOCX is, and that code already refuses to trust a member's declared
+uncompressed size. Handing bytes straight to `openpyxl` would reopen a hole
+that took two review rounds to close.
+
+Those helpers repack to a `ZIP_STORED` archive, which `openpyxl` reads as
+happily as `python-docx` does. They need generalising out of the DOCX-specific
+names rather than copying — a second bounded inflate is a second thing to get
+wrong, and the wrong one will be the one nobody reviewed.
 
 **Columns are named, never guessed** — fixed headers matched
 case-insensitively, with a downloadable template. Positional guessing is how a
@@ -113,6 +152,18 @@ Nothing new is invented here; both rules already exist and are tested.
 
 On a match the row is updated, **except on any field a human edited**. Only
 genuinely new rows are created.
+
+### When email and phone name two different people
+
+`find_candidate` can return a conflict: the row's email belongs to one
+candidate and its phone to another. That is not a match to be resolved by
+preferring one key — it is a spreadsheet saying two contradictory things about
+who this is, and picking a side would merge or split two real people.
+
+**A conflict is a reported bad row.** Nothing is written for it, the report
+names both candidates it collided with, and the recruiter decides. This is the
+same instinct the manual path already has: merging two real people is worse
+than a duplicate somebody can merge later.
 
 ### Why imported rows are confirmed
 
@@ -171,8 +222,12 @@ Undo asks for confirmation and says what it will reverse, in counts.
 8. Re-uploading the same file changes nothing and duplicates nothing.
 9. Undo deletes what the import created **and restores what it overwrote**.
 10. Undo twice is harmless.
-11. "Mar 2019" imports as month precision, with no day.
-12. RLS is enforced on every new table.
+11. A field a recruiter corrected **after** the import is not reverted by undo,
+    and the report says how many were skipped and why.
+12. A row whose email and phone name two different candidates is reported as a
+    conflict, writes nothing, and names both.
+13. "Mar 2019" imports as month precision, with no day.
+14. RLS is enforced on every new table, including `candidate_import_changes`.
 
 ## Out of scope
 
