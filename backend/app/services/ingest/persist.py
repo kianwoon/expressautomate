@@ -189,6 +189,15 @@ _SALARY_PERIODS = ("hour", "day", "week", "month", "year")
 # match far more than it should, and an unread period is NULL, not a guess.
 _IRREGULAR_PERIODS = {"dail": "day", "annu": "year"}
 
+# Stems that contain a period but do not mean it. "biweekly" and "fortnightly"
+# both carry "week", and reading either as a week values the salary at roughly
+# twice what it pays — a wrong figure ranked confidently, which is worse than
+# the missing one that a NULL produces. There is no `fortnight` in the
+# vocabulary to map them onto, so they are refused outright.
+_NOT_A_PERIOD = (
+    "biweek", "fortnight", "bimonth", "semimonth", "semiannu", "biannu",
+)
+
 
 def _salary_period(field: ExtractedField | None) -> str | None:
     """The period as one of a known few, or nothing at all.
@@ -212,12 +221,16 @@ def _salary_period(field: ExtractedField | None) -> str | None:
     cleaned = "".join(char for char in raw.lower() if char.isalpha())
     if not cleaned:
         return None
-    for period in _SALARY_PERIODS:
-        if period in cleaned:
-            return period
-    for irregular, period in _IRREGULAR_PERIODS.items():
-        if irregular in cleaned:
-            return period
+    if any(stem in cleaned for stem in _NOT_A_PERIOD):
+        return None
+    # Every period the answer mentions, not the first one found: "annual, paid
+    # monthly" names two, and nothing here can say which one the figure is in.
+    found = {period for period in _SALARY_PERIODS if period in cleaned}
+    found |= {
+        period for irregular, period in _IRREGULAR_PERIODS.items() if irregular in cleaned
+    }
+    if len(found) == 1:
+        return found.pop()
     return None
 
 

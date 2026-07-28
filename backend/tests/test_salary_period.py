@@ -42,7 +42,18 @@ def test_a_period_a_model_might_answer_is_read(answer: str, expected: str) -> No
     assert _salary_period(_field(answer)) == expected
 
 
-@pytest.mark.parametrize("answer", ["fortnight", "per shift", "???", "   ", "-"])
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "per shift", "???", "   ", "-",
+        # Contains "week", means twice a week's worth. Reading it as a week
+        # would rank the salary at roughly half what it pays.
+        "biweekly", "fortnightly", "bi-weekly", "biannual", "semiannual",
+        # Names two periods. Whichever was matched first would be asserted with
+        # full confidence, and one of the two readings is out by 12x.
+        "annual, paid monthly", "per month or year", "hourly rate, paid monthly",
+    ],
+)
 def test_an_unreadable_period_is_nothing_rather_than_a_guess(answer: str) -> None:
     """§15: "we could not read it" is not "it was monthly".
 
