@@ -104,6 +104,13 @@ export type Candidates = {
   /** The last counts we were told, kept across a reload so the chips do not
    *  blink back to nothing every time a filter changes. */
   counts: Record<string, number>;
+  /** A refetch is in flight over rows we are still showing. The same reasoning
+   *  as `counts`, applied to the table: a reload that dropped `state` back to
+   *  `loading` would unmount the table and the open detail panel, so archiving
+   *  a row or uploading a photo read as the whole page going blank. The
+   *  in-flight fact is reported here instead, and only the genuine first load —
+   *  when there is nothing on screen yet — is a `loading` state. */
+  refreshing: boolean;
   setFilter: (filter: Filter) => void;
   setOffset: (offset: number) => void;
   setQ: (q: string) => void;
@@ -116,11 +123,17 @@ export function useCandidates(): Candidates {
   const [offset, setOffset] = useState(0);
   const [q, setQRaw] = useState("");
   const [counts, setCounts] = useState<Record<string, number>>(ZERO_COUNTS);
+  const [refreshing, setRefreshing] = useState(true);
   const [nonce, setNonce] = useState(0);
 
   useEffect(() => {
     const controller = new AbortController();
-    setState({ status: "loading" });
+    // Rows already on screen stay on screen while the refetch runs, exactly as
+    // the counts do — a page that is being re-read is not a page with nothing
+    // in it, and collapsing to `loading` here is what made an avatar upload,
+    // an archive or a merge look like the whole screen had reloaded.
+    setState((prev) => (prev.status === "ready" ? prev : { status: "loading" }));
+    setRefreshing(true);
     (async () => {
       try {
         const res = await fetch(listUrl(filter, offset, q), {
@@ -139,6 +152,11 @@ export function useCandidates(): Candidates {
         if (!controller.signal.aborted) {
           setState({ status: "unreadable", message: "We could not reach the server." });
         }
+      } finally {
+        // An aborted request has been superseded by the next one, which has
+        // already set this back to true; clearing it here would report idle
+        // while a fetch is still running.
+        if (!controller.signal.aborted) setRefreshing(false);
       }
     })();
     return () => controller.abort();
@@ -157,7 +175,7 @@ export function useCandidates(): Candidates {
   }, []);
   const reload = useCallback(() => setNonce((n) => n + 1), []);
 
-  return { state, filter, offset, q, counts, setFilter, setOffset, setQ, reload };
+  return { state, filter, offset, q, counts, refreshing, setFilter, setOffset, setQ, reload };
 }
 
 /** Turns a non-2xx response into the server's own message where it gave one,

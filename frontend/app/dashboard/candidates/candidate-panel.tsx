@@ -37,6 +37,7 @@ export function CandidatePanel({
   onRestore,
   onDelete,
   onChanged,
+  onAvatarChanged,
 }: {
   row: Candidate | null;
   onEdit: () => void;
@@ -50,6 +51,10 @@ export function CandidatePanel({
   /** Called after a merge or unmerge succeeds, so the caller can refetch the
    *  list and the detail record. */
   onChanged: () => void;
+  /** Called after a photo is uploaded or removed. Separate from `onChanged`
+   *  because a photo changes nothing the table draws, and re-reading the list
+   *  for it is what used to blank the screen mid-upload. */
+  onAvatarChanged: () => void;
 }) {
   if (!row) {
     return (
@@ -72,6 +77,7 @@ export function CandidatePanel({
       onRestore={onRestore}
       onDelete={onDelete}
       onChanged={onChanged}
+      onAvatarChanged={onAvatarChanged}
     />
   );
 }
@@ -87,6 +93,7 @@ function Detail({
   onRestore,
   onDelete,
   onChanged,
+  onAvatarChanged,
 }: {
   row: Candidate;
   onEdit: () => void;
@@ -94,6 +101,7 @@ function Detail({
   onRestore: () => Promise<void>;
   onDelete: (() => Promise<void>) | null;
   onChanged: () => void;
+  onAvatarChanged: () => void;
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -162,7 +170,7 @@ function Detail({
         )}
       </div>
 
-      <CandidateAvatar row={row} onChanged={onChanged} />
+      <CandidateAvatar row={row} onChanged={onAvatarChanged} />
 
       <h3 className="jo-detail-title">{row.full_name}</h3>
       {row.current_title && (

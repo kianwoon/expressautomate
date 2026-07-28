@@ -90,7 +90,8 @@ function Notice({ eyebrow, heading, body }: { eyebrow: string; heading: string; 
 type View = { mode: "list" } | { mode: "create" } | { mode: "edit"; row: Candidate };
 
 function Workspace({ role }: { role: string }) {
-  const { state, filter, offset, q, counts, setFilter, setOffset, setQ, reload } = useCandidates();
+  const { state, filter, offset, q, counts, refreshing, setFilter, setOffset, setQ, reload } =
+    useCandidates();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<Candidate | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
@@ -130,14 +131,22 @@ function Workspace({ role }: { role: string }) {
     };
   }, [selectedId]);
 
+  // Re-reads the one open record and nothing else. The avatar is deliberately
+  // not drawn in the table, so a changed `avatar_key` cannot alter a visible
+  // row and there is nothing for the list to learn from refetching it.
+  const refetchDetail = useCallback(() => {
+    if (!selectedId) return;
+    getCandidate(selectedId)
+      .then(setDetail)
+      .catch(() => setDetailError("We could not load that candidate just now."));
+  }, [selectedId]);
+
+  // Archive, restore and merge all move a row between filters or out of the
+  // list entirely, so those genuinely do need the list re-read as well.
   const refreshDetail = useCallback(() => {
     reload();
-    if (selectedId) {
-      getCandidate(selectedId)
-        .then(setDetail)
-        .catch(() => setDetailError("We could not load that candidate just now."));
-    }
-  }, [reload, selectedId]);
+    refetchDetail();
+  }, [reload, refetchDetail]);
 
   async function doArchive() {
     if (!detail) return;
@@ -243,7 +252,7 @@ function Workspace({ role }: { role: string }) {
           <p className="body jo-note" aria-live="polite">
             Showing {offset + 1}–{offset + items.length} of {total.toLocaleString()}.
           </p>
-          <div className="jo-split">
+          <div className="jo-split" aria-busy={refreshing || undefined}>
             <CandidatesTable rows={items} selectedId={selectedId} onSelect={setSelectedId} />
             <CandidatePanel
               row={detailError ? null : detail}
@@ -252,6 +261,7 @@ function Workspace({ role }: { role: string }) {
               onRestore={doRestore}
               onDelete={canDelete ? doDelete : null}
               onChanged={refreshDetail}
+              onAvatarChanged={refetchDetail}
             />
           </div>
           {detailError && (

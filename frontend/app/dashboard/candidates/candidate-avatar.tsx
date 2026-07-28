@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import type { Candidate } from "../candidates";
 import { deleteCandidateAvatar, getCandidateAvatar, uploadCandidateAvatar } from "../candidates";
@@ -20,6 +20,13 @@ import { deleteCandidateAvatar, getCandidateAvatar, uploadCandidateAvatar } from
  * dependency) and is never written anywhere longer-lived than this
  * component's own state — no `localStorage`, no caching past the panel's
  * lifetime, since a stale link is a link that will simply stop working.
+ *
+ * The circle is also the control. There is no "Upload photo" button beside it:
+ * hovering or focusing the circle reveals a camera overlay, a photo can be
+ * dropped straight onto it, and removing one is a small badge that only exists
+ * while there is something to remove. The file input is still a real, focusable
+ * input behind the overlay rather than a click target synthesised from a div —
+ * that is what keeps the whole thing operable from the keyboard.
  */
 
 const AVATAR_COLORS = [
@@ -67,14 +74,24 @@ export function CandidateAvatar({
 }) {
   const [photo, setPhoto] = useState<PhotoState>({ status: "loading" });
   const [busy, setBusy] = useState(false);
+  const [dragging, setDragging] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const shownFor = useRef<string | null>(null);
 
   // Re-fetched every time the panel opens on a (possibly different)
   // candidate — the URL is short-lived, so holding one from a previous
   // candidate, or from earlier in this same session, is not an option.
+  //
+  // Only a change of person clears what is on screen. A re-read of the *same*
+  // candidate — which is what an upload triggers — swaps the URL underneath
+  // silently, because blanking to the initials for one frame in the middle of
+  // adding a photo is the same flicker at a smaller scale.
   useEffect(() => {
     let cancelled = false;
-    setPhoto({ status: "loading" });
+    if (shownFor.current !== row.id) {
+      shownFor.current = row.id;
+      setPhoto({ status: "loading" });
+    }
     (async () => {
       try {
         const avatar = await getCandidateAvatar(row.id);
@@ -87,16 +104,19 @@ export function CandidateAvatar({
     return () => {
       cancelled = true;
     };
-  }, [row.id, row.avatar_key]);
+  }, [row.id, row.avatar_key, row.avatar_updated_at]);
 
-  async function onFileChosen(event: React.ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0];
-    event.target.value = ""; // lets choosing the same file twice fire onChange again
-    if (!file) return;
+  /** The new photo is fetched here rather than waited for from the parent:
+   *  `onChanged` only re-reads the candidate record, and the recruiter should
+   *  see what they just uploaded the moment it lands, not a frame later. */
+  async function upload(file: File) {
+    if (busy) return;
     setBusy(true);
     setError(null);
     try {
       await uploadCandidateAvatar(row.id, file);
+      const avatar = await getCandidateAvatar(row.id);
+      if (avatar) setPhoto({ status: "ready", url: avatar.url });
       onChanged();
     } catch (err) {
       setError(err instanceof Error ? err.message : "We could not upload that photo just now.");
@@ -105,12 +125,33 @@ export function CandidateAvatar({
     }
   }
 
+  function onFileChosen(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = ""; // lets choosing the same file twice fire onChange again
+    if (file) void upload(file);
+  }
+
+  function onDrop(event: React.DragEvent) {
+    event.preventDefault();
+    setDragging(false);
+    const file = event.dataTransfer.files?.[0];
+    // A drag can carry anything at all — a PDF, a row of text, a folder. The
+    // file input filters by `accept`; a drop has to say no for itself.
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      setError("That is not an image. Drop a JPEG or PNG instead.");
+      return;
+    }
+    void upload(file);
+  }
+
   async function remove() {
     if (busy) return;
     setBusy(true);
     setError(null);
     try {
       await deleteCandidateAvatar(row.id);
+      setPhoto({ status: "none" });
       onChanged();
     } catch (err) {
       setError(err instanceof Error ? err.message : "We could not remove that photo just now.");
@@ -122,77 +163,75 @@ export function CandidateAvatar({
   const initials = initialsFor(row.full_name);
   const background = colorFor(row.full_name);
   const alt = `Photo of ${row.full_name}`;
+  const hasPhoto = photo.status === "ready";
 
   return (
-    <div className="jo-detail-avatar" style={{ display: "flex", alignItems: "center", gap: 12 }}>
-      {photo.status === "ready" ? (
-        // A short-lived presigned URL, not an asset `next/image` can
-        // optimise or cache — same tradeoff as `telegram-link-panel.tsx`.
-        <img
-          src={photo.url}
-          alt={alt}
-          width={56}
-          height={56}
-          // `flexShrink: 0` keeps it a circle. Without it the avatar is a
-          // flex item that yields its width to the column beside it, and a
-          // squashed `border-radius: 50%` reads as an ellipse, not a photo.
-          style={{
-            width: 56,
-            height: 56,
-            flexShrink: 0,
-            borderRadius: "50%",
-            objectFit: "cover",
-          }}
-        />
-      ) : (
-        <span
-          aria-label={row.avatar_key ? `${alt} (loading)` : `${row.full_name} has no photo`}
-          style={{
-            width: 56,
-            height: 56,
-            flexShrink: 0,
-            borderRadius: "50%",
-            background,
-            color: "#fff",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            fontWeight: 600,
-            fontSize: 18,
-          }}
-        >
-          {initials}
-        </span>
-      )}
-
-      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-        <div style={{ display: "flex", gap: 8 }}>
-          <label className="btn btn-secondary" style={{ cursor: busy ? "default" : "pointer" }}>
-            {busy ? "Working…" : "Upload photo"}
-            <input
-              type="file"
-              accept="image/*"
-              onChange={onFileChosen}
-              disabled={busy}
-              aria-label="Upload a candidate photo"
-              style={{
-                position: "absolute",
-                width: 1,
-                height: 1,
-                padding: 0,
-                margin: -1,
-                overflow: "hidden",
-                clip: "rect(0,0,0,0)",
-                border: 0,
-              }}
-            />
-          </label>
-          {photo.status === "ready" && (
-            <button type="button" className="btn btn-secondary" onClick={remove} disabled={busy}>
-              Remove
-            </button>
+    <div className="jo-detail-avatar">
+      <div
+        className="ca-shell"
+        data-drop={dragging ? "yes" : undefined}
+        data-busy={busy ? "yes" : undefined}
+        onDragOver={(event) => {
+          event.preventDefault();
+          if (!busy) setDragging(true);
+        }}
+        onDragLeave={() => setDragging(false)}
+        onDrop={onDrop}
+      >
+        <label className="ca-trigger">
+          {hasPhoto ? (
+            // A short-lived presigned URL, not an asset `next/image` can
+            // optimise or cache — same tradeoff as `telegram-link-panel.tsx`.
+            // eslint-disable-next-line @next/next/no-img-element
+            <img className="ca-photo" src={photo.url} alt={alt} width={56} height={56} />
+          ) : (
+            <span
+              className="ca-initials"
+              role="img"
+              aria-label={row.avatar_key ? `${alt} (loading)` : `${row.full_name} has no photo`}
+              style={{ background }}
+            >
+              {initials}
+            </span>
           )}
-        </div>
+          <span className="ca-overlay" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.8">
+              <path d="M4 8h3l1.4-2h7.2L17 8h3v11H4z" strokeLinejoin="round" />
+              <circle cx="12" cy="13" r="3.2" />
+            </svg>
+          </span>
+          {/* Visually hidden but not `display: none` — it stays in the tab
+              order, so the whole control is reachable without a mouse, and
+              the overlay above lights up from `:focus-within`. */}
+          <input
+            className="ca-file"
+            type="file"
+            accept="image/*"
+            onChange={onFileChosen}
+            disabled={busy}
+            aria-label={hasPhoto ? `Replace the photo of ${row.full_name}` : `Add a photo of ${row.full_name}`}
+          />
+        </label>
+
+        {busy && <span className="ca-spinner" aria-hidden="true" />}
+
+        {hasPhoto && !busy && (
+          <button
+            type="button"
+            className="ca-remove"
+            onClick={remove}
+            aria-label={`Remove the photo of ${row.full_name}`}
+            title="Remove photo"
+          >
+            <span aria-hidden="true">×</span>
+          </button>
+        )}
+      </div>
+
+      <div className="ca-side">
+        <span className="ca-hint">
+          {busy ? "Saving the photo…" : "Drop a photo here, or click the circle."}
+        </span>
         {photo.status === "unreadable" && (
           <span className="body muted">Could not load the photo just now.</span>
         )}

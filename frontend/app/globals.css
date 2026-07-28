@@ -1322,3 +1322,155 @@ footer { border-top: 1px solid var(--line); padding: 48px 0 40px; color: var(--i
   padding: 10px;
   display: block;
 }
+
+/* The candidate photo, where the circle itself is the control. Everything here
+   exists so there is no "Upload photo" button sitting in the layout: the file
+   input lives behind the overlay, and the overlay is what the recruiter sees. */
+.jo-detail-avatar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin: 4px 0 2px;
+}
+.ca-side {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.ca-hint {
+  font-size: 0.8125rem;
+  color: var(--ink-500);
+}
+/* Fixed 56px and `flex-shrink: 0`: as a flex item the avatar will otherwise
+   yield its width to the column beside it, and a squashed `border-radius: 50%`
+   reads as an ellipse rather than a photo. */
+.ca-shell {
+  position: relative;
+  width: 56px;
+  height: 56px;
+  flex: 0 0 56px;
+}
+.ca-trigger {
+  display: block;
+  position: relative;
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  overflow: hidden;
+  cursor: pointer;
+}
+.ca-photo {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  object-fit: cover;
+  display: block;
+}
+.ca-initials {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-weight: 600;
+  font-size: 18px;
+}
+.ca-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  color: #fff;
+  background: rgba(12, 22, 38, 0.55);
+  opacity: 0;
+  transition: opacity 150ms ease;
+}
+.ca-trigger:hover .ca-overlay,
+.ca-trigger:focus-within .ca-overlay,
+.ca-shell[data-drop="yes"] .ca-overlay {
+  opacity: 1;
+}
+/* The focus ring belongs on the circle, not on the invisible input, or a
+   keyboard user gets an outline around nothing they can see. */
+.ca-trigger:focus-within {
+  outline: 2px solid var(--blue-500);
+  outline-offset: 2px;
+}
+.ca-shell[data-drop="yes"] .ca-trigger {
+  outline: 2px dashed var(--blue-500);
+  outline-offset: 3px;
+}
+.ca-shell[data-busy="yes"] .ca-trigger {
+  cursor: default;
+  opacity: 0.65;
+}
+/* Hidden from sight but deliberately still in the tab order — `display: none`
+   here would take the only real control away from the keyboard. */
+.ca-file {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  border: 0;
+}
+.ca-spinner {
+  position: absolute;
+  inset: -4px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  border-top-color: var(--blue-500);
+  animation: ca-spin 700ms linear infinite;
+  pointer-events: none;
+}
+@keyframes ca-spin {
+  to { transform: rotate(360deg); }
+}
+/* A small badge on the rim rather than a second grey button in the row: it is
+   only ever offered when there is in fact a photo to take away. */
+.ca-remove {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink-700);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 1px 3px rgba(12, 22, 38, 0.18);
+  transition: color 150ms ease, border-color 150ms ease;
+}
+.ca-remove:hover {
+  color: #c74f4f;
+  border-color: #c74f4f;
+}
+.ca-remove:focus-visible {
+  outline: 2px solid var(--blue-500);
+  outline-offset: 2px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ca-overlay,
+  .ca-remove {
+    transition: none;
+  }
+  .ca-spinner {
+    animation: none;
+    border-color: var(--blue-500);
+    opacity: 0.6;
+  }
+}
