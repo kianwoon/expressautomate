@@ -415,6 +415,20 @@ async def merge_candidate(
         if loser.record_status == Candidate.MERGED:
             raise HTTPException(status_code=400, detail="Candidate is already merged")
 
+        # Someone may already point at the row we're about to merge. Refusing
+        # would strand a recruiter who has three duplicates of one person and
+        # no way to combine them; re-pointing those rows at the new target
+        # keeps the graph one hop deep instead of forming a chain, and stays
+        # inside this transaction so it commits or rolls back with the rest.
+        await session.execute(
+            update(Candidate)
+            .where(
+                Candidate.merged_into_candidate_id == candidate_id,
+                Candidate.record_status == Candidate.MERGED,
+            )
+            .values(merged_into_candidate_id=body.target_id)
+        )
+
         # Skills that the target already has would violate the per-candidate
         # unique key, so move only the ones it lacks and drop the rest — a
         # duplicate skill carries no information the target does not have.
@@ -496,8 +510,10 @@ async def unmerge_candidate(request: Request, candidate_id: uuid.UUID) -> dict:
                     """
                     SELECT id, full_name FROM candidates
                     WHERE record_status <> 'merged' AND id <> :id
-                      AND ((:email IS NOT NULL AND lower(email) = lower(:email))
-                        OR (:phone IS NOT NULL AND phone_e164 = :phone))
+                      AND ((CAST(:email AS text) IS NOT NULL
+                            AND lower(email) = lower(CAST(:email AS text)))
+                        OR (CAST(:phone AS text) IS NOT NULL
+                            AND phone_e164 = CAST(:phone AS text)))
                     LIMIT 1
                     """
                 ),

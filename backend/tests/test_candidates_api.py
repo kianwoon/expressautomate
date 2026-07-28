@@ -289,3 +289,97 @@ async def test_a_candidate_cannot_be_merged_into_itself(agency_with_candidates) 
             json={"target_id": str(ids["active"])},
         )
     assert r.status_code == 400
+
+
+async def test_a_clean_unmerge_restores_the_candidate(agency_with_candidates) -> None:
+    """No one else has taken the email or phone, so the unmerge just succeeds."""
+    tid, uid, ids = agency_with_candidates
+    async with await _client_for(tid, uid) as http:
+        merge = await http.post(
+            f"/api/candidates/{ids['placed']}/merge",
+            json={"target_id": str(ids["active"])},
+        )
+        assert merge.status_code == 200
+
+        r = await http.post(f"/api/candidates/{ids['placed']}/unmerge")
+    assert r.status_code == 200
+    assert r.json()["record_status"] == "active"
+
+    async with AdminSessionLocal() as s:
+        row = (
+            await s.execute(
+                text(
+                    "SELECT record_status, merged_into_candidate_id FROM candidates "
+                    "WHERE id = :i"
+                ),
+                {"i": ids["placed"]},
+            )
+        ).first()
+    assert row.record_status == "active"
+    assert row.merged_into_candidate_id is None
+
+
+async def test_unmerge_is_blocked_when_the_key_was_taken(agency_with_candidates) -> None:
+    """Someone else now holds the loser's email — a 409 naming them, not a 500."""
+    tid, uid, ids = agency_with_candidates
+    async with await _client_for(tid, uid) as http:
+        merge = await http.post(
+            f"/api/candidates/{ids['placed']}/merge",
+            json={"target_id": str(ids["active"])},
+        )
+        assert merge.status_code == 200
+
+        # Merging freed john@acme.sg for reuse; a new candidate now takes it.
+        created = await http.post(
+            "/api/candidates", json={"full_name": "New Holder", "email": "john@acme.sg"}
+        )
+        assert created.status_code == 201
+        new_id = created.json()["id"]
+
+        r = await http.post(f"/api/candidates/{ids['placed']}/unmerge")
+    assert r.status_code == 409
+    assert new_id in r.text
+
+    async with AdminSessionLocal() as s:
+        row = (
+            await s.execute(
+                text("SELECT record_status FROM candidates WHERE id = :i"),
+                {"i": ids["placed"]},
+            )
+        ).first()
+    assert row.record_status == "merged"
+
+
+async def test_merging_a_merge_target_repoints_the_chain(agency_with_candidates) -> None:
+    """A -> B -> C must collapse to A -> C and B -> C, never a two-hop chain."""
+    tid, uid, ids = agency_with_candidates
+    async with await _client_for(tid, uid) as http:
+        # ids['merged'] already points at ids['active']. Now merge ids['active']
+        # into ids['placed']: the row already pointing at 'active' must be
+        # re-pointed at 'placed' instead of being left in a chain.
+        r = await http.post(
+            f"/api/candidates/{ids['active']}/merge",
+            json={"target_id": str(ids["placed"])},
+        )
+    assert r.status_code == 200
+
+    async with AdminSessionLocal() as s:
+        rows = (
+            await s.execute(
+                text(
+                    "SELECT id, record_status, merged_into_candidate_id FROM candidates "
+                    "WHERE tenant_id = :t"
+                ),
+                {"t": tid},
+            )
+        ).all()
+    by_id = {row.id: row for row in rows}
+    assert by_id[ids["active"]].record_status == "merged"
+    assert by_id[ids["active"]].merged_into_candidate_id == ids["placed"]
+    assert by_id[ids["merged"]].record_status == "merged"
+    assert by_id[ids["merged"]].merged_into_candidate_id == ids["placed"]
+    # No row points at a merged row.
+    merged_ids = {row.id for row in rows if row.record_status == "merged"}
+    for row in rows:
+        if row.merged_into_candidate_id is not None:
+            assert row.merged_into_candidate_id not in merged_ids
