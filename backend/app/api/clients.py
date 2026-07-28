@@ -150,13 +150,36 @@ async def archive_client(request: Request, client_id: uuid.UUID) -> dict:
 
 @router.post("/clients/{client_id}/restore")
 async def restore_client(request: Request, client_id: uuid.UUID) -> dict:
-    """Undo an archive, mirroring `restore_candidate`.
+    """Undo an archive — and only an archive.
 
-    A merged row is refused by `_transition` for the same reason archive
-    refuses one: unmerge must come first so `status` and
-    `merged_into_client_id` never disagree about whether the row is live.
+    Unlike a candidate (`active | archived | merged`), a client also has
+    `confirmed`, and confirmation is a human judgement. Restoring a
+    `confirmed` row would silently demote it back into the review queue and
+    erase that judgement, so this refuses anything but `archived` rather than
+    reusing the generic `_transition` (which only guards against `merged`).
+    A merged row is refused for the same reason archive refuses one: unmerge
+    must come first so `status` and `merged_into_client_id` never disagree
+    about whether the row is live.
+
+    Restoring lands back in `unconfirmed`, not the pre-archive status: a
+    client archived long ago is deliberately sent through review again
+    rather than reinstated as confirmed by an endpoint call. This is a
+    choice, not an oversight — remembering the pre-archive status would need
+    a new column, and re-review is cheap for a recruiter to redo.
     """
-    return await _transition(request, client_id, Client.UNCONFIRMED)
+    _user_uuid, tenant_uuid = _require_session(request)
+    async with tenant_session(tenant_uuid) as session:
+        client = await _load(session, client_id)
+        if client.status != Client.ARCHIVED:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Client is {client.status}, not archived; nothing to restore",
+            )
+        await session.execute(
+            update(Client).where(Client.id == client_id).values(status=Client.UNCONFIRMED)
+        )
+        await session.commit()
+    return {"status": Client.UNCONFIRMED}
 
 
 @router.post("/clients/{client_id}/merge")

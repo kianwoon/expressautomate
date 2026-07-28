@@ -128,6 +128,30 @@ async def test_restoring_a_merged_client_is_refused(agency_with_clients) -> None
     assert r.status_code == 400
 
 
+async def test_restoring_a_confirmed_client_is_refused(agency_with_clients) -> None:
+    """The defect this guards against: restore must not demote a confirmed
+
+    client back to unconfirmed. A human's confirmation is a judgement, and an
+    endpoint whose name says "restore" must not be able to erase it.
+    """
+    tid, uid, ids = agency_with_clients
+    async with await _client_for(tid, uid) as http:
+        assert (await http.post(f"/api/clients/{ids['live']}/confirm")).status_code == 200
+        r = await http.post(f"/api/clients/{ids['live']}/restore")
+        assert r.status_code == 400
+        assert "confirmed" in r.json()["detail"]
+        body = (await http.get(f"/api/clients/{ids['live']}")).json()
+    assert body["status"] == "confirmed"
+
+
+async def test_restoring_an_unconfirmed_client_is_refused(agency_with_clients) -> None:
+    """Nothing to restore: the row was never archived."""
+    tid, uid, ids = agency_with_clients
+    async with await _client_for(tid, uid) as http:
+        r = await http.post(f"/api/clients/{ids['live']}/restore")
+    assert r.status_code == 400
+
+
 async def test_unmerge_restores_a_wrongly_merged_client(agency_with_clients) -> None:
     tid, uid, ids = agency_with_clients
     async with await _client_for(tid, uid) as http:
