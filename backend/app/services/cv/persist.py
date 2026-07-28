@@ -265,6 +265,15 @@ def match_existing_role(
 
     Pure, so the rule can be tested without a database in the way — the same
     reason `candidate_tenure` is a separate module.
+
+    Live roles are matched first, rejected roles only afterwards. A rejected
+    row is not something a CV should corroborate — it exists here purely so
+    a repeat match can be suppressed (see the module docstring) — so it must
+    never crowd out or outrank a live row that describes the same thing. Two
+    passes over the same-employer rows, in a fixed live-then-rejected order,
+    also keeps the result deterministic: `_EXISTING_ROLES` has no `ORDER BY`,
+    so relying on whatever order the database happens to hand back would let
+    a live/rejected pair at overlapping dates resolve differently run to run.
     """
     same_employer = [
         row for row in existing if row.employer_normalized == employer_normalized
@@ -272,14 +281,28 @@ def match_existing_role(
     if not same_employer:
         return None
 
+    live = [row for row in same_employer if row.status != CandidateRole.REJECTED]
+    rejected = [row for row in same_employer if row.status == CandidateRole.REJECTED]
+
     if started_on is None:
         # Nothing to compare but the company. One row is an unambiguous
         # answer; two or more is a coin toss, and a coin toss recorded as a
-        # match is a fabricated identity.
-        return same_employer[0].id if len(same_employer) == 1 else None
+        # match is a fabricated identity. Rejected rows take no part in this
+        # count: they are not candidates for corroboration, so their mere
+        # presence must not turn an otherwise-unambiguous live match into a
+        # manufactured ambiguity.
+        return live[0].id if len(live) == 1 else None
 
     span = span_months(started_on, started_precision, ended_on, ended_precision, today)
-    for row in same_employer:
+    for row in live:
+        if row.started_on is None:
+            continue
+        other = span_months(
+            row.started_on, row.started_precision, row.ended_on, row.ended_precision, today
+        )
+        if _overlaps(span, other):
+            return row.id
+    for row in rejected:
         if row.started_on is None:
             continue
         other = span_months(
