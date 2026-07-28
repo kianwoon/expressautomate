@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, String, UniqueConstraint, text
+from sqlalchemy import Boolean, DateTime, Index, String, UniqueConstraint, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, TenantScoped, Timestamps, UUIDPrimaryKey
@@ -42,6 +42,16 @@ class User(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
     __table_args__ = (
         UniqueConstraint("tenant_id", "email", name="uq_users_tenant_email"),
         UniqueConstraint("tenant_id", "ms_object_id", name="uq_users_tenant_ms_object_id"),
+        # Partial unique index: guarantees at most one owner per tenant.
+        # This is what enables irreversible deletion of a candidate's personal data
+        # (only the owner can authorize it). Declared here so autogenerate does not
+        # propose dropping it; the index is created in the owner-role migration.
+        Index(
+            "uq_users_one_owner_per_tenant",
+            "tenant_id",
+            unique=True,
+            postgresql_where=text("role = 'owner'"),
+        ),
     )
 
     email: Mapped[str] = mapped_column(String(320), nullable=False, index=True)
