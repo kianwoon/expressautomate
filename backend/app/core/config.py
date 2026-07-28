@@ -391,6 +391,17 @@ class Settings(BaseSettings):
     ARQ_MAX_JOBS: int = 10
     ARQ_MAX_TRIES: int = 5
 
+    # --- Dashboard live updates (SSE over Redis pub/sub) ---
+    # Channel names are namespaced so one Redis can serve more than one
+    # environment without staging nudging production's dashboards. The tenant
+    # id is appended per channel — see `app.services.events.channel_for`.
+    EVENTS_CHANNEL_PREFIX: str = "ea:events:"
+    # How long a stream may stay silent before it sends a keep-alive comment.
+    # Koyeb's proxy closes an idle connection, and the browser cannot tell that
+    # from a genuinely quiet mailbox, so it would reconnect on a loop. Kept
+    # comfortably under any proxy idle timeout worth guessing at.
+    EVENTS_HEARTBEAT_SECONDS: float = Field(default=20.0, gt=0)
+
     # --- Notifications (spec 2026-07-28) ---
     # Blank by default. A channel with no credentials is *skipped*, not an
     # error: the platform must boot and ingest mail before either provider is

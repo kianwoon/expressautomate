@@ -78,6 +78,21 @@ export const MAILBOX_INGEST_PATH = `${API_BASE}/api/mailbox/ingest`;
 /** Who is signed in: 200 with user/tenant/mailbox, or 401 when nobody is. */
 export const ME_PATH = `${API_BASE}/api/auth/me`;
 
+/**
+ * The open stream that tells the dashboard something changed.
+ *
+ * Mail arrives at the backend as a Graph notification, so the browser is never
+ * a party to it and can only find out by being told. This is how it is told.
+ * Server-sent events rather than a poll, because a poll is a question asked
+ * every few seconds to which the answer is almost always "nothing" — paid for
+ * by every open dashboard, forever, to be a few seconds late anyway.
+ *
+ * Same-origin and cookie-authenticated, which is the reason SSE is available at
+ * all here: `EventSource` cannot set headers, so a bearer scheme would have
+ * ruled it out and left a WebSocket or a poll as the only options.
+ */
+export const EVENTS_PATH = `${API_BASE}/api/events`;
+
 /** Clears the session cookie. POST only. */
 export const LOGOUT_PATH = `${API_BASE}/api/auth/logout`;
 

@@ -23,6 +23,7 @@ from sqlalchemy import text
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.db.rls import tenant_session
+from app.services.events import KIND_MAILBOX, publish
 from app.services.graph.client import MAILBOX_ROOT, GraphClient
 
 log = get_logger(__name__)
@@ -140,6 +141,12 @@ async def create_subscription(
         mailbox_id=str(mailbox_id),
         subscription_id=created["id"],
     )
+    # After the commit above, so a dashboard that refetches on this nudge reads
+    # the subscription rather than the moment before it existed. This is the
+    # transition from "connected" to "actually ingesting", and it is the one a
+    # user is watching for during onboarding — without a push they would sit on
+    # a screen saying nothing is happening while it already is.
+    await publish(tenant_id, KIND_MAILBOX)
     return created["id"]
 
 

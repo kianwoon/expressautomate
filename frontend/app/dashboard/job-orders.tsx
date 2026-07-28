@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import type { Me } from "../auth";
 import { DetailPanel } from "./detail-panel";
+import { LiveLight } from "./live-light";
 import { compare, haystack } from "./job-orders-sort";
 import { DEFAULT_SORT, JobOrdersTable, type Sort } from "./job-orders-table";
 import { PAGE_SIZE, useOpportunities, type Filter, type Opportunity } from "./opportunities";
@@ -96,6 +97,10 @@ export function JobOrders({ me, heading = "h2" }: { me: Me; heading?: "h1" | "h2
               rather than hiding an h1 nobody sees to satisfy the outline. */}
           <Heading className="jo-head-title">Every vacancy we have read.</Heading>
         </div>
+        {/* Beside the heading of the thing it vouches for. The table below is
+            what goes stale when the stream stops, so the light saying so
+            belongs here rather than in a corner of the page. */}
+        <LiveLight />
         <ReviewBell count={counts.needs_review} onOpen={() => setFilter("needs_review")} />
       </div>
 

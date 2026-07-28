@@ -25,7 +25,12 @@ import { JobOrders } from "./job-orders";
  * not a list anything is matched against.
  */
 export default function Dashboard() {
-  const auth = useAuth();
+  // The one page that follows the event stream. Everything on it is live — mail
+  // being read, the watch being set up, a grant going bad — and a dashboard that
+  // asked once was a dashboard that told you what was true when you opened it
+  // and then quietly aged. "Refresh in a moment" used to be an instruction on
+  // this page; the server now says when there is something to see.
+  const auth = useAuth(true);
 
   // Guard. Only a real 401 sends you away, and it goes to the landing page —
   // the user's own choice of provider belongs to them, so we never bounce
@@ -56,7 +61,7 @@ export default function Dashboard() {
               <Notice
                 eyebrow="Connection"
                 heading="We could not reach the server."
-                body="This is not a sign-in problem — your session is untouched. Reload the page in a moment. If it keeps failing, the service is down and we are looking at it."
+                body="This is not a sign-in problem — your session is untouched. The page keeps trying and will recover on its own. If this stays here, the service is down and we are looking at it."
               />
             ) : auth.status === "anonymous" ? (
               <Notice
@@ -205,7 +210,10 @@ function Starting() {
         seconds, and mail starts arriving here once it is done.
       </p>
       <p className="body" style={{ marginTop: 12, maxWidth: "62ch" }}>
-        Nothing to do. Refresh in a moment.
+        {/* It used to say "Refresh in a moment", which was an instruction to do
+            the page's job for it. The page now re-checks on its own, so the
+            sentence describes that instead of delegating it. */}
+        Nothing to do — this page moves on by itself once the watch is live.
       </p>
     </>
   );

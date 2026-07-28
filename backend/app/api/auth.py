@@ -27,6 +27,7 @@ from app.core.logging import get_logger
 from app.db.rls import tenant_session
 from app.models import MicrosoftToken, Tenant, User
 from app.services import ms_auth
+from app.services.events import KIND_MAILBOX, publish
 from app.workers.queue import enqueue
 
 log = get_logger(__name__)
@@ -802,6 +803,14 @@ async def _store_mailbox_consent(
             if _covers_mailbox(result.get("scope"))
             else []
         )
+
+    if revived:
+        # The session block above has committed, so a dashboard refetching on
+        # this nudge sees the mailbox active. Published once for the whole
+        # revival rather than per mailbox: a user holding three of them has one
+        # grant, fixed once, and three nudges would be three refetches of the
+        # same screen.
+        await publish(tenant_uuid, KIND_MAILBOX)
 
     for mailbox_id in revived:
         # The subscription died with the grant, so recreating it is the whole
