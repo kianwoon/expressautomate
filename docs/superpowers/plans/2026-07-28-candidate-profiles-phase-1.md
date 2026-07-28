@@ -286,9 +286,20 @@ def upgrade() -> None:
     op.create_check_constraint(
         'ck_users_role', 'users', "role IN ('owner', 'recruiter')"
     )
+    # Created AFTER the backfill, which has just guaranteed exactly one owner
+    # per tenant. Enforcing it in the schema means a future code path that
+    # forgets to check cannot quietly produce a second owner — and the only
+    # thing standing between "two owners" and "nobody notices" is this index.
+    op.execute(
+        """
+        CREATE UNIQUE INDEX uq_users_one_owner_per_tenant
+        ON users (tenant_id) WHERE role = 'owner'
+        """
+    )
 
 
 def downgrade() -> None:
+    op.execute("DROP INDEX IF EXISTS uq_users_one_owner_per_tenant")
     op.drop_constraint('ck_users_role', 'users', type_='check')
 ```
 
@@ -310,11 +321,21 @@ Replace that literal with a value computed just above the insert, inside the sam
 
 ```python
         # The person who signs in first is the one who set the agency up, and
-        # is the only one who can delete a candidate. Computed inside this
-        # transaction so two simultaneous first sign-ins cannot both win.
+        # is the only one who can delete a candidate.
+        #
+        # The lock is taken on the TENANT row, not on `users`. Two colleagues
+        # signing in for the first time simultaneously both see an empty
+        # `users` table, and `SELECT ... FROM users ... FOR UPDATE` locks
+        # nothing at all when it matches no rows — so both would be made
+        # owner. The tenant row exists by this point (it is upserted just
+        # above), so locking it serialises the two transactions and the second
+        # one sees the first one's user.
+        await session.execute(
+            text("SELECT 1 FROM tenants WHERE id = :t FOR UPDATE"), {"t": tenant_id}
+        )
         existing = (
             await session.execute(
-                text("SELECT 1 FROM users WHERE tenant_id = :t LIMIT 1 FOR UPDATE"),
+                text("SELECT 1 FROM users WHERE tenant_id = :t LIMIT 1"),
                 {"t": tenant_id},
             )
         ).first()
@@ -322,6 +343,22 @@ Replace that literal with a value computed just above the insert, inside the sam
 ```
 
 and pass `role=role` in the insert values. **Do not** change the `on_conflict_do_update` clause to update `role` — a returning user must keep the role they have, and an owner who signs in again must not be demoted.
+
+The migration also carries a partial unique index, so the invariant survives a
+code path this reasoning did not anticipate:
+
+```python
+    op.execute(
+        """
+        CREATE UNIQUE INDEX uq_users_one_owner_per_tenant
+        ON users (tenant_id) WHERE role = 'owner'
+        """
+    )
+```
+
+Add the matching `DROP INDEX IF EXISTS uq_users_one_owner_per_tenant` to that
+migration's `downgrade()`. A lock enforces the rule only where somebody
+remembered to take it; the index enforces it everywhere.
 
 - [ ] **Step 6: Add the provisioning tests**
 
@@ -597,11 +634,24 @@ class Candidate(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
 
     __table_args__ = (
         UniqueConstraint("tenant_id", "id", name="uq_candidates_tenant_id_id"),
+        # CASCADE, and it is the erasure rule rather than a convenience.
+        #
+        # A row merged into this one is a duplicate record of the same human
+        # being, so erasing the person must erase it too — leaving it would
+        # keep their name and email in the table a deletion request just
+        # cleared.
+        #
+        # SET NULL cannot work here whichever form it takes. Bare `SET NULL`
+        # on a composite key nulls every referencing column including
+        # `tenant_id`, which is NOT NULL; the Postgres 15+
+        # `SET NULL (merged_into_candidate_id)` form clears only the pointer
+        # but then violates `ck_candidates_merged_has_target`, which requires
+        # a merged row to name one. Both fail the delete.
         ForeignKeyConstraint(
             ["tenant_id", "merged_into_candidate_id"],
             ["candidates.tenant_id", "candidates.id"],
             name="fk_candidates_merged_into_same_tenant",
-            ondelete="SET NULL",
+            ondelete="CASCADE",
         ),
         # Declared here as well as in the migration so autogenerate does not
         # propose dropping them. `merged` is excluded so a merge frees both
@@ -783,13 +833,18 @@ def upgrade() -> None:
     op.create_index(op.f('ix_candidates_tenant_id'), 'candidates', ['tenant_id'])
     op.create_index(op.f('ix_candidates_pipeline_stage'), 'candidates', ['pipeline_stage'])
     op.create_index(op.f('ix_candidates_record_status'), 'candidates', ['record_status'])
+    # CASCADE: a row merged into this one is a duplicate record of the same
+    # person, so erasing the person erases it. Neither form of SET NULL works
+    # — the bare one nulls `tenant_id` (NOT NULL), and the Postgres 15+
+    # single-column form leaves a merged row with no target, which
+    # `ck_candidates_merged_has_target` forbids.
     op.create_foreign_key(
         'fk_candidates_merged_into_same_tenant',
         'candidates',
         'candidates',
         ['tenant_id', 'merged_into_candidate_id'],
         ['tenant_id', 'id'],
-        ondelete='SET NULL',
+        ondelete='CASCADE',
     )
     # Email is matched case-insensitively, so the index must be on lower(email)
     # — a plain index would let Jane@acme.sg and jane@acme.sg both exist and
@@ -939,6 +994,8 @@ uv run alembic check && uv run alembic downgrade -1 && uv run alembic upgrade he
 ```
 
 Expected: "No new upgrade operations detected", then both migrations run. `alembic check` catches an index declared in one place and not the other — the client feature shipped that bug and it would have made a later autogenerate propose dropping the identity key.
+
+**If `alembic check` reports drift on `uq_candidates_tenant_email`, that is expected and is not your mistake.** Alembic's autogenerate compares expression indexes (`lower(email)`) unreliably, and the partial `postgresql_where` predicate is not compared at all. Do not delete the `Index` from the model to silence it — the model declaration is what stops a future autogenerate proposing to DROP the identity key, which is the exact bug this step exists to prevent. Instead add the index name to an `exclude` list in `alembic/env.py`'s `include_object` hook, with a comment saying why, and note it in your report so the next person is not surprised.
 
 - [ ] **Step 8: Commit**
 
@@ -1544,6 +1601,14 @@ async def test_search_finds_a_candidate_by_email(agency_with_candidates) -> None
     assert [row["id"] for row in body["items"]] == [str(ids["placed"])]
 
 
+async def test_merged_rows_are_reachable_by_explicit_filter(agency_with_candidates) -> None:
+    """Otherwise a wrongly merged person cannot be found to unmerge them."""
+    tid, uid, ids = agency_with_candidates
+    async with await _client_for(tid, uid) as http:
+        body = (await http.get("/api/candidates?record_status=merged")).json()
+    assert [row["id"] for row in body["items"]] == [str(ids["merged"])]
+
+
 async def test_a_merged_candidate_is_still_reachable_by_id(agency_with_candidates) -> None:
     tid, uid, ids = agency_with_candidates
     async with await _client_for(tid, uid) as http:
@@ -1613,6 +1678,7 @@ from app.models.candidate import Candidate, CandidateFieldOverride, CandidateSki
 router = APIRouter(tags=["candidates"])
 
 StageFilter = Literal["new", "contacted", "submitted", "placed", "rejected"]
+RecordStatusFilter = Literal["active", "archived", "merged"]
 
 
 def _serialize(candidate: Candidate) -> dict:
@@ -1657,6 +1723,7 @@ async def list_candidates(
     limit: int | None = Query(default=None, ge=1),
     offset: int = Query(default=0, ge=0),
     pipeline_stage: StageFilter | None = None,
+    record_status: RecordStatusFilter | None = None,
     q: str | None = None,
 ) -> dict:
     _user_uuid, tenant_uuid = _require_session(request)
@@ -1675,7 +1742,15 @@ async def list_candidates(
             counts["all"] += n
             counts[stage] = counts.get(stage, 0) + n
 
-        base = select(Candidate).where(Candidate.record_status != Candidate.MERGED)
+        # Merged rows are hidden by default — a merged record is not a person
+        # any more — but an explicit filter must still reach them. A merged
+        # row's pointer runs loser → survivor, so there is no link from the
+        # survivor back, and without this filter a wrongly merged person is
+        # invisible and `unmerge` is reachable only by curl.
+        if record_status is not None:
+            base = select(Candidate).where(Candidate.record_status == record_status)
+        else:
+            base = select(Candidate).where(Candidate.record_status != Candidate.MERGED)
         if pipeline_stage is not None:
             base = base.where(Candidate.pipeline_stage == pipeline_stage)
         if q:
@@ -1911,16 +1986,21 @@ from datetime import date
 
 from fastapi import Response
 from pydantic import BaseModel
-from sqlalchemy import delete, insert, update
+from sqlalchemy import delete, insert, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 
 from app.models.tenant import User
 from app.services.candidate_matching import find_candidate
-from app.services.candidate_naming import normalize_email, normalize_phone, normalize_skill
+from app.services.candidate_naming import (
+    is_matchable_phone,
+    normalize_email,
+    normalize_phone,
+    normalize_skill,
+)
 ```
 
-`select`, `func`, `text` and the model imports are already present from Task 6.
+Task 6 imported only `func`, `or_` and `select` from `sqlalchemy` — `text` is **not** already present, and the merge and unmerge handlers below use it. Add it as shown or the first merge request raises `NameError`.
 
 ```python
 class CandidateIn(BaseModel):
@@ -1931,6 +2011,34 @@ class CandidateIn(BaseModel):
     """
 
     full_name: str
+    email: str | None = None
+    phone_raw: str | None = None
+    current_title: str | None = None
+    current_employer: str | None = None
+    location: str | None = None
+    years_experience: int | None = None
+    expected_salary: float | None = None
+    salary_currency: str | None = None
+    salary_period: str | None = None
+    available_from: date | None = None
+    notice_period_raw: str | None = None
+    employment_type: str | None = None
+    notes: str | None = None
+    pipeline_stage: StageFilter | None = None
+    skills: list[str] | None = None
+
+
+class CandidateUpdate(BaseModel):
+    """Every field optional — this is a PATCH.
+
+    Reusing `CandidateIn` here would be a bug: its `full_name` is required, so
+    `PATCH {"current_title": "..."}` would be rejected 422 for omitting a field
+    the caller never intended to change. `exclude_unset=True` on the dump is
+    what makes "not sent" different from "set to null", and that distinction
+    only exists if the model allows the field to be absent.
+    """
+
+    full_name: str | None = None
     email: str | None = None
     phone_raw: str | None = None
     current_title: str | None = None
@@ -1967,7 +2075,7 @@ _OVERRIDABLE = (
 async def create_candidate(request: Request, body: CandidateIn) -> dict:
     user_uuid, tenant_uuid = _require_session(request)
     async with tenant_session(tenant_uuid) as session:
-        phone_e164 = normalize_phone(body.phone_raw)
+        phone_e164 = _identity_phone(body.phone_raw)
         email = normalize_email(body.email)
 
         match = await find_candidate(session, tenant_uuid, email, phone_e164)
@@ -2015,20 +2123,32 @@ async def create_candidate(request: Request, body: CandidateIn) -> dict:
 
 
 @router.patch("/candidates/{candidate_id}")
-async def update_candidate(request: Request, candidate_id: uuid.UUID, body: CandidateIn) -> dict:
+async def update_candidate(
+    request: Request, candidate_id: uuid.UUID, body: CandidateUpdate
+) -> dict:
     user_uuid, tenant_uuid = _require_session(request)
     async with tenant_session(tenant_uuid) as session:
         await _load(session, candidate_id)
         values = body.model_dump(exclude={"skills"}, exclude_unset=True)
         if "phone_raw" in values:
-            values["phone_e164"] = normalize_phone(values["phone_raw"])
+            values["phone_e164"] = _identity_phone(values["phone_raw"])
         if "email" in values:
             values["email"] = normalize_email(values["email"])
         values["updated_by"] = user_uuid
 
-        await session.execute(
-            update(Candidate).where(Candidate.id == candidate_id).values(**values)
-        )
+        try:
+            await session.execute(
+                update(Candidate).where(Candidate.id == candidate_id).values(**values)
+            )
+        except IntegrityError as exc:
+            # Editing an email or phone to one somebody else already holds.
+            # The unique index is right to refuse; a 500 would tell the
+            # recruiter the app is broken when their data is merely ambiguous.
+            await session.rollback()
+            raise HTTPException(
+                status_code=409,
+                detail="Another candidate already has that email or phone",
+            ) from exc
         # Every edited field is remembered as a human decision. Without this a
         # later import of a stale sheet silently undoes the correction, and
         # nothing in the data afterwards could say it happened.
@@ -2227,6 +2347,23 @@ async def export_candidate(request: Request, candidate_id: uuid.UUID) -> dict:
     return await get_candidate(request, candidate_id)
 
 
+def _identity_phone(raw: str | None) -> str | None:
+    """The E.164 form, but only when this number may identify a person.
+
+    `phone_e164` is a unique key, and `uq_candidates_tenant_phone` enforces it
+    for every non-null value. A fixed line is shared by a whole company, so
+    storing one here would let the second colleague who lists the office number
+    be rejected as a duplicate of the first — while the matcher, which ignores
+    fixed lines, reports no match at all. The recruiter would see "Already
+    recorded" naming nobody.
+
+    So a non-personal number lives in `phone_raw` only. It is still shown, it
+    simply never identifies anyone, and the index and the matcher agree.
+    """
+    e164 = normalize_phone(raw)
+    return e164 if is_matchable_phone(e164) else None
+
+
 async def _require_owner(user_uuid: uuid.UUID, tenant_uuid: uuid.UUID) -> None:
     """The first role check in this codebase — see the spec.
 
@@ -2382,6 +2519,14 @@ A field listed in `overridden_fields` renders with a marker and the title text "
 
 `candidate-form.tsx` — create and edit. Only `full_name` is required; the submit button stays disabled while it is blank. On a 409, the server's message renders inline above the form.
 
+**Merge and unmerge need UI too, or the endpoints are unreachable.** They are the recruiter's only way out of a duplicate, and duplicates are guaranteed — the matcher creates one every time a split identity or an unmatchable phone appears.
+
+In `candidate-panel.tsx`, add a "Merge into…" action that opens a picker searching the same `GET /api/candidates?q=` endpoint the list uses, and calls `POST /api/candidates/{id}/merge` with the chosen `target_id`. A merged record's panel shows which candidate it was merged into, as a link, with an "Unmerge" button.
+
+Merged records are hidden from the default list, and the pointer runs loser → survivor, so there is no link from the survivor back. Reaching one means `GET /api/candidates?record_status=merged` — expose it as a "Merged" chip beside the pipeline stages. Without it a wrongly merged person is invisible in the UI and `unmerge` exists only for whoever is willing to use curl.
+
+Surface the unmerge 409 verbatim: it names the candidate that has since taken the email or phone, and that name is the only thing telling the recruiter what to fix.
+
 - [ ] **Step 4: Verify**
 
 ```bash
@@ -2399,6 +2544,8 @@ Start the backend and the frontend, sign in, and confirm each of these. The suit
 3. Adding a second candidate with an email that already exists shows the conflict message, not a blank failure.
 4. Editing a title, then reopening the record, shows the "edited by hand" marker on that field.
 5. Signed in as a recruiter (set `role` to `recruiter` in the database), the delete button is absent; as an owner it is present and works.
+6. Merging one candidate into another removes the loser from the default list, and `?record_status=merged` still finds it.
+7. Opening that merged record and unmerging returns the person to the default list.
 
 - [ ] **Step 6: Commit**
 
