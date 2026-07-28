@@ -1335,9 +1335,15 @@ footer { border-top: 1px solid var(--line); padding: 48px 0 40px; color: var(--i
 .ca-side {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  /* Nearly nothing. The name and the title are one thought about one person,
+     read as a pair rather than as prose, so they are set tight and the title
+     is greyed to keep the name the thing you land on. The gap is really for
+     the hint and the error below them, which are a different thought. */
+  gap: 1px;
   min-width: 0;
 }
+.ca-side .ca-name { line-height: 1.3; }
+.ca-side .jo-detail-company { line-height: 1.35; color: var(--ink-500); }
 /* The heading and the title carry their own top margins for the stacked
    layout they used to sit in. Beside the circle the column's own gap does
    that job, and the margins would push the name off centre. */
