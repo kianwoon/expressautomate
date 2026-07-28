@@ -19,4 +19,4 @@ Final review: READY WITH FIXES -> fixed in fefca5b. 847 passed. Feature complete
 Plan: docs/superpowers/plans/2026-07-29-cv-upload-and-parsing.md
 P2 Task 1: complete (36e4206..0c5b66f, review clean; 4 items carried to Task 2)
 P2 Task 2: complete (0c5b66f..11dbd08, review clean, 853 passed 0 skipped)
-P2 Task 3: complete (11dbd08..905b34c, decompression bomb bound added, 862 passed)
+P2 Task 3: complete (11dbd08..b0c08bb, bounded DOCX inflate + real PDF early-stop test, 862 passed)
