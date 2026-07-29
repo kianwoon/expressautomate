@@ -420,3 +420,54 @@ async def test_a_run_for_another_tenant_does_nothing(agency):
     row = await _row(run_id)
     assert row.state == SourcingRun.PENDING
     assert row.attempts == 0
+
+
+async def test_a_run_keeps_only_the_best_of_what_it_scored(agency, monkeypatch):
+    """The cap is the difference between a shortlist and a data dump.
+
+    Scoring still looks at everyone — `candidates_considered` says so — but a
+    run stores `SOURCING_MAX_MATCHES` rows, and they are the top of the same
+    `score DESC, candidate_id` order an uncapped run produces. The two runs
+    below are the check on that: the capped one must be a prefix of the full
+    one, not an arbitrary slice of it.
+    """
+    tenant_id = agency
+    opportunity_id = await _opportunity(tenant_id)
+    for index, skills in enumerate(
+        [("triage", "iv therapy"), ("triage",), ("iv therapy",), (), ()]
+    ):
+        await _candidate(
+            tenant_id,
+            name=f"Nurse {index}",
+            title="staff nurse" if index < 4 else "chef",
+            skills=skills,
+        )
+
+    monkeypatch.setattr(settings, "SOURCING_MAX_MATCHES", 100)
+    full_run = await _run(tenant_id, opportunity_id)
+    await run_sourcing(
+        None,
+        tenant_id=str(tenant_id),
+        opportunity_id=str(opportunity_id),
+        run_id=str(full_run),
+    )
+    full = [m.candidate_id for m in await _matches(tenant_id, full_run)]
+    assert len(full) == 5
+
+    monkeypatch.setattr(settings, "SOURCING_MAX_MATCHES", 2)
+    capped_run = await _run(tenant_id, opportunity_id)
+    await run_sourcing(
+        None,
+        tenant_id=str(tenant_id),
+        opportunity_id=str(opportunity_id),
+        run_id=str(capped_run),
+    )
+
+    capped = [m.candidate_id for m in await _matches(tenant_id, capped_run)]
+    assert capped == full[:2]
+
+    row = await _row(capped_run)
+    assert row.state == SourcingRun.DONE
+    # Everyone was looked at; only the best two were kept.
+    assert row.candidates_considered == 5
+    assert row.shortlisted == 2

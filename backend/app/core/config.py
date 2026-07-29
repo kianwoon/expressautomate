@@ -573,6 +573,13 @@ class Settings(BaseSettings):
     # recruiter reads the top of a shortlist, not the tail of it — so this is
     # the knob that decides what the feature costs per run.
     SOURCING_EXPLAIN_TOP_N: int = Field(default=10, gt=0)
+    # How many matches a run keeps. Scoring looks at every eligible candidate
+    # in the agency, and an agency with two thousand of them would otherwise
+    # get two thousand rows written, serialised and rendered — a data dump
+    # rather than a shortlist. The cap belongs to the run because that is
+    # where "the best of what we scored" is still known; a reader who trims
+    # afterwards is only hiding rows that were already paid for.
+    SOURCING_MAX_MATCHES: int = Field(default=20, gt=0)
     # The wall clock one sourcing run may occupy an arq worker for. A run
     # scores every eligible candidate in the tenant and then spends a model
     # call on the top of that list, so its size is the agency's database

@@ -225,7 +225,14 @@ async def run_sourcing(
         # records, not about what the model is shown.
         scored.sort(key=lambda item: (-item[1], str(item[0])))
 
-        shortlist = scored[: settings.SOURCING_EXPLAIN_TOP_N]
+        # What the run keeps. Everything eligible was scored a moment ago, but
+        # a run that stores all of it is a data dump: an agency with two
+        # thousand candidates would write, serialise and render two thousand
+        # rows off one screen. Cutting here rather than at the reader means
+        # the rows that survive are the best ones, because this is the only
+        # place the full ranking exists.
+        kept = scored[: settings.SOURCING_MAX_MATCHES]
+        shortlist = kept[: settings.SOURCING_EXPLAIN_TOP_N]
         texts = await _cv_texts(
             session, tenant, [candidate_id for candidate_id, _, _ in shortlist]
         )
@@ -270,15 +277,18 @@ async def run_sourcing(
                     "explanation": _prose(by_candidate.get(str(candidate_id))),
                     "explanation_evidence": _evidence(by_candidate.get(str(candidate_id))),
                 }
-                for candidate_id, total, components in scored
+                for candidate_id, total, components in kept
             ],
         )
 
         run = await session.get(SourcingRun, record)
         if run is None:  # pragma: no cover - deleted mid-run
             return
+        # Everyone eligible was looked at, and the count says so even though
+        # only `kept` of them were stored: "we read two thousand and these are
+        # the best twenty" is the thing a recruiter wants to know.
         run.candidates_considered = len(candidate_ids)
-        run.shortlisted = len(shortlist)
+        run.shortlisted = len(kept)
         run.model_name = settings.EXTRACTION_MODEL_FAST or None
         run.prompt_version = settings.PROMPT_VERSION
         # The protected-attribute report lands here or nowhere. A model told
@@ -297,7 +307,7 @@ async def run_sourcing(
         sourcing_run_id=run_id,
         considered=len(candidate_ids),
         matches=written,
-        shortlisted=len(shortlist),
+        shortlisted=len(kept),
     )
 
 

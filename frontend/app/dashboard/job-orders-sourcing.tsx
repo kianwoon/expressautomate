@@ -81,7 +81,9 @@ export function Shortlist({ row }: { row: Opportunity }) {
   // The names are joined here rather than expected from the sourcing routes,
   // which carry candidate ids and nothing else. Held in a ref so the fetch
   // below can skip ids it already has without naming `names` as a dependency
-  // and re-running itself on its own result.
+  // and re-running itself on its own result. One request per candidate is
+  // only reasonable because a run keeps a bounded shortlist — the size of
+  // this join is the cap the worker applied, not the size of the database.
   const known = useRef<ReadonlyMap<string, string>>(names);
   known.current = names;
 
@@ -306,8 +308,10 @@ function Safeguards({ row, run }: { row: Opportunity; run: SourcingRun }) {
         <div className="src-notice" data-kind="protected">
           <p className="body">
             This job order asks for a protected characteristic. The shortlist <strong>ignored</strong>{" "}
-            that requirement — nobody was ranked up or down for it, and it was removed from the text
-            before any of it reached the model.
+            that requirement — nobody was ranked up or down for it. A coded requirement is removed
+            from the text before the model sees it; a plainly-worded one the model does see, and
+            reports back, so it can be ignored deliberately.
+            {run.protected_attribute_note ? " The note below says which happened here." : ""}
           </p>
           {run.protected_attribute_note && (
             <p className="body src-sub">{run.protected_attribute_note}</p>
