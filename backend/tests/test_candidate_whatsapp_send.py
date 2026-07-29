@@ -744,3 +744,90 @@ async def test_a_retry_at_exactly_retry_after_seconds_succeeds(agency, monkeypat
         retried = await http.post(SEND.format(cid=ids["with_phone"]), json=_body())
     assert retried.status_code == 200
     assert retried.json()["status"] == "sent"
+
+
+async def _next_send_allowed_at(tid, uid):
+    async with AdminSessionLocal() as s:
+        return (
+            await s.execute(
+                text(
+                    "SELECT next_send_allowed_at FROM wa_sessions "
+                    "WHERE tenant_id = :t AND user_id = :u"
+                ),
+                {"t": tid, "u": uid},
+            )
+        ).scalar_one()
+
+
+async def test_a_discarded_claim_gives_back_the_deadline_it_reserved(
+    agency, monkeypatch
+) -> None:
+    """The bug: `_claim_send` reserves the next slot the instant a send is
+    admitted, but a send that never reached the gateway (unreachable here)
+    still charged the recruiter a full interval before this fix. An
+    immediate retry must be admitted, not 429'd for a send that never
+    happened."""
+    tid, uid, ids = agency
+    await _seed_wa_session(tid, uid, next_send_allowed_at=None)
+    _fake_client(monkeypatch, raises=GatewayUnreachableError("unreachable"))
+
+    async with await _client_for(tid, uid) as http:
+        first = await http.post(SEND.format(cid=ids["with_phone"]), json=_body())
+    assert first.status_code == 409
+    assert first.json()["session_status"] == "gateway_unreachable"
+
+    # Nothing was dispatched, so the deadline the discarded claim reserved
+    # must be given back rather than left standing.
+    assert await _next_send_allowed_at(tid, uid) is None
+
+    _fake_client(
+        monkeypatch,
+        outcome=SendOutcome(ok=True, session_status="connected", provider_message_id="X"),
+    )
+    async with await _client_for(tid, uid) as http:
+        retried = await http.post(SEND.format(cid=ids["with_phone"]), json=_body())
+    assert retried.status_code == 200, (
+        "an immediate retry must not be 429'd for a send that never happened"
+    )
+    assert retried.json()["status"] == "sent"
+
+
+async def test_a_discard_does_not_roll_back_a_later_sends_deadline(
+    agency, monkeypatch
+) -> None:
+    """If a second, later send has already moved `next_send_allowed_at`
+    forward by the time an earlier claim is discarded, that later send owns
+    the deadline — the discard's compare-and-set must not touch it."""
+    tid, uid, ids = agency
+    await _seed_wa_session(tid, uid, next_send_allowed_at=None)
+
+    # First claim: dispatch never happens (simulated directly, since the
+    # route always dispatches inline) — reserve, then discard, but a second,
+    # later claim has since moved the deadline forward before the discard
+    # runs.
+    activity, claimed, deadline_claim = await wa_api._claim_send(
+        tenant_uuid=tid,
+        user_uuid=uid,
+        candidate_id=ids["with_phone"],
+        client_request_id=uuid.uuid4(),
+        message="first",
+    )
+    assert claimed and deadline_claim is not None
+
+    later_deadline = datetime.now(UTC) + timedelta(hours=1)
+    async with AdminSessionLocal() as s:
+        await s.execute(
+            text(
+                "UPDATE wa_sessions SET next_send_allowed_at = :n "
+                "WHERE tenant_id = :t AND user_id = :u"
+            ),
+            {"n": later_deadline, "t": tid, "u": uid},
+        )
+        await s.commit()
+
+    await wa_api._discard_claim(tid, activity.id, uid, deadline_claim)
+
+    stored = await _next_send_allowed_at(tid, uid)
+    assert stored == later_deadline, (
+        "a later send's deadline must survive an earlier claim's discard"
+    )

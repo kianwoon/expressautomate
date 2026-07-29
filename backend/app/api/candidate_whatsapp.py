@@ -33,6 +33,7 @@ lie the recruiter would act on:
 import math
 import random
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, datetime, time, timedelta
 
 from fastapi import APIRouter, HTTPException, Request
@@ -290,6 +291,23 @@ async def _replay_of(
         ).scalar_one_or_none()
 
 
+@dataclass(frozen=True)
+class _DeadlineClaim:
+    """What `_claim_send` reserved on `wa_sessions.next_send_allowed_at`.
+
+    `reserved` is the value this claim wrote. `previous` is what stood there
+    before — possibly `None` — and is what `_discard_claim` restores if this
+    claim never becomes a real attempt. Carrying both, rather than just
+    `previous`, is what lets `_discard_claim` do a compare-and-set instead of
+    a blind write: it only restores `previous` if `next_send_allowed_at` is
+    still exactly `reserved`, so a later legitimate send that has since moved
+    the deadline is never clobbered by this one's cleanup.
+    """
+
+    reserved: datetime
+    previous: datetime | None
+
+
 async def _claim_send(
     *,
     tenant_uuid: uuid.UUID,
@@ -297,7 +315,7 @@ async def _claim_send(
     candidate_id: uuid.UUID,
     client_request_id: uuid.UUID,
     message: str,
-) -> tuple[CandidateActivity, bool]:
+) -> tuple[CandidateActivity, bool, _DeadlineClaim | None]:
     """One transaction that closes both P4-review races at once.
 
     1. **The daily cap can be raced.** Two concurrent sends both reading "49
@@ -317,10 +335,14 @@ async def _claim_send(
     the *same* idempotency key, not two different messages both slipping
     through the cap or spacing check at once.
 
-    Returns `(row, claimed)`. `claimed=True` means this call inserted the
-    `pending` row and dispatch belongs to this request. `claimed=False` means
-    a concurrent request already owns this exact `client_request_id`; the
-    caller treats the returned row exactly like a pre-existing replay.
+    Returns `(row, claimed, deadline_claim)`. `claimed=True` means this call
+    inserted the `pending` row and dispatch belongs to this request.
+    `claimed=False` means a concurrent request already owns this exact
+    `client_request_id`; the caller treats the returned row exactly like a
+    pre-existing replay, and `deadline_claim` is `None` because this call
+    reserved nothing. When `claimed=True` and a `wa_sessions` row exists,
+    `deadline_claim` carries what was reserved and what stood before it, so
+    the caller can give the deadline back if dispatch never happens.
 
     Raises `_SpacingNotElapsed` / `_DailyLimitReached` on refusal — in both
     cases nothing is attempted and nothing is written (rule 1, module
@@ -397,8 +419,9 @@ async def _claim_send(
                     )
                 )
             ).scalar_one()
-            return existing, False
+            return existing, False, None
 
+        deadline_claim: _DeadlineClaim | None = None
         if wa_session is not None:
             # Reserved the instant this send is admitted, in the same
             # transaction — not after dispatch succeeds — so a second send
@@ -409,8 +432,11 @@ async def _claim_send(
             # retries lands on or after this exact deadline.
             interval = settings.WA_SEND_MIN_INTERVAL_SECONDS
             jitter_seconds = random.uniform(0, interval / 4)
-            wa_session.next_send_allowed_at = now + timedelta(
-                seconds=interval + jitter_seconds
+            previous_deadline = wa_session.next_send_allowed_at
+            reserved_deadline = now + timedelta(seconds=interval + jitter_seconds)
+            wa_session.next_send_allowed_at = reserved_deadline
+            deadline_claim = _DeadlineClaim(
+                reserved=reserved_deadline, previous=previous_deadline
             )
 
         row = (
@@ -418,10 +444,15 @@ async def _claim_send(
                 select(CandidateActivity).where(CandidateActivity.id == activity_id)
             )
         ).scalar_one()
-        return row, True
+        return row, True, deadline_claim
 
 
-async def _discard_claim(tenant_uuid: uuid.UUID, activity_id: uuid.UUID) -> None:
+async def _discard_claim(
+    tenant_uuid: uuid.UUID,
+    activity_id: uuid.UUID,
+    user_uuid: uuid.UUID,
+    deadline_claim: _DeadlineClaim | None,
+) -> None:
     """Undo a reserved claim that never became a real attempt.
 
     Only when still `pending` — if the sweep or a resolver already moved it,
@@ -431,6 +462,15 @@ async def _discard_claim(tenant_uuid: uuid.UUID, activity_id: uuid.UUID) -> None
     or the gateway's own spacing refusal, or a not-connected session) is
     exactly that — nothing attempted — so it is removed rather than left to
     be mistaken for a real send.
+
+    A claim that never became an attempt must not spend the recruiter's next
+    slot either: `_claim_send` reserved `deadline_claim.reserved` on
+    `wa_sessions.next_send_allowed_at` the instant it admitted this send, and
+    since nothing was actually dispatched that reservation is given back. The
+    restore is a compare-and-set — `next_send_allowed_at` is only written back
+    to `deadline_claim.previous` if it still equals `deadline_claim.reserved`
+    — because a later legitimate send may already have moved the deadline
+    forward, and that send owns it now; this cleanup must not touch it.
     """
     async with tenant_session(tenant_uuid) as session:
         await session.execute(
@@ -439,6 +479,15 @@ async def _discard_claim(tenant_uuid: uuid.UUID, activity_id: uuid.UUID) -> None
                 CandidateActivity.status == CandidateActivity.PENDING,
             )
         )
+        if deadline_claim is not None:
+            await session.execute(
+                update(WaSession)
+                .where(
+                    WaSession.user_id == user_uuid,
+                    WaSession.next_send_allowed_at == deadline_claim.reserved,
+                )
+                .values(next_send_allowed_at=deadline_claim.previous)
+            )
 
 
 async def _resolve_pending(
@@ -659,7 +708,7 @@ async def whatsapp_send(
     # row, checks spacing and the daily cap against a consistent snapshot, and
     # writes the `pending` row — all one transaction. See `_claim_send`.
     try:
-        activity, claimed = await _claim_send(
+        activity, claimed, deadline_claim = await _claim_send(
             tenant_uuid=tenant_uuid,
             user_uuid=user_uuid,
             candidate_id=candidate_id,
@@ -695,14 +744,14 @@ async def whatsapp_send(
         # The connection never came up: the request did not go out. The
         # `pending` row we reserved never became a real attempt, so it is
         # removed rather than left to be mistaken for one.
-        await _discard_claim(tenant_uuid, activity.id)
+        await _discard_claim(tenant_uuid, activity.id, user_uuid, deadline_claim)
         return _unsendable("gateway_unreachable")
     except GatewaySpacingError as exc:
         # The gateway's own independent spacing check (a second line of
         # defence — see `WA_SEND_MIN_INTERVAL_SECONDS` in config.py) fired
         # even though ours did not, which should not happen in practice but
         # is handled the same way: nothing was attempted, discard the claim.
-        await _discard_claim(tenant_uuid, activity.id)
+        await _discard_claim(tenant_uuid, activity.id, user_uuid, deadline_claim)
         return _rate_limited(
             limit="interval",
             retry_after_seconds=exc.retry_after_seconds,
@@ -767,7 +816,7 @@ async def whatsapp_send(
     if not outcome.ok:
         # The gateway declined before touching WhatsApp: the session is not
         # connected. The reserved `pending` row never became a real attempt.
-        await _discard_claim(tenant_uuid, activity.id)
+        await _discard_claim(tenant_uuid, activity.id, user_uuid, deadline_claim)
         return _unsendable(outcome.session_status)
 
     resolved = await _resolve_pending(
