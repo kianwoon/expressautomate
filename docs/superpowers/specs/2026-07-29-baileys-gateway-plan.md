@@ -188,6 +188,26 @@ security-sensitive key handling and §18.
 internal callback, SSE event, settings-page UI): **Sonnet** — standard
 plumbing over decided design; recon of `events.ts` internals by **Haiku**
 Explore first.
+
+P3 carries two requirements from the P2 review, both about the connection
+pool it will be the first to open. Neither is optional.
+
+- **Assert at boot that the role cannot bypass RLS**: `SELECT rolbypassrls
+  FROM pg_roles WHERE rolname = current_user`, and refuse to start when it is
+  true. The store scopes every statement with `set_config('app.tenant_id', …)`
+  and leans on the policy to enforce it; against a bypassing role the policy
+  is decorative and §18 quietly stops being true. Today the URL points at
+  `expressautomate_app`, which is NOBYPASSRLS — but that is a fact about a
+  Koyeb secret nobody in this repo can see, so the process has to check.
+- **Set `ssl` explicitly.** The production DSN carries `?sslmode=require`
+  against a Koyeb certificate in no trust store. The Python side maps that to
+  encrypt-without-verify on purpose; `node-postgres` does not read `sslmode`
+  the same way, so a pool built from the URL alone will not connect.
+
+One thing to know before touching `gateway/`: the image tag hashes the whole
+directory, tests included, so a test-only edit still redeploys the gateway and
+drops every live socket. Once real sessions exist, that is a reason to batch
+gateway changes rather than trickle them.
 **P4 — Send path + activities migration + modal fallback**
 (`whatsapp-send` endpoint, CHECK-widening migration, `candidate-whatsapp.tsx`):
 **Sonnet** — 1–3 file changes per side, design fully specified here.
