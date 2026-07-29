@@ -42,6 +42,23 @@ class TestOverlap:
         # Overlap: 2 / 2 = 1.0
         assert overlap("Staff Nurse", "Senior Staff Nurse") == 1.0
 
+    def test_asymmetry_reverse_direction(self):
+        """Asymmetry: candidate more specific than job is not a full match.
+
+        Overlap is containment on the job side, not symmetric. A candidate who is
+        more specific than the vacancy (has extra qualifications) is a full match,
+        because they exceed the requirement. A candidate who is less specific than
+        the vacancy (lacks named qualifications) is not a full match, because they
+        don't meet the stated need. This test prevents accidentally "simplifying"
+        overlap into a symmetric metric like Jaccard, which would break matching logic.
+        """
+        # Job asks for "Senior Staff Nurse", candidate has "Staff Nurse"
+        # Job tokens: {senior, staff, nurse}
+        # Candidate tokens: {staff, nurse}
+        # Overlap: 2 / 3 = 0.666... (candidate lacks "senior")
+        assert overlap("Senior Staff Nurse", "Staff Nurse") < 1.0
+        assert overlap("Senior Staff Nurse", "Staff Nurse") == 2 / 3
+
     def test_no_overlap(self):
         """Unrelated titles score near zero."""
         # Job: {python, developer}
@@ -81,13 +98,13 @@ class TestSalaryFit:
     """Salary fit: compare two salary bands with period normalization."""
 
     def test_same_currency_within_band(self):
-        """Salary within band scores well (close to 1.0)."""
+        """Salary within band scores perfectly (returns 1.0)."""
         # Candidate: 5,000 SGD/month
         # Job: 50,000–70,000 SGD/year = 4,166.67–5,833.33 SGD/month
-        # Candidate is near the low end of the band
+        # Candidate is within the band; implementation always returns exactly 1.0 in-band.
         result = salary_fit(5000, "SGD", "month", 50000, 70000, "SGD", "year")
         assert result is not None
-        assert result > 0.7  # Within band scores highly
+        assert result == 1.0  # Within band always returns exactly 1.0
 
     def test_different_currencies_returns_none(self):
         """Different currencies return None (no signal)."""
@@ -165,9 +182,10 @@ class TestSalaryFit:
         """Same period, no conversion needed."""
         # Candidate: 60,000 SGD/year
         # Job: 50,000–70,000 SGD/year
+        # Within band; implementation always returns exactly 1.0 in-band.
         result = salary_fit(60000, "SGD", "year", 50000, 70000, "SGD", "year")
         assert result is not None
-        assert result > 0.7  # Within band
+        assert result == 1.0  # Within band always returns exactly 1.0
 
     def test_zero_candidate_amount_returns_score(self):
         """Zero amount is a valid (though bad) salary."""
@@ -179,9 +197,10 @@ class TestSalaryFit:
         """Job min == job max is valid (single point)."""
         # Candidate: 60,000 SGD/year
         # Job: 60,000 SGD/year (min and max same)
+        # Exact match at a single point; implementation always returns 1.0 in-band.
         result = salary_fit(60000, "SGD", "year", 60000, 60000, "SGD", "year")
         assert result is not None
-        assert result > 0.9  # Perfect match
+        assert result == 1.0  # Exact match returns 1.0
 
     def test_inverted_job_range(self):
         """Job min > job max (should still work)."""

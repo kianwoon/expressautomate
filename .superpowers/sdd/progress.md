@@ -114,3 +114,7 @@ P4 final fix reviewed by Fable (8.5/10 APPROVE WITH CHANGES) and closed in 62ec2
   Lost race now answers 409, not 500.
   ACCEPTED: avatar-only later work; a later import's updates do not protect a created
   candidate from the creating import's undo.
+
+## Piece 5 - candidate sourcing
+Plan: docs/superpowers/plans/2026-07-29-candidate-sourcing.md (8 tasks)
+P5 Task 1: complete (4cca6ad..3c1f0aa, 1104 passed, review clean)
