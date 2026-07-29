@@ -125,7 +125,8 @@ P5 Task 2: complete (3c1f0aa..c74d1a8, 1135 passed, review clean after test fixe
   Period basis is annual: 2080 hr, 260 day, 52 week, 12 month per year, commented.
 P5 Task 3: complete (c74d1a8..2ac311a, 1155 passed). Fable 9/10 APPROVE; no edits needed here.
   BINDING DIRECTIVES FOR TASK 5 (from Fable):
-   - widen sourcing_matches.score to Numeric(6,4) in a Task 5 migration and persist 4 places;
+   - [DONE - executed in Task 6, migration d2f6a41b8c73] widen sourcing_matches.score to
+     Numeric(6,4) and persist 4 places;
      storing at 2dp would collapse distinct scores into ties on read-back.
    - order by (score DESC, candidate_id) - eligible.py already orders input by id.
    - eligible_candidates returns ids only: fetch roles+skills in ONE batched IN(...) query,
@@ -193,3 +194,14 @@ P5 Task 6: complete (eaf5fc6..15b3756, 1190 passed). Fable 8.5/10 APPROVE WITH C
    4. Enforce SOURCING_DAILY_RUN_QUOTA in the route, not the worker - worker-side would
       strand already-created run rows.
   MINOR deferred: run.model_name is set even when nothing was explained.
+
+## PIECE 5 HANDOFF - read this first in a fresh session
+  Plan: docs/superpowers/plans/2026-07-29-candidate-sourcing.md (8 tasks)
+  Spec: docs/superpowers/specs/2026-07-29-candidate-sourcing-design.md
+  DONE: Tasks 1-6.  REMAINING: Task 7 (routes + client resolution + quota), Task 8 (UI).
+  Baseline: 1190 passed, 1 skipped.  Alembic head: d2f6a41b8c73.
+  Tests: cd backend && scripts/test-env.sh -q      (do NOT hand-roll env vars or copy CI's -
+    CI uses a different app-role password and forcing it yields hundreds of bogus auth
+    failures that look like flakiness.)  Also: uv run ruff check .
+  Task 7 is bigger than the plan says - see the four TASK 7 MUST directives above.
+  Nothing in piece 5 is pushed, and no piece 5 migration has been applied to Koyeb.
