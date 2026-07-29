@@ -97,3 +97,14 @@ P4 Task 7: complete (5d14429..91fb93e, 1092 passed). Fable 9/10 APPROVE, no fix-
     job isolates. Byte cap is the synchronous proxy.
   CARRY TO TASK 8: list_imports has no default limit - bound it in the UI call or add one.
 P4 Task 8: complete (91fb93e..bdd00fe, UI). 1092 passed, tsc/build clean, route 15.6 kB.
+
+PIECE 4 COMPLETE. Fable final: SHIP WITH FIXES 8/10; all closed in 8851cd8.
+  1097 passed, ruff/tsc/build clean. NOT pushed, migrations NOT applied to Koyeb.
+  ACCEPTED AS-IS: order_by tiebreak, Decimal coercion, router include order,
+    migration-before-worker deploy contract, list limit.
+  KNOWN GAP: a created candidate whose ONLY later work is an avatar upload is still
+    deleted by undo - avatar_key is a plain column, not an attached record.
+  HUMAN MUST CHECK ONCE SIGNED IN: (1) template -> fill -> upload XLSX -> correct counts
+    and candidates visible; (2) undo a small import - confirm sentence, skips list, refresh;
+    (3) error-report link downloads via presigned URL.
+  BEFORE DEPLOY: check Koyeb api AND worker env, and apply the migration before the worker.
