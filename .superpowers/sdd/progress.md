@@ -161,3 +161,11 @@ P5 Task 5: complete (46b903a..b02a24e, 1180 passed). Fable 8.5/10; §15 hole clo
   CARRY TO TASK 6: call explain_matches(opportunity, candidates: list[MatchCandidate], *,
     codes=<OpportunityCode rows>, llm=None) -> (list[Explanation], ProtectedReport).
     It sorts internally. Store the ProtectedReport on the run. Log assembled prompt length.
+P5 Task 5 fix reviewed by Fable (9/10 APPROVE). The §15 fix closes the whole hole, not just
+  the reported instance: is_missing is verify()'s ONLY vacuous-True path, empty/whitespace
+  quotes are rejected upstream, and the guard uses "start_char is None" rather than a
+  truthiness check - so a quote located at offset 0 correctly survives. That falsy-check
+  mistake is the classic one in this exact fix and it was not made.
+  MINOR, deferred: a duplicate candidate_id is skipped without setting fell_short, though a
+    duplicate is itself a sign of a garbled response; union dedup is exact-string so a
+    rephrased protected report survives twice (over-reporting is the safe direction).
