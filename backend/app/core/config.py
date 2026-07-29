@@ -568,6 +568,11 @@ class Settings(BaseSettings):
     # is what makes "the same inputs give the same score" true of the value a
     # recruiter reads rather than only of the arithmetic behind it.
     SOURCING_SCORE_DECIMAL_PLACES: int = Field(default=4, ge=0, le=6)
+    # How many of the highest-scoring candidates are sent to a model to be
+    # explained. Every one of them costs tokens and CV text in a prompt, and a
+    # recruiter reads the top of a shortlist, not the tail of it — so this is
+    # the knob that decides what the feature costs per run.
+    SOURCING_EXPLAIN_TOP_N: int = Field(default=10, gt=0)
 
     @field_validator("MS_IDENTITY_SCOPES", "MS_MAILBOX_SCOPES")
     @classmethod
