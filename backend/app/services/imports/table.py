@@ -16,16 +16,18 @@ exactly as it would read the original; only the trust boundary moves.
 
 import csv
 import io
+from collections.abc import Iterable
 from typing import Literal
 
 import openpyxl
 
 from app.services.archive import archive_contains, bounded_archive
 
-# The dict key under which a CSV's single sheet is returned. A CSV has no
-# internal notion of sheet names — unlike XLSX, where `Candidates` and
-# `History` are real sheet names taken from the workbook — so we need some
-# fixed key rather than a name lifted out of the file itself.
+# The dict key under which a CSV's single sheet is returned, unless the
+# caller names it explicitly via `sheet_name`. A CSV has no internal notion
+# of sheet names — unlike XLSX, where `Candidates` and `History` are real
+# sheet names taken from the workbook — so we need some fixed default rather
+# than a name lifted out of the file itself.
 _CSV_SHEET_NAME = "csv"
 
 
@@ -81,9 +83,36 @@ def _normalise_cell(value: object) -> str:
     return text
 
 
+def _check_no_duplicate_headers(header: list[str]) -> None:
+    """Refuse a header where two columns normalise to the same key.
+
+    `_rows_from_records` builds a dict keyed by normalised header, so a
+    collision — `Email` and `email ` in the same sheet — would silently
+    drop one column and keep the other, last-write-wins, with no error and
+    no warning. On an import that writes to live candidate records, reading
+    the wrong column silently is worse than refusing the file outright.
+    """
+    seen: set[str] = set()
+    for name in header:
+        if not name:
+            continue
+        if name in seen:
+            raise UnreadableTable(f"duplicate header: {name!r}")
+        seen.add(name)
+
+
 def _rows_from_records(
-    header: list[str], records: list[list[object]], max_rows: int
+    header: list[str], records: Iterable[list[object]], max_rows: int
 ) -> list[dict[str, str]]:
+    """Turn header + data rows into dicts, enforcing `max_rows` as we go.
+
+    `records` is consumed lazily, one row at a time, so the cap is checked
+    *before* each row is materialised into a dict rather than after the
+    whole sheet has already been read into memory — the caller is expected
+    to hand us a genuine iterator (a csv reader, an openpyxl row iterator),
+    never a pre-built list, or this buys nothing.
+    """
+    _check_no_duplicate_headers(header)
     rows: list[dict[str, str]] = []
     for record in records:
         if len(rows) >= max_rows:
@@ -97,24 +126,36 @@ def _rows_from_records(
     return rows
 
 
-def _read_csv(data: bytes, max_rows: int) -> dict[str, list[dict[str, str]]]:
+def _read_csv(
+    data: bytes, max_rows: int, sheet_name: str
+) -> dict[str, list[dict[str, str]]]:
     try:
         text = data.decode("utf-8-sig")
     except UnicodeDecodeError as exc:
         raise UnreadableTable("csv is not valid utf-8") from exc
 
+    reader = csv.reader(io.StringIO(text))
     try:
-        reader = csv.reader(io.StringIO(text))
-        records = list(reader)
+        header_row = next(reader)
+    except StopIteration:
+        return {sheet_name: []}
     except csv.Error as exc:
         raise UnreadableTable("csv could not be parsed") from exc
 
-    if not records:
-        return {_CSV_SHEET_NAME: []}
+    header = [_normalise_header(cell) for cell in header_row]
 
-    header = [_normalise_header(cell) for cell in records[0]]
-    rows = _rows_from_records(header, records[1:], max_rows)
-    return {_CSV_SHEET_NAME: rows}
+    def _records() -> Iterable[list[object]]:
+        # A generator, not a list: `csv.Error` raised mid-stream must
+        # surface at the row it happens on, and — the point of this whole
+        # rewrite — nothing here is allowed to buffer the file into memory
+        # before `_rows_from_records` gets a chance to enforce `max_rows`.
+        try:
+            yield from reader
+        except csv.Error as exc:
+            raise UnreadableTable("csv could not be parsed") from exc
+
+    rows = _rows_from_records(header, _records(), max_rows)
+    return {sheet_name: rows}
 
 
 def _read_xlsx(data: bytes, budget: int, max_rows: int) -> dict[str, list[dict[str, str]]]:
@@ -141,9 +182,20 @@ def _read_xlsx(data: bytes, budget: int, max_rows: int) -> dict[str, list[dict[s
                 sheets[name] = []
                 continue
             header = [_normalise_header(cell) for cell in header_row]
-            records = [list(record) for record in row_iter]
+            # Feed `row_iter` straight into `_rows_from_records` rather than
+            # collecting it into a list first — the whole point of opening
+            # this workbook with `read_only=True` is to stream rows one at
+            # a time instead of holding the sheet in memory, and building
+            # `records = [list(r) for r in row_iter]` here would silently
+            # throw that away: the cap in `_rows_from_records` would then
+            # be checked only after the entire sheet was already resident.
+            records = (list(record) for record in row_iter)
             sheets[name] = _rows_from_records(header, records, max_rows)
-    except TooManyRows:
+    except (TooManyRows, UnreadableTable):
+        # Both are already the right exception with the right message
+        # (e.g. naming the duplicated header) — letting the `except
+        # Exception` below repackage them would replace that message with
+        # the generic "xlsx could not be parsed".
         raise
     except Exception as exc:
         raise UnreadableTable("xlsx could not be parsed") from exc
@@ -154,7 +206,12 @@ def _read_xlsx(data: bytes, budget: int, max_rows: int) -> dict[str, list[dict[s
 
 
 def read_sheets(
-    data: bytes, kind: str, *, budget: int, max_rows: int
+    data: bytes,
+    kind: str,
+    *,
+    budget: int,
+    max_rows: int,
+    sheet_name: str | None = None,
 ) -> dict[str, list[dict[str, str]]]:
     """Read a table's rows, keyed by sheet name then by lower-cased header.
 
@@ -162,9 +219,17 @@ def read_sheets(
     (see module docstring); `max_rows` bounds how many data rows any single
     sheet may hold before we give up rather than build an unbounded list in
     memory. Both are the caller's numbers — this module hardcodes neither.
+
+    `sheet_name` only applies to `kind == "csv"`: a CSV has exactly one
+    sheet and no internal name for it, but a caller may need to know
+    whether that one sheet is standing in for "Candidates" or "History" —
+    Task 7's API accepts a CSV as either. Naming it here, rather than
+    handing back the fixed `"csv"` key and making every caller re-key the
+    result, keeps that constant a private detail of this module instead of
+    something every caller has to remember.
     """
     if kind == "csv":
-        return _read_csv(data, max_rows)
+        return _read_csv(data, max_rows, sheet_name or _CSV_SHEET_NAME)
     if kind == "xlsx":
         return _read_xlsx(data, budget, max_rows)
     raise UnreadableTable(f"unknown table kind: {kind!r}")
