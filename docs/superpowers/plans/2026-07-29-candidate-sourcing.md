@@ -48,7 +48,10 @@ It sources `backend/.env.test` and hides any root `.env`. **Do not hand-roll env
 | `backend/app/api/sourcing.py` (create) | Runs and submissions |
 | `backend/app/core/config.py` (modify) | `SOURCING_*` settings |
 | `frontend/app/dashboard/job-orders-sourcing.tsx` (create) | The shortlist |
-| `frontend/app/dashboard/detail-panel.tsx`, `opportunities.ts`, `api.ts`, `app.css` (modify) | Mount, types, paths, styles |
+| `frontend/app/dashboard/detail-panel.tsx` (modify) | Mount the shortlist |
+| `frontend/app/dashboard/opportunities.ts` (modify) | Types and fetches |
+| `frontend/app/api.ts` (modify) | Path helpers |
+| `frontend/app/app.css` (modify) | Styles. **Note the path** — `frontend/app/app.css`, not under `dashboard/`, and not `globals.css` |
 
 ---
 
@@ -99,7 +102,9 @@ git commit -m "Give a shortlist somewhere to live, and a submission somewhere to
 
 **Interfaces produced:**
 - `tokens(value: str) -> frozenset[str]` — lower-cased, punctuation stripped, split on whitespace.
-- `overlap(a: str, b: str) -> float` — 0.0 to 1.0. Define it precisely and document which side is the denominator; a Jaccard and a containment score rank differently, and the choice must be stated rather than emergent.
+- `overlap(a: str, b: str) -> float` — **containment on the job side**: the fraction of the *job title's* tokens that appear in the candidate's title. `len(job_tokens & cand_tokens) / len(job_tokens)`, and `0.0` when the job side is empty.
+
+  This is stated here rather than left to the implementer because the spec calls it "a stated rule", and because a Jaccard would rank differently: "Senior Staff Nurse" against a job asking for "Staff Nurse" is a *full* match on containment and a partial one on Jaccard, since Jaccard penalises the candidate for being more specific than the vacancy. Containment is the behaviour a recruiter expects. A rewrite that quietly switched would reorder every shortlist.
 - `salary_fit(candidate_amount, candidate_currency, candidate_period, job_min, job_max, job_currency, job_period) -> float | None`
 
 **The salary rules, exactly:**
@@ -137,6 +142,8 @@ git commit -m "Compare a title to a title, and a wage to a wage"
 **Scoring rules:**
 - Every component returns a named, signed contribution. **The weights come from `settings`** — no literals anywhere in this module.
 - **A component with no data reports `None` and a note, and is excluded from the total** rather than scoring zero. Absent and bad are different, and a recruiter reading the breakdown must be able to tell them apart.
+- **The total is the weighted mean over components that have data** — the sum of `weight × raw` divided by the sum of those weights. Dividing by the full weight set instead would make a candidate look worse for facts nobody recorded about them.
+- **When no component has data at all, there is no score.** The candidate is excluded from the shortlist with a note saying why, rather than given a `0.0` that reads as a bad fit. With only 11 job orders in dev data and sparse candidate records, this is not a rare edge — it is the common case early on, and the difference between "we know nothing about this person" and "this person is unsuitable" is the whole credibility of the feature.
 - Skills: `opportunity.skills` (an `ARRAY(Text)` of raw strings, `opportunity.py:49`) through `normalize_skill`, against `candidate_skills.skill_normalized`.
 - Employer signal: `employer_normalized` against `company_name_normalized`.
 - Tenure and recency come from the role spans via `candidate_tenure`.
@@ -172,6 +179,10 @@ git commit -m "Rank on what the record actually says, and say what it did not"
 
 Only codes whose `attribute` is not null are redacted. A code meaning "night shift" is not a protected characteristic and removing it would damage a legitimate requirement.
 
+**Redaction runs over every piece of opportunity text the prompt carries — not just `requirements`.** The prompt in Task 5 also includes the job title and the description, and a coded requirement can sit in any of them. Redacting one field and passing the others through would defeat the whole guard while looking like it worked.
+
+So the test that matters is not "the code is gone from `requirements`" but **"the code string does not appear anywhere in the fully assembled prompt"**. Write it that way — assert against the prompt the stub actually receives.
+
 - [ ] **Step 1: Write the failing tests**
 
 A code with an `attribute` is removed and reported; a code without one is left alone; a code appearing twice is removed both times; matching is case-insensitive; text with no codes is returned unchanged.
@@ -199,6 +210,10 @@ git commit -m "Take the coded requirement out before anything reads it"
 **The rules:**
 - Only the top N, N from `settings`.
 - Every quote is **verified against the candidate's stored text** before it is kept. A quote that does not verify means **no explanation for that candidate** — they keep their deterministic score. An unsupported reason about a person is worse than none.
+
+  **`verify` is not a drop-in.** It takes an `ExtractedField` from the ingest schema (`app/services/ingest/schema.py`), **mutates** that object's `start_char` / `end_char` as it locates the quote, and additionally consults `_value_is_corroborated`. So this module must wrap each model quote in an `ExtractedField` before calling it, and accept that the object comes back modified.
+
+  **The text verified against is the candidate's extracted CV text** — the object at `CandidateDocument.text_key`, which piece 2 stores in R2 precisely so a span stays checkable after the fact. A candidate with no parsed document has nothing to verify against and therefore gets no explanation; say so in the note rather than silently omitting them.
 - The prompt instructs the model to **ignore any requirement about a protected characteristic and to report it**. That report becomes `ProtectedReport` and is stored on the run in Task 6.
 - Fast model first, escalating only on low confidence (§32).
 
@@ -243,11 +258,11 @@ git commit -m "Run the search out of the request, and keep what it found"
 
 ---
 
-### Task 7: The routes and the shortlist
+### Task 7: The routes
 
 **Files:**
-- Create: `backend/app/api/sourcing.py`, `frontend/app/dashboard/job-orders-sourcing.tsx`
-- Modify: `backend/app/main.py`, `frontend/app/dashboard/detail-panel.tsx`, `opportunities.ts`, `api.ts`, `app.css`
+- Create: `backend/app/api/sourcing.py`
+- Modify: `backend/app/main.py`, `frontend/app/dashboard/detail-panel.tsx`, `frontend/app/dashboard/opportunities.ts`, `frontend/app/api.ts`, `frontend/app/app.css`
 - Test: `backend/tests/test_sourcing_api.py`
 
 **Routes:**
@@ -258,9 +273,21 @@ git commit -m "Run the search out of the request, and keep what it found"
 
 **Register `sourcing.router` carefully.** `/opportunities/{id}/sourcing` must not be swallowed by an existing `/opportunities/{opportunity_id}` route — the import feature hit exactly this, and a comment at the include site plus a test is how it was settled.
 
-**UI:** in the job order detail panel (`detail-panel.tsx`, 174 lines) — a "Find candidates" action, then the ranked list showing each score's breakdown and the model's reason where there is one. A "Mark submitted" action per row. Where the job order references a protected attribute **or the model reported one**, a notice says plainly that the shortlist ignored that requirement.
+**Task 8 covers the UI.** A reviewer must be able to reject the shortlist's presentation without rejecting working routes.
 
-Poll only while a run is `pending` or `running`. Styles in `app.css` (1129 lines), not `globals.css`. Focus must land somewhere sensible after an action removes the control that was pressed — **defer it until the control is enabled**; this codebase has been bitten by that twice.
+---
+
+### Task 8: The shortlist
+
+**Files:**
+- Create: `frontend/app/dashboard/job-orders-sourcing.tsx`
+- Modify: `frontend/app/dashboard/detail-panel.tsx`, `frontend/app/dashboard/opportunities.ts`, `frontend/app/api.ts`, `frontend/app/app.css`
+
+**Interfaces consumed:** the six routes from Task 7.
+
+In the job order detail panel (`detail-panel.tsx`, 174 lines) — a "Find candidates" action, then the ranked list showing each score's breakdown and the model's reason where there is one. A "Mark submitted" action per row. Where the job order references a protected attribute **or the model reported one**, a notice says plainly that the shortlist ignored that requirement.
+
+Poll only while a run is `pending` or `running`. Styles go in **`frontend/app/app.css`** (1129 lines) — that exact path, not `frontend/app/dashboard/app.css`, which does not exist, and not `globals.css` (867 lines), which is the landing-page sheet. Focus must land somewhere sensible after an action removes the control that was pressed — **defer it until the control is enabled**; this codebase has been bitten by that twice.
 
 - [ ] **Step 1: Write the failing API tests**
 
@@ -278,10 +305,10 @@ git commit -m "Show who fits, and why, and let a recruiter say they sent them"
 
 ## Self-Review
 
-**Spec coverage.** Three tables and the unique constraint → Task 1. Token overlap, salary with period and currency → Task 2. Components, weights from settings, eligibility → Task 3. Redaction and its stated limit → Task 4. Model pass, quote verification, the protected report → Task 5. Storage, job, sweep, attempts → Task 6. Routes, submissions, UI, ordering → Task 7. All 16 spec tests appear across Tasks 1-7.
+**Spec coverage.** Three tables and the unique constraint → Task 1. Token overlap, salary with period and currency → Task 2. Components, weights from settings, eligibility → Task 3. Redaction and its stated limit → Task 4. Model pass, quote verification, the protected report → Task 5. Storage, job, sweep, attempts → Task 6. Routes, submissions and ordering → Task 7. The shortlist itself → Task 8. All 16 spec tests appear across Tasks 1-8.
 
 **Placeholders.** None. Four steps deliberately point at a file to copy rather than quoting it — the test fixtures, `CandidateDocument`, `run_candidate_import`'s claim, and the LLM stub — because quoting a signature that may have drifted is worse than naming the source of truth.
 
 **Verified rather than assumed.** The alembic head is `c8e2b47d5a91`, not the revision an earlier scout reported; `verify` takes two arguments, not three. Both were checked against the files.
 
-**Type consistency.** `tokens`/`overlap`/`salary_fit` are defined in Task 2 and consumed in Task 3. `Component` is defined in Task 3 and serialised in Tasks 6 and 7. `redact` is defined in Task 4 and called in Task 5. `explain_matches` is defined in Task 5 and called in Task 6. `SourcingRun`'s state constants are defined in Task 1 and used in Tasks 6 and 7.
+**Type consistency.** `tokens`/`overlap`/`salary_fit` are defined in Task 2 and consumed in Task 3. `Component` is defined in Task 3 and serialised in Tasks 6 and 7. `redact` is defined in Task 4 and called in Task 5. `explain_matches` is defined in Task 5 and called in Task 6. `SourcingRun`'s state constants are defined in Task 1 and used in Tasks 6, 7 and 8.
