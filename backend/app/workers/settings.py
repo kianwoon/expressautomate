@@ -17,6 +17,7 @@ from app.core.config import settings
 from app.core.logging import configure_logging
 from app.services.graph.client import warn_if_unconfigured
 from app.workers.cv_jobs import parse_candidate_cv
+from app.workers.import_jobs import run_candidate_import
 from app.workers.jobs import (
     backfill_mailbox_job,
     classify_batch,
@@ -79,7 +80,7 @@ class WorkerSettings:
         # Notifications. Enqueued by `emit_and_enqueue` after the opportunity
         # commits, and by `flush_notifications` for rows whose enqueue was lost.
         deliver_notification,
-        # The only job here with a timeout of its own. Everything above is
+        # The two jobs here with a timeout of their own. Everything above is
         # bounded by the service it calls — Graph and the model client both
         # carry their own — but a CV parse runs a document parser on bytes a
         # stranger uploaded, and a single-page FlateDecode bomb inflates
@@ -91,6 +92,18 @@ class WorkerSettings:
             parse_candidate_cv,
             name="parse_candidate_cv",
             timeout=settings.CV_PARSE_TIMEOUT_SECONDS,
+        ),
+        # An import is database work rather than a model call, but it is
+        # database work whose size the uploader chooses: five hundred rows,
+        # each one a match query and a write. The timeout is what keeps one
+        # oversized file from holding a worker slot indefinitely, and a run it
+        # cuts short is left at `parsing` for `rescan_stuck` to re-enqueue.
+        # `name` is given explicitly for the same reason as above: producers
+        # enqueue the string "run_candidate_import".
+        func(
+            run_candidate_import,
+            name="run_candidate_import",
+            timeout=settings.IMPORT_JOB_TIMEOUT_SECONDS,
         ),
     ]
     # Every function above but the two classification jobs ends in a Graph call. Said once

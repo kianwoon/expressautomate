@@ -34,6 +34,17 @@ _STARTED = "start date"
 _ENDED = "end date"
 _DESCRIPTION = "description"
 
+# The two sheets an import is made of, and the columns each one is read by.
+# Public because the API hands the same names back out — the downloadable
+# template is generated from these lists rather than typed out beside them,
+# so a header can never drift from the name the parsers above match on. A
+# template naming a column this module does not read is worse than no
+# template: the recruiter fills it in and the value silently disappears.
+CANDIDATE_SHEET = "Candidates"
+HISTORY_SHEET = "History"
+CANDIDATE_HEADERS = (_FULL_NAME, _EMAIL, _PHONE, _TITLE, _EMPLOYER, _LOCATION)
+HISTORY_HEADERS = (_EMAIL, _PHONE, _EMPLOYER, _TITLE, _STARTED, _ENDED, _LOCATION, _DESCRIPTION)
+
 
 @dataclass(frozen=True)
 class RowProblem:

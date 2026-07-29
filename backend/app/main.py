@@ -15,6 +15,7 @@ from app.api import (
     activity,
     auth,
     candidate_documents,
+    candidate_imports,
     candidate_roles,
     candidates,
     candidates_avatar,
@@ -122,6 +123,9 @@ api.include_router(graph_webhook.router)
 api.include_router(opportunities.router)
 api.include_router(activity.router)
 api.include_router(glossary.router)
+# Before `candidates`, deliberately: `/candidates/imports` would otherwise be
+# matched by `/candidates/{candidate_id}` and answered as a malformed UUID.
+api.include_router(candidate_imports.router)
 api.include_router(candidates.router)
 api.include_router(candidate_roles.router)
 api.include_router(candidates_avatar.router)

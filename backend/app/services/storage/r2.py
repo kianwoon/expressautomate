@@ -110,6 +110,31 @@ def document_text_key(
     return f"{tenant_id}/candidates/{candidate_id}/documents/{document_id}.txt"
 
 
+def import_key(tenant_id: uuid.UUID, import_id: uuid.UUID, stem: str, kind: str) -> str:
+    """Where one uploaded spreadsheet is kept, exactly as it arrived.
+
+    Computed from the authenticated tenant and a freshly minted import id,
+    never from the filename the browser sent — same rule as `document_key`,
+    and same `{tenant_id}/` prefix a tenant erasure purges by.
+
+    `stem` is the only part carrying information rather than identity: a CSV
+    has no internal sheet name, so the upload route records here which of the
+    two sheets the file is standing in for, and the job reads it back. It is
+    one of a fixed set of our own words — never anything the client typed.
+    """
+    return f"{tenant_id}/imports/{import_id}/{stem}.{kind}"
+
+
+def import_error_report_key(tenant_id: uuid.UUID, import_id: uuid.UUID) -> str:
+    """Where the per-row problems of one import are kept.
+
+    A file beside the upload rather than a column, because a five-hundred-row
+    migration can produce hundreds of problems and Postgres is the wrong
+    place for a document a person reads once.
+    """
+    return f"{tenant_id}/imports/{import_id}/errors.txt"
+
+
 class BodyDeletionFailed(Exception):
     """Some keys in a batch were not deleted."""
 

@@ -59,6 +59,16 @@ _CLAIM_FETCHED = text("SELECT * FROM claim_fetched_email_rows(:limit)")
 _STALLED_DOCUMENTS = text(
     "SELECT * FROM stalled_candidate_documents(:pending_minutes, :working_minutes)"
 )
+# The imports half-again of `rescan_stuck`, and a resolver for exactly the
+# reason `_STALLED_DOCUMENTS` is: `candidate_imports` carries FORCE ROW LEVEL
+# SECURITY and this process sets no `app.tenant_id`, so a direct read would
+# match nothing at all — silently. Without this block a worker killed
+# mid-import strands the uploaded file for ever: the upload route catches a
+# `False` from `enqueue`, but a process that dies after taking the job
+# returns nothing to catch.
+_STALLED_IMPORTS = text(
+    "SELECT * FROM stalled_candidate_imports(:pending_minutes, :working_minutes)"
+)
 _DUE_FOR_RENEWAL = text("SELECT * FROM subscriptions_due_for_renewal(:margin)")
 _ACTIVE_MAILBOXES = text("SELECT * FROM active_mailboxes()")
 _MISSING_SUBSCRIPTION = text("SELECT * FROM mailboxes_without_subscription()")
@@ -116,9 +126,10 @@ async def rescan_stuck() -> int:
     work with no job attached. Without this sweep, "killing any worker
     mid-flight loses no email" is simply false.
 
-    Two kinds of row, one function. Email messages and uploaded CVs have
-    nothing in common except the way they are stranded — a lost enqueue, or a
-    worker killed mid-job — and that is the whole question this answers. A
+    Three kinds of row, one function. Email messages, uploaded CVs and
+    candidate imports have nothing in common except the way they are stranded
+    — a lost enqueue, or a worker killed mid-job — and that is the whole
+    question this answers. A
     second scheduled task would be a second thing to forget to schedule, and
     the sweep that was forgotten is invisible until somebody notices a CV that
     has said "parsing" for a week.
@@ -130,6 +141,7 @@ async def rescan_stuck() -> int:
     async with SessionLocal() as session:
         rows = (await session.execute(_STALLED, ages)).all()
         documents = (await session.execute(_STALLED_DOCUMENTS, ages)).all()
+        imports = (await session.execute(_STALLED_IMPORTS, ages)).all()
 
     requeued = 0
     for row in rows:
@@ -157,6 +169,20 @@ async def rescan_stuck() -> int:
             tenant_id=str(row.tenant_id),
             candidate_id=str(row.candidate_id),
             document_id=str(row.id),
+        ):
+            requeued += 1
+
+    for row in imports:
+        # Same shape as the documents block, and for the same reason:
+        # `run_candidate_import` accepts `parsing` as well as `pending`, so a
+        # file a killed worker left half-applied is picked up rather than
+        # skipped as already answered. Applying an import twice is safe by
+        # construction — a row that matched an existing candidate the first
+        # time matches the same one again and writes the same values.
+        if await enqueue(
+            "run_candidate_import",
+            tenant_id=str(row.tenant_id),
+            import_id=str(row.id),
         ):
             requeued += 1
 

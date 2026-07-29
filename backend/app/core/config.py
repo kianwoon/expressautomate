@@ -215,6 +215,34 @@ class Settings(BaseSettings):
     # model call, so this is a spend ceiling before it is anything else.
     CV_DAILY_PARSE_QUOTA: int = Field(default=200, gt=0)
 
+    # --- Candidate spreadsheet imports ---
+    # The largest spreadsheet the API will accept, counted as the bytes
+    # arrive rather than trusted from `Content-Length`. Larger than a CV
+    # because a five-hundred-person roster with a career history beside it is
+    # the ordinary case here, not the pathological one.
+    IMPORT_MAX_UPLOAD_BYTES: int = Field(default=20 * 1024 * 1024, gt=0)
+    # How many data rows one sheet may hold. This is the bound that stops an
+    # import building an unbounded list of dicts in a worker's memory, and it
+    # is quoted back to the recruiter when a file exceeds it, so it belongs in
+    # configuration rather than at the call site.
+    IMPORT_MAX_ROWS: int = Field(default=5_000, gt=0)
+    # How much an uploaded XLSX's zip members may inflate to in total. An
+    # XLSX is a decompression-bomb vector in exactly the way a DOCX is: a
+    # member's declared uncompressed size is a claim the file makes about
+    # itself. `read_sheets` inflates against this budget instead of believing
+    # it.
+    IMPORT_INFLATE_BUDGET_BYTES: int = Field(default=200 * 1024 * 1024, gt=0)
+    # How long a link to an import's error report stays valid. Short for the
+    # same reason a CV's is: a signed URL is a capability, and the report
+    # names real candidates.
+    IMPORT_PRESIGNED_URL_TTL_SECONDS: int = Field(default=300, gt=0)
+    # The wall clock one import may occupy an arq worker for. An import is
+    # database work rather than a model call, but it is database work whose
+    # size the uploader chooses, and `rescan_stuck` re-enqueues a run this
+    # cuts short — so the cost of a genuinely huge file is a retry, not a
+    # worker slot held for the life of the process.
+    IMPORT_JOB_TIMEOUT_SECONDS: float = Field(default=600.0, gt=0)
+
     # --- AI extraction ---
     # Kept although nothing calls the router any more: OPENROUTER_API_KEY and
     # LLM_BASE_URL are still what `llm_configured` answers for, and a deployment
