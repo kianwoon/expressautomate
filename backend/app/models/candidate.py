@@ -87,6 +87,19 @@ class Candidate(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
     )
     merged_into_candidate_id: Mapped[uuid.UUID | None] = mapped_column(PgUUID(as_uuid=True))
 
+    # Which import wrote or last touched this row, if any. A plain FK, not the
+    # composite `(tenant_id, ...)` idiom used elsewhere in this file: a
+    # composite FK's bare `ON DELETE SET NULL` nulls every referencing column
+    # including `tenant_id`, which is NOT NULL here — the same trap the
+    # `merged_into_candidate_id` comment above documents. `CandidateImport` is
+    # a record of an event, and deleting that record must never delete the
+    # person it created, so this stays SET NULL rather than CASCADE or
+    # RESTRICT — the candidate simply becomes one nobody can trace to an
+    # import.
+    import_id: Mapped[uuid.UUID | None] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("candidate_imports.id", ondelete="SET NULL")
+    )
+
     created_by: Mapped[uuid.UUID | None] = mapped_column(
         PgUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL")
     )
@@ -234,6 +247,15 @@ class CandidateRole(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
     # found. Always NULL while a person is the only writer.
     extraction_id: Mapped[uuid.UUID | None] = mapped_column(PgUUID(as_uuid=True))
 
+    # Which import wrote or last touched this row, if any. Plain FK, not
+    # composite — see the comment on `Candidate.import_id` for why: a
+    # composite FK's `SET NULL` would null `tenant_id` too, which is NOT
+    # NULL. SET NULL because deleting the import record must not delete the
+    # role it created.
+    import_id: Mapped[uuid.UUID | None] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("candidate_imports.id", ondelete="SET NULL")
+    )
+
     created_by: Mapped[uuid.UUID | None] = mapped_column(
         PgUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL")
     )
@@ -372,5 +394,121 @@ class CandidateDocument(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
         CheckConstraint(
             "parse_state IN ('pending','parsing','parsed','empty','unreadable','failed')",
             name="ck_candidate_documents_parse_state",
+        ),
+    )
+
+
+class CandidateImport(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
+    """A spreadsheet a recruiter uploaded to bulk-load or bulk-update candidates.
+
+    Modelled on `CandidateDocument` — same mixins, same object-key-plus-
+    metadata shape — but the state machine is an import's, not a parse's:
+    `pending` while the file sits in R2 waiting for the job, `parsing` while
+    rows are read and matched, and one of three terminals. `done` and `failed`
+    mirror `CandidateDocument.PARSED`/`.FAILED`; `undone` is new — the row
+    stays after undo runs (Task 6) rather than being deleted, because deleting
+    it would erase the counts below and leave no evidence the import, or its
+    reversal, ever happened.
+
+    The four `*_created`/`*_updated` counters and `rows_failed` exist so the
+    upload result and the eventual undo confirmation can both be answered from
+    this one row without re-deriving them from `CandidateImportChange`, which
+    a large import could make thousands of rows long.
+    """
+
+    __tablename__ = "candidate_imports"
+
+    PENDING = "pending"
+    PARSING = "parsing"
+    DONE = "done"
+    FAILED = "failed"
+    UNDONE = "undone"
+    IMPORT_STATES = (PENDING, PARSING, DONE, FAILED, UNDONE)
+
+    filename: Mapped[str] = mapped_column(Text, nullable=False)
+    content_type: Mapped[str] = mapped_column(String(128), nullable=False)
+    byte_size: Mapped[int] = mapped_column(Integer, nullable=False)
+    # The R2 object key for the uploaded spreadsheet as received.
+    object_key: Mapped[str] = mapped_column(Text, nullable=False)
+    # The R2 object key for a per-row error report, set only if some rows
+    # failed to parse or match. Nullable because most imports need none.
+    error_report_key: Mapped[str | None] = mapped_column(Text)
+
+    state: Mapped[str] = mapped_column(String(16), nullable=False, default=PENDING)
+
+    candidates_created: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    candidates_updated: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    roles_created: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    roles_updated: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    rows_failed: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    uploaded_by: Mapped[uuid.UUID | None] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL")
+    )
+
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "id", name="uq_candidate_imports_tenant_id_id"),
+        CheckConstraint(
+            "state IN ('pending','parsing','done','failed','undone')",
+            name="ck_candidate_imports_state",
+        ),
+    )
+
+
+class CandidateImportChange(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
+    """One field an import wrote, kept so the import can be walked back.
+
+    Undo (Task 6) restores a field only if its current value still equals
+    what the import wrote — a recruiter who retyped the field afterwards owns
+    it now, and undo must not clobber that edit. Evaluating that rule needs
+    both sides of the comparison: `previous_value` alone tells undo what to
+    restore *to*, but not whether restoring is still safe, because there is
+    nothing to check the current value against. `new_value` is that other
+    half. Dropping it would make undo either silently wrong (always restore)
+    or silently inert (never restore) — both look complete and are not.
+
+    `previous_value` is nullable and stays NULL on a `created` row: there is
+    no "before" for a field that did not exist, and undo of a `created` row
+    deletes the entity rather than restoring anything.
+
+    `entity_type`/`entity_id` point at the changed `Candidate` or
+    `CandidateRole` row rather than a typed FK to either, because one column
+    covering both saves a UNION when Task 6 walks the whole import back in id
+    order; the tenant-scoped uniqueness on both target tables is what keeps
+    a stray id from resolving into another tenant's row.
+    """
+
+    __tablename__ = "candidate_import_changes"
+
+    CANDIDATE = "candidate"
+    ROLE = "role"
+    ENTITY_TYPES = (CANDIDATE, ROLE)
+
+    CREATED = "created"
+    UPDATED = "updated"
+    ACTIONS = (CREATED, UPDATED)
+
+    import_id: Mapped[uuid.UUID] = mapped_column(PgUUID(as_uuid=True), nullable=False, index=True)
+    entity_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    entity_id: Mapped[uuid.UUID] = mapped_column(PgUUID(as_uuid=True), nullable=False, index=True)
+    action: Mapped[str] = mapped_column(String(16), nullable=False)
+    field_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    previous_value: Mapped[str | None] = mapped_column(Text)
+    new_value: Mapped[str | None] = mapped_column(Text)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "import_id"],
+            ["candidate_imports.tenant_id", "candidate_imports.id"],
+            name="fk_candidate_import_changes_import_same_tenant",
+            ondelete="CASCADE",
+        ),
+        CheckConstraint(
+            "entity_type IN ('candidate','role')",
+            name="ck_candidate_import_changes_entity_type",
+        ),
+        CheckConstraint(
+            "action IN ('created','updated')",
+            name="ck_candidate_import_changes_action",
         ),
     )
