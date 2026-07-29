@@ -61,6 +61,14 @@ describe("the chips and letter bar go silent while filtering, not stale", () => 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(result.current.counts).toBeNull());
     expect(result.current.initials).toBeNull();
+
+    // The mock answers by call order, so without this every assertion above
+    // would still hold for a hook that had quietly stopped sending
+    // `eligible_for` at all — it would be handed the filtered payload
+    // regardless, and the null counts would look like proof of a filter that
+    // was never applied. Pin the request, not just the response.
+    expect(String(fetchMock.mock.calls[0][0])).not.toContain("eligible_for");
+    expect(String(fetchMock.mock.calls[1][0])).toContain("eligible_for=opp-1");
   });
 
   it("a refetch that is merely in flight does not blank counts already delivered", async () => {
