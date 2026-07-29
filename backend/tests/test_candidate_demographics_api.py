@@ -104,6 +104,47 @@ def _constraint_of(exc: IntegrityError) -> str:
 # --- round trips ---------------------------------------------------------
 
 
+async def test_a_list_row_carries_none_of_them(agency) -> None:
+    """The browse screen must not print race beside fifty names.
+
+    These fields exist so a recruiter can fill a MOM form for one person, and
+    they are on the single-record read for exactly that. A table that showed
+    them would invite shortlisting by eye — which is the thing `redact.py`
+    refuses to let a model do, and refusing it in code while laying it out on
+    a page would be a distinction without a difference.
+
+    Without this the omission is one careless line in `_serialize` away from
+    coming back, and nothing would fail.
+    """
+    tid, uid = agency
+    async with await _client_for(tid, uid) as http:
+        created = await http.post(
+            "/api/candidates",
+            json={
+                "full_name": "Listed Person",
+                "sex": "female",
+                "race": "chinese",
+                "nationality": "SG",
+                "date_of_birth": "1990-04-12",
+                "education_years": 12,
+            },
+        )
+        assert created.status_code == 201, created.text
+        listed = await http.get("/api/candidates")
+        detail = await http.get(f"/api/candidates/{created.json()['id']}")
+
+    rows = listed.json()["items"]
+    assert rows, "expected the candidate just created"
+    for row in rows:
+        for field in PROTECTED_COLUMNS + ("education_years",):
+            assert field not in row, f"{field} leaked onto a list row"
+
+    # And the same fields are still there when one person is opened, so this
+    # is an assertion about where they appear rather than whether they exist.
+    for field in PROTECTED_COLUMNS + ("education_years",):
+        assert field in detail.json(), f"{field} missing from the single-record read"
+
+
 async def test_every_new_field_round_trips(agency) -> None:
     tid, uid = agency
     async with await _client_for(tid, uid) as http:

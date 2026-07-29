@@ -66,12 +66,20 @@ HIDDEN=""
 if [ -e "$ROOT/.env" ]; then
   HIDDEN="$ROOT/.env.hidden-while-testing"
   mv "$ROOT/.env" "$HIDDEN"
-  # INT and TERM as well as EXIT: a bare EXIT trap does not run when the shell
-  # is killed by a signal, and "killed" includes the ordinary case of somebody
-  # pressing Ctrl-C through a slow suite. Leaving `.env` renamed is the failure
-  # this trap exists to prevent, so it has to survive the ways a run really
-  # ends rather than only the tidy one.
-  trap 'mv "$HIDDEN" "$ROOT/.env"' EXIT INT TERM
+  # Two traps, not one, and the split is the point.
+  #
+  # Restoring on EXIT alone misses a shell killed by TERM. But hanging the
+  # restore off INT and TERM as well is worse than the gap it closes: a trap on
+  # a signal handles it and *returns*, so the script carries on with `.env`
+  # already put back — every later step then reads the real file, which is the
+  # drift this whole script exists to prevent — and the EXIT trap later runs
+  # the same `mv` again on a source that has gone.
+  #
+  # So the signal trap only asks the shell to leave, and the single EXIT trap
+  # does the restoring, exactly once, however the run ended. 130 is the
+  # conventional status for a Ctrl-C.
+  trap 'mv "$HIDDEN" "$ROOT/.env"' EXIT
+  trap 'exit 130' INT TERM
 fi
 
 # Bring the schema and the application role up to head before every run.
