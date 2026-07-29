@@ -77,3 +77,8 @@ P4 Task 4: complete (bcc2d28..479b5af, 1032 passed). Critical fixed: slash-dates
   Both paths now agree. Header names LOCKED: full name, email, phone, title, employer,
   location, start date, end date, description - Task 7's template must emit exactly these.
   CARRY TO TASK 5: precision None means keep the role, drop only the date (as cv/persist does).
+P4 Task 5: complete (479b5af..55171f9, 1050 passed). Fable 8/10 APPROVE WITH CHANGES, closed.
+  Line numbers now threaded through the records - index+2 drifted after any dropped row and
+  named the wrong Excel row confidently. Rejected roles stay rejected (upheld, now tested).
+  CARRY TO TASK 6: undo keys on action=CREATED; field_name="*" on a created change row is
+    informational only. Also assert import.tenant_id matches before touching anything.
