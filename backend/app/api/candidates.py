@@ -21,8 +21,13 @@ from sqlalchemy.exc import IntegrityError
 from app.api.auth import _require_session
 from app.core.config import settings
 from app.db.rls import tenant_session
-from app.models.candidate import Candidate, CandidateFieldOverride, CandidateSkill
-from app.models.tenant import User
+from app.models.candidate import (
+    Candidate,
+    CandidateActivity,
+    CandidateFieldOverride,
+    CandidateSkill,
+)
+from app.models.tenant import Tenant, User
 from app.services.candidate_matching import find_candidate
 from app.services.candidate_naming import (
     is_matchable_phone,
@@ -906,7 +911,8 @@ async def unmerge_candidate(request: Request, candidate_id: uuid.UUID) -> dict:
 async def delete_candidate(request: Request, candidate_id: uuid.UUID) -> Response:
     """Erase a person. Owner only, and irreversible.
 
-    Skills and overrides cascade. Nothing else in phase 1 holds this person's
+    Skills, overrides and activities (WhatsApp-open history — see
+    `CandidateActivity`) cascade. Nothing else in phase 1 holds this person's
     personal data — the bulk import that will is built in phase 2, and its plan
     must extend this endpoint to scrub `candidate_import_rows`.
     """
@@ -923,6 +929,234 @@ async def delete_candidate(request: Request, candidate_id: uuid.UUID) -> Respons
 async def export_candidate(request: Request, candidate_id: uuid.UUID) -> dict:
     """Everything stored about one person, for a data-access request."""
     return await get_candidate(request, candidate_id)
+
+
+ActivityType = Literal[CandidateActivity.WHATSAPP_OPENED]
+ActivityChannel = Literal[CandidateActivity.WHATSAPP]
+ActivityStatus = Literal[CandidateActivity.OPENED]
+
+
+def _actor_name(display_name: str | None, email: str) -> str:
+    """The name to show for who did something — never fabricated (§15).
+
+    `users.display_name` is only populated from the Entra/Google claims at
+    sign-in and can be null (e.g. an older row, or a provider that omitted
+    it). Falling back to the user's `email`, which is NOT NULL, is honest:
+    it identifies the real person rather than inventing a display name they
+    never gave us.
+    """
+    return display_name if display_name else email
+
+
+# Letters whose *name* opens with a vowel sound, for a title that begins with
+# an initialism. "HR Manager" is read "aitch-are", so it takes "an", while its
+# spelled-out twin "Human Resources Manager" takes "a" — the article follows
+# the sound, and for an initialism the sound is the letter's name.
+_VOWEL_SOUNDED_LETTERS = frozenset("AEFHILMNORSX")
+
+
+def _article_for(noun_phrase: str) -> str:
+    """"a" or "an", chosen by how the phrase is said rather than spelled.
+
+    The draft used to hardcode "a", which wrote "a Engineer" and — for the
+    Enrolled Nurse in the plan this feature was built from — "a Enrolled
+    Nurse". It is the first line a candidate reads from the agency, so it is
+    worth getting right.
+
+    Two rules, because job titles are mostly ordinary words with a seam of
+    initialisms running through them:
+
+    - An initialism (two or more leading capitals, as in "HR", "IT", "QA")
+      is read letter by letter, so the first letter's *name* decides.
+    - Anything else goes by its first letter, with `u` deliberately excluded
+      from the vowels: a title starting with u almost always says "you" —
+      "a UX Designer", "a Unit Manager", "a University Lecturer".
+
+    Both rules are about spelling standing in for pronunciation, so both can
+    be wrong: "an Hour" and "a Euro" are the classic misses. Neither shape
+    occurs in a job title, and the recruiter edits the message before it is
+    sent, so the cost of a miss is a word they retype — not a wrong claim
+    about the candidate.
+    """
+    stripped = noun_phrase.lstrip()
+    if not stripped or not stripped[0].isalpha():
+        # Nothing to read — "a" is the safer default, and a title starting
+        # with a digit ("3D Artist") is said "three-dee" anyway.
+        return "a"
+    if len(stripped) > 1 and stripped[0].isupper() and stripped[1].isupper():
+        return "an" if stripped[0].upper() in _VOWEL_SOUNDED_LETTERS else "a"
+    return "an" if stripped[0].lower() in "aeio" else "a"
+
+
+# allow-hardcode: this is the only outreach template step 1 ships, and its
+# wording is user-facing copy the recruiter reviews and can edit in the UI
+# before opening WhatsApp — the same category `frontend/app/dashboard/
+# candidates/page.tsx` marks with this tag for its own hardcoded copy.
+def _whatsapp_draft_text(
+    *, candidate_first_name: str, recruiter_name: str, agency_name: str, job_title: str | None
+) -> str:
+    # With a title: "...regarding a Senior Engineer opportunity." Without one,
+    # the sentence is rewritten rather than leaving a blank ("regarding a
+    # opportunity") or a dangling article ("regarding a  opportunity") — step
+    # 1 has no job selector, so a candidate with no `current_title` on file is
+    # the common case, not an edge case.
+    if job_title:
+        article = _article_for(job_title)
+        interest_line = (
+            f"I would like to speak with you regarding {article} {job_title} opportunity."
+        )
+    else:
+        interest_line = "I would like to speak with you regarding an opportunity."
+    return (
+        f"Hi {candidate_first_name},\n\n"
+        f"This is {recruiter_name} from {agency_name}.\n\n"
+        f"{interest_line}\n\n"
+        "Would you be available for a quick discussion?"
+    )
+
+
+@router.get("/candidates/{candidate_id}/whatsapp-draft")
+async def whatsapp_draft(request: Request, candidate_id: uuid.UUID) -> dict:
+    """The message a recruiter reviews before WhatsApp Web opens (step 1).
+
+    Rendered server-side so the template lives in one testable place instead
+    of being duplicated in the frontend. The platform never sends this — see
+    `CandidateActivity`.
+    """
+    user_uuid, tenant_uuid = _require_session(request)
+    async with tenant_session(tenant_uuid) as session:
+        candidate = await _load(session, candidate_id)
+        if candidate.phone_e164 is None:
+            # 409, not 404: the candidate exists, but `_identity_phone` stores
+            # NULL here for any number that could not identify a person as a
+            # WhatsApp-reachable mobile — including a switchboard/fixed line —
+            # so "no phone_e164" means "no number WhatsApp could reach".
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "This candidate has no mobile number on file that WhatsApp "
+                    "could reach. Add a phone number first."
+                ),
+            )
+        user = (
+            await session.execute(select(User).where(User.id == user_uuid))
+        ).scalar_one()
+        tenant_name = (
+            await session.execute(select(Tenant.name).where(Tenant.id == tenant_uuid))
+        ).scalar_one()
+
+    # First token only: a recruiter greets "Hi Hui Ling," not "Hi Hui Ling
+    # Tan,", and a single-token name (e.g. "Cher") is unaffected — split()
+    # on it returns the whole thing.
+    candidate_first_name = candidate.full_name.split()[0]
+    message = _whatsapp_draft_text(
+        candidate_first_name=candidate_first_name,
+        recruiter_name=_actor_name(user.display_name, user.email),
+        agency_name=tenant_name,
+        job_title=candidate.current_title,
+    )
+    return {"phone_e164": candidate.phone_e164, "message": message}
+
+
+class ActivityIn(BaseModel):
+    activity_type: ActivityType
+    channel: ActivityChannel
+    message_text: str | None = None
+
+
+def _serialize_activity(activity: CandidateActivity, actor_name: str) -> dict:
+    return {
+        "id": str(activity.id),
+        "activity_type": activity.activity_type,
+        "channel": activity.channel,
+        "message_text": activity.message_text,
+        "status": activity.status,
+        "actor_name": actor_name,
+        "created_at": activity.created_at.isoformat(),
+    }
+
+
+@router.post("/candidates/{candidate_id}/activities", status_code=201)
+async def log_activity(request: Request, candidate_id: uuid.UUID, body: ActivityIn) -> dict:
+    """Record that an outreach surface was opened — never that it was sent.
+
+    `status` is always `CandidateActivity.OPENED`: there is no field on the
+    request body for it, because nothing in this system observes a send
+    (§15) and the CHECK constraint would refuse anything else anyway.
+    """
+    user_uuid, tenant_uuid = _require_session(request)
+    async with tenant_session(tenant_uuid) as session:
+        await _load(session, candidate_id)
+        activity_id = uuid.uuid4()
+        await session.execute(
+            insert(CandidateActivity).values(
+                id=activity_id,
+                tenant_id=tenant_uuid,
+                candidate_id=candidate_id,
+                user_id=user_uuid,
+                activity_type=body.activity_type,
+                channel=body.channel,
+                message_text=body.message_text,
+                status=CandidateActivity.OPENED,
+            )
+        )
+        # Read back before commit, not after: `tenant_session` sets
+        # `app.tenant_id` with SET LOCAL, which is transaction-scoped and is
+        # cleared the instant the transaction commits. A select issued after
+        # `session.commit()` on this same session would run with no tenant
+        # set and RLS would return zero rows — not a leak, but a spurious
+        # 404-shaped failure on a row that exists. `tenant_session` commits
+        # for us on context exit, so this select just needs to happen first.
+        activity = (
+            await session.execute(
+                select(CandidateActivity).where(CandidateActivity.id == activity_id)
+            )
+        ).scalar_one()
+        user = (
+            await session.execute(select(User).where(User.id == user_uuid))
+        ).scalar_one()
+    return _serialize_activity(activity, _actor_name(user.display_name, user.email))
+
+
+@router.get("/candidates/{candidate_id}/activities")
+async def list_activities(request: Request, candidate_id: uuid.UUID) -> dict:
+    _user_uuid, tenant_uuid = _require_session(request)
+    async with tenant_session(tenant_uuid) as session:
+        await _load(session, candidate_id)
+        rows = (
+            (
+                await session.execute(
+                    select(CandidateActivity)
+                    .where(CandidateActivity.candidate_id == candidate_id)
+                    .order_by(CandidateActivity.created_at.desc())
+                    .limit(settings.CANDIDATE_ACTIVITIES_PAGE_LIMIT)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        # One lookup for every actor on the page rather than N — a recruiter's
+        # WhatsApp history is usually one person opening it repeatedly.
+        actor_ids = {row.user_id for row in rows if row.user_id is not None}
+        actors: dict[uuid.UUID, User] = {}
+        if actor_ids:
+            for user in (
+                (await session.execute(select(User).where(User.id.in_(actor_ids))))
+                .scalars()
+                .all()
+            ):
+                actors[user.id] = user
+
+    def _name_for(row: CandidateActivity) -> str:
+        user = actors.get(row.user_id) if row.user_id else None
+        if user is None:
+            # The user row is gone (deleted) but SET NULL kept the activity —
+            # honest about what we can no longer say (§15) rather than
+            # inventing a name for someone the record no longer identifies.
+            return "Unknown user"
+        return _actor_name(user.display_name, user.email)
+
+    return {"items": [_serialize_activity(row, _name_for(row)) for row in rows]}
 
 
 def _identity_phone(raw: str | None) -> str | None:

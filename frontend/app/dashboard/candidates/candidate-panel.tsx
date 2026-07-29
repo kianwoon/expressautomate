@@ -10,6 +10,7 @@ import { Value, day } from "../format";
 import { CandidateAvatar } from "./candidate-avatar";
 import { CandidateCv } from "./candidate-cv";
 import { CandidateHistory } from "./candidate-history";
+import { WhatsappActivityTimeline, WhatsappButton } from "./candidate-whatsapp";
 
 /**
  * One candidate in full, beside the list.
@@ -108,6 +109,9 @@ function Detail({
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Bumped after a WhatsApp open is logged, so the activity timeline below
+  // refetches even though the candidate's own id hasn't changed.
+  const [activityVersion, setActivityVersion] = useState(0);
 
   async function archive() {
     if (busy) return;
@@ -240,6 +244,8 @@ function Detail({
 
           <CandidateHistory row={row} onChanged={onDetailChanged} />
 
+          <WhatsappActivityTimeline row={row} version={activityVersion} />
+
           <MergePicker candidateId={row.id} onMerged={onChanged} />
         </>
       )}
@@ -249,6 +255,9 @@ function Detail({
           <button type="button" className="btn btn-primary" onClick={onEdit} disabled={busy}>
             Edit
           </button>
+          {row.record_status !== "merged" && (
+            <WhatsappButton row={row} onLogged={() => setActivityVersion((v) => v + 1)} />
+          )}
           {row.record_status === "active" && (
             <button type="button" className="btn btn-secondary" onClick={archive} disabled={busy}>
               {busy ? "Saving…" : "Archive"}

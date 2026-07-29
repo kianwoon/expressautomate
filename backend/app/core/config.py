@@ -365,6 +365,10 @@ class Settings(BaseSettings):
 
     CANDIDATES_PAGE_LIMIT: int = Field(default=200, gt=0)
 
+    # How many WhatsApp-open activities the candidate history panel returns.
+    # Newest first, same reasoning as CANDIDATES_PAGE_LIMIT.
+    CANDIDATE_ACTIVITIES_PAGE_LIMIT: int = Field(default=200, gt=0)
+
     # The most years of experience a candidate record may claim. There is no
     # database constraint to derive this from, and none is wanted: the point of
     # the bound is to catch a mistyped figure (a birth year in the experience

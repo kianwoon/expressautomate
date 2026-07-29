@@ -1244,3 +1244,39 @@ select.gl-input:focus-visible { outline: 2px solid var(--blue-500); outline-offs
 .src-act:focus-visible { opacity: 1; outline: 2px solid var(--blue-500); outline-offset: 2px; }
 .src-act-off { font-size: 0.75rem; color: var(--ink-500); }
 .src-done { font-size: 0.75rem; font-weight: 650; color: #2f7d54; }
+/* WhatsApp draft modal — no dialog primitive existed elsewhere in this
+   codebase, so this is the whole of it: a dimmed backdrop, a centered card
+   reusing the existing `.card` surface, and nothing else. */
+.wa-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  z-index: 60;
+}
+.wa-modal {
+  width: 100%;
+  max-width: 460px;
+  padding: 24px;
+  display: grid;
+  gap: 12px;
+}
+.wa-field {
+  display: grid;
+  gap: 4px;
+}
+.wa-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 8px;
+}
+.wa-timeline {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0 0;
+  display: grid;
+  gap: 4px;
+}

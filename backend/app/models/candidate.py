@@ -286,6 +286,62 @@ class CandidateRole(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
     )
 
 
+class CandidateActivity(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
+    """Something a recruiter did towards a candidate outside this app.
+
+    Step 1 of WhatsApp outreach: the platform renders a message and opens
+    WhatsApp Web, but the recruiter presses send there, not here. So this
+    table may only ever record that an outreach surface was *opened* — never
+    that a message was *sent*, because nothing in this system observes a send
+    (§15). `STATUSES` is deliberately narrow to just "opened" for that reason,
+    not as a placeholder for values to fill in later.
+
+    The vocabularies below are enforced twice, the same pattern
+    `20260729_0900_opportunity_vocabularies.py` set for
+    `opportunities.salary_period`: once here so a bad value is a 422 from
+    Pydantic, and once as a database CHECK constraint so the rule holds even
+    for a row a future migration or script writes directly.
+
+    Narrow on purpose. `activity_type`/`channel`/`status` hold exactly the
+    one value each that step 1 writes; more values arrive only when there is
+    code that writes them, not by speculating a fuller vocabulary now.
+    """
+
+    __tablename__ = "candidate_activities"
+
+    WHATSAPP_OPENED = "whatsapp_opened"
+    ACTIVITY_TYPES = (WHATSAPP_OPENED,)
+
+    WHATSAPP = "whatsapp"
+    CHANNELS = (WHATSAPP,)
+
+    OPENED = "opened"
+    STATUSES = (OPENED,)
+
+    candidate_id: Mapped[uuid.UUID] = mapped_column(
+        PgUUID(as_uuid=True), nullable=False, index=True
+    )
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL")
+    )
+    activity_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    channel: Mapped[str] = mapped_column(String(16), nullable=False)
+    # What the recruiter actually saw and (presumably) sent, not a re-render of
+    # the template — the template can change later and this row must still say
+    # what was true the day it was opened.
+    message_text: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "candidate_id"],
+            ["candidates.tenant_id", "candidates.id"],
+            name="fk_candidate_activities_candidate_same_tenant",
+            ondelete="CASCADE",
+        ),
+    )
+
+
 class CandidateFieldOverride(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
     """A field a person edited, which no import may overwrite.
 

@@ -7,6 +7,7 @@ import {
   CANDIDATE_IMPORTS_PATH,
   CANDIDATES_PAGE_SIZE,
   CANDIDATES_PATH,
+  candidateActivitiesPath,
   candidateArchivePath,
   candidateAvatarPath,
   candidateDocumentDownloadPath,
@@ -22,6 +23,7 @@ import {
   candidateRoleRejectPath,
   candidateRolesPath,
   candidateUnmergePath,
+  candidateWhatsappDraftPath,
 } from "../api";
 
 /**
@@ -127,6 +129,11 @@ export type Candidate = {
   full_name: string;
   email: string | null;
   phone_raw: string | null;
+  /** The number normalised to E.164, or `null` when nothing WhatsApp can
+   *  reach — deliberately left unset for landlines, so `null` here means the
+   *  WhatsApp button has nowhere to send to, not merely that no phone was
+   *  recorded (`phone_raw` covers that case). */
+  phone_e164: string | null;
   current_title: string | null;
   current_employer: string | null;
   location: string | null;
@@ -679,6 +686,49 @@ export async function uploadCandidateImport(
  *  for a stronger reason: this report names candidates. */
 export async function getCandidateImportErrorsUrl(importId: string): Promise<DocumentUrl> {
   const res = await fetch(candidateImportErrorsPath(importId), {
+/** What the draft endpoint hands back: the number already in the shape the
+ *  WhatsApp URL wants (plus its sign) and a message ready to edit. */
+export type WhatsappDraft = { phone_e164: string; message: string };
+
+/** A 409 here means the candidate has no `phone_e164` — the server's own
+ *  `detail` says so in words a recruiter can act on, so callers should show
+ *  it verbatim rather than a generic failure. */
+export async function getWhatsappDraft(id: string): Promise<WhatsappDraft> {
+  const res = await fetch(candidateWhatsappDraftPath(id), {
+    credentials: "include",
+    headers: { Accept: "application/json" },
+  });
+  if (!res.ok) throw new ApiError(await readError(res));
+  return (await res.json()) as WhatsappDraft;
+}
+
+export type ActivityItem = {
+  id: string;
+  activity_type: string;
+  channel: string;
+  message_text: string | null;
+  status: string;
+  actor_name: string;
+  created_at: string;
+};
+
+export type ActivityBody = { activity_type: string; channel: string; message_text: string };
+
+/** Records that WhatsApp was *opened* — never that a message was sent, since
+ *  the recruiter presses send themselves inside WhatsApp and this app never
+ *  observes that. */
+export async function logCandidateActivity(id: string, body: ActivityBody): Promise<void> {
+  const res = await fetch(candidateActivitiesPath(id), {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new ApiError(await readError(res));
+}
+
+export async function getCandidateActivities(id: string): Promise<ActivityItem[]> {
+  const res = await fetch(candidateActivitiesPath(id), {
     credentials: "include",
     headers: { Accept: "application/json" },
   });
@@ -699,6 +749,8 @@ export async function undoCandidateImport(importId: string): Promise<UndoResult>
   });
   if (!res.ok) throw new ApiError(await readError(res));
   return (await res.json()) as UndoResult;
+  const body = (await res.json()) as { items: ActivityItem[] };
+  return body.items;
 }
 
 export async function deleteCandidateAvatar(id: string): Promise<void> {

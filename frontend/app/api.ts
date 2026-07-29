@@ -273,6 +273,19 @@ export function candidateAvatarPath(id: string): string {
   return `${candidatePath(id)}/avatar`;
 }
 
+/** The pre-filled WhatsApp message for this candidate, plus the number to
+ *  send it to. GET only — nothing is sent until the recruiter presses Open
+ *  WhatsApp in their own browser tab. */
+export function candidateWhatsappDraftPath(id: string): string {
+  return `${candidatePath(id)}/whatsapp-draft`;
+}
+
+/** The candidate's activity log — so far just "WhatsApp opened" entries, each
+ *  recorded after the popup actually opened, never before. */
+export function candidateActivitiesPath(id: string): string {
+  return `${candidatePath(id)}/activities`;
+}
+
 /** The roles a candidate held. Nested under the candidate because a role has
  *  no meaning apart from one — an id from another agency is a 404 before any
  *  role is reached. POST creates; the collection itself is never fetched
