@@ -70,14 +70,13 @@ export default function CandidatesPage() {
               <Workspace role={auth.me.user.role} />
             ) : auth.status === "unreachable" ? (
               <Notice
-                eyebrow="Connection"
                 heading="We could not reach the server."
                 body="This is not a sign-in problem — your session is untouched. Reload the page in a moment."
               />
             ) : auth.status === "anonymous" ? (
-              <Notice eyebrow="Signed out" heading="Taking you back." body="You are not signed in. Returning to the home page." />
+              <Notice heading="Taking you back." body="You are not signed in. Returning to the home page." />
             ) : (
-              <Notice eyebrow="Checking" heading="One moment." body="Checking your session." />
+              <Notice heading="One moment." body="Checking your session." />
             )}
           </div>
         </section>
@@ -87,11 +86,15 @@ export default function CandidatesPage() {
   );
 }
 
-function Notice({ eyebrow, heading, body }: { eyebrow: string; heading: string; body: string }) {
+/** The pre-workspace states. No eyebrow, and the same top spacing as the
+ *  workspace it gives way to: "CONNECTION" over "We could not reach the
+ *  server." said in a label what the sentence under it says in words, and it
+ *  meant the heading sat 14px lower here than in the page that replaces it —
+ *  so the whole page nudged upward the moment the session resolved. */
+function Notice({ heading, body }: { heading: string; body: string }) {
   return (
     <>
-      <span className="eyebrow">{eyebrow}</span>
-      <h1 style={{ marginTop: 14, fontSize: "clamp(1.75rem, 3.4vw, 2.5rem)" }}>{heading}</h1>
+      <h1 style={{ fontSize: "clamp(1.75rem, 3.4vw, 2.5rem)" }}>{heading}</h1>
       <p className="lede" style={{ marginTop: 18 }}>
         {body}
       </p>
