@@ -19,8 +19,18 @@ claims on every login (see the upsert in app/api/auth.py).
 
 
 def actor_name(preferred_name: str | None, display_name: str | None, email: str) -> str:
-    """Name for the activity timeline, seen only by colleagues in this tenant."""
-    return preferred_name or display_name or email
+    """Name for the activity timeline, seen only by colleagues in this tenant.
+
+    Whitespace is skipped for the same reason as in `recruiter_name` below: a
+    provider claim padded to "   " is not a name, and returning it prints a
+    blank where the timeline promises to say who acted. The email address is
+    the last resort here — unlike the candidate-facing draft, everyone reading
+    this works at the same agency.
+    """
+    for candidate in (preferred_name, display_name):
+        if candidate and candidate.strip():
+            return candidate.strip()
+    return email
 
 
 def recruiter_name(preferred_name: str | None, display_name: str | None) -> str | None:
