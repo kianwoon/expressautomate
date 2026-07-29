@@ -84,6 +84,26 @@ export function opportunitySourcingPath(id: string): string {
   return `${OPPORTUNITIES_PATH}/${encodeURIComponent(id)}/sourcing`;
 }
 
+/** One job order, for PATCH — setting `placement_type` or the sex requirement
+ *  and its reason. Same id-in-path, same encoding, as the other single-row
+ *  paths on this page. */
+export function opportunityPath(id: string): string {
+  return `${OPPORTUNITIES_PATH}/${encodeURIComponent(id)}`;
+}
+
+/**
+ * Whether one candidate meets the placement requirements for one job order —
+ * MOM Work Permit eligibility, never a hiring verdict. Both ids are path
+ * segments and both are encoded for the reason every id-in-path function on
+ * this page encodes its id.
+ */
+export function opportunityCandidateEligibilityPath(
+  opportunityId: string,
+  candidateId: string,
+): string {
+  return `${OPPORTUNITIES_PATH}/${encodeURIComponent(opportunityId)}/candidates/${encodeURIComponent(candidateId)}/eligibility`;
+}
+
 /**
  * How often the panel asks again while a run is still working.
  *

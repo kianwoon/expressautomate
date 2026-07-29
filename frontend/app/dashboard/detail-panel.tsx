@@ -5,6 +5,7 @@ import { useState } from "react";
 import { Breakable } from "../breakable";
 import { DecodedCodes, ProtectedBadge, flagged } from "./codes";
 import { Salary, Value, day } from "./format";
+import { PlacementForm } from "./job-order-placement";
 import { Shortlist } from "./job-orders-sourcing";
 import type { Opportunity } from "./opportunities";
 import { QualityNote, ReviewBadge } from "./quality";
@@ -62,6 +63,12 @@ function Detail({
   const [error, setError] = useState<string | null>(null);
   const reviewed = row.review_status === "reviewed";
 
+  // The panel's own copy of the placement fields, so a save is reflected
+  // immediately without waiting for the next page fetch to bring `row` back
+  // around. Reset by the `key={row.id}` this component is mounted under, the
+  // same trick `saving`/`error` above rely on.
+  const [placement, setPlacement] = useState(row);
+
   async function toggle() {
     if (saving) return;
     setSaving(true);
@@ -108,6 +115,8 @@ function Detail({
       <Prose k="Requirements" text={row.requirements} />
       <Prose k="Description" text={row.job_description} />
 
+      <PlacementForm row={placement} onSaved={setPlacement} />
+
       {/* Provenance, not a link. We hold an id for the message, not a URL we
           can promise still resolves in the user's Outlook — offering one that
           404s is worse than offering none. The id is here so a disputed row
@@ -117,7 +126,17 @@ function Detail({
           the requirements above have been read. Keyed by the row along with
           the rest of the panel, so moving the selection starts it over rather
           than leaving one job order's shortlist under another's title. */}
-      <Shortlist row={row} />
+      {/* Keyed on the placement fields too, on top of the row id `Detail` is
+          already keyed by: saving a new placement type changes which MOM
+          rules every candidate below is checked against, and the eligibility
+          fetch inside `Shortlist` caches by candidate id with no way to know
+          the job order under it just changed. Remounting is what forces it
+          to ask again rather than show yesterday's answer next to today's
+          placement type. */}
+      <Shortlist
+        key={`${placement.placement_type ?? ""}-${placement.sex_requirement ?? ""}`}
+        row={row}
+      />
 
       <div className="jo-detail-source">
         <span className="row-k">Source</span>

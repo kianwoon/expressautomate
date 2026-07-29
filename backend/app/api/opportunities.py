@@ -27,18 +27,20 @@ here, and a test asserts that it never starts to.
 """
 
 import uuid
-from typing import Literal
+from datetime import date
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 from sqlalchemy import String, case, cast, func, or_, select, update
 from sqlalchemy.orm import aliased
 
 from app.api.auth import _require_session
 from app.core.config import settings
 from app.db.rls import tenant_session
-from app.models import EmailMessage, Opportunity, OpportunityCode
+from app.models import Candidate, EmailMessage, Opportunity, OpportunityCode
 from app.models.extraction import ExtractionEvidence
+from app.services.sourcing import eligibility
 
 router = APIRouter(tags=["opportunities"])
 
@@ -92,6 +94,37 @@ class ReviewRequest(BaseModel):
     """
 
     reviewed: bool
+
+
+class PlacementTypeRequest(BaseModel):
+    """`placement_type` is set by a person, never inferred — see the column
+    comment in `app/models/opportunity.py`. `None` clears it back to "not
+    stated"."""
+
+    placement_type: Literal[
+        "local_hire", "mdw_work_permit", "other_work_permit", "s_pass", "employment_pass"
+    ] | None = None
+
+
+class OccupationalRequirementRequest(BaseModel):
+    """A genuine occupational sex requirement plus the recruiter's own words
+    for why. Mirrors the database's pairing CHECK
+    (`ck_opportunities_sex_requirement_has_reason`) so a bad request is a 422
+    here rather than surfacing as a raw constraint violation."""
+
+    sex_requirement: Literal["female", "male"] | None = None
+    sex_requirement_reason: str | None = None
+
+    @model_validator(mode="after")
+    def _reason_required_with_requirement(self) -> "OccupationalRequirementRequest":
+        has_requirement = self.sex_requirement is not None
+        has_reason = bool((self.sex_requirement_reason or "").strip())
+        if has_requirement != has_reason:
+            raise ValueError(
+                "A sex requirement needs a reason in the recruiter's own words, "
+                "and a reason needs a requirement to explain."
+            )
+        return self
 
 
 @router.get("/opportunities")
@@ -403,6 +436,173 @@ async def set_review_status(
     return {
         "id": str(opportunity_id),
         "review_status": _STORED_TO_FILTER.get(updated, updated),
+    }
+
+
+@router.post("/opportunities/{opportunity_id}/placement-type")
+async def set_placement_type(
+    opportunity_id: uuid.UUID, body: PlacementTypeRequest, request: Request
+) -> dict:
+    """Set what kind of placement this vacancy is — a human decision, never an
+    inference (see the column comment in `app/models/opportunity.py`)."""
+    _user_uuid, tenant_uuid = _require_session(request)
+
+    async with tenant_session(tenant_uuid) as session:
+        # `id` alongside `placement_type` in RETURNING: `RETURNING` gives back
+        # exactly what was written, which is ambiguous when the write itself
+        # is NULL — clearing an already-NULL placement_type on a real row
+        # looks identical to matching no row at all. Returning `id` too tells
+        # the two apart without a second round trip.
+        row = (
+            await session.execute(
+                update(Opportunity)
+                .where(Opportunity.id == opportunity_id)
+                .values(placement_type=body.placement_type)
+                .returning(Opportunity.id, Opportunity.placement_type)
+            )
+        ).one_or_none()
+
+    if row is None:
+        raise HTTPException(status_code=404, detail="No such job order.")
+
+    return {"id": str(opportunity_id), "placement_type": row[1]}
+
+
+@router.post("/opportunities/{opportunity_id}/occupational-requirement")
+async def set_occupational_requirement(
+    opportunity_id: uuid.UUID, body: OccupationalRequirementRequest, request: Request
+) -> dict:
+    """Set (or clear) the job's own genuine occupational sex requirement.
+
+    The pairing rule is enforced twice: `OccupationalRequirementRequest`
+    refuses a requirement with no reason before this ever reaches the
+    database, and `ck_opportunities_sex_requirement_has_reason` refuses it
+    again for any row a script or a future endpoint writes directly.
+    """
+    _user_uuid, tenant_uuid = _require_session(request)
+
+    async with tenant_session(tenant_uuid) as session:
+        updated = (
+            await session.execute(
+                update(Opportunity)
+                .where(Opportunity.id == opportunity_id)
+                .values(
+                    sex_requirement=body.sex_requirement,
+                    sex_requirement_reason=(
+                        body.sex_requirement_reason.strip()
+                        if body.sex_requirement_reason
+                        else None
+                    ),
+                )
+                .returning(Opportunity.sex_requirement, Opportunity.sex_requirement_reason)
+            )
+        ).one_or_none()
+
+    if updated is None:
+        raise HTTPException(status_code=404, detail="No such job order.")
+
+    return {
+        "id": str(opportunity_id),
+        "sex_requirement": updated[0],
+        "sex_requirement_reason": updated[1],
+    }
+
+
+# allow-hardcode: `description=` below is FastAPI/OpenAPI docs prose — human
+# copy shown to a developer reading /docs, not matching or scoring logic.
+@router.get("/opportunities/{opportunity_id}/candidates/{candidate_id}/eligibility")
+async def get_eligibility(
+    opportunity_id: uuid.UUID,
+    candidate_id: uuid.UUID,
+    request: Request,
+    # `Annotated`, not a `Query(...)` default: a call sitting in the default
+    # slot is what B008 exists to catch, since a mutable default is built
+    # once at import and shared across every request.
+    as_of: Annotated[
+        date | None,
+        Query(
+            description=(
+                "Judge age as of this date rather than today. MOM judges age "
+                "at application, not at browse time, so a recruiter planning "
+                "ahead can ask the question as of the date the permit would "
+                "actually be filed."
+            )
+        ),
+    ] = None,
+) -> dict:
+    """Whether `candidate_id` may be legitimately narrowed for `opportunity_id`
+    (§15). Reports; does not filter — the caller decides what to show, and
+    nothing here is hidden. A candidate missing a fact appears with an
+    `unknown` finding rather than being silently absent from the list, and a
+    criterion a placement type does not govern appears `not_applicable`
+    rather than being omitted.
+
+    Deliberately no `eligible: true/false` summary field, and none should be
+    added: any two-valued rollup collapses `unknown` and `not_applicable`
+    into whichever bucket someone picked, which erases the exact distinction
+    this endpoint exists to surface. See `app/services/sourcing/eligibility.py`
+    and `tests/test_eligibility.py::test_no_boolean_rollup_in_response`.
+    """
+    _user_uuid, tenant_uuid = _require_session(request)
+    evaluated_as_of = as_of or date.today()
+
+    async with tenant_session(tenant_uuid) as session:
+        opportunity = (
+            await session.execute(
+                select(Opportunity).where(Opportunity.id == opportunity_id)
+            )
+        ).scalar_one_or_none()
+        if opportunity is None:
+            raise HTTPException(status_code=404, detail="No such job order.")
+
+        candidate = (
+            await session.execute(select(Candidate).where(Candidate.id == candidate_id))
+        ).scalar_one_or_none()
+        if candidate is None:
+            raise HTTPException(status_code=404, detail="No such candidate.")
+
+    if opportunity.placement_type is None:
+        # The job order has not been classified yet — a different thing from
+        # every candidate passing, so the caller must be able to say so rather
+        # than rendering an empty list as though nothing were wrong.
+        return {
+            "placement_type": None,
+            "assessable": False,
+            "evaluated_as_of": evaluated_as_of.isoformat(),
+            "findings": [],
+        }
+
+    facts = eligibility.CandidateFacts(
+        sex=candidate.sex,
+        date_of_birth=candidate.date_of_birth,
+        education_years=candidate.education_years,
+        nationality=candidate.nationality,
+    )
+    findings = eligibility.evaluate(
+        opportunity.placement_type,
+        facts,
+        as_of=evaluated_as_of,
+        min_age_years=settings.MDW_MIN_AGE_YEARS,
+        max_age_years_exclusive=settings.MDW_MAX_AGE_YEARS_EXCLUSIVE,
+        min_education_years=settings.MDW_MIN_EDUCATION_YEARS,
+        approved_source_countries=settings.MDW_APPROVED_SOURCE_COUNTRIES,
+        sex_requirement=opportunity.sex_requirement,
+        sex_requirement_reason=opportunity.sex_requirement_reason,
+    )
+
+    return {
+        "placement_type": opportunity.placement_type,
+        "assessable": True,
+        "evaluated_as_of": evaluated_as_of.isoformat(),
+        "findings": [
+            {
+                "criterion": f.criterion,
+                "outcome": f.outcome,
+                "detail": f.detail,
+                "basis": f.basis,
+            }
+            for f in findings
+        ],
     }
 
 

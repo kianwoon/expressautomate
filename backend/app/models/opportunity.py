@@ -26,6 +26,13 @@ from app.db.base import Base, TenantScoped, Timestamps, UUIDPrimaryKey
 class Opportunity(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
     __tablename__ = "opportunities"
 
+    LOCAL_HIRE = "local_hire"
+    MDW_WORK_PERMIT = "mdw_work_permit"
+    OTHER_WORK_PERMIT = "other_work_permit"
+    S_PASS = "s_pass"
+    EMPLOYMENT_PASS = "employment_pass"
+    PLACEMENT_TYPES = (LOCAL_HIRE, MDW_WORK_PERMIT, OTHER_WORK_PERMIT, S_PASS, EMPLOYMENT_PASS)
+
     email_message_id: Mapped[uuid.UUID] = mapped_column(
         PgUUID(as_uuid=True),
         ForeignKey("email_messages.id", ondelete="CASCADE"),
@@ -67,6 +74,34 @@ class Opportunity(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
     location_raw: Mapped[str | None] = mapped_column(Text)
     location_normalized: Mapped[str | None] = mapped_column(Text, index=True)
 
+    # What kind of placement this vacancy is — local hire, a migrant domestic
+    # worker's Work Permit, another Work Permit, S Pass or Employment Pass.
+    # NULL means not stated: a recruiter has not classified the vacancy yet,
+    # which is different from every classification being wrong.
+    #
+    # Set only by a person, via the API, never inferred. In particular this is
+    # never derived from the `EP`/`SP`/`WP` glossary codes a client's email may
+    # contain: `app/api/glossary.py` marks those `attribute="nationality"`,
+    # which makes them protected, and `redact.py` strips them from every piece
+    # of text a model reads before extraction runs. Deriving a regulatory fact
+    # from the very text that redaction exists to scrub would re-import
+    # through the back door exactly what that module removes at the front —
+    # `tests/test_opportunity_placement_type.py` asserts an email containing
+    # `WP` leaves this column NULL.
+    placement_type: Mapped[str | None] = mapped_column(String(32))
+
+    # A sex requirement the job itself imposes (a genuine occupational
+    # requirement — e.g. intimate personal care for an elderly client) and the
+    # recruiter's own words for why. Distinct from `Candidate.sex`, which is a
+    # fact about a person, and from the coded client preference `C/F` decodes
+    # to, which is recorded as evidence and never acted on (see
+    # `app/api/glossary.py`). One cannot exist without the other — an
+    # unexplained sex requirement is exactly what Singapore law does not
+    # permit — enforced by `ck_opportunities_sex_requirement_has_reason` below
+    # and mirrored at the API in `app/api/opportunities.py`.
+    sex_requirement: Mapped[str | None] = mapped_column(String(16))
+    sex_requirement_reason: Mapped[str | None] = mapped_column(Text)
+
     review_status: Mapped[str] = mapped_column(
         String(16), nullable=False, default="ready", index=True
     )
@@ -98,5 +133,23 @@ class Opportunity(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
         CheckConstraint(
             "quality_state IN ('needs_review', 'likely', 'verified')",
             name="ck_opportunities_quality_state_known",
+        ),
+        CheckConstraint(
+            "placement_type IS NULL OR placement_type IN "
+            "('local_hire', 'mdw_work_permit', 'other_work_permit', "
+            "'s_pass', 'employment_pass')",
+            name="ck_opportunities_placement_type_known",
+        ),
+        CheckConstraint(
+            "sex_requirement IS NULL OR sex_requirement IN ('female', 'male')",
+            name="ck_opportunities_sex_requirement_known",
+        ),
+        # The pairing rule itself. `IS NULL OR` guards `sex_requirement`
+        # rather than the pair, because the constraint must refuse a
+        # requirement with no reason while still allowing a reason-less,
+        # requirement-less row — the ordinary case for most vacancies.
+        CheckConstraint(
+            "(sex_requirement IS NULL) = (sex_requirement_reason IS NULL)",
+            name="ck_opportunities_sex_requirement_has_reason",
         ),
     )

@@ -171,6 +171,21 @@
 .jo-detail-source { margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--line); }
 .jo-detail-source p { margin-top: 6px; }
 .jo-detail-actions { margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--line); }
+
+.jo-placement { margin-top: 18px; padding: 14px; display: grid; gap: 10px; }
+.jo-placement-field { display: grid; gap: 4px; }
+.jo-placement-field select,
+.jo-placement-field textarea {
+  font: inherit;
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--ink-900);
+}
+.jo-placement-field textarea { resize: vertical; }
+.jo-placement-hint { margin-top: 0; font-size: 0.75rem; color: var(--ink-500); max-width: 60ch; }
+.jo-placement-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 /* Every action on one line. These four buttons are one decision — "what do I
    do with this person" — and wrapping split them into a group of three and an
    orphan, which read as two unrelated groups.
@@ -1237,6 +1252,45 @@ select.gl-input:focus-visible { outline: 2px solid var(--blue-500); outline-offs
 .src-reason-note { color: var(--ink-500); }
 .src-why { margin-top: 6px; font-size: 0.8125rem; color: var(--ink-700); max-width: 72ch; }
 .src-quote { margin-top: 2px; font-size: 0.75rem; color: var(--ink-500); max-width: 72ch; }
+
+/* Eligibility flags: a compliance fact about the placement, not a score
+   component, so it sits visually apart from the reasons breakdown below it
+   rather than inside the same list. */
+.src-elig-note { margin-top: 6px; font-size: 0.8125rem; color: var(--ink-700); max-width: 72ch; }
+.src-elig-note[data-kind="not-applicable"] { color: var(--ink-500); }
+.src-elig { margin-top: 6px; display: grid; gap: 4px; }
+.src-elig-row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 0.8125rem;
+  padding: 3px 6px;
+  border-radius: 4px;
+}
+/* `met`/`not_applicable` never reach this element — they render inside
+   `.src-elig-quiet` instead — so only the two outcomes that need to look
+   different from each other get a rule here. */
+.src-elig-row[data-outcome="not_met"] { background: var(--red-50, #fdf1f1); }
+.src-elig-row[data-outcome="unknown"] { background: var(--amber-50, #fdf6e8); }
+.src-elig-k { font-weight: 650; color: var(--ink-900); min-width: 9em; }
+.src-elig-basis { font-size: 0.6875rem; text-transform: uppercase; letter-spacing: 0.02em; }
+.src-elig-v { color: var(--ink-900); }
+.src-elig-v q { font-style: italic; }
+.src-elig-fix { font-size: 0.75rem; }
+/* Folded away by default: passing is the normal case and a rule that does
+   not apply to this placement type is not a fact about the candidate at
+   all, so neither should compete for attention with a real gap above. */
+.src-elig-quiet { margin-top: 2px; }
+.src-elig-summary {
+  font-size: 0.75rem;
+  color: var(--ink-500);
+  cursor: pointer;
+}
+.src-elig-quiet .src-elig-row { opacity: 0.8; }
+.src-elig-quiet .src-elig-row[data-outcome="met"],
+.src-elig-quiet .src-elig-row[data-outcome="not_applicable"] { background: none; }
+.src-elig-asof { margin-top: 4px; font-size: 0.6875rem; }
 
 .src-row-acts { margin-top: 6px; min-height: 1.5em; }
 /* Revealed by hover AND by `:focus-within`, so the control is reachable by

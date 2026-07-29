@@ -2,9 +2,15 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { OPPORTUNITIES_PAGE_SIZE, OPPORTUNITIES_PATH, opportunityReviewPath } from "../api";
+import {
+  OPPORTUNITIES_PAGE_SIZE,
+  OPPORTUNITIES_PATH,
+  opportunityPath,
+  opportunityReviewPath,
+} from "../api";
 import { useLive } from "../events";
 import { DEFAULT_SORT, type Sort } from "./job-orders-table";
+import { ApiError, readError } from "./candidates";
 
 /**
  * One page of job orders, and the one place that talks to the opportunities
@@ -20,6 +26,29 @@ import { DEFAULT_SORT, type Sort } from "./job-orders-table";
 
 export type ReviewStatus = "ready" | "needs_review" | "reviewed";
 export type QualityState = "verified" | "likely" | "needs_review";
+
+/** What kind of placement this vacancy is. `null` means a recruiter has not
+ *  classified it yet — never inferred, never guessed from the email. */
+export type PlacementType =
+  | "local_hire"
+  | "mdw_work_permit"
+  | "other_work_permit"
+  | "s_pass"
+  | "employment_pass";
+
+export const PLACEMENT_TYPES: { value: PlacementType; label: string }[] = [
+  { value: "local_hire", label: "Local hire" },
+  { value: "mdw_work_permit", label: "MDW Work Permit" },
+  { value: "other_work_permit", label: "Other Work Permit" },
+  { value: "s_pass", label: "S Pass" },
+  { value: "employment_pass", label: "Employment Pass" },
+];
+
+/** A genuine occupational requirement on the job itself — distinct from a
+ *  candidate's own recorded sex and from a client's coded preference, which
+ *  is decoded, flagged, and never acted on. `null` together with `null`
+ *  reason is the ordinary case; the backend refuses one without the other. */
+export type SexRequirement = "female" | "male";
 
 /**
  * One shorthand code found in the email, and what the agency's glossary says
@@ -67,6 +96,11 @@ export type Opportunity = {
    *  than assuming the key is there. */
   codes?: DecodedCode[];
   references_protected_attribute?: boolean;
+  /** Nullable: not every job order has been classified for placement
+   *  eligibility yet. Set only by a recruiter, via the form below. */
+  placement_type: PlacementType | null;
+  sex_requirement: SexRequirement | null;
+  sex_requirement_reason: string | null;
 };
 
 export type Counts = { all: number; new: number; needs_review: number; reviewed: number };
@@ -334,6 +368,34 @@ export function useOpportunities(): Opportunities {
   }, []);
 
   return { state, filter, offset, q, sort, counts, refreshing, setFilter, setOffset, setQ, setSort, review };
+}
+
+/** What the placement form sends. `sex_requirement_reason` travels with
+ *  `sex_requirement` as a pair — the backend's check constraint refuses one
+ *  without the other, and sending them together means the browser never
+ *  produces the half-set state the database would reject anyway. */
+export type PlacementUpdate = {
+  placement_type: PlacementType | null;
+  sex_requirement: SexRequirement | null;
+  sex_requirement_reason: string | null;
+};
+
+/** Sets a job order's placement type and/or sex requirement. Same PATCH
+ *  pattern as `updateCandidate` in `candidates.ts`: partial body, JSON in and
+ *  out, `ApiError` carrying whatever sentence the server worded — including
+ *  the "a reason is required" refusal the backend enforces on this pair. */
+export async function updateOpportunityPlacement(
+  id: string,
+  body: PlacementUpdate,
+): Promise<Opportunity> {
+  const res = await fetch(opportunityPath(id), {
+    method: "PATCH",
+    credentials: "include",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new ApiError(await readError(res));
+  return (await res.json()) as Opportunity;
 }
 
 /**

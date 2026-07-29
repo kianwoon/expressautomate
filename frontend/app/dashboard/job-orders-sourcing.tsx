@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { SOURCING_POLL_MS } from "../api";
 import { flagged } from "./codes";
+import { eligibilityFor, type Eligibility, type EligibilityFinding } from "./eligibility";
 import type { Opportunity } from "./opportunities";
 import {
   getSourcing,
@@ -59,6 +60,15 @@ const COMPONENT_LABELS: Record<string, string> = {
   recency: "Recent activity",
 };
 
+/** What each eligibility criterion is called in front of a recruiter. */
+const CRITERION_LABELS: Record<string, string> = {
+  sex: "Sex",
+  age: "Age",
+  education: "Education",
+  nationality: "Source country",
+  occupational_sex_requirement: "This job's sex requirement",
+};
+
 type View =
   | { status: "loading" }
   | { status: "ready"; data: SourcingView }
@@ -70,6 +80,12 @@ type View =
 export function Shortlist({ row }: { row: Opportunity }) {
   const [view, setView] = useState<View>({ status: "loading" });
   const [names, setNames] = useState<ReadonlyMap<string, string>>(new Map());
+  // `null` per id means "could not be read", kept apart from "not fetched
+  // yet" (the id simply absent) so a stale flag from a previous poll is never
+  // shown while a fresh one is still in flight.
+  const [eligibility, setEligibility] = useState<ReadonlyMap<string, Eligibility | null>>(
+    new Map(),
+  );
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState<string | null>(null);
@@ -86,6 +102,8 @@ export function Shortlist({ row }: { row: Opportunity }) {
   // this join is the cap the worker applied, not the size of the database.
   const known = useRef<ReadonlyMap<string, string>>(names);
   known.current = names;
+  const knownEligibility = useRef<ReadonlyMap<string, Eligibility | null>>(eligibility);
+  knownEligibility.current = eligibility;
 
   const refetch = useCallback(async () => {
     try {
@@ -94,6 +112,7 @@ export function Shortlist({ row }: { row: Opportunity }) {
       if (data.matches.length > 0) {
         const ids = data.matches.map((match) => match.candidate_id);
         setNames(await namesFor(ids, known.current));
+        setEligibility(await eligibilityFor(row.id, ids, knownEligibility.current));
       }
     } catch (err) {
       setView((prev) =>
@@ -154,6 +173,7 @@ export function Shortlist({ row }: { row: Opportunity }) {
       // the run itself, so the panel can say "queued" before the first poll.
       setView({ status: "ready", data: { run: started, matches: [] } });
       setSubmitted(new Set());
+      setEligibility(new Map());
     } catch (err) {
       setError(err instanceof Error ? err.message : "We could not start a shortlist just now.");
     } finally {
@@ -232,6 +252,7 @@ export function Shortlist({ row }: { row: Opportunity }) {
                   match={match}
                   rank={index + 1}
                   name={names.get(match.candidate_id) ?? null}
+                  eligibility={eligibility.get(match.candidate_id)}
                   clientId={run.client_id}
                   submitted={submitted.has(match.candidate_id)}
                   busy={submitting === match.candidate_id}
@@ -337,6 +358,7 @@ function Match({
   match,
   rank,
   name,
+  eligibility,
   clientId,
   submitted,
   busy,
@@ -349,6 +371,10 @@ function Match({
   /** Null when the candidate record could not be read. The id is shown
    *  instead, which is at least traceable — never a blank row. */
   name: string | null;
+  /** `undefined` while the fetch is still out, `null` if it failed, and the
+   *  record itself once read. Three states, three different renders — see
+   *  `EligibilityFlags`. */
+  eligibility: Eligibility | null | undefined;
   /** The client the run excluded against, or null when it could not be told —
    *  in which case there is nothing to submit *to*. */
   clientId: string | null;
@@ -373,6 +399,8 @@ function Match({
             is. */}
         <span className="src-score">{match.score}</span>
       </div>
+
+      <EligibilityFlags eligibility={eligibility} />
 
       <Breakdown reasons={match.reasons} />
 
@@ -416,6 +444,102 @@ function Match({
         </p>
       )}
     </li>
+  );
+}
+
+/**
+ * Placement eligibility for one candidate against this job order — a
+ * compliance fact, never a verdict on the person and never a reason they
+ * were ranked where they are.
+ *
+ * Four outcomes, four different renders, and `unknown` is the one that has
+ * to look actionable rather than like a quiet failure:
+ * - `met` and `not_applicable` are folded behind a one-line summary. Passing
+ *   is normal; a rule that does not apply to this placement type is not
+ *   even a fact about the person. Neither belongs at the volume of a
+ *   warning.
+ * - `not_met` is shown plainly, with the detail the record gives.
+ * - `unknown` is shown as a task — a missing field, with a link to go fill
+ *   it in — never as a failed check.
+ *
+ * No summary badge collapses this to a single pass/fail. A tick would have
+ * to be four-valued to be honest, and the two values it would destroy —
+ * `unknown` and `not_applicable` — are the two this exists to keep apart.
+ */
+function EligibilityFlags({ eligibility }: { eligibility: Eligibility | null | undefined }) {
+  if (eligibility === undefined) {
+    return <p className="body src-elig-note muted">Checking placement eligibility…</p>;
+  }
+  if (eligibility === null) {
+    return (
+      <p className="body src-elig-note" role="alert">
+        We could not check placement eligibility for this candidate just now.
+      </p>
+    );
+  }
+  if (!eligibility.assessable) {
+    return (
+      <p className="body src-elig-note" data-kind="not-applicable">
+        This job order has no placement type set, so eligibility has not been checked — that is a
+        gap in the job order, not a finding about this candidate.{" "}
+        <a href="#placement-type">Set the placement type above.</a>
+      </p>
+    );
+  }
+
+  const flagged = eligibility.findings.filter(
+    (finding) => finding.outcome === "not_met" || finding.outcome === "unknown",
+  );
+  const quiet = eligibility.findings.filter(
+    (finding) => finding.outcome === "met" || finding.outcome === "not_applicable",
+  );
+
+  return (
+    <div className="src-elig">
+      {flagged.map((finding) => (
+        <EligibilityRow key={finding.criterion} finding={finding} />
+      ))}
+      {quiet.length > 0 && (
+        <details className="src-elig-quiet">
+          <summary className="body src-elig-summary">
+            {quiet.length} criteri{quiet.length === 1 ? "on" : "a"} met or not applicable
+          </summary>
+          {quiet.map((finding) => (
+            <EligibilityRow key={finding.criterion} finding={finding} />
+          ))}
+        </details>
+      )}
+      {eligibility.evaluated_as_of && (
+        <p className="body src-elig-asof muted">
+          Assessed as of {eligibility.evaluated_as_of} — MOM judges age at the time a permit is
+          filed, not today.
+        </p>
+      )}
+    </div>
+  );
+}
+
+function EligibilityRow({ finding }: { finding: EligibilityFinding }) {
+  const label = CRITERION_LABELS[finding.criterion] ?? finding.criterion;
+  const basisLabel = finding.basis === "regulatory" ? "Work Permit rule" : "This job's requirement";
+
+  return (
+    <p className="body src-elig-row" data-outcome={finding.outcome}>
+      <span className="src-elig-k">{label}</span>
+      <span className="src-elig-basis muted">{basisLabel}</span>
+      {finding.basis === "occupational" ? (
+        <span className="src-elig-v">
+          <q>{finding.detail}</q>
+        </span>
+      ) : (
+        <span className="src-elig-v">{finding.detail}</span>
+      )}
+      {finding.outcome === "unknown" && (
+        <a className="src-elig-fix" href="/dashboard/candidates">
+          Fill this in on the candidate record.
+        </a>
+      )}
+    </p>
   );
 }
 

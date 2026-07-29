@@ -382,6 +382,36 @@ class Settings(BaseSettings):
     # nothing to resolve that against.
     DEFAULT_PHONE_REGION: str = Field(default="SG", min_length=2, max_length=2)
 
+    # --- MDW Work Permit eligibility (app/services/sourcing/eligibility.py) ---
+    # MOM policy, not a fact about this code — it changes on the regulator's
+    # schedule, not on a release cycle, so it lives here rather than as a
+    # literal in the eligibility module. `eligibility.py` stays pure (no
+    # settings import) and takes these as arguments; only the caller reads
+    # them from here.
+    MDW_MIN_AGE_YEARS: int = Field(default=23, gt=0)
+    # Exclusive upper bound — "under 50" in MOM's own wording, so a candidate
+    # turns ineligible on their 50th birthday, not the day after.
+    MDW_MAX_AGE_YEARS_EXCLUSIVE: int = Field(default=50, gt=0)
+    MDW_MIN_EDUCATION_YEARS: int = Field(default=8, ge=0)
+    # ISO 3166-1 alpha-2, comma-separated, matching `Candidate.nationality`'s
+    # own encoding so the two never need translating against each other.
+    # Comma-separated string rather than a list because that is how every
+    # other multi-value setting in this file is expressed — see
+    # `FREE_EMAIL_DOMAINS_RAW` — and parsed the same way, once, via the
+    # property below.
+    MDW_APPROVED_SOURCE_COUNTRIES_RAW: str = Field(
+        default="BD,KH,HK,IN,ID,MO,MY,MM,PH,KR,LK,TW,TH",
+        alias="MDW_APPROVED_SOURCE_COUNTRIES",
+    )
+
+    @property
+    def MDW_APPROVED_SOURCE_COUNTRIES(self) -> frozenset[str]:
+        return frozenset(
+            part.strip().upper()
+            for part in self.MDW_APPROVED_SOURCE_COUNTRIES_RAW.split(",")
+            if part.strip()
+        )
+
     # Which leading digits belong to a person rather than a switchboard. A
     # fixed line is shared by a whole company, so matching a candidate on one
     # would merge colleagues into a single record.
