@@ -96,3 +96,4 @@ P4 Task 7: complete (5d14429..91fb93e, 1092 passed). Fable 9/10 APPROVE, no fix-
   Row cap is async by design: XLSX row count needs inflating the zip, which is the DoS the
     job isolates. Byte cap is the synchronous proxy.
   CARRY TO TASK 8: list_imports has no default limit - bound it in the UI call or add one.
+P4 Task 8: complete (91fb93e..bdd00fe, UI). 1092 passed, tsc/build clean, route 15.6 kB.
