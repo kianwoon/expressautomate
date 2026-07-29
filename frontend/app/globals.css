@@ -285,6 +285,10 @@ h3 { font-size: 1.125rem; letter-spacing: -0.01em; font-weight: 650; }
      moment they stand side by side. */
   line-height: 1.2;
   padding: 11px 20px;
+  /* The height this box works out to, published so an icon button can be that
+     square without restating the numbers above. Kept here, beside the values
+     it is made of, so editing the padding edits the token in the same breath. */
+  --btn-h: calc(0.9375rem * 1.2 + 22px + 2px);
   border-radius: var(--radius);
   border: 1px solid transparent;
   cursor: pointer;

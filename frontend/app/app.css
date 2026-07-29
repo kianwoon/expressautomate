@@ -180,6 +180,13 @@
 .jo-action-row { display: flex; gap: 8px; flex-wrap: nowrap; }
 .jo-action-row .btn { min-width: 0; padding-inline: clamp(10px, 2.2vw, 20px); }
 .jo-action-row .btn-icon { padding-inline: 0; }
+/* Below this the panel is the full width of a phone, and four buttons no
+   longer fit even at the tightest padding — `nowrap` would push the labels
+   out of their own boxes and across the gaps. Two tidy lines beat one line
+   of overlapping words; the row stays single wherever it can. */
+@media (max-width: 430px) {
+  .jo-action-row { flex-wrap: wrap; }
+}
 .jo-detail-hint { margin-top: 10px; }
 .jo-detail-error { margin-top: 12px; color: var(--amber-700); font-size: 0.875rem; }
 
@@ -1295,20 +1302,19 @@ select.gl-input:focus-visible { outline: 2px solid var(--blue-500); outline-offs
    mark takes its width from its own 1:1 ratio. `aspect-ratio` on the button
    cannot do this: the button's width would come from its content, whose width
    would come from the button, and both resolve to zero. */
-/* Square, and the same square as the text buttons are tall, without writing
-   that number down: it is `.btn`'s own line box plus `.btn`'s own vertical
-   padding and border. Sizing it from the parent instead — `height: 100%` on
-   the mark, or `aspect-ratio` on the button — makes the width depend on the
-   content and the content depend on the width, and both resolve to zero.
+/* Square, and the same square as the text buttons are tall, via `--btn-h`,
+   which `.btn` publishes beside the padding it is computed from. Sizing it
+   from the parent instead — `height: 100%` on the mark, or `aspect-ratio` on
+   the button — makes the width depend on the content and the content depend
+   on the width, and both resolve to zero.
 
    `flex: none` because the row lets the text buttons compress, and its
    `min-width: 0` would otherwise squeeze this one away; it has no text to
    give back. */
 .wa-btn {
-  --wa-size: calc(0.9375rem * 1.2 + 22px + 2px);
   flex: none;
-  width: var(--wa-size);
-  height: var(--wa-size);
+  width: var(--btn-h);
+  height: var(--btn-h);
   padding: 0;
   border: 0;
   background: none;
