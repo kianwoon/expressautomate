@@ -573,6 +573,23 @@ class Settings(BaseSettings):
     # recruiter reads the top of a shortlist, not the tail of it — so this is
     # the knob that decides what the feature costs per run.
     SOURCING_EXPLAIN_TOP_N: int = Field(default=10, gt=0)
+    # The wall clock one sourcing run may occupy an arq worker for. A run
+    # scores every eligible candidate in the tenant and then spends a model
+    # call on the top of that list, so its size is the agency's database
+    # rather than anything the caller chose — and a run this cuts short is
+    # left at `running` for `rescan_stuck` to re-enqueue.
+    SOURCING_JOB_TIMEOUT_SECONDS: float = Field(default=600.0, gt=0)
+    # How many times a worker may pick one run up before giving up on it.
+    # `rescan_stuck` re-enqueues any run left non-terminal, which is the right
+    # answer to a crashed worker and the wrong one to a job order that crashes
+    # the scorer every single time — that pair loops for ever, burning a
+    # worker slot per sweep and a model call with it. Above one so a genuinely
+    # transient failure still gets its retry.
+    SOURCING_MAX_ATTEMPTS: int = Field(default=3, gt=0)
+    # How many runs one agency may start in a UTC day. Each run buys a model
+    # call over the top of its shortlist, so this is a spend ceiling before it
+    # is anything else — the same reason `CV_DAILY_PARSE_QUOTA` exists.
+    SOURCING_DAILY_RUN_QUOTA: int = Field(default=100, gt=0)
 
     @field_validator("MS_IDENTITY_SCOPES", "MS_MAILBOX_SCOPES")
     @classmethod

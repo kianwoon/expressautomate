@@ -30,6 +30,7 @@ from app.workers.jobs import (
     recreate_subscription,
 )
 from app.workers.queue import redis_settings
+from app.workers.sourcing_jobs import run_sourcing
 
 
 async def _announce(ctx: dict) -> None:
@@ -104,6 +105,18 @@ class WorkerSettings:
             run_candidate_import,
             name="run_candidate_import",
             timeout=settings.IMPORT_JOB_TIMEOUT_SECONDS,
+        ),
+        # A sourcing run scores every eligible candidate in the tenant and
+        # then spends a model call on the top of that list, so its size is
+        # the agency's database rather than anything the caller chose. The
+        # timeout is what keeps a large roster from holding a worker slot
+        # indefinitely, and a run it cuts short is left at `running` for
+        # `rescan_stuck` to re-enqueue. `name` is given explicitly for the
+        # same reason as above: producers enqueue the string "run_sourcing".
+        func(
+            run_sourcing,
+            name="run_sourcing",
+            timeout=settings.SOURCING_JOB_TIMEOUT_SECONDS,
         ),
     ]
     # Every function above but the two classification jobs ends in a Graph call. Said once

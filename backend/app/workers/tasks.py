@@ -5,7 +5,7 @@ processes work, this process makes sure work exists to be processed. A wedged
 arq worker still gets fresh work queued, and a crashed supervisor does not stop
 work already in the queue.
 
-All three sweep across every tenant at once, so they have no single tenant
+They sweep across every tenant at once, so they have no single tenant
 context to set and read through the narrow `SECURITY DEFINER` resolvers in the
 `operator_resolvers` migration. Each returns routing ids only; the job that
 follows re-reads the row under its own tenant policy.
@@ -69,6 +69,16 @@ _STALLED_DOCUMENTS = text(
 _STALLED_IMPORTS = text(
     "SELECT * FROM stalled_candidate_imports(:pending_minutes, :working_minutes)"
 )
+# The sourcing quarter of `rescan_stuck`, and a resolver for exactly the
+# reason `_STALLED_IMPORTS` is: `sourcing_runs` carries FORCE ROW LEVEL
+# SECURITY and this process sets no `app.tenant_id`, so a direct read would
+# match nothing at all — silently. Without this block a worker killed
+# mid-run leaves a recruiter watching a shortlist that says "running" and
+# never arrives, with no way to ask for it again: the run row already exists,
+# so a second request is a duplicate rather than a retry.
+_STALLED_RUNS = text(
+    "SELECT * FROM stalled_sourcing_runs(:pending_minutes, :working_minutes)"
+)
 _DUE_FOR_RENEWAL = text("SELECT * FROM subscriptions_due_for_renewal(:margin)")
 _ACTIVE_MAILBOXES = text("SELECT * FROM active_mailboxes()")
 _MISSING_SUBSCRIPTION = text("SELECT * FROM mailboxes_without_subscription()")
@@ -126,10 +136,10 @@ async def rescan_stuck() -> int:
     work with no job attached. Without this sweep, "killing any worker
     mid-flight loses no email" is simply false.
 
-    Three kinds of row, one function. Email messages, uploaded CVs and
-    candidate imports have nothing in common except the way they are stranded
-    — a lost enqueue, or a worker killed mid-job — and that is the whole
-    question this answers. A
+    Four kinds of row, one function. Email messages, uploaded CVs, candidate
+    imports and sourcing runs have nothing in common except the way they are
+    stranded — a lost enqueue, or a worker killed mid-job — and that is the
+    whole question this answers. A
     second scheduled task would be a second thing to forget to schedule, and
     the sweep that was forgotten is invisible until somebody notices a CV that
     has said "parsing" for a week.
@@ -142,6 +152,7 @@ async def rescan_stuck() -> int:
         rows = (await session.execute(_STALLED, ages)).all()
         documents = (await session.execute(_STALLED_DOCUMENTS, ages)).all()
         imports = (await session.execute(_STALLED_IMPORTS, ages)).all()
+        runs = (await session.execute(_STALLED_RUNS, ages)).all()
 
     requeued = 0
     for row in rows:
@@ -183,6 +194,21 @@ async def rescan_stuck() -> int:
             "run_candidate_import",
             tenant_id=str(row.tenant_id),
             import_id=str(row.id),
+        ):
+            requeued += 1
+
+    for row in runs:
+        # Same shape again: `run_sourcing` accepts `running` as well as
+        # `pending`, so a run a killed worker abandoned is picked up rather
+        # than skipped as already answered. Re-running is safe because the
+        # conditional claim inside the job is what decides who proceeds, and
+        # `attempts` is spent there — a job order that crashes the scorer
+        # every time reaches `failed` instead of coming back for ever.
+        if await enqueue(
+            "run_sourcing",
+            tenant_id=str(row.tenant_id),
+            opportunity_id=str(row.opportunity_id),
+            run_id=str(row.id),
         ):
             requeued += 1
 

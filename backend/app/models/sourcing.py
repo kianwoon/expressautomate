@@ -169,7 +169,12 @@ class SourcingMatch(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
     run_id: Mapped[uuid.UUID] = mapped_column(PgUUID(as_uuid=True), nullable=False)
     candidate_id: Mapped[uuid.UUID] = mapped_column(PgUUID(as_uuid=True), nullable=False)
 
-    score: Mapped[float] = mapped_column(Numeric(5, 2), nullable=False)
+    # Four decimal places, matching `SOURCING_SCORE_DECIMAL_PLACES`, because
+    # the scorer computes to four and a column that stored two would round
+    # distinct candidates into ties on the way in. The ranking would then
+    # depend on whatever order the read happened to return, and the same run
+    # would present differently to two people looking at it.
+    score: Mapped[float] = mapped_column(Numeric(6, 4), nullable=False)
     # A list of short, evidence-backed reasons the model gave for the score —
     # JSONB rather than a joined table because these are read as a unit
     # alongside the score and never queried on individually.
