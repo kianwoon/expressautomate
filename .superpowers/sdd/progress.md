@@ -137,3 +137,17 @@ P5 Task 4: complete (2ac311a..59f5214, 1168 passed). Fable 9/10 APPROVE, no fix-
     a one-char protected code would shred prose - fix belongs at the glossary API min-length.
   CARRY TO TASK 5: redact must be called on title AND description AND requirements; the
     test must assert the code is absent from the WHOLE assembled prompt, not one field.
+
+P5 cross-task review of Tasks 1-4 (Fable, 8.5/10 APPROVE WITH CHANGES). Nothing blocks 1-4.
+  ADDITIONAL BINDING DIRECTIVES FOR TASK 5 - both would raise at runtime, not in tests:
+   - Component carries Decimal fields (weight, raw, contribution). Decimal is NOT
+     JSON-serializable, so writing components verbatim into sourcing_matches.reasons (JSONB)
+     will throw at insert. Task 5 must define an explicit serializer (str or float per field).
+   - score_candidate can return None, but sourcing_matches.score is NOT NULL. Task 5 must
+     drop no-data candidates before insert; score.py's docstring says so, nothing enforces it.
+  MINOR, deferred: "placed" is still a literal in api/candidates.py:38 StageFilter (Literal
+    cannot reference Candidate.PLACED); SourcingRun.STATES duplicated as literals in the
+    check constraint; models/__init__.py exports are out of alphabetical order and several
+    candidate classes remain unexported (pre-existing, not worsened).
+  NOTE: test-env.sh was NOT modified in this range - verified empty diff. It was the Piece 2
+    environment fix, already ledgered above.
