@@ -295,7 +295,7 @@ h3 { font-size: 1.125rem; letter-spacing: -0.01em; font-weight: 650; }
    action row does not go ragged where the words stop. The tap target stays
    above the 44px guidance on a touch screen via the padding, not the glyph. */
 .btn-icon { display: inline-flex; align-items: center; justify-content: center; padding: 8px 10px; }
-.btn-icon svg { display: block; }
+.btn-icon svg, .btn-icon img { display: block; }
 /* `.btn` carries no focus ring of its own, so every button on the site —
    landing page and app alike — needs this one rule to be visibly focusable. */
 .btn:focus-visible { outline: 2px solid var(--blue-500); outline-offset: 2px; }

@@ -1264,6 +1264,21 @@ select.gl-input:focus-visible { outline: 2px solid var(--blue-500); outline-offs
   display: grid;
   gap: 12px;
 }
+/* The mark sits on the heading's text baseline rather than its line box, so a
+   long candidate name wrapping to a second line does not drag it downwards. */
+.wa-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+/* No width or height here: the mark renders at 16px in the action row and
+   24px in the modal heading, and the size comes from the attributes each
+   caller passes. A rule here would override both. */
+.wa-mark {
+  display: block;
+  flex: none;
+  border-radius: 22%;
+}
 .wa-field {
   display: grid;
   gap: 4px;
