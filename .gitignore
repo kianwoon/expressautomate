@@ -2,6 +2,11 @@
 .env
 .env.local
 .env.*.local
+# What `backend/scripts/test-env.sh` renames `.env` to while it runs, so
+# pydantic cannot read it. A run that is interrupted leaves the file sitting
+# there under a name the patterns above do not match — which is `.env`, with
+# every production secret in it, one `git add -A` away from being committed.
+.env.hidden-while-testing
 *.pem
 
 # Python

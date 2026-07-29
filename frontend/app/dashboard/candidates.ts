@@ -686,6 +686,13 @@ export async function uploadCandidateImport(
  *  for a stronger reason: this report names candidates. */
 export async function getCandidateImportErrorsUrl(importId: string): Promise<DocumentUrl> {
   const res = await fetch(candidateImportErrorsPath(importId), {
+    credentials: "include",
+    headers: { Accept: "application/json" },
+  });
+  if (!res.ok) throw new ApiError(await readError(res));
+  return (await res.json()) as DocumentUrl;
+}
+
 /** What the draft endpoint hands back: the number already in the shape the
  *  WhatsApp URL wants (plus its sign) and a message ready to edit. */
 export type WhatsappDraft = { phone_e164: string; message: string };
@@ -733,7 +740,8 @@ export async function getCandidateActivities(id: string): Promise<ActivityItem[]
     headers: { Accept: "application/json" },
   });
   if (!res.ok) throw new ApiError(await readError(res));
-  return (await res.json()) as DocumentUrl;
+  const body = (await res.json()) as { items: ActivityItem[] };
+  return body.items;
 }
 
 /** Walks one import back as far as it is still safe to.
@@ -749,8 +757,6 @@ export async function undoCandidateImport(importId: string): Promise<UndoResult>
   });
   if (!res.ok) throw new ApiError(await readError(res));
   return (await res.json()) as UndoResult;
-  const body = (await res.json()) as { items: ActivityItem[] };
-  return body.items;
 }
 
 export async function deleteCandidateAvatar(id: string): Promise<void> {

@@ -23,7 +23,12 @@ from alembic import op
 from app.core.config import settings
 
 revision: str = "5c2d8e14f6a1"
-down_revision: str | None = "3f9a6c21e8b4"
+# Rebased onto main's head rather than the revision this branch was cut from.
+# Left pointing at the old parent it made a second alembic head, and
+# `upgrade head` refuses to choose between two — the deploy fails before it
+# reaches the table. This branch adds a table nothing else references, so
+# following main's chain costs nothing and racing it costs the release.
+down_revision: str | None = "f4b8c1e7d290"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
