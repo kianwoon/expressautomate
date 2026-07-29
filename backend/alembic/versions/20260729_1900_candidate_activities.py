@@ -12,7 +12,7 @@ RLS policy created in the same revision as the table, same reasoning as
 any readable table without a forced policy.
 
 Revision ID: 5c2d8e14f6a1
-Revises: 3f9a6c21e8b4
+Revises: f4b8c1e7d290
 Create Date: 2026-07-29 10:00:00.000000+00:00
 """
 from collections.abc import Sequence
