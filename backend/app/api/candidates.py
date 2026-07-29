@@ -26,6 +26,7 @@ from app.models.candidate import (
     Candidate,
     CandidateActivity,
     CandidateFieldOverride,
+    CandidateLanguage,
     CandidateSkill,
 )
 from app.models.tenant import User
@@ -33,6 +34,7 @@ from app.services.candidate_matching import find_candidate
 from app.services.candidate_naming import (
     is_matchable_phone,
     normalize_email,
+    normalize_language,
     normalize_phone,
     normalize_skill,
 )
@@ -45,6 +47,19 @@ router = APIRouter(tags=["candidates"])
 
 StageFilter = Literal["new", "contacted", "submitted", "placed", "rejected"]
 RecordStatusFilter = Literal["active", "archived", "merged"]
+
+# The regulatory vocabularies, named off the model so the request schema and
+# the database CHECK cannot drift apart. These are accepted on write and shown
+# on read; deliberately NOT offered as query parameters anywhere — see
+# `list_candidates`, and `app/services/sourcing/redact.py` for why.
+SexIn = Literal[Candidate.FEMALE, Candidate.MALE]
+RaceIn = Literal["chinese", "malay", "indian", Candidate.OTHERS]
+FluencyIn = Literal[
+    CandidateLanguage.NATIVE,
+    CandidateLanguage.FLUENT,
+    CandidateLanguage.CONVERSATIONAL,
+    CandidateLanguage.BASIC,
+]
 
 # The bucket a name falls into in the A–Z index bar. `#` is everything that is
 # not a Latin letter: digits, punctuation, and every non-Latin script an agency
@@ -174,6 +189,20 @@ def _serialize(candidate: Candidate) -> dict:
         ),
         "notice_period_raw": candidate.notice_period_raw,
         "employment_type": candidate.employment_type,
+        # Regulatory facts. Shown to the recruiter who has to fill the MOM form
+        # and to nobody else — in particular, `app/services/sourcing/explain.py`
+        # builds its own narrow `MatchCandidate` projection and never reads this
+        # dict, which is what keeps them out of every prompt (`redact.py`).
+        "sex": candidate.sex,
+        "race": candidate.race,
+        "race_detail": candidate.race_detail,
+        "nationality": candidate.nationality,
+        # Serialized as the date it is. No age is derived here or anywhere —
+        # see the column comment.
+        "date_of_birth": (
+            candidate.date_of_birth.isoformat() if candidate.date_of_birth else None
+        ),
+        "education_years": candidate.education_years,
         "notes": candidate.notes,
         "pipeline_stage": candidate.pipeline_stage,
         "record_status": candidate.record_status,
@@ -199,6 +228,20 @@ async def list_candidates(
     q: str | None = None,
     initial: str | None = InitialFilter,
 ) -> dict:
+    # There is deliberately no `sex`, `race`, `nationality`, `date_of_birth`,
+    # `education_years` or `language` parameter here, and adding one is not a
+    # small change. Those columns exist because a MOM form asks for them; a
+    # filter on them is the platform helping somebody shortlist on a protected
+    # characteristic, which is the exact thing `app/services/sourcing/
+    # redact.py` exists to prevent. An unrecognised query parameter is ignored
+    # by FastAPI, so a caller who sends `?race=chinese` gets the unfiltered
+    # list rather than an error — no filtering, and no hint that filtering is
+    # around the corner. `tests/test_candidate_demographics_api.py` asserts it.
+    #
+    # Eligibility matching (a MDW Work Permit genuinely requires female, 23 to
+    # under 50, eight years of education, an approved source country) is a
+    # job-order concern and belongs behind a job order that states the rule,
+    # not behind a free-text filter on the whole candidate list.
     _user_uuid, tenant_uuid = _require_session(request)
     ceiling = settings.CANDIDATES_PAGE_LIMIT
     page_limit = ceiling if limit is None else min(limit, ceiling)
@@ -316,6 +359,17 @@ async def get_candidate(request: Request, candidate_id: uuid.UUID) -> dict:
             .scalars()
             .all()
         )
+        languages = (
+            (
+                await session.execute(
+                    select(CandidateLanguage)
+                    .where(CandidateLanguage.candidate_id == candidate_id)
+                    .order_by(CandidateLanguage.language_normalized)
+                )
+            )
+            .scalars()
+            .all()
+        )
         overrides = await overridden_fields(session, candidate_id)
         # Imported here rather than at module scope: `candidate_roles` imports
         # `_load` from this module, and a top-level import each way would not
@@ -335,6 +389,12 @@ async def get_candidate(request: Request, candidate_id: uuid.UUID) -> dict:
 
     payload = _serialize(candidate)
     payload["skills"] = [s.skill for s in skills]
+    # Objects, not bare strings as skills are: a language without its fluency
+    # is half the fact, and flattening it would lose the half that decides a
+    # placement.
+    payload["languages"] = [
+        {"language": row.language, "fluency": row.fluency} for row in languages
+    ]
     # So the UI can say why an import did not change a field, rather than
     # leaving the recruiter to conclude the import is broken.
     payload["overridden_fields"] = sorted(overrides)
@@ -408,6 +468,10 @@ MAX_EXPECTED_SALARY = float(
 # integrity error means "somebody already has that"; every other one (a CHECK,
 # a foreign key) is a different fault and must not be dressed up as a duplicate.
 _UNIQUE_VIOLATION = "23505"
+
+# Two uppercase letters, the ISO 3166-1 alpha-2 shape. The database CHECK says
+# the same; this is here so the caller gets a 422 naming the field.
+_ISO_ALPHA2 = re.compile(r"[A-Z]{2}")
 
 
 def _is_duplicate(exc: IntegrityError) -> bool:
@@ -491,6 +555,48 @@ class _CandidateFieldRules:
             )
         return value
 
+    @field_validator("nationality", check_fields=False)
+    @classmethod
+    def _nationality_is_iso_alpha2(cls, value: str | None) -> str | None:
+        """Uppercased here so `sg` and `SG` are the same country.
+
+        `ck_candidates_nationality_iso_alpha2` says the same thing in the
+        database; saying it here means the caller is told which field is wrong
+        instead of getting a 500 out of a CHECK.
+        """
+        if value is None:
+            return None
+        upper = value.strip().upper()
+        if not _ISO_ALPHA2.fullmatch(upper):
+            raise ValueError("nationality must be an ISO 3166-1 alpha-2 code, e.g. 'PH'")
+        return upper
+
+    @field_validator("education_years", check_fields=False)
+    @classmethod
+    def _education_years_are_plausible(cls, value: int | None) -> int | None:
+        if value is None:
+            return None
+        if not (
+            Candidate.EDUCATION_YEARS_MIN <= value <= Candidate.EDUCATION_YEARS_MAX
+        ):
+            raise ValueError(
+                "education_years must be between "
+                f"{Candidate.EDUCATION_YEARS_MIN} and {Candidate.EDUCATION_YEARS_MAX}"
+            )
+        return value
+
+
+class LanguageIn(BaseModel):
+    """One language a candidate speaks. `fluency` is optional on purpose.
+
+    A recruiter who knows somebody speaks Tagalog but has not assessed how
+    well records the language and leaves the level unset, rather than picking
+    one to satisfy a form (§15).
+    """
+
+    language: str
+    fluency: FluencyIn | None = None
+
 
 class CandidateIn(_CandidateFieldRules, BaseModel):
     """Only `full_name` is required.
@@ -512,9 +618,18 @@ class CandidateIn(_CandidateFieldRules, BaseModel):
     available_from: date | None = None
     notice_period_raw: str | None = None
     employment_type: str | None = None
+    # Regulatory facts, all optional. Omitting one leaves it NULL — not
+    # recorded — and nothing infers a value for it.
+    sex: SexIn | None = None
+    race: RaceIn | None = None
+    race_detail: str | None = None
+    nationality: str | None = None
+    date_of_birth: date | None = None
+    education_years: int | None = None
     notes: str | None = None
     pipeline_stage: StageFilter | None = None
     skills: list[str] | None = None
+    languages: list[LanguageIn] | None = None
 
 
 class CandidateUpdate(_CandidateFieldRules, BaseModel):
@@ -540,22 +655,33 @@ class CandidateUpdate(_CandidateFieldRules, BaseModel):
     available_from: date | None = None
     notice_period_raw: str | None = None
     employment_type: str | None = None
+    # Regulatory facts, all optional. Omitting one leaves it NULL — not
+    # recorded — and nothing infers a value for it.
+    sex: SexIn | None = None
+    race: RaceIn | None = None
+    race_detail: str | None = None
+    nationality: str | None = None
+    date_of_birth: date | None = None
+    education_years: int | None = None
     notes: str | None = None
     pipeline_stage: StageFilter | None = None
     skills: list[str] | None = None
+    languages: list[LanguageIn] | None = None
 
 
 class MergeRequest(BaseModel):
     target_id: uuid.UUID
 
 
-# Fields a human edit protects from a later import. `skills` is excluded: it is
-# a set, not a value, and merging an imported skill into a curated list loses
-# nothing.
+# Fields a human edit protects from a later import. `skills` and `languages`
+# are excluded: each is a set, not a value, and merging an imported member into
+# a curated list loses nothing.
 _OVERRIDABLE = (
     "full_name", "email", "phone_raw", "current_title", "current_employer",
     "location", "years_experience", "expected_salary", "salary_currency",
     "salary_period", "available_from", "notice_period_raw", "employment_type",
+    "sex", "race", "race_detail", "nationality", "date_of_birth",
+    "education_years",
     "notes",
 )
 
@@ -586,7 +712,7 @@ async def create_candidate(request: Request, body: CandidateIn) -> dict:
             )
 
         candidate_id = uuid.uuid4()
-        values = body.model_dump(exclude={"skills"})
+        values = body.model_dump(exclude={"skills", "languages"})
         values.update(
             id=candidate_id,
             tenant_id=tenant_uuid,
@@ -600,6 +726,9 @@ async def create_candidate(request: Request, body: CandidateIn) -> dict:
         try:
             await session.execute(insert(Candidate).values(**values))
             await _replace_skills(session, tenant_uuid, candidate_id, body.skills or [])
+            await _replace_languages(
+                session, tenant_uuid, candidate_id, body.languages or []
+            )
             await session.commit()
         except IntegrityError as exc:
             # The unique indexes are the backstop for a race the matcher's
@@ -630,7 +759,7 @@ def _comparable(field: str, value: object) -> object:
         return None
     if field == "expected_salary":
         return float(value)
-    if field == "available_from":
+    if field in ("available_from", "date_of_birth"):
         return value.isoformat()
     return value
 
@@ -648,7 +777,7 @@ async def update_candidate(
         # Archive already refuses a merged row for the same reason.
         if candidate.record_status == Candidate.MERGED:
             raise HTTPException(status_code=400, detail="Unmerge the candidate first")
-        values = body.model_dump(exclude={"skills"}, exclude_unset=True)
+        values = body.model_dump(exclude={"skills", "languages"}, exclude_unset=True)
         if "phone_raw" in values:
             values["phone_e164"] = _identity_phone(values["phone_raw"])
         if "email" in values:
@@ -713,6 +842,11 @@ async def update_candidate(
             )
         if body.skills is not None:
             await _replace_skills(session, tenant_uuid, candidate_id, body.skills)
+        # Replace-on-write, exactly like skills: sending the list replaces it,
+        # omitting it leaves it alone. An append-only list could never unsay a
+        # language somebody recorded by mistake.
+        if body.languages is not None:
+            await _replace_languages(session, tenant_uuid, candidate_id, body.languages)
         await session.commit()
 
     return await get_candidate(request, candidate_id)
@@ -824,6 +958,31 @@ async def merge_candidate(
             ),
             {"loser": candidate_id, "target": body.target_id},
         )
+        # Languages move exactly as skills do, and for the same reason: the
+        # loser row is a duplicate record of the same human being, so what it
+        # knows about them belongs on the survivor. Left behind they would sit
+        # on a row nothing reads, invisible until the merged row is deleted.
+        await session.execute(
+            text(
+                """
+                DELETE FROM candidate_languages loser
+                WHERE loser.candidate_id = :loser
+                  AND EXISTS (
+                      SELECT 1 FROM candidate_languages t
+                      WHERE t.candidate_id = :target
+                        AND t.language_normalized = loser.language_normalized
+                  )
+                """
+            ),
+            {"loser": candidate_id, "target": body.target_id},
+        )
+        await session.execute(
+            text(
+                "UPDATE candidate_languages SET candidate_id = :target "
+                "WHERE candidate_id = :loser"
+            ),
+            {"loser": candidate_id, "target": body.target_id},
+        )
         # Overrides move the same way, and for the same reason: they are a
         # record of what a person decided about this human being.
         await session.execute(
@@ -914,7 +1073,7 @@ async def unmerge_candidate(request: Request, candidate_id: uuid.UUID) -> dict:
 async def delete_candidate(request: Request, candidate_id: uuid.UUID) -> Response:
     """Erase a person. Owner only, and irreversible.
 
-    Skills, overrides and activities (WhatsApp-open history — see
+    Skills, languages, overrides and activities (WhatsApp-open history — see
     `CandidateActivity`) cascade. Nothing else in phase 1 holds this person's
     personal data — the bulk import that will is built in phase 2, and its plan
     must extend this endpoint to scrub `candidate_import_rows`.
@@ -1105,5 +1264,37 @@ async def _replace_skills(
                 candidate_id=candidate_id,
                 skill=raw.strip(),
                 skill_normalized=normalized,
+            )
+        )
+
+
+async def _replace_languages(
+    session, tenant_uuid: uuid.UUID, candidate_id: uuid.UUID, languages: list
+) -> None:
+    """Languages are a set, replaced wholesale — `_replace_skills` exactly.
+
+    Deduplicated on the normalised form and first-wins, so a payload naming
+    "English" twice at two fluencies does not trip
+    `uq_candidate_languages_once_per_candidate` with a 500. First rather than
+    last is arbitrary but has to be one of them; what matters is that the row
+    the recruiter sees back is one they sent.
+    """
+    await session.execute(
+        delete(CandidateLanguage).where(CandidateLanguage.candidate_id == candidate_id)
+    )
+    seen: set[str] = set()
+    for entry in languages:
+        normalized = normalize_language(entry.language)
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        await session.execute(
+            insert(CandidateLanguage).values(
+                id=uuid.uuid4(),
+                tenant_id=tenant_uuid,
+                candidate_id=candidate_id,
+                language=entry.language.strip(),
+                language_normalized=normalized,
+                fluency=entry.fluency,
             )
         )

@@ -44,6 +44,51 @@ class Candidate(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
     ACTIVE = "active"
     ARCHIVED = "archived"
     MERGED = "merged"
+
+    # --- Regulatory facts (§15) -------------------------------------------
+    #
+    # Every vocabulary below is enforced twice — here so a bad value is a 422
+    # from Pydantic, and as a database CHECK so the rule holds for a row a
+    # migration or script writes directly. Same pattern
+    # `20260729_0900_opportunity_vocabularies.py` set.
+    #
+    # These are FACTS ABOUT A PERSON, recorded because Singapore law requires
+    # them on a form. They are not selection criteria, and nothing in this
+    # codebase may filter, rank or score on them — see
+    # `app/services/sourcing/redact.py` for why that line is drawn where it is.
+
+    FEMALE = "female"
+    MALE = "male"
+    # Two values because that is the vocabulary of the MOM forms this field
+    # exists to fill: a Work Permit application has no third box. NULL is the
+    # third state and the default one — "not recorded". Nothing may ever infer
+    # this from a name (§15); a name is not evidence of sex, and guessing it
+    # would manufacture a regulatory fact nobody stated.
+    SEXES = (FEMALE, MALE)
+
+    # Singapore's administrative CMIO categories, as they appear on an NRIC and
+    # on every MOM form. Recorded for statutory deductions — CDAC, MBMF, SINDA,
+    # ECF are levied by CMIO group — and for those forms. NEVER for selection:
+    # race is not a lawful selection criterion in Singapore, and the coded
+    # shorthand recruiters use for it ("C/F") is stripped before any model reads
+    # a job order (`redact.py`).
+    #
+    # `others` is the fourth official category, not a catch-all apology; the
+    # detail a person actually gives ("Eurasian") goes in `race_detail`, free
+    # text, because flattening a Eurasian or Peranakan candidate into a code
+    # would be this system deciding what someone is.
+    OTHERS = "others"
+    RACES = ("chinese", "malay", "indian", OTHERS)
+
+    # The bound the CHECK below enforces, named so the API validator can refuse
+    # the value with a readable message instead of letting the database answer
+    # with a 500. Not a setting: this is the shape of the column, and a
+    # migration that widened it would move this constant with it — unlike
+    # `CANDIDATE_MAX_YEARS_EXPERIENCE`, which guards a column that has no
+    # constraint to derive anything from.
+    EDUCATION_YEARS_MIN = 0
+    EDUCATION_YEARS_MAX = 30
+
     # Named because sourcing has to exclude it by name (a placed person is not
     # available), and a stage spelled out at the query is a stage that can
     # drift from this tuple without anything failing.
@@ -71,6 +116,38 @@ class Candidate(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
     available_from: Mapped[date | None] = mapped_column(Date)
     notice_period_raw: Mapped[str | None] = mapped_column(Text)
     employment_type: Mapped[str | None] = mapped_column(String(32))
+
+    # All five nullable, and NULL is the ordinary state: it means "not
+    # recorded", never "unknown but guessable". Nothing in this codebase may
+    # infer any of them (§15) — not sex from a name, not nationality from a
+    # phone prefix, not race from anything at all.
+    sex: Mapped[str | None] = mapped_column(String(16))
+    race: Mapped[str | None] = mapped_column(String(16))
+    # Free text, and only meaningful beside `race = 'others'`. See the RACES
+    # comment: the code is what the statutory deduction is levied on, this is
+    # what the person actually said they are.
+    race_detail: Mapped[str | None] = mapped_column(Text)
+    # ISO 3166-1 alpha-2, uppercase. Chosen over a country name because
+    # work-pass eligibility turns on it and a name is not a key: "Burma" and
+    # "Myanmar" are one country and two strings, and MOM's approved-source-
+    # country list for a MDW Work Permit has to be checkable by equality. Two
+    # characters is also the form the immigration and MOM systems themselves
+    # use, so a value here transcribes onto a form without translation.
+    #
+    # Deliberately not constrained to the approved-source list. That list is
+    # policy and changes; a candidate may hold any nationality, and the column
+    # records who somebody is, not whether a particular pass would be granted.
+    nationality: Mapped[str | None] = mapped_column(String(2))
+    # A date, not an age. Age rots: a row written "23" is wrong within a year
+    # and there is nothing in it to say when it was true, so a candidate silently
+    # ages out of — or into — a MOM band nobody re-checked. A date of birth is
+    # true for ever and every age question can be asked of it at the moment it
+    # is asked. Nothing computes or persists an age from this.
+    date_of_birth: Mapped[date | None] = mapped_column(Date)
+    # Years of formal education completed — a MDW Work Permit requires at least
+    # eight. Bounded 0–30 by CHECK: a plausible ceiling for a life spent in
+    # education, low enough that a mistyped birth year in the box is refused.
+    education_years: Mapped[int | None] = mapped_column(Integer)
 
     notes: Mapped[str | None] = mapped_column(Text)
 
@@ -151,6 +228,30 @@ class Candidate(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
             unique=True,
             postgresql_where=text("phone_e164 IS NOT NULL AND record_status <> 'merged'"),
         ),
+        # `IS NULL OR ...` on every one of these: NULL is a legal value and
+        # means not recorded, so a bare `IN` — which is NULL, not TRUE, for a
+        # NULL input — would be satisfied by accident rather than by intent.
+        # Spelled out so the reason survives a reader who changes one.
+        CheckConstraint(
+            "sex IS NULL OR sex IN (" + ",".join(f"'{v}'" for v in SEXES) + ")",
+            name="ck_candidates_sex",
+        ),
+        CheckConstraint(
+            "race IS NULL OR race IN (" + ",".join(f"'{v}'" for v in RACES) + ")",
+            name="ck_candidates_race",
+        ),
+        # Uppercase alpha-2 only. A lowercase or three-letter code stored here
+        # would compare unequal to the same country written correctly, which
+        # for a work-pass eligibility fact is worse than a rejected write.
+        CheckConstraint(
+            "nationality IS NULL OR nationality ~ '^[A-Z]{2}$'",
+            name="ck_candidates_nationality_iso_alpha2",
+        ),
+        CheckConstraint(
+            "education_years IS NULL OR (education_years >= "
+            f"{EDUCATION_YEARS_MIN} AND education_years <= {EDUCATION_YEARS_MAX})",
+            name="ck_candidates_education_years_range",
+        ),
     )
 
 
@@ -185,6 +286,72 @@ class CandidateSkill(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
             "candidate_id",
             "skill_normalized",
             name="uq_candidate_skills_once_per_candidate",
+        ),
+    )
+
+
+class CandidateLanguage(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
+    """A language a candidate speaks, and how well.
+
+    A row rather than an array column on `candidates`, for the same reason
+    `CandidateSkill` is one: a language is a *pair* — the language and the
+    fluency — so an array would have to be an array of composites, and Postgres
+    cannot put a unique constraint on one element of that. Per-candidate
+    uniqueness is what stops "English" arriving twice at two different fluencies
+    and leaving no answer to which is true. It is also the thing a job order
+    will eventually be matched against, and a row is what an index can be built
+    on. Deliberately NOT matched on yet: this slice records the fact only.
+
+    `language_normalized` is the comparable form and `language` is what the
+    recruiter typed, the same raw-beside-normalised rule the rest of this file
+    follows. Normalisation is `normalize_skill`'s — lowercase and collapse
+    whitespace, nothing cleverer. A normaliser that aliased would decide that
+    "Bahasa" is "Malay" or "Indonesian", and for a MDW placement those are
+    different facts about a different person.
+
+    Fluency is a four-value ladder, and it stops where honest observation
+    stops. `native` is a fact about upbringing a person states about
+    themselves; `fluent`, `conversational` and `basic` are the three
+    distinctions a recruiter can actually make from a phone call, which is how
+    this value is nearly always obtained. A finer scale (CEFR's six levels)
+    would invite a precision nobody measured (§15), and a coarser one would
+    lose the conversational/basic line — the one that decides whether a
+    helper can be placed with an English-speaking household.
+    """
+
+    __tablename__ = "candidate_languages"
+
+    NATIVE = "native"
+    FLUENT = "fluent"
+    CONVERSATIONAL = "conversational"
+    BASIC = "basic"
+    FLUENCIES = (NATIVE, FLUENT, CONVERSATIONAL, BASIC)
+
+    candidate_id: Mapped[uuid.UUID] = mapped_column(
+        PgUUID(as_uuid=True), nullable=False, index=True
+    )
+    language: Mapped[str] = mapped_column(Text, nullable=False)
+    language_normalized: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    # Nullable: a recruiter who knows somebody speaks Tagalog but has not
+    # assessed how well should record the language rather than invent a level.
+    fluency: Mapped[str | None] = mapped_column(String(16))
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "candidate_id"],
+            ["candidates.tenant_id", "candidates.id"],
+            name="fk_candidate_languages_candidate_same_tenant",
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint(
+            "tenant_id",
+            "candidate_id",
+            "language_normalized",
+            name="uq_candidate_languages_once_per_candidate",
+        ),
+        CheckConstraint(
+            "fluency IS NULL OR fluency IN ('native','fluent','conversational','basic')",
+            name="ck_candidate_languages_fluency",
         ),
     )
 

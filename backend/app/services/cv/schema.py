@@ -115,6 +115,18 @@ class ExtractedRole(BaseModel):
 
 
 class CVResponse(BaseModel):
+    """Roles and skills, and nothing else about the person.
+
+    A CV very often states sex, date of birth, nationality and race outright —
+    for a domestic-worker placement it nearly always does. None of them is
+    asked for here, and none may be added: `cv_json_schema()` is derived from
+    this class, so a field added here is a field the model is instructed to
+    extract, and an AI-asserted protected characteristic is exactly what
+    `app/services/sourcing/redact.py` refuses to let this platform hold.
+    Those columns on `candidates` are filled by a person, deliberately, or
+    they stay NULL (§15).
+    """
+
     roles: list[ExtractedRole] = Field(default_factory=list)
     skills: list[ExtractedField] = Field(default_factory=list)
 

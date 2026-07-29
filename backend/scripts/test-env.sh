@@ -85,4 +85,13 @@ fi
 # property that actually matters. It is idempotent and costs a second.
 uv run alembic upgrade head >/dev/null
 
-exec uv run pytest "$@"
+# Not `exec`. `exec` replaces this shell with pytest, and a process that has
+# been replaced never runs its EXIT trap — so the `.env` hidden above was
+# restored on no run at all, not merely on an interrupted one. It sat as
+# `.env.hidden-while-testing` until somebody noticed, which meant the file
+# holding every production secret was living under a name that no ignore rule
+# matched, one `git add -A` from being committed.
+#
+# Without `exec` the trap fires and `set -e` still carries pytest's exit code
+# out of the script, so a failing suite still fails the caller.
+uv run pytest "$@"

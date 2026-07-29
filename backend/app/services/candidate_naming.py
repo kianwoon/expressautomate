@@ -87,3 +87,19 @@ def normalize_skill(raw: str) -> str:
     "JavaScript" collide, which is worse than two rows a recruiter can read.
     """
     return _WHITESPACE.sub(" ", raw.lower()).strip()
+
+
+def normalize_language(raw: str) -> str:
+    """Exactly `normalize_skill`, and deliberately no more.
+
+    The temptation here is an alias table — folding "Bahasa" onto "Malay", or
+    "Filipino" onto "Tagalog". Both of those are a guess about a person, and
+    for a domestic-worker placement they are guesses that matter: Bahasa
+    Melayu and Bahasa Indonesia are different languages, and a recruiter who
+    typed one must not find the other in the record (§15).
+
+    Kept as its own function rather than a call site of `normalize_skill`
+    because the two are the same rule for different reasons, and a future
+    change to skill normalisation must not silently move languages with it.
+    """
+    return _WHITESPACE.sub(" ", raw.lower()).strip()

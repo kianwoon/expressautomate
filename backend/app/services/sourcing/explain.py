@@ -68,6 +68,21 @@ class MatchCandidate:
     there is no parsed document. `score` is carried through untouched; this
     module never writes to it, and the fact that an explanation was refused
     must not read as a worse fit.
+
+    **This is a whitelist, and that is the whole point.** It names the five
+    things a model may see about a person; it is not built from a `Candidate`
+    row, so a column added to that table does not appear here by accident.
+    `candidates.sex`, `.race`, `.race_detail`, `.nationality` and
+    `.date_of_birth` are therefore absent and must stay absent — they are
+    recorded because a MOM form asks for them, and handing one to the model
+    that explains why somebody fits is exactly the laundering `redact.py`
+    exists to prevent. `education_years` and a candidate's languages are held
+    to the same rule here: they are eligibility facts for a job order to state,
+    not material for a free-text justification.
+
+    Adding a field to this dataclass adds it to the prompt. Do not do it for
+    any of the above. `tests/test_candidate_demographics_api.py` fails if one
+    of them reaches `build_prompt`'s output.
     """
 
     candidate_id: Any
