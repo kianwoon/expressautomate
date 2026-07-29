@@ -327,23 +327,32 @@ class InternalStatusIn(BaseModel):
     qr_expires_at: datetime | None = None
 
 
-@router.post("/internal/status")
-async def internal_status(
-    body: InternalStatusIn,
-    authorization: str | None = Header(default=None),
-) -> dict[str, str]:
-    """The gateway's push callback — the only writer of `wa_sessions.status`.
+async def apply_internal_status(body: InternalStatusIn) -> None:
+    """The single place `wa_sessions.status` is written (plan §6).
 
-    Authenticated the same way `telegram_webhook.py` authenticates Telegram:
-    a shared secret compared with `secrets.compare_digest`, because a plain
-    `==` leaks its answer through timing, and an empty configured secret
-    always rejects (an unset secret must never mean "accept anything").
+    Split out of the `POST /internal/status` route so the liveness sweep
+    (`app.workers.tasks.sweep_wa_liveness`) can call the exact same write —
+    not a second implementation of it — when it re-delivers a status the
+    gateway already told us but that never landed, because
+    `gateway/src/callback.ts` is fire-and-forget and a lost push otherwise
+    stays lost forever (asking `status()` again produces no new *change*
+    event, so no retry is ever generated on the gateway side). The sweep
+    calls this function directly, in-process, rather than over HTTP: this
+    codebase has no precedent for the worker calling the api service back
+    over the network (every other sweep talks to Postgres directly), the two
+    processes already share one database, and a real HTTP hop would need a
+    self-referencing URL nothing here currently configures — trading one
+    unreachable-gateway case for a second, symmetrical
+    unreachable-ourselves case that buys nothing. Calling this function *is*
+    "the same writer the gateway uses": it is the identical code, run
+    in-process instead of round-tripped, so there is still exactly one
+    place that turns a gateway-reported status into a database write.
+
+    The HTTP route above still owns authentication; a caller of this
+    function is already trusted (either the gateway, past the shared-secret
+    check, or our own worker process) — this function itself performs no
+    auth check, by design, since it is not the network boundary.
     """
-    expected = settings.WA_GATEWAY_SHARED_SECRET
-    presented = _bearer(authorization)
-    if not expected or not presented or not secrets_module.compare_digest(presented, expected):
-        raise HTTPException(status_code=401, detail="Unauthorised.")
-
     async with tenant_session(body.tenant_id) as session:
         # `id = user_id`: the gateway's addressing convention (see
         # gateway/src/sessions.ts, "Session identity") — `ensureWaSessionRow`
@@ -385,6 +394,28 @@ async def internal_status(
     # `events_service.publish`'s own docstring: a nudge that overtakes its own
     # row makes the browser refetch and see nothing.
     await events_service.publish(body.tenant_id, events_service.KIND_WA_SESSION)
+
+
+@router.post("/internal/status")
+async def internal_status(
+    body: InternalStatusIn,
+    authorization: str | None = Header(default=None),
+) -> dict[str, str]:
+    """The gateway's push callback — the only *network* writer of
+    `wa_sessions.status`. `apply_internal_status` above is the only writer,
+    full stop; this route is one of its two trusted callers.
+
+    Authenticated the same way `telegram_webhook.py` authenticates Telegram:
+    a shared secret compared with `secrets.compare_digest`, because a plain
+    `==` leaks its answer through timing, and an empty configured secret
+    always rejects (an unset secret must never mean "accept anything").
+    """
+    expected = settings.WA_GATEWAY_SHARED_SECRET
+    presented = _bearer(authorization)
+    if not expected or not presented or not secrets_module.compare_digest(presented, expected):
+        raise HTTPException(status_code=401, detail="Unauthorised.")
+
+    await apply_internal_status(body)
     return {"status": "ok"}
 
 

@@ -502,12 +502,16 @@ async def sweep_stale_wa_sends() -> int:
 # See `20260729_2400_wa_liveness_sweep.py` for the full reasoning; restated
 # briefly: claim stamps `last_liveness_check_at = now()` up front so two
 # concurrent sweeps cannot both pick the same session (the SKIP LOCKED
-# compare-and-set), and returns each row's *previous* value so this module
-# can put it back if the gateway never answers.
+# compare-and-set), and returns each row's *status*, *previous* check time
+# and the *claimed_at* stamp itself, so this module can (a) notice a
+# gateway answer that disagrees with the row and repair it, and (b) revert
+# the stamp on an unreachable gateway without racing a newer claim.
 _WA_LIVENESS_CLAIM = text(
     "SELECT * FROM wa_sweep_claim_due_sessions(:stale_minutes, :limit)"
 )
-_WA_LIVENESS_REVERT = text("SELECT wa_sweep_revert_check(:id, :previous)")
+_WA_LIVENESS_REVERT = text(
+    "SELECT wa_sweep_revert_check(:id, :previous, :claimed_at)"
+)
 
 
 async def sweep_wa_liveness() -> int:
@@ -519,12 +523,25 @@ async def sweep_wa_liveness() -> int:
     silently. This sweep is the background half — it asks, on a clock, so
     staleness is bounded even with no browser open.
 
-    **This function never writes `wa_sessions.status`.** Per §6 the gateway's
-    `POST /api/wa/internal/status` callback is the only writer of that
-    column, and it already fires whenever a session's status changes — so
-    calling `WaGatewayClient.status` is sufficient to bring the database up
-    to date; this task only has to ask. Writing status here would be a
-    second writer racing the callback, exactly what §6 rules out.
+    **This function never writes `wa_sessions.status` directly.** Per §6 the
+    gateway's `POST /api/wa/internal/status` callback is meant to be the only
+    thing that turns a gateway-reported status into a write, and it already
+    fires whenever the gateway's own state changes — so simply calling
+    `WaGatewayClient.status` is *usually* sufficient to bring the database up
+    to date.
+
+    It is not always sufficient. `gateway/src/callback.ts` is fire-and-forget
+    — a push that fails to deliver is logged and dropped, never retried. If
+    that lost push carried a status change, the row is wrong and stays wrong
+    forever: asking `status()` again produces no new *change* on the gateway
+    side, so no new callback is ever generated to fix it. Left alone, this
+    sweep would be worse than not running at all — it would stamp
+    `last_liveness_check_at` on a row it just confirmed is wrong. So when the
+    gateway's answer disagrees with the status this task claimed, the task
+    re-delivers that answer through `apply_internal_status` — the exact
+    function `POST /api/wa/internal/status` calls, not a reimplementation of
+    it (see that function's docstring for why this keeps §6's single-writer
+    invariant intact rather than breaking it).
 
     Only `connected`/`reconnecting` sessions are ever claimed (enforced in
     `wa_sweep_claim_due_sessions`'s WHERE clause) — a `disconnected` or
@@ -535,9 +552,11 @@ async def sweep_wa_liveness() -> int:
     answered** (§15). The claim function stamps it optimistically to win the
     SKIP LOCKED race; if the gateway call raises `GatewayUnreachableError` for
     that session, this function reverts the stamp to what it held before the
-    claim (`wa_sweep_revert_check`). Leaving `now()` behind on a call that
-    never got an answer would assert a check that did not happen — the old
-    timestamp is the honest state, however stale it looks.
+    claim (`wa_sweep_revert_check`, compare-and-set against the `claimed_at`
+    this same claim wrote, so a slow revert can never clobber a newer claim).
+    Leaving `now()` behind on a call that never got an answer would assert a
+    check that did not happen — the old timestamp is the honest state,
+    however stale it looks.
     """
     if not settings.wa_gateway_configured():
         # Same "a new service starts with zero env vars" reasoning as
@@ -545,6 +564,7 @@ async def sweep_wa_liveness() -> int:
         # real deployment state, not an error worth logging every tick.
         return 0
 
+    from app.api.wa_gateway import InternalStatusIn, apply_internal_status
     from app.services.wa_gateway import GatewayUnreachableError, WaGatewayClient
 
     async with SessionLocal() as session:
@@ -565,21 +585,47 @@ async def sweep_wa_liveness() -> int:
     client = WaGatewayClient()
     checked = 0
     unreachable = 0
+    repaired = 0
     for row in claimed:
         try:
-            await client.status(str(row.tenant_id), str(row.user_id))
+            snapshot = await client.status(str(row.tenant_id), str(row.user_id))
         except GatewayUnreachableError:
             unreachable += 1
             async with SessionLocal() as session:
                 await session.execute(
-                    _WA_LIVENESS_REVERT, {"id": row.id, "previous": row.previous_check_at}
+                    _WA_LIVENESS_REVERT,
+                    {
+                        "id": row.id,
+                        "previous": row.previous_check_at,
+                        "claimed_at": row.claimed_at,
+                    },
                 )
                 await session.commit()
             continue
         checked += 1
+        if snapshot.status != row.status:
+            # The row we claimed disagrees with what the gateway says right
+            # now — a callback was lost. Re-deliver the gateway's own answer
+            # through the single writer, so the row (and the SSE nudge that
+            # follows) catches up. `status_detail`/`qr_expires_at` are not
+            # known here — only `status` — so they are left unset rather than
+            # guessed; the gateway's next real callback will fill them in.
+            repaired += 1
+            await apply_internal_status(
+                InternalStatusIn(
+                    tenant_id=row.tenant_id,
+                    user_id=row.user_id,
+                    status=snapshot.status,
+                    phone_e164=snapshot.phone_number,
+                )
+            )
 
     if unreachable:
         log.warning(
             "wa_liveness_sweep_gateway_unreachable", checked=checked, unreachable=unreachable
         )
+    if repaired:
+        # A lost gateway callback, caught: worth seeing, since it is the
+        # exact failure mode this sweep exists to close.
+        log.warning("wa_liveness_sweep_repaired_lost_callback", repaired=repaired)
     return checked

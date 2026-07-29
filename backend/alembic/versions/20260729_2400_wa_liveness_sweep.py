@@ -42,6 +42,24 @@ machine's two "claims to be live" states (plan §6). A `disconnected` or
 `logged_out` session has nothing to check, and asking the gateway about one
 would make the gateway wake a socket nobody asked it to hold open.
 
+**Review fix (lost callback):** `gateway/src/callback.ts` is fire-and-forget
+— a push that fails to deliver is logged and dropped, never retried. If that
+lost push carried a status change, the database row is wrong and stays wrong
+indefinitely: asking `status()` again produces no new *change* on the
+gateway side, so no new callback is ever generated. The claim function now
+also returns each row's `status` so `app.workers.tasks.sweep_wa_liveness` can
+compare it against the gateway's live answer and, on a mismatch,
+re-deliver that answer through the same write `POST /api/wa/internal/status`
+uses (`app.api.wa_gateway.apply_internal_status`) — see that function's
+docstring for why this is still "one writer" and not a second one.
+
+**Review fix (revert CAS):** `wa_sweep_revert_check` previously wrote
+`p_previous WHERE id = p_id` unconditionally, which let a slow worker clobber
+a newer, unrelated stamp and let any app-role caller overwrite an arbitrary
+tenant's row by guessing its id. It now also takes `p_claimed_at` and only
+reverts if `last_liveness_check_at` still equals what this same claim wrote
+— see the function body's comment.
+
 Revision ID: f2b6a1d9c4e8
 Revises: e1a9c5f3d7b2
 Create Date: 2026-07-29 24:00:00+00:00
@@ -61,7 +79,10 @@ depends_on: str | Sequence[str] | None = None
 SIGNATURE = "wa_sweep_claim_due_sessions(p_stale_minutes int, p_limit int)"
 ARG_TYPES = "int, int"
 BODY = """
-RETURNS TABLE (id uuid, tenant_id uuid, user_id uuid, previous_check_at timestamptz)
+RETURNS TABLE (
+    id uuid, tenant_id uuid, user_id uuid, status text,
+    previous_check_at timestamptz, claimed_at timestamptz
+)
 LANGUAGE sql
 SECURITY DEFINER
 SET search_path = public, pg_temp
@@ -88,6 +109,19 @@ AS $$
     -- unless the task explicitly reverts it. See
     -- app.workers.tasks.sweep_wa_liveness for why an unreachable gateway
     -- must not leave `now()` behind as if a check had actually happened.
+    --
+    -- `status` (the row's status, untouched by this UPDATE) is returned too
+    -- so the worker task can compare it against what the gateway actually
+    -- answers without a second query — that comparison is how a lost
+    -- gateway callback (fire-and-forget on the gateway side, never retried)
+    -- gets noticed and repaired instead of being silently confirmed as
+    -- "checked, nothing wrong".
+    --
+    -- `claimed_at` (the `now()` this call wrote) is returned so a revert can
+    -- be a compare-and-set against it (see wa_sweep_revert_check) rather
+    -- than an unconditional overwrite — a worker whose gateway call is slow
+    -- enough to run past another worker's later, successful re-claim of the
+    -- same row must not clobber that newer stamp.
     WITH locked AS (
         SELECT id, last_liveness_check_at AS prev FROM wa_sessions
         WHERE status IN ('connected', 'reconnecting')
@@ -103,12 +137,14 @@ AS $$
     SET last_liveness_check_at = now()
     FROM locked l
     WHERE w.id = l.id
-    RETURNING w.id, w.tenant_id, w.user_id, l.prev
+    RETURNING w.id, w.tenant_id, w.user_id, w.status, l.prev, w.last_liveness_check_at
 $$
 """
 
-REVERT_SIGNATURE = "wa_sweep_revert_check(p_id uuid, p_previous timestamptz)"
-REVERT_ARG_TYPES = "uuid, timestamptz"
+REVERT_SIGNATURE = (
+    "wa_sweep_revert_check(p_id uuid, p_previous timestamptz, p_claimed_at timestamptz)"
+)
+REVERT_ARG_TYPES = "uuid, timestamptz, timestamptz"
 REVERT_BODY = """
 RETURNS void
 LANGUAGE sql
@@ -120,7 +156,20 @@ AS $$
     -- §15: we did not actually check, so the stamp must not survive — this
     -- restores whatever last_liveness_check_at held before the claim
     -- (possibly NULL), rather than asserting a check that never happened.
-    UPDATE wa_sessions SET last_liveness_check_at = p_previous WHERE id = p_id
+    --
+    -- `AND last_liveness_check_at = p_claimed_at` is the compare-and-set a
+    -- plain `WHERE id = p_id` was missing: without it, a worker that hangs
+    -- past the stale window would revert straight over a *newer* successful
+    -- claim/check by a different worker on the same row. It also closes a
+    -- §18-adjacent gap — this function is EXECUTE-granted to the app role
+    -- (the same role a web request runs as) and takes an arbitrary uuid and
+    -- timestamp, so without the CAS a caller could overwrite any tenant's
+    -- stamp by guessing an id. A revert that matches nothing has been
+    -- superseded since the claim, and doing nothing is the correct outcome.
+    UPDATE wa_sessions
+       SET last_liveness_check_at = p_previous
+     WHERE id = p_id
+       AND last_liveness_check_at = p_claimed_at
 $$
 """
 
