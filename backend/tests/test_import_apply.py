@@ -24,7 +24,7 @@ from app.models.candidate import (
     CandidateRole,
 )
 from app.services.imports.apply import apply_import
-from app.services.imports.rows import CandidateRecord, RoleRecord
+from app.services.imports.rows import CandidateRecord, RoleRecord, parse_candidates
 from tests.conftest import AdminSessionLocal
 from tests.test_candidate_roles_api import agency, other_agency  # noqa: F401
 
@@ -48,6 +48,7 @@ async def _an_import(tenant_id: uuid.UUID) -> uuid.UUID:
 
 def _candidate(**overrides) -> CandidateRecord:
     fields = {
+        "line": 2,
         "full_name": "Jane Tan",
         "email": "jane@acme.sg",
         "phone_raw": "+65 9123 4567",
@@ -62,6 +63,7 @@ def _candidate(**overrides) -> CandidateRecord:
 
 def _role(**overrides) -> RoleRecord:
     fields = {
+        "line": 2,
         "candidate_email": "jane@acme.sg",
         "candidate_phone": None,
         "employer": "Parkway Shenton",
@@ -477,6 +479,136 @@ async def test_a_date_with_no_precision_is_dropped_and_the_role_kept(agency):  #
         assert role.started_on is None
         assert role.ended_on is None
         assert role.title == "Staff Nurse"
+
+
+# allow-hardcode: SQL fixture literals and reason-substring assertions below
+# are test data/assertions, not a matching or scoring oracle.
+# Line numbers -------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_problem_after_a_dropped_row_names_the_true_line(agency):  # noqa: F811
+    """Row 2 is unparseable and dropped; row 3 then collides. The report must
+
+    say line 3 — the recruiter's own row — not a number shifted by the
+    dropped row, which is what the position of the surviving record in the
+    (already-filtered) list would give.
+    """
+    tenant_id, _user = agency
+    by_email = await _existing_candidate(tenant_id, email="dup@acme.sg", phone_e164=None)
+    by_phone = await _existing_candidate(
+        tenant_id, full_name="Other Person", email="other@acme.sg", phone_e164="+6591112222"
+    )
+    import_id = await _an_import(tenant_id)
+
+    rows = [
+        {"full name": "Bad Phone", "phone": "12a34"},  # line 2, dropped
+        {"full name": "Dup", "email": "dup@acme.sg", "phone": "+65 9111 2222"},  # line 3
+    ]
+    records, parse_problems = parse_candidates(rows, sheet="Candidates")
+    assert parse_problems and parse_problems[0].line == 2
+    assert [r.line for r in records] == [3]
+
+    async with tenant_session(tenant_id) as session:
+        outcome = await apply_import(
+            session,
+            tenant_id=tenant_id,
+            import_id=import_id,
+            candidates=records,
+            roles=[],
+            today=TODAY,
+        )
+
+    assert len(outcome.problems) == 1
+    assert outcome.problems[0].line == 3
+    reason = outcome.problems[0].reason
+    assert str(by_email) in reason and str(by_phone) in reason
+
+
+# Rejected roles -------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_rejected_role_stays_rejected_and_is_reported(agency):  # noqa: F811
+    """A recruiter's rejection is not reopened by a later spreadsheet."""
+    tenant_id, _user = agency
+    candidate_id = await _existing_candidate(tenant_id)
+    import_id = await _an_import(tenant_id)
+    role_id = uuid.uuid4()
+    async with AdminSessionLocal() as s:
+        await s.execute(
+            text(
+                "INSERT INTO candidate_roles (id, tenant_id, candidate_id, employer,"
+                " employer_normalized, title, title_normalized, started_on,"
+                " started_precision, ended_on, ended_precision, source, status)"
+                " VALUES (:i, :t, :c, 'Parkway Shenton', 'parkway shenton', 'Nurse',"
+                " 'nurse', '2019-06-01', 'month', '2020-01-01', 'month', 'human',"
+                " 'rejected')"
+            ),
+            {"i": role_id, "t": tenant_id, "c": candidate_id},
+        )
+        await s.commit()
+
+    async with tenant_session(tenant_id) as session:
+        outcome = await apply_import(
+            session,
+            tenant_id=tenant_id,
+            import_id=import_id,
+            candidates=[],
+            roles=[_role()],
+            today=TODAY,
+        )
+
+    assert outcome.roles_updated == 0
+    assert outcome.roles_created == 0
+    assert len(outcome.problems) == 1
+    reason = outcome.problems[0].reason
+    assert "rejected" in reason and str(candidate_id) in reason
+
+    async with tenant_session(tenant_id) as session:
+        role = (await session.execute(select(CandidateRole))).scalars().one()
+        assert role.status == CandidateRole.REJECTED
+        assert role.title == "Nurse"
+        assert role.source == "human"
+        assert (await session.execute(select(CandidateImportChange))).scalars().all() == []
+
+
+# Transposed dates -----------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_transposed_dates_are_dropped_and_reported(agency):  # noqa: F811
+    """An end before a start is not silently swallowed into a dateless role."""
+    tenant_id, _user = agency
+    await _existing_candidate(tenant_id)
+    import_id = await _an_import(tenant_id)
+
+    async with tenant_session(tenant_id) as session:
+        outcome = await apply_import(
+            session,
+            tenant_id=tenant_id,
+            import_id=import_id,
+            candidates=[],
+            roles=[
+                _role(
+                    started_on=date(2020, 3, 1),
+                    started_precision="month",
+                    ended_on=date(2019, 3, 1),
+                    ended_precision="month",
+                )
+            ],
+            today=TODAY,
+        )
+
+    assert outcome.roles_created == 1
+    assert len(outcome.problems) == 1
+    reason = outcome.problems[0].reason
+    assert "2020-03-01" in reason and "2019-03-01" in reason
+
+    async with tenant_session(tenant_id) as session:
+        role = (await session.execute(select(CandidateRole))).scalars().one()
+        assert role.started_on is None
+        assert role.ended_on is None
 
 
 # Re-applying ------------------------------------------------------------

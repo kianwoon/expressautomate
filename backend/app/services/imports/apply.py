@@ -38,12 +38,11 @@ from app.services.imports.rows import CandidateRecord, RoleRecord, RowProblem
 SOURCE_IMPORT = "import"
 
 # The sheets these records came off. `rows.py` takes the real sheet name from
-# the workbook, but a parsed record does not carry it, so a problem raised
-# here names the kind of sheet and locates the row by its position among the
-# records handed over — which is not the recruiter's line number when earlier
-# rows failed to parse. Task 7 holds both halves and is where the two get
-# joined; until then the reason text carries the email or phone, which is what
-# a recruiter actually searches their own file by.
+# the workbook and now carries the real line too (`CandidateRecord.line`,
+# `RoleRecord.line`), so a problem raised here names the kind of sheet and the
+# recruiter's own spreadsheet row — not a position among the records handed
+# over, which drifts from the true line as soon as an earlier row fails to
+# parse and gets dropped before this list is built.
 _CANDIDATE_SHEET = "candidates"
 _ROLE_SHEET = "work history"
 
@@ -295,8 +294,8 @@ async def _apply_candidates(
     """Every candidate row, matched or created, before a single role is read."""
     seen: dict[tuple[str, str], _Applied] = {}
 
-    for index, record in enumerate(records):
-        line = index + 2
+    for record in records:
+        line = record.line
         keys = _keys(record.email, record.phone_e164)
 
         # The run's own map first. A file listing somebody twice describes one
@@ -392,20 +391,35 @@ async def _apply_candidates(
     return seen
 
 
-def _dates(record: RoleRecord) -> tuple[date | None, str | None, date | None, str | None]:
+def _dates(
+    record: RoleRecord, *, problems: list[RowProblem], line: int
+) -> tuple[date | None, str | None, date | None, str | None]:
     """The role's dates, keeping only what the sheet could honestly be read as.
 
     A precision of `None` is `rows.py` reporting a cell it could not read; the
     date that came with it is not a fact, so it is dropped and the job kept —
     the same call `cv/persist.py:stored_date` makes for a half-read date. An
     end before a start is dropped whole, because the check constraint refuses
-    it and a recruiter's transposed cells are not a reason to fail the run.
+    it and a recruiter's transposed cells are not a reason to fail the run —
+    but silently landing a role with no dates at all would hide a transposed
+    pair from the recruiter, so it is reported.
     """
     started_on = record.started_on if record.started_precision else None
     ended_on = record.ended_on if record.ended_precision else None
     started_precision = record.started_precision if started_on else None
     ended_precision = record.ended_precision if ended_on else None
     if started_on and ended_on and ended_on < started_on:
+        problems.append(
+            RowProblem(
+                sheet=_ROLE_SHEET,
+                line=line,
+                reason=(
+                    f"end date {ended_on.isoformat()} is before start date "
+                    f"{started_on.isoformat()}; both were dropped and the job kept "
+                    "with no dates"
+                ),
+            )
+        )
         return None, None, None, None
     return started_on, started_precision, ended_on, ended_precision
 
@@ -487,8 +501,8 @@ async def _apply_roles(
 ) -> None:
     cache: dict[uuid.UUID, list[CandidateRole]] = {}
 
-    for index, record in enumerate(records):
-        line = index + 2
+    for record in records:
+        line = record.line
         candidate_id = await _candidate_for(
             session,
             tenant_id=tenant_id,
@@ -517,7 +531,9 @@ async def _apply_roles(
             continue
 
         employer_normalized = normalize_company_name(employer)
-        started_on, started_precision, ended_on, ended_precision = _dates(record)
+        started_on, started_precision, ended_on, ended_precision = _dates(
+            record, problems=outcome.problems, line=line
+        )
 
         if candidate_id not in cache:
             cache[candidate_id] = await _existing_roles(session, candidate_id)

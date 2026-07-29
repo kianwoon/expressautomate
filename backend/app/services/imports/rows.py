@@ -46,6 +46,11 @@ class RowProblem:
 
 @dataclass(frozen=True)
 class CandidateRecord:
+    # The recruiter's own spreadsheet line, carried through so a later
+    # problem naming this record points at the row that actually caused it —
+    # not at the record's position in this (already-filtered) list. See
+    # `apply.py`, which uses this instead of recomputing a position.
+    line: int
     full_name: str
     email: str | None
     phone_raw: str | None
@@ -57,6 +62,9 @@ class CandidateRecord:
 
 @dataclass(frozen=True)
 class RoleRecord:
+    # Same reasoning as `CandidateRecord.line`: the real spreadsheet line,
+    # not a position in this already-filtered list.
+    line: int
     # Not a candidate_id — history rows are matched to a candidate by email
     # or phone, the same identity resolution `find_candidate` already does,
     # so a role carries the keys to look that candidate up rather than a
@@ -212,6 +220,7 @@ def parse_candidates(
 
         records.append(
             CandidateRecord(
+                line=line,
                 full_name=full_name,
                 email=email,
                 phone_raw=raw_phone.strip() or None,
@@ -277,6 +286,7 @@ def parse_roles(
 
         records.append(
             RoleRecord(
+                line=line,
                 candidate_email=email,
                 candidate_phone=phone_e164,
                 employer=employer,

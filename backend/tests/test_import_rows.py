@@ -17,6 +17,7 @@ def test_candidate_row_with_email_and_phone_parses():
     assert problems == []
     assert records == [
         CandidateRecord(
+            line=2,
             full_name="Alice Tan",
             email="alice@example.com",
             phone_raw="91234567",
@@ -240,6 +241,34 @@ def test_role_record_has_matching_keys_not_a_candidate_id():
     assert isinstance(role, RoleRecord)
     assert role.candidate_phone == "+6591234567"
     assert role.candidate_email is None
+
+
+def test_candidate_record_line_survives_an_earlier_dropped_row():
+    """The second row fails to parse; the fourth row's record must still
+
+    carry line 5 (its true spreadsheet line), not 4 — the position it would
+    land at if `records`' own index were mistaken for the spreadsheet line.
+    """
+    rows = [
+        {"full name": "First", "email": "first@example.com"},  # line 2, kept
+        {"full name": "Bad Phone", "phone": "12a34"},  # line 3, dropped (problem)
+        {"full name": "Third", "email": "third@example.com"},  # line 4, kept
+        {"full name": "Fourth", "email": "fourth@example.com"},  # line 5, kept
+    ]
+    records, problems = parse_candidates(rows, sheet="Candidates")
+    assert len(problems) == 1 and problems[0].line == 3
+    assert [r.line for r in records] == [2, 4, 5]
+
+
+def test_role_record_line_survives_an_earlier_dropped_row():
+    rows = [
+        {"email": "a@example.com", "employer": "Acme", "title": "Recruiter"},  # line 2
+        {"employer": "Acme", "title": "Recruiter"},  # line 3, dropped: no email/phone
+        {"email": "b@example.com", "employer": "Acme", "title": "Recruiter"},  # line 4
+    ]
+    records, problems = parse_roles(rows, sheet="History")
+    assert len(problems) == 1 and problems[0].line == 3
+    assert [r.line for r in records] == [2, 4]
 
 
 def test_parse_never_raises_on_garbage_row():
