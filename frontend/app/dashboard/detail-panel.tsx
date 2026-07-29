@@ -5,6 +5,7 @@ import { useState } from "react";
 import { Breakable } from "../breakable";
 import { DecodedCodes, ProtectedBadge, flagged } from "./codes";
 import { Salary, Value, day } from "./format";
+import { Shortlist } from "./job-orders-sourcing";
 import type { Opportunity } from "./opportunities";
 import { QualityNote, ReviewBadge } from "./quality";
 
@@ -111,6 +112,13 @@ function Detail({
           can promise still resolves in the user's Outlook — offering one that
           404s is worse than offering none. The id is here so a disputed row
           can be traced back to the email it came from. */}
+      {/* Below the job order itself, above the provenance: the shortlist is
+          an answer to what the email asked for, so it only makes sense once
+          the requirements above have been read. Keyed by the row along with
+          the rest of the panel, so moving the selection starts it over rather
+          than leaving one job order's shortlist under another's title. */}
+      <Shortlist row={row} />
+
       <div className="jo-detail-source">
         <span className="row-k">Source</span>
         <p className="body jo-sub">

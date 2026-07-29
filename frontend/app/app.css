@@ -942,6 +942,13 @@ select.gl-input:focus-visible { outline: 2px solid var(--blue-500); outline-offs
   /* Same reasoning as `.cv-pip`: it is the only thing saying the import has
      not finished, so it stops moving rather than disappearing. */
   .ci-pulse { animation: none; opacity: 1; }
+  /* The row's action stops fading in and is simply there — the reveal was
+     only ever a way of keeping the row quiet, never a way of hiding it. */
+  .src-act { transition: none; opacity: 1; }
+  .src-start { transition: none; }
+  /* Same reasoning as `.ci-pulse`: it is the only thing saying the shortlist
+     has not finished, so it stops moving rather than disappearing. */
+  .src-pulse { animation: none; opacity: 1; }
 }
 
 /* The spreadsheet importer, on the candidates page rather than in the detail
@@ -1127,3 +1134,113 @@ select.gl-input:focus-visible { outline: 2px solid var(--blue-500); outline-offs
   gap: 2px;
 }
 .ci-skips .body { font-size: 0.75rem; }
+
+/* ---- The shortlist, inside the job order detail panel ---------------------
+   Same house style as `.ci-*` above: text actions that belong to the row they
+   act on, revealed on hover and on `:focus-within` so they never leave the tab
+   order, and no chunky button pairs anywhere. */
+.src { margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--line); }
+.src-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+/* The one control that is always here — and therefore where focus lands after
+   an action removes the control that was pressed. */
+.src-start {
+  font: inherit;
+  font-size: 0.8125rem;
+  font-weight: 650;
+  padding: 2px 6px;
+  border: 0;
+  background: none;
+  color: var(--blue-500);
+  cursor: pointer;
+  border-radius: 4px;
+  transition: color 150ms ease;
+}
+.src-start:hover { color: var(--ink-900); }
+.src-start:disabled { cursor: default; opacity: 0.5; }
+.src-start:focus-visible { outline: 2px solid var(--blue-500); outline-offset: 2px; }
+.src-note { margin-top: 8px; font-size: 0.8125rem; color: var(--ink-500); max-width: 72ch; }
+.src-state {
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.8125rem;
+  color: var(--ink-700);
+}
+.src-error { margin-top: 8px; font-size: 0.8125rem; color: var(--amber-700); max-width: 72ch; }
+/* A slow pulse, not a spinner: scoring a whole database and then calling a
+   model takes as long as it takes, and a spinner promises a wait measured in
+   the moment. */
+.src-pulse {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--blue-500);
+  animation: cv-pulse 1400ms ease-in-out infinite;
+}
+
+/* The two things the shortlist did NOT do. Set apart from the list rather
+   than folded into it, because they qualify every row at once. */
+.src-notice {
+  margin-top: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-left-width: 3px;
+  border-radius: var(--radius);
+  background: var(--surface-alt);
+}
+.src-notice[data-kind="protected"] { border-left-color: #8a5be1; }
+.src-notice[data-kind="client"] { border-left-color: var(--amber-700); }
+.src-notice .body { margin: 0; font-size: 0.8125rem; color: var(--ink-900); max-width: 72ch; }
+.src-notice .src-sub { margin-top: 4px; color: var(--ink-500); font-size: 0.75rem; }
+
+.src-list { margin: 12px 0 0; padding: 0; list-style: none; display: grid; gap: 10px; }
+.src-row {
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+.src-row-main { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.src-rank { font-size: 0.75rem; color: var(--ink-500); min-width: 1.25em; }
+.src-name { font-size: 0.875rem; font-weight: 650; color: var(--ink-900); overflow-wrap: anywhere; }
+/* A name we could not read falls back to the id, which stays traceable but
+   should not pretend to be a person's name. */
+.src-name-unknown { font-weight: 500; color: var(--ink-500); font-variant-numeric: tabular-nums; }
+.src-score {
+  margin-left: auto;
+  font-size: 0.8125rem;
+  font-weight: 650;
+  color: var(--ink-700);
+  font-variant-numeric: tabular-nums;
+}
+.src-reasons { margin: 6px 0 0; padding: 0; list-style: none; display: grid; gap: 2px; }
+.src-reason { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; font-size: 0.75rem; }
+.src-reason-k { color: var(--ink-500); min-width: 8em; }
+.src-reason-v { color: var(--ink-900); font-variant-numeric: tabular-nums; }
+.src-reason-note { color: var(--ink-500); }
+.src-why { margin-top: 6px; font-size: 0.8125rem; color: var(--ink-700); max-width: 72ch; }
+.src-quote { margin-top: 2px; font-size: 0.75rem; color: var(--ink-500); max-width: 72ch; }
+
+.src-row-acts { margin-top: 6px; min-height: 1.5em; }
+/* Revealed by hover AND by `:focus-within`, so the control is reachable by
+   keyboard without a mouse ever having been near the row. */
+.src-act {
+  font: inherit;
+  font-size: 0.75rem;
+  padding: 2px 4px;
+  border: 0;
+  background: none;
+  color: var(--ink-500);
+  cursor: pointer;
+  border-radius: 4px;
+  opacity: 0;
+  transition: opacity 150ms ease, color 150ms ease;
+}
+.src-row:hover .src-act,
+.src-row:focus-within .src-act { opacity: 1; }
+.src-act:hover { color: var(--ink-900); }
+.src-act:disabled { cursor: default; opacity: 0.5; }
+.src-act:focus-visible { opacity: 1; outline: 2px solid var(--blue-500); outline-offset: 2px; }
+.src-act-off { font-size: 0.75rem; color: var(--ink-500); }
+.src-done { font-size: 0.75rem; font-weight: 650; color: #2f7d54; }

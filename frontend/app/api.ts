@@ -73,6 +73,39 @@ export function opportunityReviewPath(id: string): string {
 }
 
 /**
+ * The shortlist for one job order: POST starts a run, GET reads back the most
+ * recent one with its matches.
+ *
+ * A function rather than a constant for the reason `opportunityReviewPath` is
+ * one — the id is in the path, and encoded so an id that is not the uuid we
+ * expect cannot walk out of its own segment.
+ */
+export function opportunitySourcingPath(id: string): string {
+  return `${OPPORTUNITIES_PATH}/${encodeURIComponent(id)}/sourcing`;
+}
+
+/**
+ * How often the panel asks again while a run is still working.
+ *
+ * Scoring an agency's whole candidate database and then calling a model takes
+ * as long as it takes, so this is a poll rather than an event: nothing on the
+ * event stream is emitted for a shortlist. Env-overridable with the same
+ * `|| 4000` guard as the page sizes above — an unset variable and a typo both
+ * parse to `NaN`, and `setInterval(NaN)` fires as fast as the browser will let
+ * it.
+ */
+export const SOURCING_POLL_MS = Number(process.env.NEXT_PUBLIC_SOURCING_POLL_MS) || 4000;
+
+/**
+ * Records that a candidate was put in front of a client — the one durable fact
+ * the shortlist exists to produce, and what makes the "not already submitted"
+ * exclusion mean anything on the next run.
+ */
+export function candidateSubmissionsPath(id: string): string {
+  return `${candidatePath(id)}/submissions`;
+}
+
+/**
  * What ingestion has actually been doing — the last few events, each with the
  * outcome. Separate from the counts on `/auth/me` because a count says how
  * much arrived and this says whether anything is going wrong.

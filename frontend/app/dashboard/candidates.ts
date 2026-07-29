@@ -328,7 +328,7 @@ export function useCandidates(): Candidates {
  *  rather than a generic failure. A 409 here is a split identity or a key
  *  someone else already holds — the message is the only thing telling the
  *  recruiter what to do next. */
-async function readError(res: Response): Promise<string> {
+export async function readError(res: Response): Promise<string> {
   if (res.status === 401) return "Your session has expired. Sign in again, then try that once more.";
   try {
     const body = (await res.json()) as { detail?: string };
