@@ -568,6 +568,26 @@ jobs:
           GATEWAY_TAG: ${{ needs.plan.outputs.gateway_tag }}
         run: |
           set -euo pipefail
+          # The service cannot exist before this workflow has built the image
+          # it runs, so the very first gateway commit necessarily lands while
+          # `expressautomate/gateway` is still absent. Failing here would turn
+          # main red for doing exactly what the plan asks for in the order the
+          # plan requires.
+          #
+          # So a missing service is reported and skipped — loudly, and only
+          # for that one reason. Any other failure from `service update` still
+          # fails the job: a service that exists and refuses the update is a
+          # real problem, and swallowing it would hide the drift this file
+          # spends so much effort guarding against.
+          if ! koyeb service get expressautomate/gateway --token "$KOYEB_TOKEN" >/dev/null 2>&1; then
+            echo "::warning title=Gateway not deployed::The Koyeb service \
+          'expressautomate/gateway' does not exist yet, so image \
+          ${GATEWAY_IMAGE}:${GATEWAY_TAG} was built and pushed but nothing is \
+          running it. Create the service per the deploy table in CLAUDE.md — \
+          no public route, health check /health on 7300, scale fixed at 1 — \
+          then re-run this job."
+            exit 0
+          fi
           koyeb service update expressautomate/gateway \
             --docker "${GATEWAY_IMAGE}:${GATEWAY_TAG}" \
             --docker-private-registry-secret "$KOYEB_REGISTRY_SECRET" \
