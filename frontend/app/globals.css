@@ -290,6 +290,12 @@ h3 { font-size: 1.125rem; letter-spacing: -0.01em; font-weight: 650; }
 .btn-primary:hover { filter: brightness(1.08); }
 .btn-secondary { background: var(--surface); color: var(--ink-900); border-color: var(--line); }
 .btn-secondary:hover { background: var(--surface-alt); }
+/* A button whose whole label is an icon. Square rather than text-width, and
+   sized to match the height of the text buttons it stands beside, so an
+   action row does not go ragged where the words stop. The tap target stays
+   above the 44px guidance on a touch screen via the padding, not the glyph. */
+.btn-icon { display: inline-flex; align-items: center; justify-content: center; padding: 8px 10px; }
+.btn-icon svg { display: block; }
 /* `.btn` carries no focus ring of its own, so every button on the site —
    landing page and app alike — needs this one rule to be visibly focusable. */
 .btn:focus-visible { outline: 2px solid var(--blue-500); outline-offset: 2px; }
