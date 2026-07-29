@@ -365,6 +365,20 @@ class Settings(BaseSettings):
 
     CANDIDATES_PAGE_LIMIT: int = Field(default=200, gt=0)
 
+    # `?eligible_for=` (app/api/candidates.py) cannot filter in SQL — a
+    # candidate is only known `not_met` after `eligibility.evaluate()` runs in
+    # Python, and re-expressing MOM's rules as SQL predicates would put them
+    # in two places. So the endpoint loads up to this many of the tenant's
+    # matching candidates, evaluates each, and pages the *filtered* result in
+    # memory. This is the ceiling on that scan, not on the page returned —
+    # an agency of a hundred recruiters with a genuinely large active list
+    # still fits comfortably under 5,000, and the number is small enough that
+    # eco-nano never builds anywhere near that many ORM objects on one
+    # request. Past this ceiling the endpoint reports `scan_truncated: true`
+    # and `scanned: <n>` rather than silently answering from a partial view —
+    # a short list must never look like completeness.
+    CANDIDATES_ELIGIBILITY_SCAN_LIMIT: int = Field(default=5_000, gt=0)
+
     # How many WhatsApp-open activities the candidate history panel returns.
     # Newest first, same reasoning as CANDIDATES_PAGE_LIMIT.
     CANDIDATE_ACTIVITIES_PAGE_LIMIT: int = Field(default=200, gt=0)

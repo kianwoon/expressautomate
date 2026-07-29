@@ -13,6 +13,7 @@ from datetime import date
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, field_validator
 from sqlalchemy import case, delete, func, insert, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -29,6 +30,7 @@ from app.models.candidate import (
     CandidateLanguage,
     CandidateSkill,
 )
+from app.models.opportunity import Opportunity
 from app.models.tenant import User
 from app.services.candidate_matching import find_candidate
 from app.services.candidate_naming import (
@@ -40,6 +42,7 @@ from app.services.candidate_naming import (
 )
 from app.services.candidate_overrides import overridden_fields
 from app.services.candidate_tenure import derive
+from app.services.sourcing import eligibility
 from app.services.user_naming import actor_name
 
 log = get_logger(__name__)
@@ -156,6 +159,11 @@ def _initial_of(name_column):
 # a hand-rolled check, so the contract lives in the OpenAPI schema too.
 InitialFilter = Query(default=None, pattern=r"^([A-Za-z]|#)$")
 
+# Module-level singleton, the same reason `InitialFilter` is one: a `Query(...)`
+# call sitting in the signature default is what B008 exists to catch, since a
+# mutable default is built once at import and shared across every request.
+EligibleForFilter = Query(default=None)
+
 
 def _sorted_initials(found: list[str]) -> list[str]:
     """Letters ascending, `#` last — the reading order of the bar itself."""
@@ -202,6 +210,25 @@ def _serialize(candidate: Candidate) -> dict:
     }
 
 
+# The one 409 shape `?eligible_for=` uses when the opportunity has no
+# `placement_type`. A flat body, deliberately not `HTTPException(detail={...})`
+# — that nests everything under `detail`, and the frontend needs `reason` as a
+# sibling key it can branch on without unwrapping. Mirrors `_rate_limited` in
+# `candidate_whatsapp.py`, the established shape for this codebase's non-
+# `HTTPException` error responses.
+def _placement_type_not_set() -> JSONResponse:
+    return JSONResponse(
+        status_code=409,
+        content={
+            "detail": (
+                "This job order has no placement type set, so there is no "
+                "regulatory rule to filter candidates against."
+            ),
+            "reason": "placement_type_not_set",
+        },
+    )
+
+
 @router.get("/candidates")
 async def list_candidates(
     request: Request,
@@ -213,6 +240,15 @@ async def list_candidates(
     record_status: RecordStatusFilter | None = None,
     q: str | None = None,
     initial: str | None = InitialFilter,
+    # A recruiter narrowing a shortlist to who a placement's regulatory rules
+    # (MOM's, not the job's own occupational sex requirement — see
+    # `eligibility.has_regulatory_not_met`) do not definitely disqualify.
+    # Absent entirely means no eligibility filtering, exactly as before this
+    # parameter existed — `race`, `sex`, `nationality` etc. still have no
+    # query parameter of their own (see the comment above `_user_uuid,
+    # tenant_uuid = ...` below) and this is not one either: it filters on what
+    # a job order's stated rule computes, never on a raw demographic column.
+    eligible_for: uuid.UUID | None = EligibleForFilter,
 ) -> dict:
     # There is deliberately no `sex`, `race`, `nationality`, `date_of_birth`,
     # `education_years` or `language` parameter here, and adding one is not a
@@ -301,9 +337,6 @@ async def list_candidates(
         if initial is not None:
             base = base.where(_initial_of(Candidate.full_name) == initial.upper())
 
-        total = (
-            await session.execute(select(func.count()).select_from(base.subquery()))
-        ).scalar_one()
         # The order follows what the reader is doing. Browsing the whole list
         # is a "what changed lately" question, so recency wins. Clicking a
         # letter is a "find this person" question, and recency inside a letter
@@ -313,13 +346,89 @@ async def list_candidates(
             if initial is not None
             else Candidate.updated_at.desc()
         )
-        rows = (
-            (await session.execute(base.order_by(order).limit(page_limit).offset(offset)))
-            .scalars()
-            .all()
-        )
 
-    return {
+        excluded_ineligible: int | None = None
+        scan_truncated: bool | None = None
+        scanned: int | None = None
+        if eligible_for is not None:
+            # §18: another agency's opportunity id must read as 404, not 403 —
+            # `_load` in this module gives that answer for a candidate for the
+            # same reason, and `tenant_session` scopes this SELECT under RLS
+            # exactly as it does everywhere else, so a foreign id matches no
+            # row here rather than leaking whether it exists.
+            opportunity = (
+                await session.execute(
+                    select(Opportunity).where(Opportunity.id == eligible_for)
+                )
+            ).scalar_one_or_none()
+            if opportunity is None:
+                raise HTTPException(status_code=404, detail="No such job order.")
+            if opportunity.placement_type is None:
+                return _placement_type_not_set()
+
+            # No N+1: every fact `eligibility.evaluate` needs (sex,
+            # date_of_birth, education_years, nationality) is already a column
+            # on `Candidate`, so the rows this query fetches are the only
+            # database round trip eligibility filtering costs — evaluation
+            # itself is pure Python over data already in memory, exactly like
+            # `get_eligibility` in `opportunities.py`.
+            #
+            # Fetched unpaginated (up to the scan ceiling) and ordered the
+            # same way the plain list would be: `not_met` is only known after
+            # evaluating every matching row, so the page a `LIMIT`/`OFFSET`
+            # would carve out cannot be decided in SQL without
+            # re-implementing the rules there — which the eligibility
+            # module's docstring forbids.
+            #
+            # `+ 1` over the ceiling is how truncation is detected without a
+            # second COUNT query: fetching one more row than the ceiling
+            # allows tells us whether there *is* a next row, at the cost of
+            # discarding it if so.
+            scan_limit = settings.CANDIDATES_ELIGIBILITY_SCAN_LIMIT
+            scan_rows = (
+                (await session.execute(base.order_by(order).limit(scan_limit + 1)))
+                .scalars()
+                .all()
+            )
+            scan_truncated = len(scan_rows) > scan_limit
+            all_rows = scan_rows[:scan_limit]
+            scanned = len(all_rows)
+
+            kept: list[Candidate] = []
+            for candidate in all_rows:
+                facts = eligibility.CandidateFacts(
+                    sex=candidate.sex,
+                    date_of_birth=candidate.date_of_birth,
+                    education_years=candidate.education_years,
+                    nationality=candidate.nationality,
+                )
+                findings = eligibility.evaluate(
+                    opportunity.placement_type,
+                    facts,
+                    as_of=date.today(),
+                    min_age_years=settings.MDW_MIN_AGE_YEARS,
+                    max_age_years_exclusive=settings.MDW_MAX_AGE_YEARS_EXCLUSIVE,
+                    min_education_years=settings.MDW_MIN_EDUCATION_YEARS,
+                    approved_source_countries=settings.MDW_APPROVED_SOURCE_COUNTRIES,
+                    sex_requirement=opportunity.sex_requirement,
+                    sex_requirement_reason=opportunity.sex_requirement_reason,
+                )
+                if not eligibility.has_regulatory_not_met(findings):
+                    kept.append(candidate)
+            excluded_ineligible = len(all_rows) - len(kept)
+            total = len(kept)
+            rows = kept[offset : offset + page_limit]
+        else:
+            total = (
+                await session.execute(select(func.count()).select_from(base.subquery()))
+            ).scalar_one()
+            rows = (
+                (await session.execute(base.order_by(order).limit(page_limit).offset(offset)))
+                .scalars()
+                .all()
+            )
+
+    payload = {
         "items": [_serialize(c) for c in rows],
         "total": total,
         "limit": page_limit,
@@ -327,6 +436,18 @@ async def list_candidates(
         "counts": counts,
         "initials": initials,
     }
+    if excluded_ineligible is not None:
+        payload["excluded_ineligible"] = excluded_ineligible
+        # Present only alongside `excluded_ineligible` — the unfiltered path
+        # never truncates (it pages in SQL) and must not gain a field that
+        # would suggest it might. `scanned` is how many candidates the
+        # eligibility rules were actually evaluated against; `scan_truncated`
+        # is whether that number is the tenant's whole matching set or just
+        # the ceiling. A caller must not read a short `total` as a complete
+        # answer without checking this.
+        payload["scanned"] = scanned
+        payload["scan_truncated"] = scan_truncated
+    return payload
 
 
 @router.get("/candidates/{candidate_id}")

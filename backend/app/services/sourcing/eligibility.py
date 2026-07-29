@@ -373,3 +373,23 @@ def evaluate(
         _occupational_sex_requirement_finding(facts, sex_requirement, sex_requirement_reason)
     )
     return ordered
+
+
+def has_regulatory_not_met(findings: list[Finding]) -> bool:
+    """Whether `findings` contains a definite regulatory disqualification.
+
+    The only predicate `?eligible_for=` in `app/api/candidates.py` is allowed
+    to filter on — see the module docstring's three bases. `basis ==
+    BASIS_REGULATORY` excludes the occupational-sex finding categorically: a
+    job's own stated requirement, however genuine, is a person's judgement
+    call, not MOM's rule, and must only ever annotate. `outcome == NOT_MET`
+    excludes `unknown` deliberately: a candidate we cannot assess has not been
+    shown ineligible, and excluding them would assert something this module
+    never established. `not_applicable` is excluded the same way `unknown` is
+    — neither outcome is `not_met`, so both simply fail the comparison below
+    without needing their own branch.
+    """
+    return any(
+        finding.basis == BASIS_REGULATORY and finding.outcome == NOT_MET
+        for finding in findings
+    )

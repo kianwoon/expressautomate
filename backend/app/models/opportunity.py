@@ -90,6 +90,20 @@ class Opportunity(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
     # `WP` leaves this column NULL.
     placement_type: Mapped[str | None] = mapped_column(String(32))
 
+    # Who set `placement_type`, and when — `updated_at`/`created_at` (from
+    # `Timestamps`) answer "when did *something* on this row last change",
+    # which is too blunt once `placement_type` unlocks a lawful sex filter
+    # (`app/api/candidates.py::list_candidates`, `eligible_for`). Mislabelling
+    # an ordinary job as an MDW placement is now the way to get that filter
+    # with legal cover, so the record needs to say who made the call, not just
+    # that the row moved. SET NULL, the same idiom as `Candidate.created_by`/
+    # `updated_by`: the user who set it may later be deleted, and the fact
+    # that *someone* set it must outlive the account that did.
+    placement_type_set_by: Mapped[uuid.UUID | None] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL")
+    )
+    placement_type_set_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
     # A sex requirement the job itself imposes (a genuine occupational
     # requirement — e.g. intimate personal care for an elderly client) and the
     # recruiter's own words for why. Distinct from `Candidate.sex`, which is a
@@ -101,6 +115,13 @@ class Opportunity(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
     # and mirrored at the API in `app/api/opportunities.py`.
     sex_requirement: Mapped[str | None] = mapped_column(String(16))
     sex_requirement_reason: Mapped[str | None] = mapped_column(Text)
+    # Same audit idiom as `placement_type_set_by`/`_set_at`, and for the same
+    # reason: an occupational requirement is a human judgement call, not a
+    # law, and the record must say who made it.
+    sex_requirement_set_by: Mapped[uuid.UUID | None] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL")
+    )
+    sex_requirement_set_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     review_status: Mapped[str] = mapped_column(
         String(16), nullable=False, default="ready", index=True

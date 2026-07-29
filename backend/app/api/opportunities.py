@@ -445,7 +445,7 @@ async def set_placement_type(
 ) -> dict:
     """Set what kind of placement this vacancy is — a human decision, never an
     inference (see the column comment in `app/models/opportunity.py`)."""
-    _user_uuid, tenant_uuid = _require_session(request)
+    user_uuid, tenant_uuid = _require_session(request)
 
     async with tenant_session(tenant_uuid) as session:
         # `id` alongside `placement_type` in RETURNING: `RETURNING` gives back
@@ -453,11 +453,20 @@ async def set_placement_type(
         # is NULL — clearing an already-NULL placement_type on a real row
         # looks identical to matching no row at all. Returning `id` too tells
         # the two apart without a second round trip.
+        #
+        # `placement_type_set_by`/`_set_at` are written on every call,
+        # including a clear back to NULL — the CHECK stays the source of
+        # truth for what "set" is, but who most recently touched the field
+        # is worth recording even for a clear.
         row = (
             await session.execute(
                 update(Opportunity)
                 .where(Opportunity.id == opportunity_id)
-                .values(placement_type=body.placement_type)
+                .values(
+                    placement_type=body.placement_type,
+                    placement_type_set_by=user_uuid,
+                    placement_type_set_at=func.now(),
+                )
                 .returning(Opportunity.id, Opportunity.placement_type)
             )
         ).one_or_none()
@@ -479,7 +488,7 @@ async def set_occupational_requirement(
     database, and `ck_opportunities_sex_requirement_has_reason` refuses it
     again for any row a script or a future endpoint writes directly.
     """
-    _user_uuid, tenant_uuid = _require_session(request)
+    user_uuid, tenant_uuid = _require_session(request)
 
     async with tenant_session(tenant_uuid) as session:
         updated = (
@@ -493,6 +502,8 @@ async def set_occupational_requirement(
                         if body.sex_requirement_reason
                         else None
                     ),
+                    sex_requirement_set_by=user_uuid,
+                    sex_requirement_set_at=func.now(),
                 )
                 .returning(Opportunity.sex_requirement, Opportunity.sex_requirement_reason)
             )
