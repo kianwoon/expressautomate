@@ -16,8 +16,9 @@ from sqlalchemy import select
 from app.api.auth import _require_session
 from app.api.candidates import _load
 from app.db.rls import tenant_session
-from app.models.candidate import Candidate, CandidateFieldOverride, CandidateRole
+from app.models.candidate import Candidate, CandidateRole
 from app.models.extraction import ExtractionEvidence
+from app.services.candidate_overrides import overridden_fields
 from app.services.candidate_tenure import derive
 from app.services.client_naming import normalize_company_name
 from app.services.cv.schema import ROLE_FIELDS
@@ -197,19 +198,6 @@ async def evidence_for(session, role_ids: list[uuid.UUID]) -> dict[uuid.UUID, st
                 result[role_id] = fields[field_name]
                 break
     return result
-
-
-async def overridden_fields(session, candidate_id: uuid.UUID) -> set[str]:
-    """The fields a person asserted, which derivation must leave alone."""
-    return set(
-        (
-            await session.execute(
-                select(CandidateFieldOverride.field_name).where(
-                    CandidateFieldOverride.candidate_id == candidate_id
-                )
-            )
-        ).scalars()
-    )
 
 
 async def apply_derived(session, candidate: Candidate) -> None:

@@ -62,3 +62,18 @@ PIECE 2 COMPLETE. Fable final: SHIP WITH FIXES 8.5/10; all findings closed in a5
     introduced two untested regressions: a rejected row made a dateless live match look
     ambiguous, and live-vs-rejected overlap resolved by database row order. Closed in
     cb27aef: live roles are consulted first, rejected only for suppression. 927 passed.
+
+## Piece 4 - candidate/history spreadsheet import
+Plan: docs/superpowers/plans/2026-07-29-candidate-spreadsheet-import.md (8 tasks)
+P4 Task 1: complete (0a45c06..e874d47, 993 passed, review clean)
+  CARRY TO TASKS 5 AND 6: import_id uses a PLAIN FK (composite + bare SET NULL would null
+    tenant_id, which is NOT NULL - same trap as merged_into_candidate_id). So nothing at the
+    DB level stops import_id pointing at ANOTHER tenant's import. App code must assert
+    import.tenant_id == candidate.tenant_id before assigning, and undo must too.
+P4 Task 2: complete (e874d47..c08ec4f, 1000 passed, faithful move verified line-by-line)
+P4 Task 3: complete (c08ec4f..bcc2d28, 1013 passed; streaming cap + duplicate-header refusal + sheet_name)
+P4 Task 4: complete (bcc2d28..479b5af, 1032 passed). Critical fixed: slash-dates were
+  reordered opportunistically so 4/25/2019 asserted 25 April, while the CV path drops it.
+  Both paths now agree. Header names LOCKED: full name, email, phone, title, employer,
+  location, start date, end date, description - Task 7's template must emit exactly these.
+  CARRY TO TASK 5: precision None means keep the role, drop only the date (as cv/persist does).

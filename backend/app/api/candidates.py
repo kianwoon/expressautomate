@@ -30,6 +30,7 @@ from app.services.candidate_naming import (
     normalize_phone,
     normalize_skill,
 )
+from app.services.candidate_overrides import overridden_fields
 from app.services.candidate_tenure import derive
 
 router = APIRouter(tags=["candidates"])
@@ -307,17 +308,7 @@ async def get_candidate(request: Request, candidate_id: uuid.UUID) -> dict:
             .scalars()
             .all()
         )
-        overrides = (
-            (
-                await session.execute(
-                    select(CandidateFieldOverride.field_name).where(
-                        CandidateFieldOverride.candidate_id == candidate_id
-                    )
-                )
-            )
-            .scalars()
-            .all()
-        )
+        overrides = await overridden_fields(session, candidate_id)
         # Imported here rather than at module scope: `candidate_roles` imports
         # `_load` from this module, and a top-level import each way would not
         # resolve. The detail panel is the only reader, so the cost is one
