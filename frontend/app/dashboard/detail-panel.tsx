@@ -117,6 +117,20 @@ function Detail({
 
       <PlacementForm row={placement} onSaved={setPlacement} />
 
+      {/* Carries this job order to the candidates page rather than growing a
+          job-order picker over there — the recruiter already knows which
+          role they are filling. A plain link, not a fetch: the candidates
+          page reads `eligible_for` from the URL itself and does its own 409
+          handling if the placement type turns out not to be set. */}
+      <p className="jo-detail-find">
+        <a
+          className="btn btn-secondary"
+          href={`/dashboard/candidates?eligible_for=${encodeURIComponent(placement.id)}`}
+        >
+          Find candidates for this role
+        </a>
+      </p>
+
       {/* Provenance, not a link. We hold an id for the message, not a URL we
           can promise still resolves in the user's Outlook — offering one that
           404s is worse than offering none. The id is here so a disputed row

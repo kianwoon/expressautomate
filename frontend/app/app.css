@@ -168,6 +168,16 @@
 .jo-detail-rows { margin-top: 18px; }
 .jo-detail-prose { margin-top: 18px; }
 .jo-detail-prose p { margin-top: 6px; font-size: 0.875rem; }
+.jo-detail-find { margin-top: 18px; }
+
+.cand-elig-banner {
+  margin-top: 24px; padding: 16px 20px; display: grid; gap: 10px;
+  border-left: 3px solid var(--blue-600);
+}
+.cand-elig-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+}
+.cand-elig-note { margin-top: 0; }
 .jo-detail-source { margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--line); }
 .jo-detail-source p { margin-top: 6px; }
 .jo-detail-actions { margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--line); }

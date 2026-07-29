@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-import { CANDIDATES_PAGE_SIZE, LANDING_PATH } from "../../api";
+import { CANDIDATES_PAGE_SIZE, DASHBOARD_PATH, LANDING_PATH } from "../../api";
 import { useAuth } from "../../auth";
 import { SiteFooter } from "../../site-footer";
 import { SiteNav } from "../../site-nav";
@@ -13,7 +13,9 @@ import {
   restoreCandidate,
   useCandidates,
 } from "../candidates";
-import type { Candidate, Filter } from "../candidates";
+import type { Candidate, Filter, ListState } from "../candidates";
+import { getOpportunity } from "../opportunities";
+import type { Opportunity } from "../opportunities";
 import { CandidateForm } from "./candidate-form";
 import { CandidateImports } from "./candidate-imports";
 import { CandidatePanel } from "./candidate-panel";
@@ -99,6 +101,16 @@ function Notice({ eyebrow, heading, body }: { eyebrow: string; heading: string; 
 
 type View = { mode: "list" } | { mode: "create" } | { mode: "edit"; row: Candidate };
 
+// Read once, on module init of the component — the URL is how the job order
+// handed this page its context, and re-reading it on every render would let
+// a `setOffset` or a chip click that leaves `?eligible_for=…` sitting in the
+// address bar (nobody rewrites it except `clearEligibleFor` below) silently
+// re-apply a filter the recruiter thought they had cleared.
+function initialEligibleFor(): string | null {
+  if (typeof window === "undefined") return null;
+  return new URLSearchParams(window.location.search).get("eligible_for");
+}
+
 function Workspace({ role }: { role: string }) {
   const {
     state,
@@ -106,6 +118,7 @@ function Workspace({ role }: { role: string }) {
     offset,
     q,
     initial,
+    eligibleFor,
     counts,
     initials,
     refreshing,
@@ -113,12 +126,54 @@ function Workspace({ role }: { role: string }) {
     setOffset,
     setQ,
     setInitial,
+    setEligibleFor,
     reload,
-  } = useCandidates();
+  } = useCandidates(initialEligibleFor());
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<Candidate | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
   const [view, setView] = useState<View>({ mode: "list" });
+
+  // The candidates endpoint has no reason to know a job order's title — the
+  // banner does, so it is fetched separately, the same split `detail` above
+  // keeps between the list and the one record it is about. `undefined` is
+  // "still loading", `null` is "could not read it" (e.g. the job order was
+  // deleted), and both render a banner that at least names the filter as
+  // active rather than waiting on a title before saying anything.
+  const [jobOrder, setJobOrder] = useState<Opportunity | null | undefined>(
+    eligibleFor ? undefined : null,
+  );
+  useEffect(() => {
+    if (!eligibleFor) {
+      setJobOrder(null);
+      return;
+    }
+    let cancelled = false;
+    setJobOrder(undefined);
+    getOpportunity(eligibleFor)
+      .then((row) => {
+        if (!cancelled) setJobOrder(row);
+      })
+      .catch(() => {
+        if (!cancelled) setJobOrder(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [eligibleFor]);
+
+  // Returns to the ordinary list and takes `eligible_for` out of the address
+  // bar with it — a filter that clears in the list but stays in the URL
+  // would silently reapply itself on the next reload.
+  const clearEligibleFor = useCallback(() => {
+    setEligibleFor(null);
+    setSelectedId(null);
+    if (typeof window !== "undefined") {
+      const url = new URL(window.location.href);
+      url.searchParams.delete("eligible_for");
+      window.history.replaceState(null, "", url.toString());
+    }
+  }, [setEligibleFor]);
 
   const items = state.status === "ready" ? state.page.items : EMPTY;
   const total = state.status === "ready" ? state.page.total : 0;
@@ -245,6 +300,14 @@ function Workspace({ role }: { role: string }) {
         it was typed by a person or came from a sheet a person uploaded.
       </p>
 
+      {eligibleFor && (
+        <EligibleForBanner
+          jobOrder={jobOrder}
+          state={state}
+          onClear={clearEligibleFor}
+        />
+      )}
+
       <div className="jo-head" style={{ marginTop: 24 }}>
         <button type="button" className="btn btn-primary" onClick={() => setView({ mode: "create" })}>
           Add candidate
@@ -331,6 +394,13 @@ function Workspace({ role }: { role: string }) {
         <p className="body jo-note" role="alert">
           {state.message}
         </p>
+      ) : state.status === "blocked" ? (
+        // The banner above already explains the 409 and offers a way out;
+        // showing the ordinary empty-list line underneath it here would read
+        // as a second, contradictory answer to the same question.
+        <p className="body jo-note" role="alert">
+          Set the placement type on that job order, then try again.
+        </p>
       ) : items.length === 0 ? (
         <p className="body jo-note" aria-live="polite">
           {emptyLine(filter, initial)}
@@ -369,6 +439,78 @@ function Workspace({ role }: { role: string }) {
         </>
       )}
     </>
+  );
+}
+
+/**
+ * The banner while `eligible_for` is on the URL — the one thing standing
+ * between a filtered list and a list that quietly lost people. Three jobs:
+ * say the filter is active and name the job order, report how many rows it
+ * removed (qualified against `scanned` when the scan was truncated, never
+ * against the agency's whole candidate count), and say plainly when
+ * `scan_truncated` means "from the first N examined" rather than "everyone".
+ */
+function EligibleForBanner({
+  jobOrder,
+  state,
+  onClear,
+}: {
+  jobOrder: Opportunity | null | undefined;
+  state: ListState;
+  onClear: () => void;
+}) {
+  const roleLine =
+    jobOrder === undefined
+      ? "this role"
+      : jobOrder === null
+        ? "this role"
+        : jobOrder.job_title_raw
+          ? jobOrder.company_name_raw
+            ? `${jobOrder.job_title_raw} at ${jobOrder.company_name_raw}`
+            : jobOrder.job_title_raw
+          : "this role";
+
+  return (
+    <div className="card cand-elig-banner" role="status">
+      <div className="cand-elig-head">
+        <span>
+          Showing only candidates who can legally take <strong>{roleLine}</strong>.
+        </span>
+        <button type="button" className="btn btn-secondary" onClick={onClear}>
+          Clear filter
+        </button>
+      </div>
+
+      {state.status === "blocked" && (
+        <p className="body jo-detail-error" role="alert">
+          {state.detail || "This job order needs a placement type before it can be used this way."}{" "}
+          <a href={DASHBOARD_PATH}>Set the placement type on the job order.</a>
+        </p>
+      )}
+
+      {state.status === "ready" &&
+        typeof state.page.excluded_ineligible === "number" &&
+        (state.page.scan_truncated ? (
+          <p className="body jo-sub cand-elig-note" role="alert">
+            Not everyone was checked: only the first {(state.page.scanned ?? 0).toLocaleString()}{" "}
+            candidates examined were scanned, and there may be more beyond it.{" "}
+            {state.page.excluded_ineligible.toLocaleString()} of{" "}
+            {(state.page.scanned ?? 0).toLocaleString()} examined are hidden — they cannot hold this
+            permit.
+          </p>
+        ) : (
+          <p className="body jo-sub cand-elig-note">
+            {state.page.excluded_ineligible.toLocaleString()}{" "}
+            {state.page.excluded_ineligible === 1 ? "candidate" : "candidates"} hidden — they cannot
+            hold this permit.
+          </p>
+        ))}
+
+      <p className="body jo-sub cand-elig-note">
+        Candidates with incomplete details — like a missing date of birth — are still shown here;
+        that is not the same as being ineligible.
+      </p>
+    </div>
   );
 }
 

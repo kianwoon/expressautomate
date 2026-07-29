@@ -184,6 +184,19 @@ export type CandidatePage = {
    *  but *without* `initial`, so picking a letter can never empty the bar that
    *  was used to pick it. */
   initials: string[];
+  /** Present only when the request carried `eligible_for` — how many rows the
+   *  regulatory check removed. Absent, not zero, when the filter is off: a
+   *  page that was never filtered has nothing to report having excluded. */
+  excluded_ineligible?: number;
+  /** Present only alongside `excluded_ineligible` — how many candidates were
+   *  actually evaluated. When `scan_truncated` is true this is smaller than
+   *  the agency's whole candidate count, and `excluded_ineligible` must be
+   *  read against it, not against the total. */
+  scanned?: number;
+  /** True when the scan hit its ceiling and stopped before evaluating every
+   *  candidate. The list is then eligible people *from the first `scanned`
+   *  examined* — there may be more beyond it that were never looked at. */
+  scan_truncated?: boolean;
 };
 
 /** The chips. `null` is "All" (every non-merged record). `"merged"` is its
@@ -192,7 +205,13 @@ export type CandidatePage = {
  *  `pipeline_stage` one. */
 export type Filter = null | Stage | "merged";
 
-function listUrl(filter: Filter, offset: number, q: string, initial: string | null): string {
+function listUrl(
+  filter: Filter,
+  offset: number,
+  q: string,
+  initial: string | null,
+  eligibleFor: string | null,
+): string {
   const params = new URLSearchParams({
     limit: String(CANDIDATES_PAGE_SIZE),
     offset: String(offset),
@@ -201,6 +220,7 @@ function listUrl(filter: Filter, offset: number, q: string, initial: string | nu
   else if (filter) params.set("pipeline_stage", filter);
   if (q.trim()) params.set("q", q.trim());
   if (initial) params.set("initial", initial);
+  if (eligibleFor) params.set("eligible_for", eligibleFor);
   return `${CANDIDATES_PATH}?${params.toString()}`;
 }
 
@@ -216,7 +236,13 @@ function messageFor(status: number): string {
 export type ListState =
   | { status: "loading" }
   | { status: "ready"; page: CandidatePage }
-  | { status: "unreadable"; message: string };
+  | { status: "unreadable"; message: string }
+  /** The job order carried by `eligible_for` has no `placement_type` set —
+   *  the server's 409. Its own state rather than folded into `unreadable`,
+   *  because the fix is not "reload the page", it is "set the placement
+   *  type", and the caller needs `reason` to know that without parsing
+   *  `detail`. */
+  | { status: "blocked"; detail: string; reason: string };
 
 const ZERO_COUNTS: Record<string, number> = { all: 0 };
 const NO_INITIALS: string[] = [];
@@ -228,6 +254,10 @@ export type Candidates = {
   q: string;
   /** The letter the list is narrowed to, or `null` for all of them. */
   initial: string | null;
+  /** The opportunity id the list is narrowed to, or `null` for the ordinary,
+   *  unfiltered list. Carried in from the job order's "Find candidates for
+   *  this role" action via the URL, never from a picker on this page. */
+  eligibleFor: string | null;
   /** The last counts we were told, kept across a reload so the chips do not
    *  blink back to nothing every time a filter changes. */
   counts: Record<string, number>;
@@ -246,15 +276,21 @@ export type Candidates = {
   setOffset: (offset: number) => void;
   setQ: (q: string) => void;
   setInitial: (initial: string | null) => void;
+  setEligibleFor: (eligibleFor: string | null) => void;
   reload: () => void;
 };
 
-export function useCandidates(): Candidates {
+/** `initialEligibleFor` seeds the filter from the URL the candidates page was
+ *  navigated to with — read once by the caller, on mount, never re-derived
+ *  here, so a later edit to the address bar cannot silently retarget an
+ *  already-open list. */
+export function useCandidates(initialEligibleFor: string | null = null): Candidates {
   const [state, setState] = useState<ListState>({ status: "loading" });
   const [filter, setFilterRaw] = useState<Filter>(null);
   const [offset, setOffset] = useState(0);
   const [q, setQRaw] = useState("");
   const [initial, setInitialRaw] = useState<string | null>(null);
+  const [eligibleFor, setEligibleForRaw] = useState<string | null>(initialEligibleFor);
   const [counts, setCounts] = useState<Record<string, number>>(ZERO_COUNTS);
   const [initials, setInitials] = useState<string[]>(NO_INITIALS);
   const [refreshing, setRefreshing] = useState(true);
@@ -270,11 +306,23 @@ export function useCandidates(): Candidates {
     setRefreshing(true);
     (async () => {
       try {
-        const res = await fetch(listUrl(filter, offset, q, initial), {
+        const res = await fetch(listUrl(filter, offset, q, initial, eligibleFor), {
           credentials: "include",
           headers: { Accept: "application/json" },
           signal: controller.signal,
         });
+        if (res.status === 409) {
+          const body = (await res.json().catch(() => ({}))) as {
+            detail?: string;
+            reason?: string;
+          };
+          setState({
+            status: "blocked",
+            detail: body.detail ?? "This job order needs a placement type before it can be used this way.",
+            reason: body.reason ?? "placement_type_not_set",
+          });
+          return;
+        }
         if (!res.ok) {
           setState({ status: "unreadable", message: messageFor(res.status) });
           return;
@@ -295,7 +343,7 @@ export function useCandidates(): Candidates {
       }
     })();
     return () => controller.abort();
-  }, [filter, offset, q, initial, nonce]);
+  }, [filter, offset, q, initial, eligibleFor, nonce]);
 
   // Changing the filter or the search must reset the page, for the same
   // reason as job orders: staying on offset 150 of five matching rows reads
@@ -314,6 +362,14 @@ export function useCandidates(): Candidates {
     setInitialRaw(next);
     setOffset(0);
   }, []);
+  // Clearing or setting the eligibility filter is a filter change like any
+  // other, so the page resets for the reason above. The caller is also
+  // responsible for taking `eligible_for` out of the URL when clearing —
+  // this hook only owns the fetch, not the address bar.
+  const setEligibleFor = useCallback((next: string | null) => {
+    setEligibleForRaw(next);
+    setOffset(0);
+  }, []);
   const reload = useCallback(() => setNonce((n) => n + 1), []);
 
   return {
@@ -322,6 +378,7 @@ export function useCandidates(): Candidates {
     offset,
     q,
     initial,
+    eligibleFor,
     counts,
     initials,
     refreshing,
@@ -329,6 +386,7 @@ export function useCandidates(): Candidates {
     setOffset,
     setQ,
     setInitial,
+    setEligibleFor,
     reload,
   };
 }

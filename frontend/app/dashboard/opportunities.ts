@@ -380,6 +380,21 @@ export type PlacementUpdate = {
   sex_requirement_reason: string | null;
 };
 
+/** One job order, for the candidates page's "Find candidates for this role"
+ *  banner — the job title and company are the only fields that banner needs,
+ *  but the single-record GET returns the whole row and there is no reason to
+ *  ask for less. Thrown as `ApiError` like every other reader on this page,
+ *  so a caller that only wants the name can still show the server's own
+ *  sentence when the job order itself is gone. */
+export async function getOpportunity(id: string): Promise<Opportunity> {
+  const res = await fetch(opportunityPath(id), {
+    credentials: "include",
+    headers: { Accept: "application/json" },
+  });
+  if (!res.ok) throw new ApiError(await readError(res));
+  return (await res.json()) as Opportunity;
+}
+
 /** Sets a job order's placement type and/or sex requirement. Same PATCH
  *  pattern as `updateCandidate` in `candidates.ts`: partial body, JSON in and
  *  out, `ApiError` carrying whatever sentence the server worded — including
