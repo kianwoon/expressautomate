@@ -775,6 +775,14 @@ export type WhatsappSendResult = {
  *  `no_number` (422) means the fix is on the candidate record, not in
  *  Settings → WhatsApp, so the modal must not point there.
  *
+ *  `risk_not_acknowledged` (409, same status as `session`, told apart by
+ *  `reason` in the body rather than `session_status` — the session may be
+ *  perfectly `connected`, this refusal is about the recruiter, not the
+ *  link) means the fix is one checkbox in Settings → WhatsApp, and *only*
+ *  that: the popup is not offered as a way around it, because the refusal
+ *  exists to make sure the recruiter has seen the risk notice before
+ *  sending, and routing around it defeats the point.
+ *
  *  There are two distinct 429s, told apart by `limit` rather than by
  *  guessing from the sentence: `"daily"` is the day's cap, spent until UTC
  *  midnight; `"interval"` is the minimum gap between sends, which clears
@@ -782,13 +790,13 @@ export type WhatsappSendResult = {
  *  number — never recomputed here, since a rounded or drifted value just
  *  produces a second 429 on retry. */
 export class WhatsappSendError extends ApiError {
-  kind: "session" | "rate_limited" | "no_number";
+  kind: "session" | "rate_limited" | "no_number" | "risk_not_acknowledged";
   session_status: string | null;
   limit: "daily" | "interval" | null;
   retry_after_seconds: number | null;
   constructor(
     message: string,
-    kind: "session" | "rate_limited" | "no_number",
+    kind: "session" | "rate_limited" | "no_number" | "risk_not_acknowledged",
     session_status: string | null,
     limit: "daily" | "interval" | null = null,
     retry_after_seconds: number | null = null,
@@ -828,21 +836,34 @@ export async function sendCandidateWhatsapp(
     let session_status: string | null = null;
     let limit: "daily" | "interval" | null = null;
     let retry_after_seconds: number | null = null;
+    let reason: string | null = null;
     try {
       const body = (await res.json()) as {
         detail?: string;
         session_status?: string;
         limit?: "daily" | "interval";
         retry_after_seconds?: number;
+        reason?: string;
       };
       if (body.detail) detail = body.detail;
       if (body.session_status) session_status = body.session_status;
       if (body.limit) limit = body.limit;
       if (typeof body.retry_after_seconds === "number") retry_after_seconds = body.retry_after_seconds;
+      if (body.reason) reason = body.reason;
     } catch {
       /* not JSON, or empty */
     }
-    const kind = res.status === 429 ? "rate_limited" : res.status === 422 ? "no_number" : "session";
+    // A 409 with `reason: "risk_not_acknowledged"` carries no `session_status`
+    // at all — it is not a session state, so it must be told apart by `reason`
+    // before falling into the `session` bucket, not folded into it.
+    const kind =
+      res.status === 429
+        ? "rate_limited"
+        : res.status === 422
+          ? "no_number"
+          : res.status === 409 && reason === "risk_not_acknowledged"
+            ? "risk_not_acknowledged"
+            : "session";
     throw new WhatsappSendError(detail, kind, session_status, limit, retry_after_seconds);
   }
   if (!res.ok) throw new ApiError(await readError(res));

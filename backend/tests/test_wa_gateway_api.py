@@ -112,12 +112,53 @@ async def test_pair_ignores_ids_in_the_request_body(client, signed_in, monkeypat
 
     monkeypatch.setattr("app.services.wa_gateway.WaGatewayClient.pair", fake_pair)
 
+    from app.services.wa_risk_notice import NOTICE_VERSION
+
+    ack = await client.post("/api/wa/consent", json={"notice_version": NOTICE_VERSION})
+    assert ack.status_code == 200
+
     response = await client.post(
         "/api/wa/session",
         json={"tenant_id": str(uuid.uuid4()), "user_id": str(uuid.uuid4())},
     )
     assert response.status_code == 200
     assert response.json()["qr"] == "abc123"
+
+
+async def test_pair_refused_without_a_current_risk_acknowledgement(
+    client, signed_in, monkeypatch
+) -> None:
+    async def fake_pair(self, tenant_id: str, user_id: str) -> SessionSnapshot:
+        raise AssertionError("the gateway must never be called before acknowledgement")
+
+    monkeypatch.setattr("app.services.wa_gateway.WaGatewayClient.pair", fake_pair)
+
+    response = await client.post("/api/wa/session")
+    assert response.status_code == 409
+    body = response.json()
+    assert body["reason"] == "risk_not_acknowledged"
+
+
+async def test_pair_refusal_body_is_flat_never_nested_under_detail(
+    client, signed_in, monkeypatch
+) -> None:
+    """The regression `HTTPException(detail={...})` causes: FastAPI nests the
+    dict under its own `detail` key, yielding `{"detail": {"detail": ...,
+    "reason": ...}}` — the frontend reads `reason` at the top level and would
+    silently fall through to a generic error. Pins the exact top-level shape.
+    """
+
+    async def fake_pair(self, tenant_id: str, user_id: str) -> SessionSnapshot:
+        raise AssertionError("the gateway must never be called before acknowledgement")
+
+    monkeypatch.setattr("app.services.wa_gateway.WaGatewayClient.pair", fake_pair)
+
+    response = await client.post("/api/wa/session")
+    assert response.status_code == 409
+    body = response.json()
+    assert set(body.keys()) == {"detail", "reason"}
+    assert isinstance(body["detail"], str)
+    assert body["reason"] == "risk_not_acknowledged"
 
 
 async def test_a_dead_gateway_is_a_status_not_a_500(client, signed_in, monkeypatch) -> None:

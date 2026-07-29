@@ -116,10 +116,16 @@ class WaSession(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
     sent_date: Mapped[date | None] = mapped_column(Date)
 
     # Plan §9: the recruiter ticks a box acknowledging the ban risk before the
-    # first pairing. Recorded, not assumed.
+    # first pairing. Recorded, not assumed. `risk_notice_version` is the
+    # content-hash version (app/services/wa_risk_notice.py) of the text that
+    # was on screen at that timestamp — the timestamp alone cannot say *what*
+    # was acknowledged, only *that* something was. Both columns are written
+    # together by `POST /api/wa/consent` and read together by `GET
+    # /api/wa/session`; neither is backfilled for a pre-existing session.
     ban_risk_acknowledged_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True)
     )
+    risk_notice_version: Mapped[str | None] = mapped_column(String(64))
 
     # P5: the jittered spacing deadline (plan §9) the *last admitted send*
     # set. Written once, when a send is admitted; every refusal in between

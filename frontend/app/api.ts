@@ -184,6 +184,12 @@ export const SETTINGS_WHATSAPP_PATH = "/settings/whatsapp";
 export const WA_SESSION_PATH = `${API_BASE}/api/wa/session`;
 export const WA_SESSION_DISCONNECT_PATH = `${WA_SESSION_PATH}/disconnect`;
 
+/** Records this recruiter's acknowledgement of the unofficial-connection risk
+ *  notice returned alongside `GET /api/wa/session`. Body carries the
+ *  `notice_version` the recruiter was shown; 422 if the server's current
+ *  version has since moved on. */
+export const WA_CONSENT_PATH = `${API_BASE}/api/wa/consent`;
+
 /**
  * Everything the notifications screen needs in one read: which channels are
  * configured, which destinations exist with the events each is subscribed to,

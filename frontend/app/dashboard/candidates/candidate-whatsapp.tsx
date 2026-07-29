@@ -170,11 +170,20 @@ type SendAvailability = "unknown" | WaSessionStatus;
  *   429 that reached here without a `limit` (should not happen once the
  *   backend contract is live, but a response the client cannot classify must
  *   still show *something*).
+ * - `kind: "risk_not_acknowledged"` (409, no `session_status` — the session
+ *   may be perfectly `connected`) — the recruiter has not ticked the risk
+ *   checkbox in Settings → WhatsApp. Checked before the `session_status`
+ *   branching below, since the two reasons for a 409 do not overlap. The
+ *   popup is deliberately *not* offered here: every other refusal offers it
+ *   because the message still deserves to go out some way, but this refusal
+ *   exists specifically to make sure the recruiter has seen the risk notice
+ *   first, and a popup escape hatch would defeat that. The notice itself is
+ *   not repeated here — it lives once, in Settings, rendered from the server.
  * - `kind: "session"` (409) — branches on `session_status` for the reason
  *   above; `pointToSettings` is true only where a relink or a wait in
  *   Settings is the actual fix. */
 function sendFailureCopy(
-  kind: "session" | "rate_limited" | "no_number",
+  kind: "session" | "rate_limited" | "no_number" | "risk_not_acknowledged",
   sessionStatus: string | null,
   serverDetail: string,
   limit?: "daily" | "interval" | null,
@@ -182,6 +191,13 @@ function sendFailureCopy(
 ): { text: string; pointToSettings: boolean; offerPopup: boolean } {
   if (kind === "no_number") {
     return { text: serverDetail, pointToSettings: false, offerPopup: false };
+  }
+  if (kind === "risk_not_acknowledged") {
+    return {
+      text: `${serverDetail} You need to acknowledge that risk in Settings → WhatsApp before sending — there's no way around this one.`,
+      pointToSettings: true,
+      offerPopup: false,
+    };
   }
   if (kind === "rate_limited") {
     if (limit === "daily") {
@@ -532,8 +548,8 @@ function WhatsappModal({
                 {sendError.pointToSettings && (
                   <>
                     {" "}
-                    <a href={SETTINGS_WHATSAPP_PATH}>Fix this in Settings → WhatsApp</a>, or use Open
-                    WhatsApp below.
+                    <a href={SETTINGS_WHATSAPP_PATH}>Fix this in Settings → WhatsApp</a>
+                    {sendError.offerPopup ? <>, or use Open WhatsApp below.</> : "."}
                   </>
                 )}
                 {!sendError.pointToSettings && sendError.offerPopup && (

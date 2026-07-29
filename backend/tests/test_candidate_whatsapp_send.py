@@ -35,6 +35,7 @@ from app.services.wa_gateway import (
     GatewayUnreachableError,
     SendOutcome,
 )
+from app.services.wa_risk_notice import NOTICE_VERSION
 from tests.conftest import AdminSessionLocal
 from tests.test_clients_api import sign_in
 
@@ -63,6 +64,18 @@ async def agency():
                 "VALUES (:i, :t, :e, 'Wong', 'owner')"
             ),
             {"i": uid, "t": tid, "e": f"u{uid.hex[:6]}@agency.sg"},
+        )
+        # This fixture's recruiter has already acknowledged the ban-risk
+        # notice (plan §9) — the send-path gate itself is covered by its own
+        # tests below, which use a separate, never-acknowledged user so they
+        # are not fighting this default.
+        await s.execute(
+            text(
+                "INSERT INTO wa_sessions (id, tenant_id, user_id, status, "
+                "ban_risk_acknowledged_at, risk_notice_version) "
+                "VALUES (:i, :t, :u, 'disconnected', now(), :v)"
+            ),
+            {"i": uid, "t": tid, "u": uid, "v": NOTICE_VERSION},
         )
         for cid, name, phone in (
             (ids["with_phone"], "Hui Ling Tan", "+6582217734"),
@@ -250,6 +263,17 @@ async def test_the_same_key_in_another_agency_is_not_a_replay(agency, monkeypatc
             ),
             {"i": cid_b, "t": tid_b},
         )
+        # This test is about replay/idempotency across tenants, not the
+        # risk-acknowledgement gate — give agency B's recruiter one so their
+        # send is not refused for an unrelated reason.
+        await s.execute(
+            text(
+                "INSERT INTO wa_sessions (id, tenant_id, user_id, status, "
+                "ban_risk_acknowledged_at, risk_notice_version) "
+                "VALUES (:i, :t, :u, 'disconnected', now(), :v)"
+            ),
+            {"i": uid_b, "t": tid_b, "u": uid_b, "v": NOTICE_VERSION},
+        )
         await s.commit()
     try:
         async with await _client_for(tid_b, uid_b) as http:
@@ -258,7 +282,7 @@ async def test_the_same_key_in_another_agency_is_not_a_replay(agency, monkeypatc
         assert len(await _activities(tid_b, cid_b)) == 1
     finally:
         async with AdminSessionLocal() as s:
-            for table in ("candidate_activities", "candidates", "users"):
+            for table in ("candidate_activities", "candidates", "wa_sessions", "users"):
                 await s.execute(text(f"DELETE FROM {table} WHERE tenant_id = :t"), {"t": tid_b})
             await s.execute(text("DELETE FROM tenants WHERE id = :t"), {"t": tid_b})
             await s.commit()
@@ -630,6 +654,17 @@ async def test_agency_b_can_neither_send_to_nor_read_agency_as_candidate(
             text("INSERT INTO users (id, tenant_id, email, role) VALUES (:i, :t, :e, 'owner')"),
             {"i": uid_b, "t": tid_b, "e": f"u{uid_b.hex[:6]}@other.sg"},
         )
+        # This test is about candidate-scoping (§18), not the risk-
+        # acknowledgement gate — give agency B's recruiter one so the 404
+        # below is actually about the candidate, not consent.
+        await s.execute(
+            text(
+                "INSERT INTO wa_sessions (id, tenant_id, user_id, status, "
+                "ban_risk_acknowledged_at, risk_notice_version) "
+                "VALUES (:i, :t, :u, 'disconnected', now(), :v)"
+            ),
+            {"i": uid_b, "t": tid_b, "u": uid_b, "v": NOTICE_VERSION},
+        )
         await s.commit()
     try:
         async with await _client_for(tid_b, uid_b) as http:
@@ -641,6 +676,7 @@ async def test_agency_b_can_neither_send_to_nor_read_agency_as_candidate(
             assert listing.status_code == 404
     finally:
         async with AdminSessionLocal() as s:
+            await s.execute(text("DELETE FROM wa_sessions WHERE tenant_id = :t"), {"t": tid_b})
             await s.execute(text("DELETE FROM users WHERE tenant_id = :t"), {"t": tid_b})
             await s.execute(text("DELETE FROM tenants WHERE id = :t"), {"t": tid_b})
             await s.commit()
@@ -653,12 +689,26 @@ async def test_agency_b_can_neither_send_to_nor_read_agency_as_candidate(
 async def _seed_wa_session(tid, uid, *, next_send_allowed_at=None) -> None:
     """A `wa_sessions` row for this recruiter — P5's pre-dispatch claim locks
     this row (`SELECT ... FOR UPDATE`), so a spacing or cap-race test needs
-    one to exist, exactly as a real paired recruiter would have."""
+    one to exist, exactly as a real paired recruiter would have.
+
+    `ON CONFLICT ... DO UPDATE` rather than a plain insert: the `agency`
+    fixture already creates this recruiter's row (to record their ban-risk
+    acknowledgement), and a second plain `INSERT` would collide with the
+    `uq_wa_sessions_user_id` constraint. The acknowledgement columns are
+    deliberately left untouched here — this helper is about status and
+    spacing, not consent.
+
+    allow-hardcode: SQL statement text, test fixture setup — same category
+    as the other raw-SQL helpers in this file.
+    """
     async with AdminSessionLocal() as s:
         await s.execute(
             text(
                 "INSERT INTO wa_sessions (id, tenant_id, user_id, status, "
-                "next_send_allowed_at) VALUES (:i, :t, :u, 'connected', :n)"
+                "next_send_allowed_at) VALUES (:i, :t, :u, 'connected', :n) "
+                "ON CONFLICT (user_id) DO UPDATE SET "
+                "status = EXCLUDED.status, "
+                "next_send_allowed_at = EXCLUDED.next_send_allowed_at"
             ),
             {"i": uuid.uuid4(), "t": tid, "u": uid, "n": next_send_allowed_at},
         )
@@ -831,3 +881,80 @@ async def test_a_discard_does_not_roll_back_a_later_sends_deadline(
     assert stored == later_deadline, (
         "a later send's deadline must survive an earlier claim's discard"
     )
+
+
+async def test_send_is_refused_without_a_current_risk_acknowledgement(monkeypatch) -> None:
+    """Plan §9's gate applies to sending, not only to pairing: a recruiter
+    who paired before this feature shipped has a live `connected` session
+    and no acknowledgement recorded, and is exactly who this exists to warn.
+    Uses its own tenant/user rather than the `agency` fixture, which already
+    acknowledges — this test needs a recruiter who has not.
+    """
+    tid, uid = uuid.uuid4(), uuid.uuid4()
+    cid = uuid.uuid4()
+    async with AdminSessionLocal() as s:
+        await s.execute(
+            text("INSERT INTO tenants (id, name, slug) VALUES (:i, :n, :n)"),
+            {"i": tid, "n": f"agency-{tid.hex[:6]}"},
+        )
+        await s.execute(
+            text(
+                "INSERT INTO users (id, tenant_id, email, display_name, role) "
+                "VALUES (:i, :t, :e, 'Wong', 'owner')"
+            ),
+            {"i": uid, "t": tid, "e": f"u{uid.hex[:6]}@agency.sg"},
+        )
+        await s.execute(
+            text(
+                "INSERT INTO candidates (id, tenant_id, full_name, phone_e164, "
+                "current_title) VALUES (:i, :t, 'Hui Ling Tan', '+6582217734', 'Engineer')"
+            ),
+            {"i": cid, "t": tid},
+        )
+        # A session that is already `connected` — pairing happened before
+        # this feature shipped — but never acknowledged the risk.
+        await s.execute(
+            text(
+                "INSERT INTO wa_sessions (id, tenant_id, user_id, status) "
+                "VALUES (:i, :t, :u, 'connected')"
+            ),
+            {"i": uuid.uuid4(), "t": tid, "u": uid},
+        )
+        await s.commit()
+
+    def fail_if_called(*a, **k):
+        raise AssertionError("the gateway must never be called before acknowledgement")
+
+    monkeypatch.setattr(wa_api.WaGatewayClient, "send", fail_if_called)
+
+    async with await _client_for(tid, uid) as http:
+        resp = await http.post(SEND.format(cid=cid), json=_body())
+    assert resp.status_code == 409
+    body = resp.json()
+    assert set(body.keys()) == {"detail", "reason"}
+    assert body["reason"] == "risk_not_acknowledged"
+
+    # Nothing was reserved: no activity row, no spacing deadline spent.
+    assert await _activities(tid, cid) == []
+    assert await _next_send_allowed_at(tid, uid) is None
+
+    async with AdminSessionLocal() as s:
+        for table in ("candidate_activities", "candidates", "wa_sessions", "users"):
+            await s.execute(text(f"DELETE FROM {table} WHERE tenant_id = :t"), {"t": tid})
+        await s.execute(text("DELETE FROM tenants WHERE id = :t"), {"t": tid})
+        await s.commit()
+
+
+async def test_send_is_permitted_after_a_current_risk_acknowledgement(agency, monkeypatch) -> None:
+    """The `agency` fixture already acknowledges the current notice version,
+    so a send through it must succeed — this is the positive side of the
+    gate, alongside the negative case above."""
+    tid, uid, ids = agency
+    _fake_client(
+        monkeypatch,
+        outcome=SendOutcome(ok=True, session_status="connected", provider_message_id="WAMSG-9"),
+    )
+    async with await _client_for(tid, uid) as http:
+        resp = await http.post(SEND.format(cid=ids["with_phone"]), json=_body())
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "sent"

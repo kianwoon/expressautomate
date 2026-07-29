@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import QRCode from "qrcode";
 
-import { WA_SESSION_DISCONNECT_PATH, WA_SESSION_PATH } from "../../api";
+import { WA_CONSENT_PATH, WA_SESSION_DISCONNECT_PATH, WA_SESSION_PATH } from "../../api";
 import { useLive } from "../../events";
 
 /**
@@ -49,6 +49,22 @@ type SessionResponse = {
   phone_number: string | null;
   connected_at: string | null;
   last_checked_at: string | null;
+  notice_text: string;
+  notice_version: string;
+  risk_acknowledged_at: string | null;
+  risk_notice_version: string | null;
+};
+
+/** The risk notice, as last read from `GET /api/wa/session`. Kept apart from
+ *  `Panel` because it gates pairing across several connection statuses
+ *  (disconnected, expired, logged_out) rather than being a status of its own —
+ *  the server owns the copy, this just tracks what was shown and what this
+ *  recruiter has acknowledged. */
+type NoticeState = {
+  text: string;
+  version: string;
+  acknowledgedAt: string | null;
+  acknowledgedVersion: string | null;
 };
 
 type Panel =
@@ -73,6 +89,10 @@ export function WhatsappPanel() {
   const [panel, setPanel] = useState<Panel>({ status: "loading" });
   const [confirmingDisconnect, setConfirmingDisconnect] = useState(false);
   const [disconnecting, setDisconnecting] = useState(false);
+  const [notice, setNotice] = useState<NoticeState | null>(null);
+  const [consentChecked, setConsentChecked] = useState(false);
+  const [consentSubmitting, setConsentSubmitting] = useState(false);
+  const [consentError, setConsentError] = useState<string | null>(null);
 
   // Bumped whenever a fetch is superseded by a newer one (a nudge-triggered
   // refetch landing after Connect/Cancel/Disconnect, or two refetches racing).
@@ -81,6 +101,21 @@ export function WhatsappPanel() {
   const requestId = useRef(0);
 
   const applySession = useCallback(async (body: SessionResponse, myRequestId: number) => {
+    if (requestId.current === myRequestId) {
+      const nextNotice: NoticeState = {
+        text: body.notice_text,
+        version: body.notice_version,
+        acknowledgedAt: body.risk_acknowledged_at,
+        acknowledgedVersion: body.risk_notice_version,
+      };
+      setNotice(nextNotice);
+      // A fresh, current acknowledgement means the checkbox (if it was ever
+      // ticked for a stale version) is no longer meaningful state to carry.
+      if (nextNotice.acknowledgedVersion === nextNotice.version) {
+        setConsentChecked(false);
+        setConsentError(null);
+      }
+    }
     if (body.status === "pairing" && body.qr) {
       // Never render a QR past its expiry, whether this refetch came from the
       // nudge or from the fallback poll.
@@ -168,6 +203,24 @@ export function WhatsappPanel() {
         headers: { Accept: "application/json" },
       });
       if (requestId.current !== myRequestId) return;
+      if (res.status === 409) {
+        let reason: string | undefined;
+        try {
+          const errBody = (await res.json()) as { reason?: string };
+          reason = errBody.reason;
+        } catch {
+          reason = undefined;
+        }
+        if (reason === "risk_not_acknowledged") {
+          // A race (another tab acknowledged and paired, or the notice
+          // version moved on between load and this click) — re-fetch rather
+          // than show a generic error, so the notice they need is on screen.
+          await load();
+          return;
+        }
+        setPanel({ status: "request_error", message: "We could not start a WhatsApp link just now." });
+        return;
+      }
       if (!res.ok) {
         setPanel({ status: "request_error", message: "We could not start a WhatsApp link just now." });
         return;
@@ -178,7 +231,52 @@ export function WhatsappPanel() {
       if (requestId.current !== myRequestId) return;
       setPanel({ status: "request_error", message: "We could not reach the server." });
     }
-  }, [applySession]);
+  }, [applySession, load]);
+
+  const acknowledgeRisk = useCallback(
+    async (checked: boolean) => {
+      setConsentChecked(checked);
+      if (!checked || !notice) return;
+      setConsentSubmitting(true);
+      setConsentError(null);
+      try {
+        const res = await fetch(WA_CONSENT_PATH, {
+          method: "POST",
+          credentials: "include",
+          headers: { Accept: "application/json", "Content-Type": "application/json" },
+          body: JSON.stringify({ notice_version: notice.version }),
+        });
+        if (res.status === 422) {
+          // The version we were about to acknowledge is no longer current —
+          // refetch and show whatever notice is current now, rather than
+          // silently retrying with a version the server already rejected.
+          setConsentChecked(false);
+          await load();
+          return;
+        }
+        if (!res.ok) {
+          setConsentChecked(false);
+          setConsentError("We could not record that just now. Try again.");
+          return;
+        }
+        const body = (await res.json()) as {
+          risk_acknowledged_at: string | null;
+          risk_notice_version: string | null;
+        };
+        setNotice((prev) =>
+          prev
+            ? { ...prev, acknowledgedAt: body.risk_acknowledged_at, acknowledgedVersion: body.risk_notice_version }
+            : prev,
+        );
+      } catch {
+        setConsentChecked(false);
+        setConsentError("We could not reach the server.");
+      } finally {
+        setConsentSubmitting(false);
+      }
+    },
+    [notice, load],
+  );
 
   const cancel = useCallback(() => {
     requestId.current++;
@@ -226,6 +324,59 @@ export function WhatsappPanel() {
     return () => clearInterval(timer);
   }, [shouldPoll, pollExpiresAt, load]);
 
+  const needsAck = notice !== null && (!notice.acknowledgedAt || notice.acknowledgedVersion !== notice.version);
+
+  /**
+   * Renders in place of a bare Connect button wherever pairing can be
+   * started (disconnected, expired, logged_out). When the recruiter has
+   * never acknowledged the current notice version, or acknowledged an older
+   * one, this is the risk notice + checkbox instead of the button — the
+   * button only appears once ticked. Once acknowledged, this is a quiet
+   * one-line record instead, not a repeat of the notice.
+   */
+  function connectAction(label: string) {
+    if (!notice) return null;
+    if (needsAck) {
+      return (
+        <>
+          {notice.text.split(/\n{2,}/).map((paragraph, i) => (
+            <p className="nt-note" key={i}>
+              {paragraph}
+            </p>
+          ))}
+          <label className="nt-note" style={{ display: "flex", gap: "0.5em", alignItems: "flex-start" }}>
+            <input
+              type="checkbox"
+              checked={consentChecked}
+              disabled={consentSubmitting}
+              onChange={(e) => void acknowledgeRisk(e.target.checked)}
+            />
+            <span>I have read and accept the risk this poses to my own WhatsApp number.</span>
+          </label>
+          {consentError ? <p className="nt-error">{consentError}</p> : null}
+          <div className="nt-card-foot">
+            <button className="btn btn-primary" onClick={() => void connect()} disabled={needsAck}>
+              {label}
+            </button>
+          </div>
+        </>
+      );
+    }
+    return (
+      <>
+        <p className="nt-note">
+          You acknowledged the risk to your own WhatsApp number
+          {notice.acknowledgedAt ? ` on ${new Date(notice.acknowledgedAt).toLocaleString()}` : ""}.
+        </p>
+        <div className="nt-card-foot">
+          <button className="btn btn-primary" onClick={() => void connect()}>
+            {label}
+          </button>
+        </div>
+      </>
+    );
+  }
+
   if (panel.status === "loading") {
     return (
       <div className="nt-card">
@@ -269,11 +420,7 @@ export function WhatsappPanel() {
             candidates will be sent from your own WhatsApp number, not a shared or automated one. We
             never see or store your WhatsApp password.
           </p>
-          <div className="nt-card-foot">
-            <button className="btn btn-primary" onClick={() => void connect()}>
-              Connect WhatsApp
-            </button>
-          </div>
+          {connectAction("Connect WhatsApp")}
         </>
       ) : panel.status === "pairing_starting" ? (
         <>
@@ -307,11 +454,7 @@ export function WhatsappPanel() {
       ) : panel.status === "expired" ? (
         <>
           <p className="nt-note">That code expired. Start again when you are ready.</p>
-          <div className="nt-card-foot">
-            <button className="btn btn-primary" onClick={() => void connect()}>
-              Connect WhatsApp
-            </button>
-          </div>
+          {connectAction("Connect WhatsApp")}
         </>
       ) : panel.status === "reconnecting" ? (
         <>
@@ -326,11 +469,7 @@ export function WhatsappPanel() {
             WhatsApp ended the link on this device. This can happen if the device was removed from
             Linked devices on the phone itself. Link again to keep sending from your WhatsApp number.
           </p>
-          <div className="nt-card-foot">
-            <button className="btn btn-primary" onClick={() => void connect()}>
-              Connect WhatsApp
-            </button>
-          </div>
+          {connectAction("Connect WhatsApp")}
         </>
       ) : panel.status === "request_error" ? (
         <>

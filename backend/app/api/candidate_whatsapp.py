@@ -44,6 +44,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.api.auth import _require_session
 from app.api.candidates import _load
+from app.api.wa_gateway import _is_current_ack, _load_risk_ack
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.db.rls import tenant_session
@@ -673,6 +674,28 @@ async def whatsapp_send(
     replay = await _replay_of(tenant_uuid, body.client_request_id)
     if replay is not None:
         return _send_response(replay)
+
+    # Plan §9's gate applies here too, not only to pairing: a recruiter who
+    # paired before this shipped has a live `connected` session and no
+    # acknowledgement on file, and is exactly the person this feature exists
+    # to warn. Checked before anything is reserved — no `_claim_send`, no
+    # `pending` row, no spacing deadline spent — because a send that was
+    # never permitted should cost nothing if it is refused. The session
+    # itself is left alone: it is healthy, and tearing it down to make a
+    # point would force a re-pair, which plan §11 names as its own ban
+    # signal.
+    ack_at, ack_version = await _load_risk_ack(tenant_uuid, user_uuid)
+    if not _is_current_ack(ack_at, ack_version):
+        return JSONResponse(
+            status_code=409,
+            content={
+                "detail": (
+                    "You must acknowledge the WhatsApp ban-risk notice "
+                    "before sending."
+                ),
+                "reason": "risk_not_acknowledged",
+            },
+        )
 
     async with tenant_session(tenant_uuid) as session:
         # Inside the tenant session, so agency B asking about agency A's

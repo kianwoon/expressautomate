@@ -38,6 +38,7 @@ from datetime import UTC, datetime
 from typing import Any, Literal
 
 from fastapi import APIRouter, Header, HTTPException, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy import text
 
@@ -45,8 +46,10 @@ from app.api.auth import _require_session
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.db.rls import tenant_session
+from app.models.wa_session import STATUS_DISCONNECTED
 from app.services import events as events_service
 from app.services.wa_gateway import GatewayUnreachableError, WaGatewayClient
+from app.services.wa_risk_notice import NOTICE_TEXT, NOTICE_VERSION
 
 log = get_logger(__name__)
 router = APIRouter(prefix="/wa", tags=["wa_gateway"])
@@ -111,6 +114,43 @@ async def _call_gateway(
     return body
 
 
+async def _load_risk_ack(
+    tenant_id: uuid.UUID, user_id: uuid.UUID
+) -> tuple[datetime | None, str | None]:
+    """This user's own `(risk_acknowledged_at, risk_notice_version)`.
+
+    Reads `wa_sessions` directly (unlike the gateway-backed fields on this
+    module's other routes) because an acknowledgement is a fact FastAPI owns
+    outright — the gateway has no opinion on it. `tenant_session` scopes the
+    query to the caller's own tenant (§18); the row may not exist yet for a
+    recruiter who has never started pairing, which reads as "not
+    acknowledged", not an error.
+    """
+    async with tenant_session(tenant_id) as session:
+        row = (
+            await session.execute(
+                text(
+                    "SELECT ban_risk_acknowledged_at, risk_notice_version "
+                    "FROM wa_sessions WHERE user_id = :user_id"
+                ),
+                {"user_id": user_id},
+            )
+        ).first()
+    if row is None:
+        return None, None
+    return row[0], row[1]
+
+
+def _is_current_ack(ack_at: datetime | None, ack_version: str | None) -> bool:
+    """An acknowledgement only counts if it is of *this* notice text.
+
+    A recruiter who acknowledged an older wording has not acknowledged the
+    risk as currently described — the version must match `NOTICE_VERSION`
+    exactly, not merely be non-null.
+    """
+    return ack_at is not None and ack_version == NOTICE_VERSION
+
+
 @router.post("/session")
 async def start_session(request: Request) -> dict[str, Any]:
     """Start or resume pairing.
@@ -120,16 +160,121 @@ async def start_session(request: Request) -> dict[str, Any]:
     the live socket, and called while `pairing` it returns the *existing* QR
     rather than starting a second one — two browser tabs open on the same
     settings page see the same code.
+
+    Refuses without a *current* risk acknowledgement (plan §9). This is a
+    409, not a new `session_status` — the CHECK constraint on `wa_sessions`
+    names exactly five statuses and none of them is this; the reason lives in
+    a separate `reason` key instead.
     """
     user_id, tenant_id = _require_session(request)
+    ack_at, ack_version = await _load_risk_ack(tenant_id, user_id)
+    if not _is_current_ack(ack_at, ack_version):
+        # A flat body, not `HTTPException(detail={...})` — that wraps
+        # whatever is passed inside another `{"detail": ...}`, and the
+        # contract here is exactly two top-level keys. Deliberately not a
+        # new `session_status`: the CHECK constraint on `wa_sessions` names
+        # five and only five, and an earlier phase of this build shipped a
+        # contract that violated exactly that by inventing a sixth.
+        return JSONResponse(
+            status_code=409,
+            content={
+                "detail": (
+                    "You must acknowledge the WhatsApp ban-risk notice "
+                    "before pairing."
+                ),
+                "reason": "risk_not_acknowledged",
+            },
+        )
     return await _call_gateway("pair", tenant_id, user_id, include_details=False)
 
 
 @router.get("/session")
 async def get_session(request: Request) -> dict[str, Any]:
-    """Current status. This is what an SSE `wa_session` nudge refetches."""
+    """Current status. This is what an SSE `wa_session` nudge refetches.
+
+    Carries both what this user has acknowledged (`risk_acknowledged_at`,
+    `risk_notice_version` — null only if never acknowledged; otherwise the
+    exact version recorded, unchanged even if the notice text has since
+    moved on) and what is current (`notice_version`, `notice_text`). The
+    caller compares the two versions itself to tell "never acknowledged"
+    apart from "acknowledged a version that is no longer current" — this
+    route does not make that judgement or null the field out on its behalf.
+    """
     user_id, tenant_id = _require_session(request)
-    return await _call_gateway("status", tenant_id, user_id, include_details=True)
+    body = await _call_gateway("status", tenant_id, user_id, include_details=True)
+    ack_at, ack_version = await _load_risk_ack(tenant_id, user_id)
+    body |= {
+        "risk_acknowledged_at": ack_at,
+        "risk_notice_version": ack_version,
+        "notice_version": NOTICE_VERSION,
+        "notice_text": NOTICE_TEXT,
+    }
+    return body
+
+
+class ConsentIn(BaseModel):
+    """Body of `POST /api/wa/consent` — the version the recruiter was shown."""
+
+    notice_version: str
+
+
+@router.post("/consent")
+async def record_consent(request: Request, body: ConsentIn) -> dict[str, Any]:
+    """Record acknowledgement of the ban-risk notice (plan §9).
+
+    422, not 409, for a stale or unknown version: acknowledging text the
+    recruiter was not actually shown is not consent, and the caller sent a
+    bad request rather than hitting a conflict with server state. §18: this
+    always writes the signed-in caller's own `(tenant_id, user_id)` row,
+    never an id taken from the request.
+    """
+    user_id, tenant_id = _require_session(request)
+    if body.notice_version != NOTICE_VERSION:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"'{body.notice_version}' is not the current notice version "
+                f"('{NOTICE_VERSION}'). Reload and acknowledge the current "
+                "notice."
+            ),
+        )
+    async with tenant_session(tenant_id) as session:
+        # `status` is spelled out on insert rather than left to the column's
+        # `pairing` default: acknowledging the notice does not start a
+        # pairing attempt, and a row claiming `pairing` when nothing is
+        # pairing is a false state both a human reader and the stale-pending
+        # sweep could act on. `disconnected` — no live session — is the
+        # honest word for "acknowledged, nothing paired yet". An existing
+        # row's `status` is never touched here; only the gateway's internal
+        # callback (`internal_status` below) owns that column once a session
+        # exists.
+        await session.execute(
+            text(
+                """
+                INSERT INTO wa_sessions
+                    (id, tenant_id, user_id, status, ban_risk_acknowledged_at, risk_notice_version)
+                VALUES
+                    (:user_id, :tenant_id, :user_id, :status, now(), :notice_version)
+                ON CONFLICT (user_id) DO UPDATE SET
+                    ban_risk_acknowledged_at = now(),
+                    risk_notice_version = EXCLUDED.risk_notice_version,
+                    updated_at = now()
+                """
+            ),
+            {
+                "tenant_id": tenant_id,
+                "user_id": user_id,
+                "status": STATUS_DISCONNECTED,
+                "notice_version": body.notice_version,
+            },
+        )
+    ack_at, ack_version = await _load_risk_ack(tenant_id, user_id)
+    return {
+        "risk_acknowledged_at": ack_at,
+        "risk_notice_version": ack_version,
+        "notice_version": NOTICE_VERSION,
+        "notice_text": NOTICE_TEXT,
+    }
 
 
 @router.post("/session/disconnect")
