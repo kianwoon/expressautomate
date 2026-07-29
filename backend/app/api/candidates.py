@@ -450,9 +450,16 @@ async def list_candidates(
         # the eligibility pass only ever sees the scan window, so a stage count
         # taken from it would be a confident number for a question nobody asked
         # ("how many eligible people are in Screening, among the first five
-        # thousand by recency"). There is no honest number here, so there is no
-        # number: the caller is told to stop drawing the chips and the letter
-        # bar rather than to draw them wrong.
+        # thousand by recency").
+        #
+        # Not that an honest number is never available — when the scan did not
+        # truncate it saw the whole matching set, which for most agencies here
+        # is every time. Suppressing it even then is a choice, and the reason
+        # is that the alternative is worse to read: chips that carry figures on
+        # a small agency and fall silent on a large one teach nobody what the
+        # number means, and the recruiter who most needs the caveat is the one
+        # who would stop seeing it. So the caller is told to stop drawing the
+        # chips and the letter bar, rather than to draw them sometimes.
         "counts": None if eligible_for is not None else counts,
         "initials": None if eligible_for is not None else initials,
     }

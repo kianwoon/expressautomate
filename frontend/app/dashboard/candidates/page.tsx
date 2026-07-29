@@ -304,7 +304,7 @@ function Workspace({ role }: { role: string }) {
         <EligibleForBanner
           jobOrder={jobOrder}
           state={state}
-          narrowed={q.trim() !== "" || initial !== null}
+          narrowed={filter !== null || q.trim() !== "" || initial !== null}
           onClear={clearEligibleFor}
         />
       )}
@@ -472,10 +472,15 @@ function EligibleForBanner({
 }: {
   jobOrder: Opportunity | null | undefined;
   state: ListState;
-  /** Whether a search or a letter is also active. The scan ceiling applies
-   *  *after* those narrow the set, so when it bites, "the first N examined"
-   *  means the first N of the current search — not of the whole agency. Saying
-   *  which is the difference between a caveat and a misleading one. */
+  /** Whether a stage chip, a search or a letter is also active — every one of
+   *  which narrows `base` before the scan ceiling applies. When it bites, the
+   *  window is the first N of *that* set, not of the whole agency, and saying
+   *  which is the difference between a caveat and a misleading one.
+   *
+   *  Deliberately says nothing about the sort: the order flips to alphabetical
+   *  once a letter is picked, so naming one ordering is wrong on the other
+   *  branch. "In the order shown here" is true either way, and the list is
+   *  right there to be looked at. */
   narrowed: boolean;
   onClear: () => void;
 }) {
@@ -512,10 +517,11 @@ function EligibleForBanner({
         typeof state.page.excluded_ineligible === "number" &&
         (state.page.scan_truncated ? (
           <p className="body jo-sub cand-elig-note" role="alert">
-            Not everyone was checked. We looked at the{" "}
-            {(state.page.scanned ?? 0).toLocaleString()} most recently updated candidates
-            {narrowed ? " matching your current search" : ""}, and stopped there — eligible people
-            may exist beyond that point. {state.page.excluded_ineligible.toLocaleString()} of those{" "}
+            Not everyone was checked. We worked down{" "}
+            {narrowed ? "the candidates matching your current filters" : "your candidates"} in the
+            order shown here, stopped after {(state.page.scanned ?? 0).toLocaleString()}, and did
+            not look further — eligible people may exist beyond that point.{" "}
+            {state.page.excluded_ineligible.toLocaleString()} of those{" "}
             {(state.page.scanned ?? 0).toLocaleString()} are hidden because they cannot hold this
             permit.
           </p>
