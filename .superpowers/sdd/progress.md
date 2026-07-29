@@ -123,3 +123,17 @@ P5 Task 2: complete (3c1f0aa..c74d1a8, 1135 passed, review clean after test fixe
     with plain "C". Fine for job titles. WRONG for skills - use normalize_skill from
     candidate_naming.py:83 for skill comparison, NOT tokens()/overlap().
   Period basis is annual: 2080 hr, 260 day, 52 week, 12 month per year, commented.
+P5 Task 3: complete (c74d1a8..2ac311a, 1155 passed). Fable 9/10 APPROVE; no edits needed here.
+  BINDING DIRECTIVES FOR TASK 5 (from Fable):
+   - widen sourcing_matches.score to Numeric(6,4) in a Task 5 migration and persist 4 places;
+     storing at 2dp would collapse distinct scores into ties on read-back.
+   - order by (score DESC, candidate_id) - eligible.py already orders input by id.
+   - eligible_candidates returns ids only: fetch roles+skills in ONE batched IN(...) query,
+     not per candidate.
+P5 Task 4: complete (2ac311a..59f5214, 1168 passed). Fable 9/10 APPROVE, no fix-now.
+  Fable ran adversarial REPL probes: C++, M(F), A|B, .NET all escape correctly; the
+  naive-sequential corruption case is real and the single-pass longest-first design prevents it.
+  DEFERRED: re.IGNORECASE is simple case-mapping not casefold (theoretical for SG shorthand);
+    a one-char protected code would shred prose - fix belongs at the glossary API min-length.
+  CARRY TO TASK 5: redact must be called on title AND description AND requirements; the
+    test must assert the code is absent from the WHOLE assembled prompt, not one field.
