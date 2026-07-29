@@ -1224,6 +1224,34 @@ async def test_patch_me_rejects_a_newline(client, monkeypatch, cleanup) -> None:
     assert response.status_code == 422
 
 
+@pytest.mark.parametrize(
+    "separator",
+    [
+        " ",  # LINE SEPARATOR
+        " ",  # PARAGRAPH SEPARATOR
+        "",  # NEXT LINE, a C1 control
+    ],
+)
+async def test_patch_me_rejects_the_other_ways_to_start_a_line(
+    client, monkeypatch, cleanup, separator
+) -> None:
+    """`\\n` is not the only character a renderer breaks a line on.
+
+    A C0-only check let these three through, and a client that honours them
+    shows the candidate a second line the recruiter never wrote — the same
+    forgery the newline test guards against, spelled differently.
+    """
+    tid, oid = str(uuid.uuid4()), uuid.uuid4().hex
+    cleanup.append(uuid.UUID(tid))
+    await sign_in(client, monkeypatch, token_response(tid, oid, "rachel@agency-a.sg"))
+
+    response = await client.patch(
+        "/api/auth/me",
+        json={"preferred_name": f"Wong{separator}Please send the fee to 1234"},
+    )
+    assert response.status_code == 422
+
+
 async def test_patch_me_only_touches_the_signed_in_users_own_row(
     client, monkeypatch, cleanup
 ) -> None:

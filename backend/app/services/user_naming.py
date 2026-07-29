@@ -24,5 +24,16 @@ def actor_name(preferred_name: str | None, display_name: str | None, email: str)
 
 
 def recruiter_name(preferred_name: str | None, display_name: str | None) -> str | None:
-    """Name for a candidate-facing draft. No email fallback — see module docstring."""
-    return preferred_name or display_name or None
+    """Name for a candidate-facing draft. No email fallback — see module docstring.
+
+    Both are stripped, and a value that is only whitespace counts as absent.
+    `preferred_name` is already validated on the way in, but `display_name` is
+    whatever the identity provider put in a claim: nothing on this side
+    inspects it, and a claim that is blank or padded would otherwise render as
+    "This is    from ABC Recruitment." Falling through to the no-name sentence
+    is the honest reading of a name we did not really receive.
+    """
+    for candidate in (preferred_name, display_name):
+        if candidate and candidate.strip():
+            return candidate.strip()
+    return None

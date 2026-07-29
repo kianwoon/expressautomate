@@ -40,7 +40,13 @@ export function AccountSetting() {
 }
 
 function AccountForm({ me }: { me: Me }) {
-  const [name, setName] = useState(me.user.preferred_name ?? me.user.display_name ?? "");
+  // Only the chosen name, never the provider's. Pre-filling with
+  // `display_name` meant that opening this page and pressing Save copied
+  // Microsoft's name into `preferred_name` and quietly stopped it ever
+  // updating again — the user would have had no way to know they had opted
+  // out of something. Empty means "no choice made", which is exactly what the
+  // placeholder below says, and saving it empty keeps the provider's name.
+  const [name, setName] = useState(me.user.preferred_name ?? "");
   const [save, setSave] = useState<SaveState>({ status: "idle" });
   const [savedOnce, setSavedOnce] = useState(false);
 
@@ -66,7 +72,7 @@ function AccountForm({ me }: { me: Me }) {
         return;
       }
       const nextMe = (await res.json()) as Me;
-      setName(nextMe.user.preferred_name ?? nextMe.user.display_name ?? "");
+      setName(nextMe.user.preferred_name ?? "");
       setSave({ status: "idle" });
       setSavedOnce(true);
       // `useAuth` fetches once per mount with no shared cache and no push
@@ -102,6 +108,10 @@ function AccountForm({ me }: { me: Me }) {
               value={name}
               onChange={(e) => setName(e.target.value)}
               disabled={save.status === "saving"}
+              // What is being used right now while the box is empty, so the
+              // field can stay empty — meaning "keep following the provider"
+              // — without looking as though no name exists at all.
+              placeholder={me.user.display_name?.trim() || "Your name"}
             />
           </label>
 

@@ -850,6 +850,26 @@ MAX_PREFERRED_NAME_LENGTH = User.__table__.c.preferred_name.type.length
 _CONTROL_CHARACTERS = re.compile(r"[\x00-\x1f\x7f]")
 
 
+def _spans_more_than_one_line(value: str) -> bool:
+    """Whether anything in `value` would start a second line somewhere.
+
+    The regex above is C0 and DEL only. Unicode has several more characters
+    that a renderer treats as a line break — U+2028 and U+2029 above all, and
+    U+0085 — and a chat client that honours them turns "Wong<U+2028>Please
+    send the fee to…" into two lines, the second of which the recruiter never
+    wrote and the candidate has no reason to doubt.
+
+    `str.splitlines` already knows the whole set, which is why the check is
+    delegated to it rather than to a longer character class that would drift
+    from whatever Python learns next.
+
+    Deliberately not extended to bidi overrides, zero-width joiners or emoji.
+    A joiner is ordinary in an emoji and in several Indic scripts, so refusing
+    it would reject real names to prevent nothing this message can suffer.
+    """
+    return len(value.splitlines()) > 1
+
+
 class PreferredNameIn(BaseModel):
     # `str | None` so an explicit `{"preferred_name": null}` is distinguishable
     # from omitting the field entirely once decoded — FastAPI/Pydantic gives a
@@ -877,7 +897,7 @@ async def update_me(request: Request, body: PreferredNameIn) -> dict[str, dict]:
         cleaned: str | None = None
     else:
         stripped = body.preferred_name.strip()
-        if _CONTROL_CHARACTERS.search(stripped):
+        if _CONTROL_CHARACTERS.search(stripped) or _spans_more_than_one_line(stripped):
             raise HTTPException(
                 status_code=422,
                 detail="preferred_name must not contain newlines or control characters",
