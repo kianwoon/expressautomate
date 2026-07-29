@@ -52,6 +52,18 @@ job paying 90,000 a year is a good fit; compared naively it is a catastrophic
 mismatch. `salary_period` exists on both sides for this reason, and
 `opportunity.py:90` has a CHECK keeping the values honest.
 
+**Currency is the same trap wearing a different hat.** 8,000 SGD against 8,000
+USD is not a match, and this product serves an economy where both appear.
+Salary contributes **only when the two currencies agree**, or when both are
+absent. Otherwise the component scores nothing and says why — a missing signal
+is honest, an invented one is not. No conversion: a rate we did not fetch on a
+date we did not record is a fabricated fact.
+
+**Title similarity is normalised token overlap**, computed here. Not a model
+call, not a fuzzy library — a stated rule, because the deterministic half must
+give the same score for the same inputs every time, and anything model-shaped
+inside it breaks that.
+
 **The score is stored as its parts, not as a number.** A recruiter asking why
 somebody is third gets an answer without anything being re-run.
 
@@ -87,9 +99,15 @@ So the guard is three layers, and its limit is stated rather than implied:
 
 1. Known coded strings are removed from what the model sees.
 2. The prompt instructs the model to ignore any requirement about a protected
-   characteristic, and to report it if it encounters one.
+   characteristic, **and to report it if it encounters one. That report is
+   stored on the run and shown to the recruiter** — the same notice the
+   glossary flag produces.
 3. The recruiter sees the flag the job order already carries, and is told
    plainly that the shortlist ignored that requirement.
+
+Layer 2 is what closes most of the plain-words gap, and it only closes it if
+the model's report is persisted rather than discarded. A model told to notice
+something, whose noticing goes nowhere, is not a safeguard — it is a comment.
 
 A fourth layer belongs in a later piece: detecting plainly-worded
 discrimination the glossary cannot, which is a classification problem rather
@@ -106,10 +124,17 @@ is candidate-global and cannot say *to whom*.
 
 **`sourcing_runs`** — one per time a recruiter asks: `opportunity_id`, `state`,
 `candidates_considered`, `shortlisted`, `model_name`, `prompt_version`,
-`created_by`.
+`created_by`, and `protected_attribute_noticed` plus `protected_attribute_note`
+— what layer 2 above reported, so it can be shown rather than lost.
 
 **`sourcing_matches`** — `run_id`, `candidate_id`, `score`, `reasons` (the
 component breakdown), `explanation` and `explanation_evidence`, both nullable.
+Ordered by score then `candidate_id`, so two candidates scoring identically
+appear in the same order every time the run is read.
+
+`candidate_submissions` carries a unique constraint on
+`(tenant_id, candidate_id, client_id)`: a person is either in front of that
+client or not, and a double-click should not make them twice submitted.
 
 All three inherit `TenantScoped` with RLS in the same migration.
 
@@ -159,15 +184,18 @@ plainly that the shortlist ignored that requirement.
 3. A candidate already submitted to this client is excluded.
 4. A monthly expectation is compared correctly against an annual salary.
 5. A coded protected-attribute string never appears in the model prompt.
-6. A model quote that does not verify against the source is dropped, and the
+6. A protected requirement the model reports is stored on the run and shown.
+7. Salary contributes nothing when the two currencies differ, and says why.
+8. Two candidates with identical scores come back in a stable order.
+9. A model quote that does not verify against the source is dropped, and the
    candidate keeps its deterministic score.
-7. The same inputs produce the same deterministic score.
-8. A stored run does not change when candidate data later does.
-9. Skills are normalised on both sides before comparison.
-10. Recording a submission excludes that candidate from the next run.
-11. Deleting a submission puts them back.
-12. RLS is enforced on all three new tables.
-13. No route escapes `/api`.
+10. The same inputs produce the same deterministic score.
+11. A stored run does not change when candidate data later does.
+12. Skills are normalised on both sides before comparison.
+13. Recording a submission excludes that candidate from the next run.
+14. Deleting a submission puts them back, and a repeat submission cannot duplicate.
+15. RLS is enforced on all three new tables.
+16. No route escapes `/api`.
 
 ## Out of scope
 
