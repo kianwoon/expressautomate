@@ -178,12 +178,16 @@ export type CandidatePage = {
   total: number;
   limit: number;
   offset: number;
-  counts: Record<string, number>;
+  /** `null` under `eligible_for`: the server has no honest per-stage number
+   *  for a filtered list, so it sends none rather than one describing a wider
+   *  population than the rows beside it. Draw nothing, never a stale figure. */
+  counts: Record<string, number> | null;
   /** Which first letters currently have anyone behind them, sorted, `#` last.
    *  The server computes it with the stage, status and search filters applied
    *  but *without* `initial`, so picking a letter can never empty the bar that
-   *  was used to pick it. */
-  initials: string[];
+   *  was used to pick it. `null` under `eligible_for`, for the same reason as
+   *  `counts`. */
+  initials: string[] | null;
   /** Present only when the request carried `eligible_for` — how many rows the
    *  regulatory check removed. Absent, not zero, when the filter is off: a
    *  page that was never filtered has nothing to report having excluded. */
@@ -259,12 +263,16 @@ export type Candidates = {
    *  this role" action via the URL, never from a picker on this page. */
   eligibleFor: string | null;
   /** The last counts we were told, kept across a reload so the chips do not
-   *  blink back to nothing every time a filter changes. */
-  counts: Record<string, number>;
+   *  blink back to nothing every time a filter changes. `null` while the
+   *  eligibility filter is on — and the stickiness is exactly why that has to
+   *  travel as a real `null` rather than as "leave what was there": holding
+   *  the previous figures would put the unfiltered totals above the filtered
+   *  rows, which is the misreading this is here to prevent. */
+  counts: Record<string, number> | null;
   /** The last letters we were told, kept across a reload for the same reason
    *  as `counts`: an index bar that greys out entirely on every page change is
-   *  a bar nobody can aim at. */
-  initials: string[];
+   *  a bar nobody can aim at. `null` while filtering, likewise. */
+  initials: string[] | null;
   /** A refetch is in flight over rows we are still showing. The same reasoning
    *  as `counts`, applied to the table: a reload that dropped `state` back to
    *  `loading` would unmount the table and the open detail panel, so archiving
@@ -291,8 +299,8 @@ export function useCandidates(initialEligibleFor: string | null = null): Candida
   const [q, setQRaw] = useState("");
   const [initial, setInitialRaw] = useState<string | null>(null);
   const [eligibleFor, setEligibleForRaw] = useState<string | null>(initialEligibleFor);
-  const [counts, setCounts] = useState<Record<string, number>>(ZERO_COUNTS);
-  const [initials, setInitials] = useState<string[]>(NO_INITIALS);
+  const [counts, setCounts] = useState<Record<string, number> | null>(ZERO_COUNTS);
+  const [initials, setInitials] = useState<string[] | null>(NO_INITIALS);
   const [refreshing, setRefreshing] = useState(true);
   const [nonce, setNonce] = useState(0);
 

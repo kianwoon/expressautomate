@@ -443,8 +443,18 @@ async def list_candidates(
         "total": total,
         "limit": page_limit,
         "offset": offset,
-        "counts": counts,
-        "initials": initials,
+        # Both describe the unfiltered population, so under `?eligible_for=`
+        # they describe a different set of people than `items` does — a chip
+        # reading "All 4,200" above thirty rows, and letters that lead to empty
+        # pages. Recomputing them over the eligible set is not the fix either:
+        # the eligibility pass only ever sees the scan window, so a stage count
+        # taken from it would be a confident number for a question nobody asked
+        # ("how many eligible people are in Screening, among the first five
+        # thousand by recency"). There is no honest number here, so there is no
+        # number: the caller is told to stop drawing the chips and the letter
+        # bar rather than to draw them wrong.
+        "counts": None if eligible_for is not None else counts,
+        "initials": None if eligible_for is not None else initials,
     }
     if excluded_ineligible is not None:
         payload["excluded_ineligible"] = excluded_ineligible

@@ -142,6 +142,34 @@ async def test_regulatory_not_met_removes_a_candidate(agency) -> None:
         assert body["scanned"] == 2
 
 
+async def test_the_chips_and_letter_bar_go_silent_while_filtering(agency) -> None:
+    """`counts` and `initials` describe the unfiltered population, so under
+    `eligible_for` they would sit above rows they do not describe — a chip
+    reading "All 2" over a single eligible row, and a letter leading to an
+    empty page. There is no honest number available (the eligibility pass only
+    ever sees the scan window), so the answer is `null` rather than a figure.
+
+    Recomputing them over the eligible set is the tempting fix and is the
+    thing this test exists to catch: it would look right in every small
+    fixture and be wrong for exactly the agency the scan ceiling was built
+    for."""
+    tid, uid, mailbox_id = agency
+    async with await _client_for(tid, uid) as http:
+        opp_id = await _make_opportunity(tid, mailbox_id, placement_type=MDW)
+        await _make_candidate(http, **_ELIGIBLE)
+        await _make_candidate(http, **{**_ELIGIBLE, "sex": "male"})
+
+        filtered = (await http.get(f"/api/candidates?eligible_for={opp_id}")).json()
+        assert filtered["counts"] is None
+        assert filtered["initials"] is None
+
+        # And the ordinary list still answers both, so this is a filtered-only
+        # silence rather than the facets having been dropped altogether.
+        plain = (await http.get("/api/candidates")).json()
+        assert plain["counts"]["all"] == 2
+        assert plain["initials"]
+
+
 async def test_unknown_does_not_remove_a_candidate(agency) -> None:
     tid, uid, mailbox_id = agency
     async with await _client_for(tid, uid) as http:

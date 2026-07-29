@@ -304,6 +304,7 @@ function Workspace({ role }: { role: string }) {
         <EligibleForBanner
           jobOrder={jobOrder}
           state={state}
+          narrowed={q.trim() !== "" || initial !== null}
           onClear={clearEligibleFor}
         />
       )}
@@ -323,7 +324,16 @@ function Workspace({ role }: { role: string }) {
         <div className="jo-chips" role="group" aria-label="Filter candidates">
           {CHIPS.map((chip) => {
             const active = filter === chip.key;
-            const n = chip.key === null ? counts.all : chip.key === "merged" ? null : counts[chip.key];
+            // No number at all while the eligibility filter is on. The chip
+            // still filters — stage and eligibility compose fine on the
+            // server — but the server counted the unfiltered population, so
+            // the figure would sit above rows it does not describe.
+            const n =
+              counts === null || chip.key === "merged"
+                ? null
+                : chip.key === null
+                  ? counts.all
+                  : counts[chip.key];
             return (
               <button
                 key={chip.label}
@@ -379,7 +389,11 @@ function Workspace({ role }: { role: string }) {
               className="jo-index-key"
               data-active={active ? "yes" : undefined}
               aria-pressed={active}
-              disabled={!initials.includes(letter)}
+              // `null` means the server did not say which letters are
+              // populated, which is not the same as saying none are. Leave
+              // every letter live rather than greying out letters that may
+              // well have eligible people behind them.
+              disabled={initials !== null && !initials.includes(letter)}
               onClick={() => pickInitial(letter)}
             >
               {letter}
@@ -453,10 +467,16 @@ function Workspace({ role }: { role: string }) {
 function EligibleForBanner({
   jobOrder,
   state,
+  narrowed,
   onClear,
 }: {
   jobOrder: Opportunity | null | undefined;
   state: ListState;
+  /** Whether a search or a letter is also active. The scan ceiling applies
+   *  *after* those narrow the set, so when it bites, "the first N examined"
+   *  means the first N of the current search — not of the whole agency. Saying
+   *  which is the difference between a caveat and a misleading one. */
+  narrowed: boolean;
   onClear: () => void;
 }) {
   const roleLine =
@@ -492,10 +512,11 @@ function EligibleForBanner({
         typeof state.page.excluded_ineligible === "number" &&
         (state.page.scan_truncated ? (
           <p className="body jo-sub cand-elig-note" role="alert">
-            Not everyone was checked: only the first {(state.page.scanned ?? 0).toLocaleString()}{" "}
-            candidates examined were scanned, and there may be more beyond it.{" "}
-            {state.page.excluded_ineligible.toLocaleString()} of{" "}
-            {(state.page.scanned ?? 0).toLocaleString()} examined are hidden — they cannot hold this
+            Not everyone was checked. We looked at the{" "}
+            {(state.page.scanned ?? 0).toLocaleString()} most recently updated candidates
+            {narrowed ? " matching your current search" : ""}, and stopped there — eligible people
+            may exist beyond that point. {state.page.excluded_ineligible.toLocaleString()} of those{" "}
+            {(state.page.scanned ?? 0).toLocaleString()} are hidden because they cannot hold this
             permit.
           </p>
         ) : (
