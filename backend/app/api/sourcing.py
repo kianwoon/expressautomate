@@ -1,0 +1,379 @@
+"""Start a shortlist, read one back, and record who was actually submitted.
+
+Its own module rather than more of `opportunities.py` or `candidates.py`,
+because these routes straddle both and belong to neither: a run is started
+against a job order and read back against a job order, but a submission is
+recorded against a candidate, and the two only make sense together. Without
+the submission routes the eligibility rule "not already submitted to this
+client" can never fire, because nothing would ever write the row it reads.
+
+Three things are decided here rather than in the worker, and each of them is
+here for a reason that only holds on this side of the queue:
+
+1. **The client.** There is no `opportunities.client_id`; the link is the
+   email the job order arrived on. Resolving it here means the answer is
+   written onto the run (`client_resolution.py` explains the rule), so the run
+   records which client it excluded against — or says plainly that it could
+   not tell, and that the exclusion therefore did not run. The worker used to
+   infer it on every attempt and substitute a nil UUID on failure, which
+   disabled the exclusion silently: a candidate already put in front of that
+   client would reappear at the top of the next shortlist with nothing
+   anywhere to say why.
+
+2. **The quota.** `SOURCING_DAILY_RUN_QUOTA` is checked before the row is
+   created. Refusing inside the worker would leave `pending` rows nobody will
+   ever process — a queue of runs that look started and never finish.
+
+3. **The failure to queue.** `enqueue` returns a bool and never raises, so a
+   Redis outage would otherwise leave a run `pending` until the stuck-run
+   sweep happened by. The run is moved to `failed` with a sentence saying a
+   retry is worth trying, exactly as `candidate_imports.py` does.
+
+Another agency's job order, run, candidate or submission is a **404, never a
+403**: every read goes through the tenant session, so a foreign id is simply
+not there.
+"""
+
+import uuid
+from datetime import UTC, datetime, time
+
+from fastapi import APIRouter, HTTPException, Request
+from pydantic import BaseModel
+from sqlalchemy import func, select
+
+from app.api.auth import _require_session
+from app.core.config import settings
+from app.core.logging import get_logger
+from app.db.rls import tenant_session
+from app.models.candidate import Candidate
+from app.models.client import Client
+from app.models.opportunity import Opportunity
+from app.models.sourcing import CandidateSubmission, SourcingRun
+from app.services.sourcing.client_resolution import resolve_client
+from app.services.sourcing.persist import read_matches
+from app.workers.queue import enqueue
+
+log = get_logger(__name__)
+
+router = APIRouter(tags=["sourcing"])
+
+# allow-hardcode: a sentence shown to a recruiter, not configuration.
+_ENQUEUE_FAILED = (
+    "This shortlist was created but could not be queued. Try again in a few minutes."
+)
+
+
+def serialize_run(run: SourcingRun) -> dict:
+    """What the panel needs to describe one run.
+
+    `client_id` and `client_unresolved_reason` are both exposed, and the UI
+    needs both: the id says which client the already-submitted exclusion was
+    applied against, and the reason is the only thing that distinguishes "no
+    candidate had been submitted to them" from "we never checked".
+    """
+    return {
+        "id": str(run.id),
+        "opportunity_id": str(run.opportunity_id),
+        "state": run.state,
+        "client_id": str(run.client_id) if run.client_id else None,
+        "client_unresolved_reason": run.client_unresolved_reason,
+        "candidates_considered": run.candidates_considered,
+        "shortlisted": run.shortlisted,
+        "protected_attribute_noticed": run.protected_attribute_noticed,
+        "protected_attribute_note": run.protected_attribute_note,
+        "failure_reason": run.failure_reason,
+        "created_at": run.created_at.isoformat() if run.created_at else None,
+    }
+
+
+def serialize_match(match) -> dict:
+    return {
+        "candidate_id": str(match.candidate_id),
+        # A string, not a float: the column is NUMERIC(6, 4) and binary
+        # floating point cannot hold every value it stores exactly. The four
+        # places are the whole reason the column was widened, so rounding them
+        # away on the way out would undo that in the last step.
+        "score": str(match.score),
+        "reasons": match.reasons,
+        "explanation": match.explanation,
+        "explanation_evidence": match.explanation_evidence,
+    }
+
+
+class SubmissionRequest(BaseModel):
+    client_id: uuid.UUID
+    opportunity_id: uuid.UUID | None = None
+
+
+async def _opportunity_or_404(session, opportunity_id: uuid.UUID) -> Opportunity:
+    """One job order, read under the tenant policy so a foreign id is a 404."""
+    record = (
+        await session.execute(select(Opportunity).where(Opportunity.id == opportunity_id))
+    ).scalar_one_or_none()
+    if record is None:
+        raise HTTPException(status_code=404, detail="Job order not found")
+    return record
+
+
+def _midnight_utc() -> datetime:
+    """The start of the quota window.
+
+    UTC, which is 8am in Singapore — the same window `CV_DAILY_PARSE_QUOTA`
+    uses, and deliberately the same rather than a second definition of "today"
+    for a recruiter to reconcile.
+    """
+    return datetime.combine(datetime.now(UTC).date(), time.min, tzinfo=UTC)
+
+
+@router.post("/opportunities/{opportunity_id}/sourcing", status_code=202)
+async def start_sourcing(request: Request, opportunity_id: uuid.UUID) -> dict:
+    """Queue a shortlist for this job order.
+
+    202, not 201: the row exists but the answer does not. Nothing is scored
+    here — an agency's whole candidate database plus a model call has no
+    business inside a request.
+    """
+    user_uuid, tenant_uuid = _require_session(request)
+
+    async with tenant_session(tenant_uuid) as session:
+        await _opportunity_or_404(session, opportunity_id)
+
+        # Counted, and refused, before anything is written. A run created and
+        # then rejected would be a `pending` row no worker will ever claim.
+        used = (
+            await session.execute(
+                select(func.count())
+                .select_from(SourcingRun)
+                .where(SourcingRun.created_at >= _midnight_utc())
+            )
+        ).scalar_one()
+        if used >= settings.SOURCING_DAILY_RUN_QUOTA:
+            raise HTTPException(
+                status_code=429,
+                detail=(
+                    f"This agency has started {settings.SOURCING_DAILY_RUN_QUOTA} "
+                    "shortlists today. More can be started tomorrow."
+                ),
+            )
+
+        resolution = await resolve_client(
+            session, tenant_id=tenant_uuid, opportunity_id=opportunity_id
+        )
+        run_id = uuid.uuid4()
+        session.add(
+            SourcingRun(
+                id=run_id,
+                tenant_id=tenant_uuid,
+                opportunity_id=opportunity_id,
+                state=SourcingRun.PENDING,
+                client_id=resolution.client_id,
+                client_unresolved_reason=resolution.reason,
+                created_by=user_uuid,
+            )
+        )
+        await session.commit()
+
+    if resolution.client_id is None:
+        # Logged as well as stored, because "the exclusion did not run" is the
+        # kind of thing that is only noticed later, from the outside.
+        log.info(
+            "sourcing_client_unresolved",
+            sourcing_run_id=str(run_id),
+            opportunity_id=str(opportunity_id),
+        )
+
+    # Enqueued after the commit, because the job reads the row it is named
+    # for. The client goes with it rather than being read back off the row:
+    # the queue hop should not depend on this write being visible first.
+    if not await enqueue(
+        "run_sourcing",
+        tenant_id=str(tenant_uuid),
+        opportunity_id=str(opportunity_id),
+        run_id=str(run_id),
+        client_id=str(resolution.client_id) if resolution.client_id else None,
+    ):
+        log.warning("sourcing_enqueue_failed", sourcing_run_id=str(run_id))
+        async with tenant_session(tenant_uuid) as session:
+            record = await session.get(SourcingRun, run_id)
+            record.state = SourcingRun.FAILED
+            record.failure_reason = _ENQUEUE_FAILED
+            body = serialize_run(record)
+            await session.commit()
+            return body
+
+    async with tenant_session(tenant_uuid) as session:
+        return serialize_run(await session.get(SourcingRun, run_id))
+
+
+@router.get("/opportunities/{opportunity_id}/sourcing")
+async def latest_sourcing(request: Request, opportunity_id: uuid.UUID) -> dict:
+    """The most recent run for this job order, and its matches.
+
+    A job order with no run yet answers 200 with a null run rather than 404:
+    "there is no shortlist" is a state of a job order that exists, and a 404
+    here would be indistinguishable from another agency's id.
+    """
+    _user_uuid, tenant_uuid = _require_session(request)
+
+    async with tenant_session(tenant_uuid) as session:
+        await _opportunity_or_404(session, opportunity_id)
+        run = (
+            await session.execute(
+                select(SourcingRun)
+                .where(SourcingRun.opportunity_id == opportunity_id)
+                # `id` breaks the tie: two runs started in the same
+                # transaction share `created_at`, and "the latest" must not
+                # depend on which one the plan returns first.
+                .order_by(SourcingRun.created_at.desc(), SourcingRun.id.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if run is None:
+            return {"run": None, "matches": []}
+        return await _with_matches(session, tenant_uuid, run)
+
+
+@router.get("/opportunities/{opportunity_id}/sourcing/{run_id}")
+async def one_sourcing_run(
+    request: Request, opportunity_id: uuid.UUID, run_id: uuid.UUID
+) -> dict:
+    """An earlier run, so "the list I sent on Tuesday" survives.
+
+    A run is a record rather than a live query — that is why `sourcing_runs`
+    stores its matches instead of recomputing them — and a record nobody can
+    address by id is not much of one.
+    """
+    _user_uuid, tenant_uuid = _require_session(request)
+
+    async with tenant_session(tenant_uuid) as session:
+        await _opportunity_or_404(session, opportunity_id)
+        run = (
+            await session.execute(
+                select(SourcingRun).where(
+                    SourcingRun.id == run_id,
+                    # A real run under the wrong job order is a 404 too: the
+                    # URL asserts a relationship, and answering anyway would
+                    # let the path be walked for run ids.
+                    SourcingRun.opportunity_id == opportunity_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if run is None:
+            raise HTTPException(status_code=404, detail="Shortlist not found")
+        return await _with_matches(session, tenant_uuid, run)
+
+
+async def _with_matches(session, tenant_uuid: uuid.UUID, run: SourcingRun) -> dict:
+    """One run and its matches, best first and stable — `read_matches` orders
+    by score descending then `candidate_id`, so two readers of the same stored
+    run see the same list even where scores tie."""
+    matches = await read_matches(session, tenant_id=tenant_uuid, run_id=run.id)
+    return {"run": serialize_run(run), "matches": [serialize_match(m) for m in matches]}
+
+
+@router.post("/candidates/{candidate_id}/submissions", status_code=201)
+async def record_submission(
+    request: Request, candidate_id: uuid.UUID, body: SubmissionRequest
+) -> dict:
+    """Record that this person was put in front of this client.
+
+    The one durable fact the shortlist exists to produce, and the only thing
+    that makes the eligibility exclusion mean anything.
+
+    The client and the job order are looked up rather than trusted: both are
+    read through the tenant session first, so an id belonging to another
+    agency is a 404 here rather than a foreign key violation later. A repeat
+    is 409, not a second row — `uq_candidate_submissions_once_per_client` says
+    a person is either in front of a client or not, and a double-click must
+    not turn that into a workflow.
+    """
+    user_uuid, tenant_uuid = _require_session(request)
+
+    async with tenant_session(tenant_uuid) as session:
+        candidate = (
+            await session.execute(select(Candidate).where(Candidate.id == candidate_id))
+        ).scalar_one_or_none()
+        if candidate is None:
+            raise HTTPException(status_code=404, detail="Candidate not found")
+
+        client = (
+            await session.execute(select(Client).where(Client.id == body.client_id))
+        ).scalar_one_or_none()
+        if client is None:
+            raise HTTPException(status_code=404, detail="Client not found")
+
+        if body.opportunity_id is not None:
+            await _opportunity_or_404(session, body.opportunity_id)
+
+        existing = (
+            await session.execute(
+                select(CandidateSubmission).where(
+                    CandidateSubmission.candidate_id == candidate_id,
+                    CandidateSubmission.client_id == body.client_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if existing is not None:
+            raise HTTPException(
+                status_code=409,
+                detail="This candidate has already been submitted to this client.",
+            )
+
+        record = CandidateSubmission(
+            id=uuid.uuid4(),
+            tenant_id=tenant_uuid,
+            candidate_id=candidate_id,
+            client_id=body.client_id,
+            opportunity_id=body.opportunity_id,
+            submitted_by=user_uuid,
+        )
+        session.add(record)
+        await session.flush()
+        # `submitted_at` is a server default, so it is unset on the object
+        # until it is read back. Refreshed explicitly rather than left to lazy
+        # load: an async session cannot fetch an expired attribute on
+        # attribute access, and the response would be a MissingGreenlet.
+        await session.refresh(record)
+        body_out = _serialize_submission(record)
+        await session.commit()
+        return body_out
+
+
+@router.delete("/candidates/{candidate_id}/submissions/{submission_id}", status_code=200)
+async def withdraw_submission(
+    request: Request, candidate_id: uuid.UUID, submission_id: uuid.UUID
+) -> dict:
+    """Undo a submission recorded in error, restoring the candidate's
+    eligibility for that client.
+
+    Deleted rather than flagged: this table answers one boolean question and
+    carries no status column on purpose, so a withdrawn submission that stayed
+    as a row would keep excluding the candidate while claiming not to.
+    """
+    _user_uuid, tenant_uuid = _require_session(request)
+
+    async with tenant_session(tenant_uuid) as session:
+        record = (
+            await session.execute(
+                select(CandidateSubmission).where(
+                    CandidateSubmission.id == submission_id,
+                    CandidateSubmission.candidate_id == candidate_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if record is None:
+            raise HTTPException(status_code=404, detail="Submission not found")
+        body = _serialize_submission(record)
+        await session.delete(record)
+        await session.commit()
+        return {"deleted": True, "submission": body}
+
+
+def _serialize_submission(record: CandidateSubmission) -> dict:
+    return {
+        "id": str(record.id),
+        "candidate_id": str(record.candidate_id),
+        "client_id": str(record.client_id),
+        "opportunity_id": str(record.opportunity_id) if record.opportunity_id else None,
+        "submitted_at": record.submitted_at.isoformat() if record.submitted_at else None,
+    }

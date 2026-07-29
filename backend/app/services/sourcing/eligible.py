@@ -47,26 +47,51 @@ _ELIGIBLE = text(
     """
 )
 
+# The same question with the third rule removed, for a job order whose client
+# could not be resolved (`client_resolution.py`). A separate statement rather
+# than binding NULL into the one above: `s.client_id = NULL` is never true, so
+# the two do return the same rows, but it returns them by accident of
+# three-valued logic — and a reader checking whether the exclusion applies
+# would have to work that out. The caller says which question it is asking.
+#
+# allow-hardcode: a SQL statement, not a phrase list.
+_ELIGIBLE_ANY_CLIENT = text(
+    """
+    SELECT c.id
+    FROM candidates c
+    WHERE c.tenant_id = :tenant_id
+      AND c.record_status = :active
+      AND c.pipeline_stage <> :placed
+    ORDER BY c.id
+    """
+)
+
 
 async def eligible_candidates(
     session: AsyncSession,
     *,
     tenant_id: uuid.UUID,
-    client_id: uuid.UUID,
+    client_id: uuid.UUID | None,
 ) -> list[uuid.UUID]:
     """The candidate ids that may be ranked for this client, oldest key first.
 
     Ids rather than rows: the scorer needs roles and skills as well, and the
     step that loads those should decide what it fetches. A stable `ORDER BY`
     so a rerun of the same job considers the same people in the same order.
+
+    `client_id=None` means the caller could not tell which client this job
+    order is for, and the third rule is dropped for this run. That is the
+    honest answer — the submissions rule can only exclude somebody already put
+    in front of a *particular* client — but it is also the quiet one, which is
+    why the run that asks for it records `client_unresolved_reason` alongside.
     """
     result = await session.execute(
-        _ELIGIBLE,
+        _ELIGIBLE if client_id is not None else _ELIGIBLE_ANY_CLIENT,
         {
             "tenant_id": tenant_id,
-            "client_id": client_id,
             "active": Candidate.ACTIVE,
             "placed": Candidate.PLACED,
+            **({"client_id": client_id} if client_id is not None else {}),
         },
     )
     return [row[0] for row in result]

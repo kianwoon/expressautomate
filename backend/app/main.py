@@ -26,6 +26,7 @@ from app.api import (
     mailbox,
     notifications,
     opportunities,
+    sourcing,
     telegram_webhook,
     whatsapp_webhook,
 )
@@ -120,6 +121,16 @@ async def _body_store_misconfigured(
 api.include_router(auth.router)
 api.include_router(mailbox.router)
 api.include_router(graph_webhook.router)
+# Before `opportunities` and before `candidates`, deliberately, and for the
+# reason `candidate_imports` is below: a literal segment declared after a
+# `{param}` route on the same prefix is never reached. `opportunities.router`
+# owns `/opportunities/{opportunity_id}/review` today and `candidates.router`
+# owns `/candidates/{candidate_id}`, so `/candidates/{id}/submissions` in
+# particular would be shadowed the moment `candidates` grew a matching
+# `{candidate_id}/{something}` route. Declaring the narrower paths first makes
+# that ordering explicit rather than accidental; `test_sourcing_api.py` asserts
+# each of these paths still resolves.
+api.include_router(sourcing.router)
 api.include_router(opportunities.router)
 api.include_router(activity.router)
 api.include_router(glossary.router)

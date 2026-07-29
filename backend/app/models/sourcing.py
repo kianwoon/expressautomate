@@ -125,6 +125,21 @@ class SourcingRun(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
         index=True,
     )
 
+    # The client the "not already submitted to this client" rule was applied
+    # against, resolved once at enqueue time rather than re-inferred on every
+    # replay. Nullable because it genuinely cannot always be resolved — there
+    # is no `opportunities.client_id`, only the `client_mentions` written
+    # against the email the job order arrived on — and in that case the run
+    # still happens, with `client_unresolved_reason` saying what was skipped.
+    # A null here and a null there together would be the old silent failure.
+    client_id: Mapped[uuid.UUID | None] = mapped_column(PgUUID(as_uuid=True), index=True)
+    client_unresolved_reason: Mapped[str | None] = mapped_column(Text)
+
+    # Why a `failed` run failed, in a sentence a recruiter can act on. A run
+    # has no error report file the way an import does, so without this column
+    # an infrastructure failure is a dead row with nothing on it.
+    failure_reason: Mapped[str | None] = mapped_column(Text)
+
     state: Mapped[str] = mapped_column(String(16), nullable=False, default=PENDING)
     candidates_considered: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     shortlisted: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -146,6 +161,15 @@ class SourcingRun(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
 
     __table_args__ = (
         UniqueConstraint("tenant_id", "id", name="uq_sourcing_runs_tenant_id_id"),
+        # Composite, so a run cannot name another agency's client. No
+        # `ondelete`: a composite `SET NULL` would null `tenant_id` (NOT NULL
+        # here), and `CASCADE` would delete a run a recruiter may already have
+        # acted on. Clients are merged or archived, not deleted.
+        ForeignKeyConstraint(
+            ["tenant_id", "client_id"],
+            ["clients.tenant_id", "clients.id"],
+            name="fk_sourcing_runs_client_same_tenant",
+        ),
         CheckConstraint(
             "state IN ('pending','running','done','failed')",
             name="ck_sourcing_runs_state",

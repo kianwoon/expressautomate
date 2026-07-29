@@ -35,7 +35,7 @@ this person yet.
 import uuid
 from datetime import UTC, date, datetime
 
-from sqlalchemy import select, text, update
+from sqlalchemy import select, update
 
 from app.core.config import settings
 from app.core.logging import get_logger
@@ -63,34 +63,6 @@ log = get_logger(__name__)
 # replaying the job on either must change nothing.
 _RESUMABLE = (SourcingRun.PENDING, SourcingRun.RUNNING)
 
-# Which client this job order is for. There is no `opportunities.client_id`:
-# the link is the email the job order arrived on, and `client_mentions` is
-# what `match_client` wrote against that email. Needed because eligibility's
-# third rule — do not propose the same person to the same client twice — is
-# the only part of the run that is about the client rather than the vacancy.
-#
-# allow-hardcode: a SQL statement, not a phrase list.
-_CLIENT_FOR_OPPORTUNITY = text(
-    """
-    SELECT m.client_id
-    FROM client_mentions m
-    JOIN opportunities o
-      ON o.email_message_id = m.email_message_id
-     AND o.tenant_id = m.tenant_id
-    WHERE o.id = :opportunity_id
-      AND o.tenant_id = :tenant_id
-    ORDER BY m.created_at
-    LIMIT 1
-    """
-)
-
-# Stands in for "this job order resolved to no client". Every candidate is
-# then eligible, which is the honest answer: the submissions rule can only
-# exclude somebody already put in front of a *particular* client, and there
-# isn't one. A real id is never this value, so the NOT EXISTS matches nothing
-# rather than excluding at random.
-_NO_CLIENT = uuid.UUID(int=0)
-
 
 def body_store():
     """Indirection point, so tests can swap in the in-memory store."""
@@ -107,8 +79,27 @@ def _today() -> date:
     return datetime.now(UTC).date()
 
 
-async def run_sourcing(ctx, *, tenant_id: str, opportunity_id: str, run_id: str) -> None:
+async def run_sourcing(
+    ctx,
+    *,
+    tenant_id: str,
+    opportunity_id: str,
+    run_id: str,
+    client_id: str | None = None,
+) -> None:
     """Rank the eligible candidates for one job order and store the result.
+
+    `client_id` is decided by the route that created the run, not here. It was
+    inferred here once, from `client_mentions` on the source email, with a nil
+    UUID standing in when it could not be — which silently disabled the
+    already-submitted exclusion and left no trace that it had. Resolution now
+    happens once, at enqueue, and is written to `sourcing_runs.client_id`.
+
+    The argument is optional because `rescan_stuck` re-enqueues a stranded run
+    from the sweep resolver, which carries routing ids only; that path falls
+    back to the column, which is the second reason the column exists. Passing
+    it explicitly still matters: the enqueue path should not depend on its own
+    write having landed before the worker reads it.
 
     Failure discipline mirrors `run_candidate_import`. The row moves to
     `running` before the long operation, because arq only reschedules on
@@ -122,6 +113,7 @@ async def run_sourcing(ctx, *, tenant_id: str, opportunity_id: str, run_id: str)
     tenant = uuid.UUID(tenant_id)
     opportunity_key = uuid.UUID(opportunity_id)
     record = uuid.UUID(run_id)
+    client = uuid.UUID(client_id) if client_id else None
 
     async with tenant_session(tenant) as session:
         row = (
@@ -139,6 +131,13 @@ async def run_sourcing(ctx, *, tenant_id: str, opportunity_id: str, run_id: str)
                 state=row.state,
             )
             return
+
+        # The sweep re-enqueues with routing ids only, so fall back to what
+        # the route wrote on the row. `None` on both sides is a real answer,
+        # not a missing one: this job order resolved to no client, and
+        # `client_unresolved_reason` on the same row says so.
+        if client is None:
+            client = row.client_id
 
         # The claim is a conditional UPDATE, not the read above followed by a
         # write. The read is only good enough to log with: between it and the
@@ -196,15 +195,8 @@ async def run_sourcing(ctx, *, tenant_id: str, opportunity_id: str, run_id: str)
             await _fail(tenant, record)
             return
 
-        client_id = (
-            await session.execute(
-                _CLIENT_FOR_OPPORTUNITY,
-                {"opportunity_id": opportunity_key, "tenant_id": tenant},
-            )
-        ).scalar_one_or_none() or _NO_CLIENT
-
         candidate_ids = await eligible_candidates(
-            session, tenant_id=tenant, client_id=client_id
+            session, tenant_id=tenant, client_id=client
         )
         loaded = await load_scoring_inputs(
             session, tenant_id=tenant, candidate_ids=candidate_ids
