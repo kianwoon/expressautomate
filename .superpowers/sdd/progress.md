@@ -151,3 +151,13 @@ P5 cross-task review of Tasks 1-4 (Fable, 8.5/10 APPROVE WITH CHANGES). Nothing 
     candidate classes remain unexported (pre-existing, not worsened).
   NOTE: test-env.sh was NOT modified in this range - verified empty diff. It was the Piece 2
     environment fix, already ledgered above.
+P5 Task 5: complete (46b903a..b02a24e, 1180 passed). Fable 8.5/10; §15 hole closed - evidence
+  of exactly "Not mentioned" set is_missing, so verify() returned True VACUOUSLY and an
+  unlocated quote reached the caller. _supported now also rejects is_missing / start_char None.
+  Protected reports are unioned across passes (a second pass could erase the first's report).
+  Explanations deduped by candidate_id.
+  DEFERRED, ruled correct: no CV truncation cap (truncating would make honest quotes
+    unverifiable); per-response escalation (per-candidate would multiply cost and latency).
+  CARRY TO TASK 6: call explain_matches(opportunity, candidates: list[MatchCandidate], *,
+    codes=<OpportunityCode rows>, llm=None) -> (list[Explanation], ProtectedReport).
+    It sorts internally. Store the ProtectedReport on the run. Log assembled prompt length.
