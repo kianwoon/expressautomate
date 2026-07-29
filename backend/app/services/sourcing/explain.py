@@ -270,6 +270,15 @@ def _supported(entry: dict, candidate: MatchCandidate) -> Explanation | None:
         return None
     if not verify(located, candidate.cv_text or ""):
         return None
+    # verify() is vacuously True for a field whose value is "Not mentioned" —
+    # it never locates anything, because there is nothing to locate. That is
+    # correct for optional CV fields but wrong here: `quote` came from the
+    # model's `evidence`, not a value it was allowed to leave blank, and a
+    # candidate explanation with no located quote is exactly the invented
+    # reason §15 exists to block. Reject anything verify() didn't actually
+    # find a span for, whatever it returned.
+    if located.is_missing or located.start_char is None:
+        return None
     return Explanation(
         candidate_id=candidate.candidate_id,
         reason=reason,
@@ -300,17 +309,26 @@ def _read(data, asked: dict) -> tuple[list[Explanation], list[str], bool]:
     ]
 
     kept: list[Explanation] = []
+    seen_ids: set[str] = set()
     fell_short = False
     for entry in data.get("explanations") or []:
         if not isinstance(entry, dict):
             fell_short = True
             continue
-        candidate = asked.get(str(entry.get("candidate_id")))
+        entry_id = str(entry.get("candidate_id"))
+        candidate = asked.get(entry_id)
         if candidate is None:
             # An id we never sent. Nothing to verify it against, and inventing
             # the mapping would attach a reason to the wrong person.
             fell_short = True
             continue
+        if entry_id in seen_ids:
+            # Two entries naming the same candidate: the report promises one
+            # row per candidate, so only the first entry for an id is even
+            # considered — a rejected first entry does not hand the slot to
+            # a later duplicate.
+            continue
+        seen_ids.add(entry_id)
         explanation = _supported(entry, candidate)
         if explanation is None:
             fell_short = True
@@ -374,10 +392,19 @@ async def explain_matches(
                     "reasoning_effort": effort,
                 },
             )
-            kept, reported, fell_short = _read(result.data, asked)
+            kept, pass_reported, fell_short = _read(result.data, asked)
         except (LLMInvalidJSON, ValueError) as exc:
             log.warning("sourcing_explanation_unusable", model=model, error=repr(exc))
             continue
+
+        # Union, never replace: the second pass answers the same job order
+        # with a different model, not a clean slate, and a protected report
+        # exists precisely to catch what redaction couldn't. A first pass that
+        # noticed a plainly-worded requirement and a second that didn't must
+        # not make that requirement disappear.
+        for item in pass_reported:
+            if item not in reported:
+                reported.append(item)
 
         answered = True
         if not fell_short:
@@ -386,7 +413,7 @@ async def explain_matches(
 
     if not answered:
         log.warning("sourcing_explanation_gave_up", candidates=len(explainable))
-        kept, reported = [], []
+        kept = []
 
     # Only explanations still above the bar survive the second pass. Everything
     # dropped here leaves the candidate with their deterministic score, which is

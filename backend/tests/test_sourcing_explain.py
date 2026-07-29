@@ -242,6 +242,65 @@ async def test_only_the_top_n_are_explained():
     assert "c2" not in spy.prompts[0]
 
 
+async def test_not_mentioned_evidence_yields_no_explanation():
+    """§15: verify() is vacuously True for "Not mentioned" evidence, because
+    there is nothing to locate. That must not read as support — a quote that
+    was never located is not a quote at all. Fails against the pre-fix code,
+    which called verify() and returned an Explanation with None offsets.
+    """
+    not_mentioned = _answer("Not mentioned")
+    spy = _Spy(not_mentioned, not_mentioned)
+    explanations, _ = await explain_matches(_Opportunity(), [_candidate()], llm=spy)
+
+    assert explanations == []
+    assert spy.models == ["test/fast", "test/strong"]
+
+
+async def test_a_protected_report_from_the_first_pass_survives_a_silent_second():
+    """A first pass that notices a plain-worded requirement must not be
+    overwritten by a second pass that missed it — union, not replace."""
+    spy = _Spy(
+        _answer(
+            "Managed a team of forty across three offices",  # unsupported: forces escalation
+            protected=["Asks for candidates under 35."],
+        ),
+        _answer("Led Boolean search training"),  # second pass reports nothing
+    )
+    explanations, report = await explain_matches(
+        _Opportunity(), [_candidate()], llm=spy
+    )
+
+    assert spy.models == ["test/fast", "test/strong"]
+    assert len(explanations) == 1
+    assert report.noticed is True
+    assert report.requirements == ["Asks for candidates under 35."]
+
+
+async def test_duplicate_candidate_ids_keep_only_the_first():
+    payload = {
+        "protected_requirements": [],
+        "explanations": [
+            {
+                "candidate_id": "c1",
+                "reason": "Runs Boolean search training.",
+                "evidence": "Led Boolean search training",
+                "confidence": 0.9,
+            },
+            {
+                "candidate_id": "c1",
+                "reason": "Second, contradicting entry.",
+                "evidence": "Senior Recruiter at KLN Logistics",
+                "confidence": 0.95,
+            },
+        ],
+    }
+    spy = _Spy(payload)
+    explanations, _ = await explain_matches(_Opportunity(), [_candidate()], llm=spy)
+
+    assert len(explanations) == 1
+    assert explanations[0].reason == "Runs Boolean search training."
+
+
 async def test_an_unparseable_answer_from_both_passes_explains_nobody():
     spy = _Spy(None, None)
     explanations, report = await explain_matches(
