@@ -52,6 +52,7 @@ def build_tasks() -> list[PeriodicTask]:
         renew_subscriptions,
         rescan_stuck,
         sweep_stale_wa_sends,
+        sweep_wa_liveness,
     )
 
     async def _rescan() -> None:
@@ -88,6 +89,13 @@ def build_tasks() -> list[PeriodicTask]:
         # `sweep_stale_wa_sends` in `app/workers/tasks.py`.
         await sweep_stale_wa_sends()
 
+    async def _sweep_wa_liveness() -> None:
+        # Plan §6's liveness sweep, background-check half: asks the gateway
+        # about every `connected`/`reconnecting` session so a dead socket is
+        # noticed even with no browser open. See `sweep_wa_liveness` in
+        # `app/workers/tasks.py`.
+        await sweep_wa_liveness()
+
     return [
         PeriodicTask("rescan_stuck", settings.RESCAN_INTERVAL_SECONDS, _rescan),
         PeriodicTask(
@@ -107,6 +115,11 @@ def build_tasks() -> list[PeriodicTask]:
             "sweep_stale_wa_sends",
             settings.WA_SWEEP_INTERVAL_SECONDS,
             _sweep_wa_sends,
+        ),
+        PeriodicTask(
+            "sweep_wa_liveness",
+            settings.WA_LIVENESS_SWEEP_INTERVAL_SECONDS,
+            _sweep_wa_liveness,
         ),
     ]
 

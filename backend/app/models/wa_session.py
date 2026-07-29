@@ -108,6 +108,20 @@ class WaSession(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
     qr_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_connected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
+    # Plan §6's background liveness sweep (`20260729_2400_wa_liveness_sweep.py`,
+    # `app.workers.tasks.sweep_wa_liveness`): when a background check last
+    # actually reached the gateway for this session. Deliberately distinct
+    # from the `last_checked_at` field `GET /api/wa/session` returns — that
+    # one is `datetime.now()` at request time, "when this browser request
+    # looked" (`app/api/wa_gateway.py#_call_gateway`), a different fact from
+    # "when the sweep last ran". Written only by
+    # `wa_sweep_claim_due_sessions`/`wa_sweep_revert_check`, and only when a
+    # check genuinely happened (§15) — never guessed forward on a gateway
+    # timeout.
+    last_liveness_check_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+
     # Daily cap (plan §9). Counter plus the date it counts, so the reset is
     # "sent_date <> today" rather than a scheduled job that can fail to run.
     sent_today: Mapped[int] = mapped_column(

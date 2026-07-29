@@ -552,6 +552,22 @@ class Settings(BaseSettings):
     # Independent of NOTIFY_SWEEP_INTERVAL_SECONDS on purpose — a different
     # concern with a different tolerable latency.
     WA_SWEEP_INTERVAL_SECONDS: float = Field(default=120.0, gt=0)
+    # Session liveness sweep (plan §6, the background half —
+    # `20260729_2400_wa_liveness_sweep.py`). A `connected`/`reconnecting`
+    # session whose `last_liveness_check_at` is older than this (or NULL) is
+    # due: the sweep asks the gateway's status endpoint, which is enough to
+    # bring the database up to date because the gateway already pushes
+    # `POST /api/wa/internal/status` on every change — asking does not need
+    # to write `status` itself (§6's single-writer invariant). Independent of
+    # WA_SWEEP_INTERVAL_SECONDS: that sweep resolves stale sends, this one
+    # resolves stale knowledge about a session's socket.
+    WA_LIVENESS_CHECK_STALE_MINUTES: int = Field(default=15, gt=0)
+    # How often the supervisor runs the liveness sweep.
+    WA_LIVENESS_SWEEP_INTERVAL_SECONDS: float = Field(default=180.0, gt=0)
+    # Bound on one sweep call — same reasoning as WA_SWEEP_LIMIT-equivalent
+    # constants elsewhere: caps how long one call holds FOR UPDATE SKIP
+    # LOCKED. The SQL function itself also caps at 500.
+    WA_LIVENESS_SWEEP_LIMIT: int = Field(default=200, gt=0)
     # Telegram echoes this in `X-Telegram-Bot-Api-Secret-Token`. Without it the
     # webhook accepts anything that can reach the URL, and the URL is public.
     TELEGRAM_WEBHOOK_SECRET: str = ""

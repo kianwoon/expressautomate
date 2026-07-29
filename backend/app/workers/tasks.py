@@ -497,3 +497,89 @@ async def sweep_stale_wa_sends() -> int:
         # user-visible half of this.
         log.warning("wa_sends_swept_to_unknown", count=len(rows))
     return len(rows)
+
+
+# See `20260729_2400_wa_liveness_sweep.py` for the full reasoning; restated
+# briefly: claim stamps `last_liveness_check_at = now()` up front so two
+# concurrent sweeps cannot both pick the same session (the SKIP LOCKED
+# compare-and-set), and returns each row's *previous* value so this module
+# can put it back if the gateway never answers.
+_WA_LIVENESS_CLAIM = text(
+    "SELECT * FROM wa_sweep_claim_due_sessions(:stale_minutes, :limit)"
+)
+_WA_LIVENESS_REVERT = text("SELECT wa_sweep_revert_check(:id, :previous)")
+
+
+async def sweep_wa_liveness() -> int:
+    """Ask the gateway about every session that claims to be live.
+
+    Plan §6, the gap this closes: `last_checked_at` on `GET /api/wa/session`
+    only ever meant "when a browser last asked", so a session nobody has
+    opened settings for in days looked current even if its socket died
+    silently. This sweep is the background half — it asks, on a clock, so
+    staleness is bounded even with no browser open.
+
+    **This function never writes `wa_sessions.status`.** Per §6 the gateway's
+    `POST /api/wa/internal/status` callback is the only writer of that
+    column, and it already fires whenever a session's status changes — so
+    calling `WaGatewayClient.status` is sufficient to bring the database up
+    to date; this task only has to ask. Writing status here would be a
+    second writer racing the callback, exactly what §6 rules out.
+
+    Only `connected`/`reconnecting` sessions are ever claimed (enforced in
+    `wa_sweep_claim_due_sessions`'s WHERE clause) — a `disconnected` or
+    `logged_out` session has nothing to check, and asking would make the
+    gateway wake a socket nobody asked it to hold open.
+
+    **`last_liveness_check_at` is written only when the gateway actually
+    answered** (§15). The claim function stamps it optimistically to win the
+    SKIP LOCKED race; if the gateway call raises `GatewayUnreachableError` for
+    that session, this function reverts the stamp to what it held before the
+    claim (`wa_sweep_revert_check`). Leaving `now()` behind on a call that
+    never got an answer would assert a check that did not happen — the old
+    timestamp is the honest state, however stale it looks.
+    """
+    if not settings.wa_gateway_configured():
+        # Same "a new service starts with zero env vars" reasoning as
+        # `_call_gateway` in app/api/wa_gateway.py: nothing to check yet is a
+        # real deployment state, not an error worth logging every tick.
+        return 0
+
+    from app.services.wa_gateway import GatewayUnreachableError, WaGatewayClient
+
+    async with SessionLocal() as session:
+        claimed = (
+            await session.execute(
+                _WA_LIVENESS_CLAIM,
+                {
+                    "stale_minutes": settings.WA_LIVENESS_CHECK_STALE_MINUTES,
+                    "limit": settings.WA_LIVENESS_SWEEP_LIMIT,
+                },
+            )
+        ).all()
+        await session.commit()
+
+    if not claimed:
+        return 0
+
+    client = WaGatewayClient()
+    checked = 0
+    unreachable = 0
+    for row in claimed:
+        try:
+            await client.status(str(row.tenant_id), str(row.user_id))
+        except GatewayUnreachableError:
+            unreachable += 1
+            async with SessionLocal() as session:
+                await session.execute(
+                    _WA_LIVENESS_REVERT, {"id": row.id, "previous": row.previous_check_at}
+                )
+                await session.commit()
+            continue
+        checked += 1
+
+    if unreachable:
+        log.warning(
+            "wa_liveness_sweep_gateway_unreachable", checked=checked, unreachable=unreachable
+        )
+    return checked
