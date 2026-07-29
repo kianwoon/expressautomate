@@ -13,7 +13,8 @@ import uuid
 
 import openpyxl
 import pytest
-from sqlalchemy import text
+from sqlalchemy import Select, text
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.models.candidate import CandidateImport
@@ -76,6 +77,41 @@ async def _row(import_id: uuid.UUID):
                 {"i": import_id},
             )
         ).one()
+
+
+def _race_after_first_select(monkeypatch, import_id: uuid.UUID, new_state: str) -> None:
+    """Move the row to `new_state` in another session, the instant after the
+    first `SELECT ... candidate_imports` this test's code issues returns.
+
+    This is what "the pre-check reads one thing, the conditional claim finds
+    another" looks like when forced deterministically: the row genuinely
+    changes underneath the code between its read and its write, on a commit
+    from a different session, exactly as a concurrent undo or a concurrent
+    job pickup would. `AsyncSession.execute` is patched rather than the
+    caller's own session, because the caller never hands this test a session
+    to hook — patching the class fires for exactly the query that matters and
+    nothing else needs to know.
+    """
+    original = AsyncSession.execute
+    fired = {"done": False}
+
+    async def _patched(self, statement, *args, **kwargs):
+        result = await original(self, statement, *args, **kwargs)
+        if (
+            not fired["done"]
+            and isinstance(statement, Select)
+            and "candidate_imports" in str(statement)
+        ):
+            fired["done"] = True
+            async with AdminSessionLocal() as s:
+                await s.execute(
+                    text("UPDATE candidate_imports SET state = :s WHERE id = :i"),
+                    {"s": new_state, "i": import_id},
+                )
+                await s.commit()
+        return result
+
+    monkeypatch.setattr(AsyncSession, "execute", _patched)
 
 
 def _report(store: InMemoryBodyStore, key: str) -> str:
@@ -370,6 +406,34 @@ async def test_the_job_will_not_apply_a_file_over_an_undo(
             {"i": import_id},
         )
         await s.commit()
+
+    await run_candidate_import(None, tenant_id=str(tenant_id), import_id=str(import_id))
+
+    row = await _row(import_id)
+    assert row.state == CandidateImport.UNDONE
+    assert row.candidates_created == 0
+    await _cleanup(tenant_id)
+
+
+@pytest.mark.asyncio
+async def test_the_conditional_claim_itself_refuses_a_row_undone_mid_flight(
+    agency,  # noqa: F811
+    store,
+    monkeypatch,
+):
+    """The test above never reaches the claim: it undoes the row before the
+    job ever reads it, so the pre-check (`row.state not in _RESUMABLE`)
+    returns first and the conditional `UPDATE ... WHERE state IN (...)` never
+    runs. This test forces the race into the gap the pre-check cannot see:
+    the row reads as `pending`, passes the pre-check, and only then — between
+    that read and the claim — does undo commit from another session. If the
+    claim were a plain `UPDATE ... SET state = 'parsing'` rather than the
+    conditional one, this would silently overwrite undo's answer and the
+    assertion below would fail.
+    """
+    tenant_id, _user_id = agency
+    import_id = await _seed(tenant_id, store, b"full name,email\nJane Tan,jane@acme.sg\n")
+    _race_after_first_select(monkeypatch, import_id, CandidateImport.UNDONE)
 
     await run_candidate_import(None, tenant_id=str(tenant_id), import_id=str(import_id))
 

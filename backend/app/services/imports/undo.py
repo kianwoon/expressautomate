@@ -363,7 +363,7 @@ async def undo_import(session, *, tenant_id: uuid.UUID, import_id: uuid.UUID) ->
         .values(state=CandidateImport.UNDONE)
         .execution_options(synchronize_session=False)
     )
-    if claimed.rowcount != 1:  # pragma: no cover - lost race, timing-dependent
+    if claimed.rowcount != 1:
         raise ValueError(
             f"import {import_id} changed state while it was being undone; nothing was reversed"
         )

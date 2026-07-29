@@ -356,7 +356,20 @@ async def undo(request: Request, import_id: uuid.UUID) -> dict:
                 detail="This import has not finished. It can be undone once it has.",
             )
 
-        outcome = await undo_import(session, tenant_id=tenant_uuid, import_id=import_id)
+        try:
+            outcome = await undo_import(session, tenant_id=tenant_uuid, import_id=import_id)
+        except ValueError:
+            # Only the lost-race branch of `undo_import` can reach here: every
+            # other `ValueError` it raises (unknown import, wrong tenant, not
+            # yet settled) is already excluded by `_load` and the state check
+            # above. The row simply moved under the caller between this
+            # gate's read and the claim inside `undo_import` — not a server
+            # fault, so 409 rather than 500, with a sentence that tells the
+            # caller the only thing that will fix it: waiting and retrying.
+            raise HTTPException(
+                status_code=409,
+                detail="This import is being processed. Try again once it settles.",
+            ) from None
         # Read off the flushed row before committing. `undo_import` may have
         # deleted the rows this import created, and refreshing afterwards
         # would re-query under a session whose objects the commit expired.

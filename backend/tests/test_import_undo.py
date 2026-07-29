@@ -14,7 +14,8 @@ import uuid
 from datetime import date
 
 import pytest
-from sqlalchemy import select, text
+from sqlalchemy import Select, select, text
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.rls import tenant_session
 from app.models.candidate import (
@@ -131,6 +132,40 @@ async def _apply(tenant_id, import_id, candidates, roles=()):
 async def _undo(tenant_id, import_id):
     async with tenant_session(tenant_id) as session:
         return await undo_import(session, tenant_id=tenant_id, import_id=import_id)
+
+
+def _race_after_first_select(monkeypatch, import_id: uuid.UUID, new_state: str) -> None:
+    """Move the row to `new_state` from another session the instant after
+    the first `SELECT ... candidate_imports` this call issues returns.
+
+    Forces the race `undo_import`'s conditional claim exists for: the import
+    reads as settled, passes `_the_import`'s check, and only then — between
+    that read and the claim — does something else commit a state the claim's
+    `WHERE state IN SETTLED` no longer matches. `AsyncSession.execute` is
+    patched rather than the caller's own session so the hook can fire on
+    exactly the query that matters without the test needing to touch
+    `undo_import`'s internals.
+    """
+    original = AsyncSession.execute
+    fired = {"done": False}
+
+    async def _patched(self, statement, *args, **kwargs):
+        result = await original(self, statement, *args, **kwargs)
+        if (
+            not fired["done"]
+            and isinstance(statement, Select)
+            and "candidate_imports" in str(statement)
+        ):
+            fired["done"] = True
+            async with AdminSessionLocal() as s:
+                await s.execute(
+                    text("UPDATE candidate_imports SET state = :s WHERE id = :i"),
+                    {"s": new_state, "i": import_id},
+                )
+                await s.commit()
+        return result
+
+    monkeypatch.setattr(AsyncSession, "execute", _patched)
 
 
 async def _one_candidate(tenant_id) -> Candidate:
@@ -610,3 +645,36 @@ async def test_the_import_is_marked_undone(agency):  # noqa: F811
             .all()
         )
         assert changes != []
+
+
+@pytest.mark.asyncio
+async def test_the_conditional_claim_itself_refuses_a_row_the_job_moved_mid_flight(
+    agency,  # noqa: F811
+    monkeypatch,
+):
+    """`test_undo_refuses_while_the_import_is_still_parsing` never reaches
+    the claim: the row already reads `parsing` at `_the_import`'s check, so
+    the `record.state not in SETTLED` guard raises before the conditional
+    `UPDATE ... WHERE state IN SETTLED` ever runs. This test forces the race
+    into the gap that guard cannot see: the row reads `done` — settled, so
+    the guard passes — and only then, between that read and the claim, does
+    another session move it to `parsing`, standing in for the job resuming a
+    stuck row. If the claim were a plain `UPDATE ... SET state = 'undone'`
+    instead of the conditional one, it would overwrite that state and this
+    would report a reversal that never happened.
+    """
+    tenant_id, _user = agency
+    import_id = await _an_import(tenant_id, state=CandidateImport.DONE)
+    await _apply(tenant_id, import_id, [_candidate()])
+    _race_after_first_select(monkeypatch, import_id, CandidateImport.PARSING)
+
+    with pytest.raises(ValueError, match="changed state while it was being undone"):
+        await _undo(tenant_id, import_id)
+
+    async with tenant_session(tenant_id) as session:
+        record = (
+            (await session.execute(select(CandidateImport).where(CandidateImport.id == import_id)))
+            .scalars()
+            .one()
+        )
+        assert record.state == CandidateImport.PARSING
