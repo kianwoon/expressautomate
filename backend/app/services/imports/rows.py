@@ -142,10 +142,22 @@ def _parse_cell_date(raw: str) -> tuple[date | None, str | None]:
         # is the month. Only the year survives.
         if a <= 12 and b <= 12:
             return date(year, 1, 1), "year"
-        day, month = (a, b) if a > 12 else (b, a)
+        # Day-first, unconditionally — mirrors `app/services/cv/persist.py:
+        # _read_parts` exactly, on purpose: the two import paths must classify
+        # the same cell the same way. The old rule here picked whichever
+        # field exceeded 12 as the day, so `4/25/2019` was read as 25 April —
+        # a date the CV path refuses to assert (it stays day-first, gets an
+        # invalid month, and drops the date). Reinterpreting the order just
+        # because the day-first reading fails is itself a fabrication (§15):
+        # it substitutes "some order that produces a valid date" for "the
+        # order the cell actually wrote".
         try:
-            return date(year, month, day), "day"
+            return date(year, b, a), "day"
         except ValueError:
+            # Day-first gave an invalid month (`4/25/2019`: month 25). No
+            # fallback to month precision or year precision here — `_read_parts`
+            # doesn't offer one either; `stored_date`'s except clause just
+            # drops the date and keeps the role, which this matches.
             return None, None
 
     match = _MONTH_YEAR.match(text)
@@ -255,6 +267,13 @@ def parse_roles(
 
         started_on, started_precision = _parse_cell_date(row.get(_STARTED) or "")
         ended_on, ended_precision = _parse_cell_date(row.get(_ENDED) or "")
+        # `None, None` here means the cell could not be honestly read (an
+        # unparseable string, or a day-first reading with an invalid month —
+        # see `_parse_cell_date`'s `_SLASH` branch). That drops only the date;
+        # the role itself is still recorded with whichever precision came
+        # back. `app/services/cv/persist.py:stored_date` makes the same call
+        # for the same reason — a half-read date is not a reason to discard a
+        # role a recruiter did type or a CV did name.
 
         records.append(
             RoleRecord(

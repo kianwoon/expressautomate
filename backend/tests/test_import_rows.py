@@ -195,6 +195,26 @@ def test_unambiguous_slash_date_yields_day_precision():
     assert role.started_on == date(2019, 4, 25)
 
 
+def test_slash_date_with_invalid_day_first_month_drops_the_date():
+    # `4/25/2019`: day-first reads it as day=4, month=25 — an invalid month.
+    # `app/services/cv/persist.py:_read_parts`/`stored_date` make the same
+    # day-first read for the identical shape in CV text and, on the same
+    # invalid month, drop the date rather than reinterpreting the fields as
+    # month-first. This must agree, not read it as 25 April.
+    rows = [
+        {
+            "email": "a@example.com",
+            "employer": "Acme",
+            "title": "Recruiter",
+            "start date": "4/25/2019",
+        }
+    ]
+    records, _ = parse_roles(rows, sheet="History")
+    role = records[0]
+    assert role.started_on is None
+    assert role.started_precision is None
+
+
 def test_role_entirely_empty_row_is_skipped_silently():
     rows = [{"email": "", "employer": "", "title": "", "start date": ""}]
     records, problems = parse_roles(rows, sheet="History")
