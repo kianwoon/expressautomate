@@ -297,6 +297,32 @@ jobs:
         # in the image build.
         run: npm test
 
+  # The frontend is a separate stack with its own test harness (Vitest); it
+  # shares nothing with the Python suite or the gateway's `node --test`
+  # setup, so it runs as its own job rather than bolted onto either. No
+  # database and no service container: `useCandidates` and friends are
+  # tested against a mocked `fetch`, never a live backend.
+  frontend_test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install
+        working-directory: frontend
+        run: npm ci
+
+      # `npm test` typechecks first (`tsc --noEmit && vitest run`), so a
+      # build break fails here rather than surfacing only in the image build.
+      - name: Test
+        working-directory: frontend
+        run: npm test
+
   gateway_build:
     needs: [plan]
     if: needs.plan.outputs.gateway_exists != 'true'
@@ -366,9 +392,10 @@ jobs:
       github.ref == 'refs/heads/main' && github.event_name == 'push' &&
       needs.test.result == 'success' &&
       needs.gateway_test.result == 'success' &&
+      needs.frontend_test.result == 'success' &&
       (needs.build.result == 'success' || needs.build.result == 'skipped') &&
       (needs.gateway_build.result == 'success' || needs.gateway_build.result == 'skipped')
-    needs: [plan, test, gateway_test, build, gateway_build]
+    needs: [plan, test, gateway_test, frontend_test, build, gateway_build]
     runs-on: ubuntu-latest
     steps:
       # Full history: the default shallow clone has no parent commits, so
