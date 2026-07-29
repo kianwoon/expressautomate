@@ -16,7 +16,11 @@ Rows the import *created* are deleted outright — they exist only because of it
 so there is no earlier state to return them to. That is keyed on
 `action == created`; `field_name` on such a row is the `"*"` sentinel
 `apply.py` writes to record that the whole row was the change, and it is
-informational only.
+informational only. A created candidate is the one exception: if a role has
+been attached to it since — by a recruiter, not by this import — deleting the
+candidate would cascade that role away too, and no change record exists to
+put it back. Such a candidate is kept and the skip reported, the same
+protection the restore rule above gives an updated field.
 
 Whatever undo would not do is reported rather than swallowed. An undo that
 reversed less than the whole import must say so — a caller that presented a
@@ -137,7 +141,7 @@ async def _the_import(session, tenant_id: uuid.UUID, import_id: uuid.UUID) -> Ca
 
 
 async def _delete_created(
-    session, changes: list[CandidateImportChange], outcome: UndoOutcome
+    session, import_id: uuid.UUID, changes: list[CandidateImportChange], outcome: UndoOutcome
 ) -> None:
     """Remove every row this import brought into existence.
 
@@ -148,6 +152,20 @@ async def _delete_created(
     their job would report one row deleted, understating what it did to the
     recruiter reading the confirmation. Deleting a role never removes a
     candidate, so this direction has no such shadow.
+
+    A created candidate is the one place undo can do worse than nothing: the
+    candidate itself has no earlier state to protect, but the cascade that
+    removes it also removes every role now attached — including a role a
+    recruiter typed in by hand after the import ran, which this module has no
+    record of and so no way to put back. Roles this import itself created are
+    deleted first, above, so whatever is still attached to a candidate by the
+    time we get here is work nobody logged as the import's doing. `CandidateRole
+    .import_id` is used to tell the two apart rather than the change log,
+    because it is a plain column set once at row creation — reading it needs
+    no correlation between a role's change record and the candidate it belongs
+    to, and it stays correct even if the log's retention window has already
+    dropped older entries. A candidate carrying only that kind of role, or none
+    at all, still deletes as before.
     """
     by_type: dict[str, set[uuid.UUID]] = {kind: set() for kind in _MODELS}
     for change in changes:
@@ -162,6 +180,44 @@ async def _delete_created(
         rows = (
             (await session.execute(select(model).where(model.id.in_(wanted)))).scalars().all()
         )
+
+        if kind == CandidateImportChange.CANDIDATE and rows:
+            roles = (
+                (
+                    await session.execute(
+                        select(CandidateRole).where(
+                            CandidateRole.candidate_id.in_([row.id for row in rows])
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            foreign_roles: dict[uuid.UUID, int] = {}
+            for role in roles:
+                if role.import_id != import_id:
+                    foreign_roles[role.candidate_id] = foreign_roles.get(role.candidate_id, 0) + 1
+
+            kept = []
+            for row in rows:
+                count = foreign_roles.get(row.id)
+                if count:
+                    outcome.skips.append(
+                        UndoSkip(
+                            entity_type=kind,
+                            entity_id=row.id,
+                            field_name="*",
+                            reason=(
+                                f"candidate {row.id} was kept because {count} role(s) were "
+                                "added to it since this import ran, and deleting the "
+                                "candidate would take that work with it"
+                            ),
+                        )
+                    )
+                    continue
+                kept.append(row)
+            rows = kept
+
         for row in rows:
             await session.delete(row)
             outcome.rows_deleted += 1
@@ -216,7 +272,7 @@ async def undo_import(session, *, tenant_id: uuid.UUID, import_id: uuid.UUID) ->
     )
 
     outcome = UndoOutcome()
-    await _delete_created(session, changes, outcome)
+    await _delete_created(session, import_id, changes, outcome)
     rows = await _entities(session, changes)
 
     # Newest change first. Should one import ever touch the same field twice,

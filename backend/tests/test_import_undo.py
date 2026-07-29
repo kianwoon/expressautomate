@@ -162,6 +162,31 @@ async def _hand_written_change(
         await s.commit()
 
 
+async def _hand_added_role(tenant_id, candidate_id) -> uuid.UUID:
+    """A role a recruiter typed in through the UI, not through any import.
+
+    `import_id` is left NULL, the same as anything a person writes directly —
+    it is what tells undo's created-row check that this role is not the
+    import's to answer for.
+    """
+    # allow-hardcode: fixture content for a test row, not a matching oracle.
+    role_id = uuid.uuid4()
+    async with AdminSessionLocal() as s:
+        s.add(
+            CandidateRole(
+                id=role_id,
+                tenant_id=tenant_id,
+                candidate_id=candidate_id,
+                employer="Mount Elizabeth",
+                employer_normalized="mount elizabeth",
+                title="Charge Nurse",
+                title_normalized="charge nurse",
+            )
+        )
+        await s.commit()
+    return role_id
+
+
 # The rule -----------------------------------------------------------------
 
 
@@ -268,6 +293,72 @@ async def test_undo_deletes_the_rows_the_import_created(agency):  # noqa: F811
     async with tenant_session(tenant_id) as session:
         assert (await session.execute(select(Candidate))).scalars().all() == []
         assert (await session.execute(select(CandidateRole))).scalars().all() == []
+
+
+@pytest.mark.asyncio
+async def test_a_created_candidate_with_a_hand_added_role_is_kept(agency):  # noqa: F811
+    """Deleting the candidate would take a role nobody logged as the import's."""
+    tenant_id, _user = agency
+    import_id = await _an_import(tenant_id)
+    outcome = await _apply(tenant_id, import_id, [_candidate()], [_role()])
+    assert outcome.candidates_created == 1
+    assert outcome.roles_created == 1
+
+    candidate_id = (await _one_candidate(tenant_id)).id
+    await _hand_added_role(tenant_id, candidate_id)
+
+    undone = await _undo(tenant_id, import_id)
+
+    # The import's own role is undone (it was this import's doing), but the
+    # candidate is kept because a role added since is still attached to it.
+    assert undone.rows_deleted == 1
+    assert len(undone.skips) == 1
+    skip = undone.skips[0]
+    assert skip.entity_id == candidate_id
+    assert "since this import ran" in skip.reason
+
+    async with tenant_session(tenant_id) as session:
+        candidates = (await session.execute(select(Candidate))).scalars().all()
+        assert len(candidates) == 1
+        assert candidates[0].id == candidate_id
+        roles = (await session.execute(select(CandidateRole))).scalars().all()
+        assert len(roles) == 1
+        assert roles[0].employer == "Mount Elizabeth"
+
+
+@pytest.mark.asyncio
+async def test_a_created_candidate_whose_only_roles_came_from_the_import_still_deletes(
+    agency,  # noqa: F811
+):
+    """No hand-added work sits on top, so the old outright-delete behaviour holds."""
+    tenant_id, _user = agency
+    import_id = await _an_import(tenant_id)
+    outcome = await _apply(tenant_id, import_id, [_candidate()], [_role()])
+    assert outcome.candidates_created == 1
+    assert outcome.roles_created == 1
+
+    undone = await _undo(tenant_id, import_id)
+    assert undone.rows_deleted == 2
+    assert undone.skips == []
+
+    async with tenant_session(tenant_id) as session:
+        assert (await session.execute(select(Candidate))).scalars().all() == []
+        assert (await session.execute(select(CandidateRole))).scalars().all() == []
+
+
+@pytest.mark.asyncio
+async def test_a_created_candidate_with_no_roles_still_deletes(agency):  # noqa: F811
+    tenant_id, _user = agency
+    import_id = await _an_import(tenant_id)
+    outcome = await _apply(tenant_id, import_id, [_candidate()])
+    assert outcome.candidates_created == 1
+
+    undone = await _undo(tenant_id, import_id)
+    assert undone.rows_deleted == 1
+    assert undone.skips == []
+
+    async with tenant_session(tenant_id) as session:
+        assert (await session.execute(select(Candidate))).scalars().all() == []
 
 
 @pytest.mark.asyncio
