@@ -198,8 +198,8 @@ P5 Task 6: complete (eaf5fc6..15b3756, 1190 passed). Fable 8.5/10 APPROVE WITH C
 ## PIECE 5 HANDOFF - read this first in a fresh session
   Plan: docs/superpowers/plans/2026-07-29-candidate-sourcing.md (8 tasks)
   Spec: docs/superpowers/specs/2026-07-29-candidate-sourcing-design.md
-  DONE: Tasks 1-6.  REMAINING: Task 7 (routes + client resolution + quota), Task 8 (UI).
-  Baseline: 1190 passed, 1 skipped.  Alembic head: d2f6a41b8c73.
+  DONE: Tasks 1-7.  REMAINING: Task 8 (UI) only.
+  Baseline: 1207 passed, 1 skipped.  Alembic head: f4b8c1e7d290.
   Tests: cd backend && scripts/test-env.sh -q      (do NOT hand-roll env vars or copy CI's -
     CI uses a different app-role password and forcing it yields hundreds of bogus auth
     failures that look like flakiness.)  Also: uv run ruff check .
@@ -227,3 +227,24 @@ P5 Task 7: complete (5fe53f8..583bb65, 1207 passed). Fable 9/10 APPROVE, nothing
    - render BOTH client_id and client_unresolved_reason; an unresolved run must say the
      already-submitted exclusion could not be applied.
    - score arrives as a STRING, not a number.
+
+### TASK 8 (UI) - everything it needs, so it need not re-derive any of it
+  ROUTE COUNT: the plan says "six routes from Task 7". Task 7 shipped FIVE:
+    POST /api/opportunities/{id}/sourcing, GET .../sourcing, GET .../sourcing/{run_id},
+    POST /api/candidates/{id}/submissions, DELETE /api/candidates/{id}/submissions/{sid}.
+  SHAPES (source of truth: backend/app/api/sourcing.py):
+    run   = {id, opportunity_id, state, client_id, client_unresolved_reason,
+             candidates_considered, shortlisted, protected_attribute_noticed,
+             protected_attribute_note, failure_reason, created_at}
+    state = pending | running | done | failed
+    GET returns {run, matches}; run is NULL when there has never been one.
+    match = {candidate_id, score (STRING), reasons, explanation, explanation_evidence}
+  A MATCH CARRIES candidate_id ONLY - no name. The shortlist must join names from the
+    candidates data the dashboard already loads. Do not expect them from these routes.
+  SUBMISSION POST NEEDS client_id IN THE BODY. An unresolved run has no client_id, so
+    "Mark submitted" must handle that case - disable it, or ask which client.
+  failure_reason is NULL on a worker-failed run (only the route's enqueue-failure path
+    writes one). Never render an empty error box.
+  score is a STRING and ordering is already done server-side (score DESC, candidate_id) -
+    never sort or compare it numerically in the UI.
+  Poll only while state is pending or running. Styles go in frontend/app/app.css.
