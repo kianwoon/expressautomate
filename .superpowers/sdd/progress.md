@@ -248,3 +248,25 @@ P5 Task 7: complete (5fe53f8..583bb65, 1207 passed). Fable 9/10 APPROVE, nothing
   score is a STRING and ordering is already done server-side (score DESC, candidate_id) -
     never sort or compare it numerically in the UI.
   Poll only while state is pending or running. Styles go in frontend/app/app.css.
+
+P5 Task 8: complete. PIECE 5 COMPLETE (4cca6ad..8fece81, 19 commits, 1208 passed).
+  Fable final: SHIP WITH FIXES 8.5/10; both closed in 8fece81.
+   - The shortlist was not short: the worker stored a match for EVERY scored candidate, the
+     GET returned them all, and the UI fired one name request each. A 2,000-candidate agency
+     meant 2,000 rows and 2,000 requests from one screen. Now capped by SOURCING_MAX_MATCHES
+     (20) at the point matches are written; candidates_considered still records everyone
+     scored, so "we looked at 2,000, here are the top 20" survives.
+   - The safeguards copy claimed the requirement never reached the model. False for the
+     plain-words case - those are precisely the ones the model itself reported. Now
+     distinguishes coded (redacted first) from plainly-worded (seen, reported, ignored).
+  ACCEPTED, not fixed: merged client not chased to its survivor (wrong-inclusion is
+    recoverable, wrong-exclusion is not - own small task); model_name records the fast model
+    after escalation; quota check is not atomic; protected-report dedup is exact-string;
+    no CV truncation cap; per-response escalation; the routing test reads openapi().
+  UNENFORCED INVARIANT: SOURCING_MAX_MATCHES (20) must stay >= SOURCING_EXPLAIN_TOP_N (10),
+    or fewer candidates get explanations than the explain setting implies. No validator.
+  NOT PUSHED. No piece 5 migration applied to Koyeb. Head: f4b8c1e7d290.
+  HUMAN MUST CHECK ONCE SIGNED IN: (1) "Find candidates" on a real job order reaches done
+    with a rendered breakdown; (2) a coded job order shows the protected-attribute notice;
+    (3) an unresolved-client run shows its notice and "Mark submitted" is disabled with the
+    explanation.
