@@ -169,3 +169,27 @@ P5 Task 5 fix reviewed by Fable (9/10 APPROVE). The §15 fix closes the whole ho
   MINOR, deferred: a duplicate candidate_id is skipped without setting fell_short, though a
     duplicate is itself a sign of a garbled response; union dedup is exact-string so a
     rephrased protected report survives twice (over-reporting is the safe direction).
+P5 Task 6: complete (eaf5fc6..15b3756, 1190 passed). Fable 8.5/10 APPROVE WITH CHANGES -
+  all five directives landed and Task 6's code is sound; the changes BIND TASK 7.
+
+  THE CLIENT GAP - a hole in the spec I wrote, not a coding choice. The eligibility rule
+  "not already submitted to this client" assumed a job order knows its client. IT DOES NOT:
+  there is no opportunities.client_id. Task 6 infers it from client_mentions on the source
+  email with a nil-UUID sentinel, which SILENTLY DISABLES the exclusion when unresolvable.
+
+  TASK 7 MUST:
+   1. Resolve the client at ENQUEUE time in the route, pass client_id explicitly to
+      run_sourcing, and STORE it on sourcing_runs (new nullable client_id column, migration
+      in Task 7). A run is a record; nothing currently records which client the exclusion
+      used, or that it used none.
+   2. When unresolvable: RUN ANYWAY BUT FLAG IT - surface "already-submitted exclusion could
+      not be applied: no client on this job order" on the run and in the UI. Refusing kills
+      the feature for every unmatched client; silence is the re-pitching embarrassment.
+   3. Resolution must PREFER matched_by='domain' OVER name matches, and must not
+      ORDER BY created_at LIMIT 1 - a name match is "a resemblance" (client.py:105), and an
+      email mentioning two clients would otherwise pick arbitrarily and wrongly EXCLUDE
+      candidates. ON DELETE SET NULL on retention purge also breaks the email join over
+      time, which is a second reason to persist the resolved client rather than re-infer it.
+   4. Enforce SOURCING_DAILY_RUN_QUOTA in the route, not the worker - worker-side would
+      strand already-created run rows.
+  MINOR deferred: run.model_name is set even when nothing was explained.
