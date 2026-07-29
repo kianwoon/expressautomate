@@ -983,8 +983,15 @@ def _article_for(noun_phrase: str) -> str:
         # Nothing to read — "a" is the safer default, and a title starting
         # with a digit ("3D Artist") is said "three-dee" anyway.
         return "a"
-    if len(stripped) > 1 and stripped[0].isupper() and stripped[1].isupper():
-        return "an" if stripped[0].upper() in _VOWEL_SOUNDED_LETTERS else "a"
+    # An initialism is short as well as capitalised. Testing only "first two
+    # letters are capitals" catches a title someone typed in caps lock —
+    # "SENIOR ENGINEER" would be read as initials and take "an" — and titles
+    # arrive capitalised from CV extraction often enough that this is a real
+    # sentence, not a hypothetical one. Four characters covers HR, IT, QA, UX
+    # and MRT without reaching an ordinary word.
+    first_word = stripped.split()[0]
+    if first_word.isupper() and first_word.isalpha() and len(first_word) <= 4:
+        return "an" if first_word[0] in _VOWEL_SOUNDED_LETTERS else "a"
     return "an" if stripped[0].lower() in "aeio" else "a"
 
 
@@ -993,7 +1000,7 @@ def _article_for(noun_phrase: str) -> str:
 # before opening WhatsApp — the same category `frontend/app/dashboard/
 # candidates/page.tsx` marks with this tag for its own hardcoded copy.
 def _whatsapp_draft_text(
-    *, candidate_first_name: str, recruiter_name: str, agency_name: str, job_title: str | None
+    *, candidate_greeting_name: str, recruiter_name: str, agency_name: str, job_title: str | None
 ) -> str:
     # With a title: "...regarding a Senior Engineer opportunity." Without one,
     # the sentence is rewritten rather than leaving a blank ("regarding a
@@ -1008,7 +1015,7 @@ def _whatsapp_draft_text(
     else:
         interest_line = "I would like to speak with you regarding an opportunity."
     return (
-        f"Hi {candidate_first_name},\n\n"
+        f"Hi {candidate_greeting_name},\n\n"
         f"This is {recruiter_name} from {agency_name}.\n\n"
         f"{interest_line}\n\n"
         "Would you be available for a quick discussion?"
@@ -1045,12 +1052,20 @@ async def whatsapp_draft(request: Request, candidate_id: uuid.UUID) -> dict:
             await session.execute(select(Tenant.name).where(Tenant.id == tenant_uuid))
         ).scalar_one()
 
-    # First token only: a recruiter greets "Hi Hui Ling," not "Hi Hui Ling
-    # Tan,", and a single-token name (e.g. "Cher") is unaffected — split()
-    # on it returns the whole thing.
-    candidate_first_name = candidate.full_name.split()[0]
+    # The whole name, because which part of it is the given name is not
+    # something this code can know. "Tan Hui Ling" is surname-first, so the
+    # first token is `Tan` and greeting her by it addresses a stranger by her
+    # surname; written the other way round the first token is `Hui`, half of
+    # a two-syllable given name. Malay (bin/binti) and Indian (s/o, d/o)
+    # names break a positional rule differently again, and this is a Singapore
+    # vertical where all four conventions sit in the same list.
+    #
+    # So the draft greets the name as recorded and the recruiter shortens it
+    # — they know the person. Picking a token here would be the same guess
+    # §15 forbids everywhere else, made in the first line the candidate reads.
+    candidate_greeting_name = candidate.full_name.strip()
     message = _whatsapp_draft_text(
-        candidate_first_name=candidate_first_name,
+        candidate_greeting_name=candidate_greeting_name,
         recruiter_name=_actor_name(user.display_name, user.email),
         agency_name=tenant_name,
         job_title=candidate.current_title,

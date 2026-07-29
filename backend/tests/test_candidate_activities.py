@@ -75,7 +75,12 @@ async def test_the_draft_renders_name_recruiter_and_agency(agency_with_candidate
             await http.get(f"/api/candidates/{ids['with_phone']}/whatsapp-draft")
         ).json()
     assert body["phone_e164"] == "+6582217734"
-    assert body["message"].startswith("Hi Hui,")
+    # The whole name, not a token of it. "Hui Ling Tan" written the other way
+    # round is "Tan Hui Ling", and no rule here can tell which order a given
+    # row used — so greeting anything shorter risks "Hi Tan" (a stranger
+    # addressed by surname) or "Hi Hui" (half a given name). The recruiter
+    # shortens it; they know the person and this code does not.
+    assert body["message"].startswith("Hi Hui Ling Tan,")
     assert "Wong" in body["message"]
     assert f"agency-{tid.hex[:6]}" in body["message"]
     assert "Engineer opportunity" in body["message"]
@@ -121,6 +126,13 @@ async def test_no_title_reads_properly_with_no_blank_gap(agency_with_candidates)
         # "UX" is an initialism whose first letter says "you" as well.
         ("UX Designer", "a UX Designer"),
         ("Unit Manager", "a Unit Manager"),
+        ("MRT Station Manager", "an MRT Station Manager"),
+        # Caps lock is not an initialism. A title typed or extracted in full
+        # caps must still be read as the words it is, or "SENIOR ENGINEER"
+        # comes out as "an SENIOR ENGINEER".
+        ("SENIOR ENGINEER", "a SENIOR ENGINEER"),
+        ("MARKETING MANAGER", "a MARKETING MANAGER"),
+        ("ENROLLED NURSE", "an ENROLLED NURSE"),
         # Nothing to sound out; "a" is the safe default.
         ("3D Artist", "a 3D Artist"),
     ],
@@ -131,7 +143,7 @@ def test_the_article_follows_how_the_title_is_said(title, expected) -> None:
     from app.api.candidates import _whatsapp_draft_text
 
     message = _whatsapp_draft_text(
-        candidate_first_name="Hui Ling",
+        candidate_greeting_name="Hui Ling",
         recruiter_name="Wong",
         agency_name="ABC Recruitment",
         job_title=title,
