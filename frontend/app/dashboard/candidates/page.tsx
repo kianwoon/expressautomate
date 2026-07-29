@@ -15,6 +15,7 @@ import {
 } from "../candidates";
 import type { Candidate, Filter } from "../candidates";
 import { CandidateForm } from "./candidate-form";
+import { CandidateImports } from "./candidate-imports";
 import { CandidatePanel } from "./candidate-panel";
 import { CandidatesTable } from "./candidates-table";
 
@@ -193,6 +194,16 @@ function Workspace({ role }: { role: string }) {
     [setInitial],
   );
 
+  // An undone import may have deleted the person the panel is open on. Re-read
+  // the list and let go of the selection, rather than leaving a detail fetch
+  // pointed at a row that is no longer there — which reads as "we could not
+  // load that candidate" when the truth is that it is gone on purpose.
+  const dropSelection = useCallback(() => {
+    setSelectedId(null);
+    setDetail(null);
+    reload();
+  }, [reload]);
+
   const canDelete = role === "owner";
   async function doDelete() {
     if (!detail) return;
@@ -232,6 +243,11 @@ function Workspace({ role }: { role: string }) {
           Add candidate
         </button>
       </div>
+
+      {/* Above the filters rather than inside the table: an import acts on the
+          whole list, and most of what it does is create people no filter is
+          currently pointed at. */}
+      <CandidateImports onImported={reload} onUndone={dropSelection} />
 
       <div className="jo-controls" style={{ marginTop: 20 }}>
         <div className="jo-chips" role="group" aria-label="Filter candidates">

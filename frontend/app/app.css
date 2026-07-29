@@ -938,4 +938,192 @@ select.gl-input:focus-visible { outline: 2px solid var(--blue-500); outline-offs
   /* The pip stops moving but stays visible, because it is the only thing
      saying the parse is still running. */
   .cv-pip { animation: none; opacity: 1; }
+  .ci-drop { transition: none; }
+  /* Same reasoning as `.cv-pip`: it is the only thing saying the import has
+     not finished, so it stops moving rather than disappearing. */
+  .ci-pulse { animation: none; opacity: 1; }
 }
+
+/* The spreadsheet importer, on the candidates page rather than in the detail
+   panel — an import is a bulk act on the list. The drop panel is lifted whole
+   from `.cv-drop` above, because a recruiter who has learned to drop a CV on a
+   dashed rectangle should not have to learn a second gesture for a sheet. */
+.ci-section {
+  margin-top: 24px;
+  padding: 16px 18px 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.ci-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+/* Set as a link, not a button: it acts on nothing in the page, it fetches a
+   file, and it should not out-weigh the panel it sits above. */
+.ci-template {
+  font-size: 0.8125rem;
+  color: var(--blue-600);
+  text-decoration: underline;
+}
+.ci-template:focus-visible {
+  outline: 2px solid var(--blue-500);
+  outline-offset: 2px;
+}
+.ci-drop {
+  margin-top: 10px;
+  border: 1px dashed var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-alt);
+  transition: border-color 150ms ease, background-color 150ms ease;
+}
+/* Its own row above the invitation, and outside the label: a click that both
+   chose a sheet and opened a file picker would make the second decision before
+   the first had been read back. */
+.ci-sheet {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px 0;
+  font-size: 0.8125rem;
+  color: var(--ink-500);
+  flex-wrap: wrap;
+}
+.ci-sheet-v {
+  font: inherit;
+  font-size: 0.8125rem;
+  color: var(--ink-900);
+  padding: 4px 6px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  max-width: 100%;
+}
+.ci-sheet-v:focus-visible {
+  outline: 2px solid var(--blue-500);
+  outline-offset: 1px;
+}
+.ci-trigger {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  align-items: center;
+  padding: 12px 12px 14px;
+  cursor: pointer;
+  text-align: center;
+}
+.ci-invite { font-size: 0.875rem; color: var(--ink-700); }
+.ci-kinds { font-size: 0.75rem; color: var(--ink-500); max-width: 52ch; }
+.ci-drop:hover { border-color: var(--blue-500); }
+/* The ring goes on the panel rather than on the hidden input inside it, or a
+   keyboard user gets an outline around nothing they can see. */
+.ci-drop:focus-within {
+  outline: 2px solid var(--blue-500);
+  outline-offset: 2px;
+  border-color: var(--blue-500);
+}
+.ci-drop[data-drop="yes"] { border-color: var(--blue-500); border-style: solid; }
+.ci-drop[data-busy="yes"] .ci-trigger { cursor: default; opacity: 0.65; }
+
+.ci-empty { margin-top: 12px; font-size: 0.8125rem; }
+.ci-list { list-style: none; margin: 12px 0 0; padding: 0; }
+/* One rail per run, coloured by how it went — the same left-border vocabulary
+   the roles and the CVs use, so the page reads as one design. */
+.ci-row {
+  padding: 8px 0 8px 12px;
+  border-left: 2px solid var(--line);
+}
+.ci-row + .ci-row { margin-top: 6px; }
+.ci-row[data-state="done"] { border-left-color: #2f7d54; }
+.ci-row[data-state="failed"] { border-left-color: #c74f4f; }
+.ci-row[data-state="undone"] { border-left-color: var(--ink-500); }
+.ci-row-main { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.ci-file {
+  font-size: 0.875rem;
+  font-weight: 650;
+  color: var(--ink-900);
+  overflow-wrap: anywhere;
+}
+.ci-when { font-size: 0.75rem; color: var(--ink-500); white-space: nowrap; }
+.ci-row-state {
+  margin-top: 2px;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 0.8125rem;
+  color: var(--ink-700);
+}
+.ci-badge {
+  font-size: 0.6875rem;
+  font-weight: 650;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  color: var(--ink-500);
+}
+.ci-badge[data-state="done"] { color: #2f7d54; border-color: #2f7d54; }
+.ci-badge[data-state="failed"] { color: #c74f4f; border-color: #c74f4f; }
+.ci-counts { color: var(--ink-500); }
+/* A slow pulse, not a spinner: a five hundred row sheet takes as long as it
+   takes, and a spinning thing promises a wait measured in the moment. */
+.ci-pulse {
+  flex: 0 0 auto;
+  align-self: center;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--blue-500);
+  animation: cv-pulse 1400ms ease-in-out infinite;
+}
+.ci-row-acts {
+  margin-top: 4px;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+/* Text, not a chunky button pair. These act on one row and belong to it. */
+.ci-act {
+  font: inherit;
+  font-size: 0.8125rem;
+  padding: 2px 4px;
+  border: 0;
+  background: none;
+  color: var(--ink-500);
+  cursor: pointer;
+  border-radius: 4px;
+  transition: color 150ms ease;
+}
+.ci-act:hover { color: var(--ink-900); }
+.ci-act-danger:hover { color: #c74f4f; }
+.ci-act:disabled { cursor: default; opacity: 0.5; }
+.ci-act:focus-visible { outline: 2px solid var(--blue-500); outline-offset: 2px; }
+
+/* The confirmation takes the place of the button that raised it, in the row it
+   is about — a dialog over the page would ask the question somewhere the counts
+   it names are no longer visible. */
+.ci-confirm {
+  flex: 1 1 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-alt);
+}
+.ci-confirm-line { margin: 0; font-size: 0.8125rem; color: var(--ink-900); max-width: 72ch; }
+.ci-confirm-acts { margin-top: 6px; display: flex; gap: 8px; }
+.ci-outcome { margin-top: 6px; font-size: 0.8125rem; }
+.ci-outcome .body { margin: 0; font-size: 0.8125rem; }
+.ci-skip-lead { margin-top: 4px; }
+.ci-skips {
+  margin: 4px 0 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 2px;
+}
+.ci-skips .body { font-size: 0.75rem; }

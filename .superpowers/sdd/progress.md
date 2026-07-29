@@ -82,3 +82,17 @@ P4 Task 5: complete (479b5af..55171f9, 1050 passed). Fable 8/10 APPROVE WITH CHA
   named the wrong Excel row confidently. Rejected roles stay rejected (upheld, now tested).
   CARRY TO TASK 6: undo keys on action=CREATED; field_name="*" on a created change row is
     informational only. Also assert import.tenant_id matches before touching anything.
+P4 Task 6: complete (55171f9..5d14429, 1064 passed). Fable 8/10; data-loss path closed -
+  deleting a created candidate cascaded away roles a recruiter added AFTER the import.
+  Now skipped and reported. DEFERRED by owner: order_by(created_at,id) tiebreak needs a
+  monotonic sequence column that does not exist; Decimal/float coercion trap on columns
+  not yet importable (fails inert, the safe direction).
+  CARRY TO TASK 8 UI: confirm when rows_deleted > 0; a second undo's skips are its OWN
+  first pass's work and must NOT be presented as "we protected your edits".
+P4 Task 7: complete (5d14429..91fb93e, 1092 passed). Fable 9/10 APPROVE, no fix-now.
+  DEFERRED by owner: router include order (comment+test judged sufficient); migration must
+    deploy before worker (same accepted contract as the two existing sweep functions);
+    a deterministically crashing file loops forever - needs a retry counter, own small task.
+  Row cap is async by design: XLSX row count needs inflating the zip, which is the DoS the
+    job isolates. Byte cap is the synchronous proxy.
+  CARRY TO TASK 8: list_imports has no default limit - bound it in the UI call or add one.

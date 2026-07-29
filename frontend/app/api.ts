@@ -284,6 +284,43 @@ export function candidateDocumentDownloadPath(id: string, documentId: string): s
   return `${candidateDocumentPath(id, documentId)}/download`;
 }
 
+/** The spreadsheet imports an agency has run. POST (multipart) uploads one and
+ *  GET lists the recent ones; both live here. */
+export const CANDIDATE_IMPORTS_PATH = `${CANDIDATES_PATH}/imports`;
+
+/**
+ * How many recent imports the list asks for.
+ *
+ * The endpoint has no default limit of its own — omit this and an agency three
+ * years into using us downloads every import it has ever run to draw a table
+ * showing the last few. Env-overridable for the same reason `CANDIDATES_PAGE_SIZE`
+ * is, and with the same `|| 8` guard: an unset variable and a typo both parse
+ * to `NaN`, and `limit=NaN` is a 422 rather than a working table.
+ */
+export const CANDIDATE_IMPORTS_LIMIT = Number(process.env.NEXT_PUBLIC_CANDIDATE_IMPORTS_LIMIT) || 8;
+
+/** The workbook carrying the exact headers the parser reads. A plain download,
+ *  not JSON — linked directly rather than fetched. */
+export const CANDIDATE_IMPORT_TEMPLATE_PATH = `${CANDIDATE_IMPORTS_PATH}/template`;
+
+/** One import. Encoded for the reason `candidatePath` encodes an id. */
+export function candidateImportPath(importId: string): string {
+  return `${CANDIDATE_IMPORTS_PATH}/${encodeURIComponent(importId)}`;
+}
+
+/** A short-lived presigned URL for the row-by-row error report. Signed per
+ *  request and never stored: the report names real candidates, so a URL kept
+ *  anywhere would outlive the permission it was granted under. */
+export function candidateImportErrorsPath(importId: string): string {
+  return `${candidateImportPath(importId)}/errors`;
+}
+
+/** Walking one import back. POST-only, and refused while the run is still
+ *  parsing. */
+export function candidateImportUndoPath(importId: string): string {
+  return `${candidateImportPath(importId)}/undo`;
+}
+
 /** The client list. A site route, so no API_BASE prefix. */
 export const CLIENTS_DASHBOARD_PATH = "/dashboard/clients";
 

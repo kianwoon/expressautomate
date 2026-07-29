@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useState } from "react";
 
 import {
+  CANDIDATE_IMPORTS_LIMIT,
+  CANDIDATE_IMPORTS_PATH,
   CANDIDATES_PAGE_SIZE,
   CANDIDATES_PATH,
   candidateArchivePath,
@@ -10,6 +12,8 @@ import {
   candidateDocumentDownloadPath,
   candidateDocumentPath,
   candidateDocumentsPath,
+  candidateImportErrorsPath,
+  candidateImportUndoPath,
   candidateMergePath,
   candidatePath,
   candidateRestorePath,
@@ -563,6 +567,138 @@ export async function uploadCandidateAvatar(
   });
   if (!res.ok) throw new ApiError(await readError(res));
   return (await res.json()) as { avatar_key: string; avatar_updated_at: string };
+}
+
+/** Which sheet a CSV is standing in for.
+ *
+ *  A CSV is one nameless sheet, so the uploader has to say which of the two it
+ *  holds; the server decides from this field and never from the filename, so a
+ *  file called `history.csv` full of candidates is still a candidate sheet if
+ *  that is what was chosen. An XLSX carries both sheets by name and the field
+ *  is ignored — which is why the picker stays on screen either way rather than
+ *  guessing from an extension we do not trust. */
+export type ImportSheet = "Candidates" | "History";
+
+/** How far one uploaded spreadsheet has got.
+ *
+ * `failed` is the whole run falling over — a file we could not read at all, or
+ * one that never reached the queue. It is not the same as a `done` import with
+ * `rows_failed` above zero, which is the ordinary case of a sheet where most
+ * rows landed and a few did not. `undone` is the only state that was reached
+ * by someone choosing it. */
+export type ImportState = "pending" | "parsing" | "done" | "failed" | "undone";
+
+export type CandidateImport = {
+  id: string;
+  filename: string;
+  content_type: string;
+  byte_size: number;
+  state: ImportState;
+  candidates_created: number;
+  candidates_updated: number;
+  roles_created: number;
+  roles_updated: number;
+  rows_failed: number;
+  /** Whether a report was actually written, which is not the same question as
+   *  `rows_failed > 0`: a run that fell over before it read a row has no failed
+   *  rows and still has a report saying why. The link follows this, not the
+   *  count. */
+  has_errors: boolean;
+  created_at: string | null;
+};
+
+/** One field, or one whole candidate, that undo left alone — and why.
+ *
+ * `field_name` is `"*"` when the skip is about the row rather than a column:
+ * a candidate the import created but which has since had a role added to it by
+ * hand is kept whole, because deleting it would take that work with it. */
+export type UndoSkip = {
+  entity_type: string;
+  entity_id: string;
+  field_name: string;
+  reason: string;
+};
+
+/** What an undo actually managed.
+ *
+ * `already_undone` is the server short-circuiting a second undo rather than
+ * running one: the counts and skips are absent, because re-running would report
+ * its own first pass's work as a page of skips. Callers must branch on it
+ * before reading anything else — presenting that as "we protected your changes"
+ * would be a lie in the one place a person is checking whether their data is
+ * safe. */
+export type UndoResult = {
+  import: CandidateImport;
+  already_undone: boolean;
+  rows_deleted?: number;
+  fields_restored?: number;
+  fields_skipped?: number;
+  skips?: UndoSkip[];
+};
+
+/** Recent imports, newest first.
+ *
+ * The limit is always sent. The endpoint has none of its own, and an agency
+ * with three years of imports behind it would otherwise fetch all of them to
+ * draw a table of the last few. */
+export async function listCandidateImports(): Promise<CandidateImport[]> {
+  const params = new URLSearchParams({ limit: String(CANDIDATE_IMPORTS_LIMIT) });
+  const res = await fetch(`${CANDIDATE_IMPORTS_PATH}?${params.toString()}`, {
+    credentials: "include",
+    headers: { Accept: "application/json" },
+  });
+  if (!res.ok) throw new ApiError(await readError(res));
+  return (await res.json()) as CandidateImport[];
+}
+
+/** Uploads a spreadsheet. 202, not 201: the row exists and the answer does
+ *  not — the rows are read by a job afterwards, which is why what comes back is
+ *  `pending` with every count at zero. */
+export async function uploadCandidateImport(
+  file: File,
+  sheet: ImportSheet,
+): Promise<CandidateImport> {
+  const form = new FormData();
+  form.append("file", file);
+  form.append("sheet", sheet);
+  const res = await fetch(CANDIDATE_IMPORTS_PATH, {
+    method: "POST",
+    credentials: "include",
+    headers: { Accept: "application/json" },
+    body: form,
+  });
+  // Oversized (413), not a spreadsheet at all (415) and an unnamed sheet (422)
+  // each arrive as a sentence the server wrote; `readError` surfaces it rather
+  // than replacing it with a guess about which of the three it was.
+  if (!res.ok) throw new ApiError(await readError(res));
+  return (await res.json()) as CandidateImport;
+}
+
+/** A short-lived URL for the row-by-row error report, fetched at the moment it
+ *  is asked for and never held — the same bargain the CV download keeps, and
+ *  for a stronger reason: this report names candidates. */
+export async function getCandidateImportErrorsUrl(importId: string): Promise<DocumentUrl> {
+  const res = await fetch(candidateImportErrorsPath(importId), {
+    credentials: "include",
+    headers: { Accept: "application/json" },
+  });
+  if (!res.ok) throw new ApiError(await readError(res));
+  return (await res.json()) as DocumentUrl;
+}
+
+/** Walks one import back as far as it is still safe to.
+ *
+ * A 409 here is the run still parsing, and the server's own sentence says to
+ * wait — which is why it travels through `readError` untouched rather than
+ * becoming a generic failure. */
+export async function undoCandidateImport(importId: string): Promise<UndoResult> {
+  const res = await fetch(candidateImportUndoPath(importId), {
+    method: "POST",
+    credentials: "include",
+    headers: { Accept: "application/json" },
+  });
+  if (!res.ok) throw new ApiError(await readError(res));
+  return (await res.json()) as UndoResult;
 }
 
 export async function deleteCandidateAvatar(id: string): Promise<void> {
