@@ -220,7 +220,14 @@ function Workspace({ role }: { role: string }) {
         onCancel={() => setView({ mode: "list" })}
         onDone={(saved) => {
           setView({ mode: "list" });
+          // Editing the row the panel is already open on leaves `selectedId`
+          // unchanged, so the detail effect never re-runs and the panel keeps
+          // showing the values from before the edit. The PATCH response is the
+          // full record — the same shape the detail GET returns — so adopt it
+          // directly rather than relying on the selection to change.
           setSelectedId(saved.id);
+          setDetail(saved);
+          setDetailError(null);
           reload();
         }}
       />
