@@ -91,7 +91,7 @@ export function WhatsappButton({
       <button
         ref={triggerRef}
         type="button"
-        className="btn btn-secondary btn-icon"
+        className="btn btn-icon wa-btn"
         onClick={() => setOpen(true)}
         disabled={disabled}
         // The icon carries no text, so the name has to come from here — and

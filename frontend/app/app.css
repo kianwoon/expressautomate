@@ -179,7 +179,7 @@
    labels legible. The icon button is exempt: it is already square. */
 .jo-action-row { display: flex; gap: 8px; flex-wrap: nowrap; }
 .jo-action-row .btn { min-width: 0; padding-inline: clamp(10px, 2.2vw, 20px); }
-.jo-action-row .btn-icon { padding-inline: 12px; }
+.jo-action-row .btn-icon { padding-inline: 0; }
 .jo-detail-hint { margin-top: 10px; }
 .jo-detail-error { margin-top: 12px; color: var(--amber-700); font-size: 0.875rem; }
 
@@ -1287,6 +1287,43 @@ select.gl-input:focus-visible { outline: 2px solid var(--blue-500); outline-offs
   display: block;
   flex: none;
   border-radius: 22%;
+}
+
+/* The mark *is* the button: no chrome of its own, no padding, and the tile
+   runs to all four corners. Square without a hardcoded size — the flex row
+   stretches the button to the height of the text buttons beside it, and the
+   mark takes its width from its own 1:1 ratio. `aspect-ratio` on the button
+   cannot do this: the button's width would come from its content, whose width
+   would come from the button, and both resolve to zero. */
+/* Square, and the same square as the text buttons are tall, without writing
+   that number down: it is `.btn`'s own line box plus `.btn`'s own vertical
+   padding and border. Sizing it from the parent instead — `height: 100%` on
+   the mark, or `aspect-ratio` on the button — makes the width depend on the
+   content and the content depend on the width, and both resolve to zero.
+
+   `flex: none` because the row lets the text buttons compress, and its
+   `min-width: 0` would otherwise squeeze this one away; it has no text to
+   give back. */
+.wa-btn {
+  --wa-size: calc(0.9375rem * 1.2 + 22px + 2px);
+  flex: none;
+  width: var(--wa-size);
+  height: var(--wa-size);
+  padding: 0;
+  border: 0;
+  background: none;
+}
+.wa-btn .wa-mark {
+  width: 100%;
+  height: 100%;
+  border-radius: var(--radius);
+}
+.wa-btn:hover .wa-mark {
+  filter: brightness(1.08);
+}
+.wa-btn:disabled .wa-mark {
+  filter: grayscale(1);
+  opacity: 0.45;
 }
 .wa-field {
   display: grid;
