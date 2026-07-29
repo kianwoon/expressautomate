@@ -341,10 +341,20 @@ async def list_candidates(
         # is a "what changed lately" question, so recency wins. Clicking a
         # letter is a "find this person" question, and recency inside a letter
         # reads as no order at all — you cannot scan for a surname in it.
+        # `id` last, on both branches, because neither key above is unique. A
+        # bulk import gives thousands of rows the same `updated_at`, and two
+        # people genuinely share a name — and where the sort key ties, Postgres
+        # is free to return them in a different order each time it is asked.
+        # Paging then shows somebody twice and somebody else not at all, which
+        # reads as the list losing people rather than as an unstable sort.
+        #
+        # It matters more since `?eligible_for=` arrived: the same order decides
+        # where the bounded scan is cut, so an unstable tail would change *which*
+        # candidates are assessed between one request and the next.
         order = (
-            func.lower(Candidate.full_name).asc()
+            (func.lower(Candidate.full_name).asc(), Candidate.id.asc())
             if initial is not None
-            else Candidate.updated_at.desc()
+            else (Candidate.updated_at.desc(), Candidate.id.desc())
         )
 
         excluded_ineligible: int | None = None
@@ -386,7 +396,7 @@ async def list_candidates(
             # discarding it if so.
             scan_limit = settings.CANDIDATES_ELIGIBILITY_SCAN_LIMIT
             scan_rows = (
-                (await session.execute(base.order_by(order).limit(scan_limit + 1)))
+                (await session.execute(base.order_by(*order).limit(scan_limit + 1)))
                 .scalars()
                 .all()
             )
@@ -423,7 +433,7 @@ async def list_candidates(
                 await session.execute(select(func.count()).select_from(base.subquery()))
             ).scalar_one()
             rows = (
-                (await session.execute(base.order_by(order).limit(page_limit).offset(offset)))
+                (await session.execute(base.order_by(*order).limit(page_limit).offset(offset)))
                 .scalars()
                 .all()
             )
