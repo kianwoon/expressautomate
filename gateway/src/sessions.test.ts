@@ -423,7 +423,9 @@ describe('SessionManager', { skip: SKIP }, () => {
     await manager.pair(ref);
     fake.emit('connection.update', { connection: 'open' });
     (fake.sockets[0] as { sendMessage: () => Promise<never> }).sendMessage = async () => {
-      throw new Error('not-authorized: blocked by recipient');
+      // 403 `forbidden` — an answer, not a silence. Only a code we can point
+      // at earns `failed`; see `POSITIVE_REFUSAL_CODES`.
+      throw new Boom('not-authorized: blocked by recipient', { statusCode: 403 });
     };
 
     const outcome = await manager.send(ref, '+6591234567', 'hi');
@@ -431,6 +433,35 @@ describe('SessionManager', { skip: SKIP }, () => {
     assert.equal(!outcome.ok && 'refusal' in outcome && outcome.refusal,
       'not-authorized: blocked by recipient');
     assert.equal(outcome.status, 'connected');
+  });
+
+  test('an error we cannot classify is unknown, not a failure', async () => {
+    // The direction of the default, which is the whole finding. A socket torn
+    // down mid-send (500 badSession, 515 restartRequired, 503 unavailable) or
+    // a plain network error carries no proof the frame stayed home — and
+    // guessing "failed" is what sends a candidate a second copy.
+    const ref = await seedTenantAndUser();
+    const fake = fakeSocketFactory();
+    const manager = new SessionManager(pool, cipher, { socketFactory: fake.factory });
+    await manager.pair(ref);
+    fake.emit('connection.update', { connection: 'open' });
+
+    const thrown: unknown[] = [
+      new Boom('bad session', { statusCode: 500 }),
+      new Boom('restart required', { statusCode: 515 }),
+      new Boom('service unavailable', { statusCode: 503 }),
+      new Error('socket hang up'),
+    ];
+    for (const error of thrown) {
+      (fake.sockets[0] as { sendMessage: () => Promise<never> }).sendMessage = async () => {
+        throw error;
+      };
+      const outcome = await manager.send(ref, '+6591234567', 'hi');
+      assert.ok(
+        !outcome.ok && 'indeterminate' in outcome,
+        `${String(error)} must be unknown, not a refusal`,
+      );
+    }
   });
 
   test('a timed-out send is indeterminate, not a refusal — the message may have gone', async () => {

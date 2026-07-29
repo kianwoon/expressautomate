@@ -99,14 +99,26 @@ export type SendOutcome =
   | { readonly ok: false; readonly status: 'connected'; readonly indeterminate: string };
 
 /**
- * Boom codes that mean the connection went away rather than WhatsApp saying no.
+ * The only codes that positively mean WhatsApp rejected this message.
  *
- * From Baileys' own `DisconnectReason`: 408 covers `timedOut` and
- * `connectionLost`, 428 is `connectionClosed`, 440 is `connectionReplaced`.
- * A throw carrying one of these says nothing about whether the message was
- * accepted — only that we stopped being able to hear the answer.
+ * From Baileys' own `DisconnectReason` (`lib/Types/index.d.ts`): 401
+ * `loggedOut`, 403 `forbidden`, 411 `multideviceMismatch`. Each is an answer
+ * — the account may not send, so nothing went out.
+ *
+ * Everything else is treated as unknown, and the direction of that default is
+ * the point. The first version listed the codes that meant "we cannot know"
+ * and called the rest refusals, which is backwards: 500 `badSession`, 515
+ * `restartRequired` and 503 `unavailableService` all tear down a socket with
+ * sends already in flight, and a plain `Error` from the network stack carries
+ * no code at all. Each of those became a confident `failed`.
+ *
+ * This mirrors `_NEVER_DISPATCHED` in `app/services/wa_gateway.py`, which
+ * lists the safe cases for the same reason: a failure mode Baileys adds
+ * tomorrow should default to "we do not know", never to a claim that nothing
+ * was sent. Being wrong that way tells a recruiter to resend a message the
+ * candidate already has.
  */
-const INDETERMINATE_SEND_CODES = new Set([408, 428, 440]);
+const POSITIVE_REFUSAL_CODES = new Set([401, 403, 411]);
 
 /** Pushed to FastAPI on every change; matches `InternalStatusIn` in `wa_gateway.py`. */
 export interface StatusCallback {
@@ -276,22 +288,21 @@ export class SessionManager {
       const message = error instanceof Error ? error.message : String(error);
       const statusCode = (error as Boom | undefined)?.output?.statusCode;
 
-      // Not every throw is a refusal. A timed-out or closed connection means
-      // the answer never arrived, not that the message was rejected — and
-      // Baileys throws the same way whether the frame left or not. Calling
-      // that `failed` asserts a thing we cannot know, and the recruiter it
-      // misleads resends: the candidate gets the message twice.
-      if (statusCode !== undefined && INDETERMINATE_SEND_CODES.has(statusCode)) {
-        return { ok: false, status: 'connected', indeterminate: message };
+      // A refusal is something we can point at: WhatsApp answered, and the
+      // answer was no. That earns a `failed` row upstream, and the string is
+      // passed on as-is — rewording it here would be inventing a reason for
+      // someone else's refusal. Nothing in it is ours: no gateway URL, no
+      // shared secret, both of which live in config rather than in a send.
+      if (statusCode !== undefined && POSITIVE_REFUSAL_CODES.has(statusCode)) {
+        return { ok: false, status: 'connected', refusal: message };
       }
 
-      // What is left is WhatsApp (or Baileys) refusing this message on a live
-      // socket, and it is the only thing that earns a `failed` row upstream.
-      // The message is passed on as-is: the API stores it verbatim, so
-      // rewording it here would be inventing a reason for someone else's
-      // refusal. Nothing in this string is ours — it carries no gateway URL
-      // and no shared secret, both of which live in config, not in a send.
-      return { ok: false, status: 'connected', refusal: message };
+      // Everything else — a timeout, a closed socket, a restart, an error with
+      // no code at all — leaves us unable to say whether the frame went out,
+      // because Baileys throws the same way either way. `unknown` is the only
+      // honest answer, and the only one that does not push a recruiter into
+      // resending a message the candidate may already have.
+      return { ok: false, status: 'connected', indeterminate: message };
     }
     const providerMessageId = receipt?.key?.id ?? null;
     return { ok: true, status: 'connected', providerMessageId };

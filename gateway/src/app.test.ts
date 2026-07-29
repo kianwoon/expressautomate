@@ -242,6 +242,20 @@ describe('POST /send (P4)', () => {
     assert.equal(res.json().status, 'connected');
   });
 
+  // The third fact, and the one that costs a candidate a duplicate message if
+  // it is folded into either of the others. 502 rather than 422 is what makes
+  // the API write `unknown` instead of `failed`: it maps a gateway 5xx to "we
+  // do not know", and a 4xx to "WhatsApp said no". Without this test the
+  // classification could be right in `sessions.ts` and thrown away here, and
+  // every other test would still pass.
+  test('a send whose outcome we never learned is 502, so the API records unknown', async () => {
+    outcome = { ok: false, status: 'connected', indeterminate: 'Timed Out' };
+    const res = await send({ tenantId: 't', userId: 'u', to: '+6591234567', text: 'hi' });
+    assert.equal(res.statusCode, 502, 'a 4xx here would be recorded as a failure');
+    assert.equal(res.json().error, 'Timed Out');
+    assert.equal(res.json().status, 'connected');
+  });
+
   test('a missing recipient or empty text is 400, not an empty message sent to nobody', async () => {
     outcome = { ok: true, status: 'connected', providerMessageId: 'WAMSG-1' };
     const before = sends.length;
