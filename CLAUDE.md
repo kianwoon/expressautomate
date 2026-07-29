@@ -87,6 +87,25 @@ the service is ever recreated — both caused outages when they drifted:
 | Route | `/` (not `/api`) |
 | Health check | `/api/health` (not `/health` — a 404 there leaves the deploy `PENDING` until CI times out) |
 
+**The `gateway` service is the exception to "one image".** The WA gateway
+(`gateway/`, Node 22 + Fastify — see
+[the plan](docs/superpowers/specs/2026-07-29-baileys-gateway-plan.md)) runs its
+own image, `ghcr.io/kianwoon/expressautomate-gateway`, tagged from a hash of
+`gateway/` alone. Its hand-set Koyeb settings, recorded here for the same
+reason as the two above:
+
+| Setting (service `gateway`) | Value |
+|---|---|
+| Route | **none** — no public route at all. It is called only by `api` over the private mesh; the browser never reaches it. |
+| Health check | `GET /health` on port **7300** (`WA_GATEWAY_PORT`). Unauthenticated by design — an authenticated health check fails the same way a 404 does. |
+| Scale | **pinned to 1, autoscaling off, forever.** A Baileys socket is process-local; two instances fight over the same WhatsApp session and get both logged out. |
+
+Its env vars are set by hand and start empty: `WA_GATEWAY_SHARED_SECRET`
+(required — the process refuses to boot without it) and, from P2, the database
+URL and `WA_GATEWAY_ENCRYPTION_KEY`. `api` needs `WA_GATEWAY_URL` +
+`WA_GATEWAY_SHARED_SECRET` once it first calls the gateway (P3) — the same
+"first call to an external system" rule as `GRAPH_BASE_URL` and `R2_*` below.
+
 **Per-service env vars are also not in this repo.** The workflow deploys the
 image; the variables were set by hand, so they drift per service. `GRAPH_BASE_URL`
 was missing on `api` for a day — harmless until the inbox preview became the

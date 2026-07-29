@@ -6,6 +6,7 @@ on:
     paths:
       - 'backend/**'
       - 'frontend/**'
+      - 'gateway/**'
       - 'Dockerfile'
       - '.github/workflows/backend.yml'
       - '.github/scripts/**'
@@ -14,6 +15,7 @@ on:
     paths:
       - 'backend/**'
       - 'frontend/**'
+      - 'gateway/**'
       - 'Dockerfile'
       - '.github/workflows/backend.yml'
       - '.github/scripts/**'
@@ -28,10 +30,18 @@ concurrency:
 
 env:
   IMAGE: ghcr.io/kianwoon/expressautomate-api
+  # The WA gateway is a separate Node service and gets its OWN image (plan
+  # §12.3). It must never run on the shared backend image, and its tag must
+  # hash ONLY gateway/** — that is what stops a backend or frontend commit
+  # producing a new gateway tag and recycling live WhatsApp sockets.
+  GATEWAY_IMAGE: ghcr.io/kianwoon/expressautomate-gateway
   KOYEB_REGISTRY_SECRET: ghcr-expressautomate
   API_SERVICE_ID: 4a352e28-a0dc-4ae8-bda1-9b13c0605b27
   WORKER_SERVICE_ID: e1423408-7877-43bd-ad6f-182f0e6f2ddd
   ARQ_SERVICE_ID: 0822002c-1024-4eb7-816e-25b75adf721c
+  # Set once the Koyeb `gateway` service exists (see CLAUDE.md deploy table).
+  # Empty means: deploy it, but do not verify — same contract as ARQ_SERVICE_ID.
+  GATEWAY_SERVICE_ID: ''
 
 jobs:
   # The image depends only on backend/, frontend/ and the Dockerfile. Tagging by
@@ -44,6 +54,8 @@ jobs:
     outputs:
       tag: ${{ steps.tag.outputs.tag }}
       exists: ${{ steps.tag.outputs.exists }}
+      gateway_tag: ${{ steps.gateway_tag.outputs.tag }}
+      gateway_exists: ${{ steps.gateway_tag.outputs.exists }}
     steps:
       - uses: actions/checkout@v7
 
@@ -68,6 +80,34 @@ jobs:
             echo "exists=true" >> "$GITHUB_OUTPUT"
           else
             echo "$TAG not found (HTTP $CODE); build required"
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Same trick, own inputs: the gateway tag hashes `gateway/` and NOTHING
+      # else — not the root Dockerfile, not this workflow. So a backend,
+      # frontend or workflow commit yields the tag the gateway is already
+      # running, the deploy scope sees it on-target, and the service is left
+      # alone. Once it holds live WhatsApp sockets, a needless redeploy drops
+      # every recruiter's session (plan §2, §12.3).
+      - id: gateway_tag
+        env:
+          GHCR_PAT: ${{ secrets.GHCR_PAT }}
+        run: |
+          set -euo pipefail
+          TAG=gw-$(git ls-tree -r HEAD --format='%(objectname) %(path)' \
+                     -- gateway | sha256sum | cut -c1-16)
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+          BEARER=$(printf '%s' "$GHCR_PAT" | base64 -w0)
+          CODE=$(curl -s -o /dev/null -w '%{http_code}' \
+            -H "Authorization: Bearer $BEARER" \
+            -H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.v2+json' \
+            "https://ghcr.io/v2/${GATEWAY_IMAGE#ghcr.io/}/manifests/$TAG")
+          if [ "$CODE" = "200" ]; then
+            echo "$TAG already in the registry; skipping gateway build"
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "$TAG not found (HTTP $CODE); gateway build required"
             echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
 
@@ -172,6 +212,53 @@ jobs:
           uv run alembic upgrade head
           uv run pytest -q
 
+  # The gateway is a separate stack with separate tests; it shares nothing with
+  # the Python suite, so it runs as its own job rather than bolted onto `test`.
+  gateway_test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: gateway/package-lock.json
+      - name: Install
+        working-directory: gateway
+        run: npm ci
+      - name: Test
+        working-directory: gateway
+        # `npm test` typechecks first, so a build break fails here rather than
+        # in the image build.
+        run: npm test
+
+  gateway_build:
+    needs: [plan]
+    if: needs.plan.outputs.gateway_exists != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ secrets.GHCR_USERNAME }}
+          password: ${{ secrets.GHCR_PAT }}
+
+      # Context is `gateway/`, not the repo root: the image cannot accidentally
+      # absorb backend or frontend files, and nothing outside gateway/ can
+      # invalidate a layer.
+      - uses: docker/build-push-action@v7
+        with:
+          context: ./gateway
+          push: true
+          tags: |
+            ${{ env.GATEWAY_IMAGE }}:${{ needs.plan.outputs.gateway_tag }}
+            ${{ github.ref == 'refs/heads/main' && format('{0}:latest', env.GATEWAY_IMAGE) || '' }}
+          cache-from: type=gha,scope=gateway
+          cache-to: type=gha,mode=max,scope=gateway
+
   build:
     needs: [plan]
     # Nothing to do when an image for this exact content is already published.
@@ -213,8 +300,10 @@ jobs:
       !cancelled() &&
       github.ref == 'refs/heads/main' && github.event_name == 'push' &&
       needs.test.result == 'success' &&
-      (needs.build.result == 'success' || needs.build.result == 'skipped')
-    needs: [plan, test, build]
+      needs.gateway_test.result == 'success' &&
+      (needs.build.result == 'success' || needs.build.result == 'skipped') &&
+      (needs.gateway_build.result == 'success' || needs.gateway_build.result == 'skipped')
+    needs: [plan, test, gateway_test, build, gateway_build]
     runs-on: ubuntu-latest
     steps:
       # Full history: the default shallow clone has no parent commits, so
@@ -241,7 +330,7 @@ jobs:
           # commit landed mid-build — and because the paths filter means no
           # further run is triggered, that deploy was never retried. It
           # happened: a frontend change sat undeployed until fixed by hand.
-          CHANGED=$(git diff --name-only "$GITHUB_SHA" "$HEAD_SHA" -- backend/ frontend/ Dockerfile .github/workflows/backend.yml .github/scripts/)
+          CHANGED=$(git diff --name-only "$GITHUB_SHA" "$HEAD_SHA" -- backend/ frontend/ gateway/ Dockerfile .github/workflows/backend.yml .github/scripts/)
           if [ -n "$CHANGED" ]; then
             echo "origin/main is now $HEAD_SHA and changes the app; this run is stale."
             echo "stale=true" >> "$GITHUB_OUTPUT"
@@ -261,32 +350,47 @@ jobs:
         env:
           KOYEB_TOKEN: ${{ secrets.KOYEB_TOKEN }}
           TAG: ${{ needs.plan.outputs.tag }}
+          GATEWAY_TAG: ${{ needs.plan.outputs.gateway_tag }}
         run: |
           BEFORE="${{ github.event.before }}"
           # All-zeros on a branch's first push, and a force-push can leave it
-          # unreachable — deploy everything rather than guess.
+          # unreachable — assume everything changed rather than guess. Note this
+          # no longer short-circuits: the decision still passes through the
+          # already-on-target-image check below, so even the paranoid path does
+          # not restart a service that is running the exact bytes we would ship.
+          # That matters most for the gateway, whose restart drops live sockets.
           if [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ] \
              || ! git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
-            echo "no usable diff base; deploying both services"
-            echo "api=true"    >> "$GITHUB_OUTPUT"
-            echo "worker=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          CHANGED=$(git diff --name-only "$BEFORE" "$GITHUB_SHA")
-          echo "changed files:"; echo "$CHANGED" | sed 's/^/  /'
-
-          # Anything shared (Dockerfile, workflow, deploy scripts) counts as a
-          # backend change: it can alter how either service is built or run.
-          if echo "$CHANGED" | grep -qE '^(backend/|Dockerfile$|\.github/)'; then
-            BACKEND=true
+            echo "no usable diff base; assuming every service changed"
+            BACKEND=true; FRONTEND=true; GATEWAY=true
           else
-            BACKEND=false
-          fi
-          if echo "$CHANGED" | grep -qE '^frontend/'; then
-            FRONTEND=true
-          else
-            FRONTEND=false
+            CHANGED=$(git diff --name-only "$BEFORE" "$GITHUB_SHA")
+            echo "changed files:"; echo "$CHANGED" | sed 's/^/  /'
+
+            # Anything shared (Dockerfile, workflow, deploy scripts) counts as a
+            # backend change: it can alter how either service is built or run.
+            if echo "$CHANGED" | grep -qE '^(backend/|Dockerfile$|\.github/)'; then
+              BACKEND=true
+            else
+              BACKEND=false
+            fi
+            if echo "$CHANGED" | grep -qE '^frontend/'; then
+              FRONTEND=true
+            else
+              FRONTEND=false
+            fi
+            # Deliberately NOT widened to `.github/` the way BACKEND is. A
+            # workflow edit must not recycle the gateway: its image tag hashes
+            # gateway/ only, so a workflow-only commit would ship the identical
+            # image and drop every recruiter's WhatsApp socket for nothing
+            # (plan §12.3). If a workflow change ever does need to reach the
+            # gateway, it will have changed the tag or the service definition,
+            # and that is the thing to check — not this pattern.
+            if echo "$CHANGED" | grep -qE '^gateway/'; then
+              GATEWAY=true
+            else
+              GATEWAY=false
+            fi
           fi
 
           # api serves both tiers; worker only ever needs backend changes.
@@ -304,6 +408,7 @@ jobs:
             | python3 -c 'import sys,json; d=json.load(sys.stdin)["deployment"]["definition"]; print((d.get("docker") or {}).get("image",""))'
           }
           TARGET="${IMAGE}:${TAG}"
+          GATEWAY_TARGET="${GATEWAY_IMAGE}:${GATEWAY_TAG}"
 
           # arq is scoped like worker — backend-only — but checked against its
           # OWN image. Sharing the worker's result meant a run that deployed
@@ -312,19 +417,22 @@ jobs:
           # forever. Each service is asked about itself.
           ARQ=$BACKEND
 
-          skip_if_current() {  # name, id, current-decision
+          # 4th arg is the target image: the gateway runs its OWN image, so it
+          # must be compared against that and never against the backend tag.
+          skip_if_current() {  # name, id, current-decision, target-image
             [ "$3" = true ] || { echo false; return; }
             [ -n "$2" ] || { echo true; return; }   # no id configured: deploy
-            if [ "$(running "$2")" = "$TARGET" ]; then
-              echo "$1 already on $TARGET" >&2; echo false
+            if [ "$(running "$2")" = "$4" ]; then
+              echo "$1 already on $4" >&2; echo false
             else
               echo true
             fi
           }
 
-          API=$(skip_if_current api "$API_SERVICE_ID" "$API")
-          BACKEND=$(skip_if_current worker "$WORKER_SERVICE_ID" "$BACKEND")
-          ARQ=$(skip_if_current arq "$ARQ_SERVICE_ID" "$ARQ")
+          API=$(skip_if_current api "$API_SERVICE_ID" "$API" "$TARGET")
+          BACKEND=$(skip_if_current worker "$WORKER_SERVICE_ID" "$BACKEND" "$TARGET")
+          ARQ=$(skip_if_current arq "$ARQ_SERVICE_ID" "$ARQ" "$TARGET")
+          GATEWAY=$(skip_if_current gateway "$GATEWAY_SERVICE_ID" "$GATEWAY" "$GATEWAY_TARGET")
 
           # The services this run will actually deploy AND can verify. A
           # service with no configured id is deployed but not verified, so it
@@ -335,15 +443,25 @@ jobs:
           [ "$ARQ" = true ]     && [ -n "$ARQ_SERVICE_ID" ]    && IDS="$IDS,$ARQ_SERVICE_ID"
           IDS="${IDS#,}"
 
+          # The gateway is verified separately: it runs a DIFFERENT image with a
+          # different tag, and verify_koyeb.py checks one image per invocation.
+          GW_IDS=""
+          [ "$GATEWAY" = true ] && [ -n "$GATEWAY_SERVICE_ID" ] && GW_IDS="$GATEWAY_SERVICE_ID"
+
           if [ "$ARQ" = true ] && [ -z "$ARQ_SERVICE_ID" ]; then
             echo "::warning::ARQ_SERVICE_ID is unset — arq will deploy but is not verified"
+          fi
+          if [ "$GATEWAY" = true ] && [ -z "$GATEWAY_SERVICE_ID" ]; then
+            echo "::warning::GATEWAY_SERVICE_ID is unset — gateway will deploy but is not verified"
           fi
 
           echo "api=$API"        >> "$GITHUB_OUTPUT"
           echo "worker=$BACKEND" >> "$GITHUB_OUTPUT"
           echo "arq=$ARQ"        >> "$GITHUB_OUTPUT"
+          echo "gateway=$GATEWAY" >> "$GITHUB_OUTPUT"
           echo "service_ids=$IDS" >> "$GITHUB_OUTPUT"
-          echo "-> api=$API worker=$BACKEND arq=$ARQ"
+          echo "gateway_service_ids=$GW_IDS" >> "$GITHUB_OUTPUT"
+          echo "-> api=$API worker=$BACKEND arq=$ARQ gateway=$GATEWAY"
 
       - uses: astral-sh/setup-uv@v9.0.0
         if: steps.freshness.outputs.stale == 'false' && steps.scope.outputs.worker == 'true'
@@ -378,7 +496,8 @@ jobs:
           steps.freshness.outputs.stale == 'false' &&
           (steps.scope.outputs.api == 'true' ||
            steps.scope.outputs.worker == 'true' ||
-           steps.scope.outputs.arq == 'true')
+           steps.scope.outputs.arq == 'true' ||
+           steps.scope.outputs.gateway == 'true')
         env:
           KOYEB_CLI_VERSION: v5.10.1
         run: |
@@ -438,6 +557,22 @@ jobs:
             --docker-args app.workers.settings.WorkerSettings \
             --token "$KOYEB_TOKEN"
 
+      # The WA gateway (plan §1). Its own image, its own tag, no public route,
+      # scale pinned to 1 — the last two are hand-set on the service and are
+      # NOT in this repo (CLAUDE.md deploy table). `service update --docker`
+      # only changes the image, so it cannot undo them.
+      - name: Deploy gateway
+        if: steps.freshness.outputs.stale == 'false' && steps.scope.outputs.gateway == 'true'
+        env:
+          KOYEB_TOKEN: ${{ secrets.KOYEB_TOKEN }}
+          GATEWAY_TAG: ${{ needs.plan.outputs.gateway_tag }}
+        run: |
+          set -euo pipefail
+          koyeb service update expressautomate/gateway \
+            --docker "${GATEWAY_IMAGE}:${GATEWAY_TAG}" \
+            --docker-private-registry-secret "$KOYEB_REGISTRY_SECRET" \
+            --token "$KOYEB_TOKEN"
+
       # The three are updated in order, so a failure part-way leaves them
       # briefly on different builds. Tolerable because migrations run first and
       # must be backward-compatible with the running image anyway, and because
@@ -463,4 +598,21 @@ jobs:
           # Both carry DATABASE_URL and friends; a definition that lost them
           # would boot and fail at the first query.
           MIN_ENV_VARS: 5
+        run: python3 .github/scripts/verify_koyeb.py
+
+      # Separate invocation because verify_koyeb.py checks ONE image per run and
+      # the gateway's is different by design.
+      - name: Verify gateway deploy landed
+        if: >-
+          steps.freshness.outputs.stale == 'false' &&
+          steps.scope.outputs.gateway_service_ids != ''
+        env:
+          KOYEB_TOKEN: ${{ secrets.KOYEB_TOKEN }}
+          IMAGE: ${{ env.GATEWAY_IMAGE }}
+          IMAGE_TAG: ${{ needs.plan.outputs.gateway_tag }}
+          SERVICE_IDS: ${{ steps.scope.outputs.gateway_service_ids }}
+          # WA_GATEWAY_SHARED_SECRET, the DB URL and (from P2) the encryption
+          # key. A definition that lost them boots into a 401-everything or a
+          # refusal to start.
+          MIN_ENV_VARS: 2
         run: python3 .github/scripts/verify_koyeb.py
