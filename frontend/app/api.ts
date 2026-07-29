@@ -167,6 +167,7 @@ export const CANDIDATES_DASHBOARD_PATH = "/dashboard/candidates";
  */
 export const SETTINGS_GLOSSARY_PATH = "/settings/glossary";
 export const SETTINGS_NOTIFICATIONS_PATH = "/settings/notifications";
+export const SETTINGS_ACCOUNT_PATH = "/settings/account";
 
 /**
  * Everything the notifications screen needs in one read: which channels are

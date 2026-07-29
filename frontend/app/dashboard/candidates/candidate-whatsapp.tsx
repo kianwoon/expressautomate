@@ -2,6 +2,8 @@
 
 import { useEffect, useRef, useState } from "react";
 
+import { SETTINGS_ACCOUNT_PATH } from "../../api";
+import { useAuth } from "../../auth";
 import type { Candidate } from "../candidates";
 import {
   ApiError,
@@ -106,6 +108,13 @@ function WhatsappModal({
   const [blocked, setBlocked] = useState<string | null>(null);
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const headingRef = useRef<HTMLHeadingElement | null>(null);
+  // Not a blocker: the backend already rewrites the message to omit the name
+  // entirely rather than fall back to an email (see settings/account.tsx),
+  // so a signed-in user with neither name is fine to send, just less
+  // personal — this is a nudge toward Settings, not a gate.
+  const auth = useAuth();
+  const missingName =
+    auth.status === "signed-in" && !auth.me.user.preferred_name && !auth.me.user.display_name;
 
   useEffect(() => {
     let cancelled = false;
@@ -222,6 +231,12 @@ function WhatsappModal({
         {draft.status === "ready" && (
           <>
             <p className="body muted">{draft.phone_e164}</p>
+            {missingName && (
+              <p className="body jo-sub" style={{ marginTop: 8 }}>
+                Your name is missing from this message —{" "}
+                <a href={SETTINGS_ACCOUNT_PATH}>set it in Account settings</a>.
+              </p>
+            )}
             <label className="wa-field">
               <span className="row-k">Message</span>
               <textarea

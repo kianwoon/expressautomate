@@ -2,7 +2,13 @@
 
 import { useEffect } from "react";
 
-import { LANDING_PATH, SETTINGS_GLOSSARY_PATH, SETTINGS_NOTIFICATIONS_PATH, SETTINGS_PATH } from "../api";
+import {
+  LANDING_PATH,
+  SETTINGS_ACCOUNT_PATH,
+  SETTINGS_GLOSSARY_PATH,
+  SETTINGS_NOTIFICATIONS_PATH,
+  SETTINGS_PATH,
+} from "../api";
 import { useAuth } from "../auth";
 import { SiteFooter } from "../site-footer";
 import { SiteNav } from "../site-nav";
@@ -22,12 +28,13 @@ import { SiteNav } from "../site-nav";
  * not a list anything is matched against.
  */
 
-type Tab = "inbox" | "glossary" | "notifications";
+type Tab = "inbox" | "glossary" | "notifications" | "account";
 
 const TABS: { key: Tab; label: string; href: string }[] = [
   { key: "inbox", label: "Inbox", href: SETTINGS_PATH },
   { key: "glossary", label: "Shorthand", href: SETTINGS_GLOSSARY_PATH },
   { key: "notifications", label: "Notifications", href: SETTINGS_NOTIFICATIONS_PATH },
+  { key: "account", label: "Account", href: SETTINGS_ACCOUNT_PATH },
 ];
 
 export function SettingsShell({

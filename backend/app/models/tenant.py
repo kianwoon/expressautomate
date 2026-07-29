@@ -56,6 +56,13 @@ class User(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
 
     email: Mapped[str] = mapped_column(String(320), nullable=False, index=True)
     display_name: Mapped[str | None] = mapped_column(String(255))
+    # The user's own choice of name, distinct from `display_name` — which
+    # sign-in overwrites from the provider's claims on every login (see the
+    # upsert in app/api/auth.py). Mirrors `CandidateFieldOverride`: the
+    # provider's fact and the person's decision are kept in separate places so
+    # neither can silently clobber the other. Written only by
+    # `PATCH /api/auth/me`; sign-in must never touch this column.
+    preferred_name: Mapped[str | None] = mapped_column(String(255))
     # Entra ID object id ("oid" claim) — stable per user per tenant.
     ms_object_id: Mapped[str | None] = mapped_column(String(64), index=True)
     role: Mapped[str] = mapped_column(String(32), nullable=False, default="recruiter")

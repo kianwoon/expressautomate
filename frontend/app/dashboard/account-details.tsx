@@ -35,7 +35,13 @@ export function AccountDetails({ me }: { me: Me }) {
         <div className="card">
           <h3>Account</h3>
           <div className="rows" style={{ marginTop: 12 }}>
-            <Row k="Name" v={me.user.display_name?.trim() || null} />
+            {/* The chosen name first, so this card and the nav cannot show two
+                different names for the same person once one is set. Not
+                `displayNameOf`, which falls back to the email address: the
+                row below already is the email, and repeating it here reads
+                as though we could not find a name rather than as though none
+                was given. */}
+            <Row k="Name" v={me.user.preferred_name?.trim() || me.user.display_name?.trim() || null} />
             <Row k="Email" v={me.user.email} />
             <Row k="Role" v={me.user.role} />
           </div>

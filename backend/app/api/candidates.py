@@ -37,6 +37,7 @@ from app.services.candidate_naming import (
 )
 from app.services.candidate_overrides import overridden_fields
 from app.services.candidate_tenure import derive
+from app.services.user_naming import actor_name, recruiter_name
 
 router = APIRouter(tags=["candidates"])
 
@@ -936,18 +937,6 @@ ActivityChannel = Literal[CandidateActivity.WHATSAPP]
 ActivityStatus = Literal[CandidateActivity.OPENED]
 
 
-def _actor_name(display_name: str | None, email: str) -> str:
-    """The name to show for who did something — never fabricated (§15).
-
-    `users.display_name` is only populated from the Entra/Google claims at
-    sign-in and can be null (e.g. an older row, or a provider that omitted
-    it). Falling back to the user's `email`, which is NOT NULL, is honest:
-    it identifies the real person rather than inventing a display name they
-    never gave us.
-    """
-    return display_name if display_name else email
-
-
 # Letters whose *name* opens with a vowel sound, for a title that begins with
 # an initialism. "HR Manager" is read "aitch-are", so it takes "an", while its
 # spelled-out twin "Human Resources Manager" takes "a" — the article follows
@@ -1007,7 +996,11 @@ def _article_for(noun_phrase: str) -> str:
 # before opening WhatsApp — the same category `frontend/app/dashboard/
 # candidates/page.tsx` marks with this tag for its own hardcoded copy.
 def _whatsapp_draft_text(
-    *, candidate_greeting_name: str, recruiter_name: str, agency_name: str, job_title: str | None
+    *,
+    candidate_greeting_name: str,
+    recruiter_name: str | None,
+    agency_name: str,
+    job_title: str | None,
 ) -> str:
     # With a title: "...regarding a Senior Engineer opportunity." Without one,
     # the sentence is rewritten rather than leaving a blank ("regarding a
@@ -1021,9 +1014,18 @@ def _whatsapp_draft_text(
         )
     else:
         interest_line = "I would like to speak with you regarding an opportunity."
+    # Same treatment as a missing job title: rewrite the sentence rather than
+    # leave a gap. `recruiter_name` is None when neither `preferred_name` nor
+    # `display_name` is set (see app/services/user_naming.py) — that chain
+    # deliberately has no email fallback, since this sentence is read by the
+    # candidate, not a colleague.
+    if recruiter_name:
+        intro_line = f"This is {recruiter_name} from {agency_name}."
+    else:
+        intro_line = f"I am writing from {agency_name}."
     return (
         f"Hi {candidate_greeting_name},\n\n"
-        f"This is {recruiter_name} from {agency_name}.\n\n"
+        f"{intro_line}\n\n"
         f"{interest_line}\n\n"
         "Would you be available for a quick discussion?"
     )
@@ -1073,7 +1075,7 @@ async def whatsapp_draft(request: Request, candidate_id: uuid.UUID) -> dict:
     candidate_greeting_name = candidate.full_name.strip()
     message = _whatsapp_draft_text(
         candidate_greeting_name=candidate_greeting_name,
-        recruiter_name=_actor_name(user.display_name, user.email),
+        recruiter_name=recruiter_name(user.preferred_name, user.display_name),
         agency_name=tenant_name,
         job_title=candidate.current_title,
     )
@@ -1137,7 +1139,9 @@ async def log_activity(request: Request, candidate_id: uuid.UUID, body: Activity
         user = (
             await session.execute(select(User).where(User.id == user_uuid))
         ).scalar_one()
-    return _serialize_activity(activity, _actor_name(user.display_name, user.email))
+    return _serialize_activity(
+        activity, actor_name(user.preferred_name, user.display_name, user.email)
+    )
 
 
 @router.get("/candidates/{candidate_id}/activities")
@@ -1176,7 +1180,7 @@ async def list_activities(request: Request, candidate_id: uuid.UUID) -> dict:
             # honest about what we can no longer say (§15) rather than
             # inventing a name for someone the record no longer identifies.
             return "Unknown user"
-        return _actor_name(user.display_name, user.email)
+        return actor_name(user.preferred_name, user.display_name, user.email)
 
     return {"items": [_serialize_activity(row, _name_for(row)) for row in rows]}
 

@@ -1138,6 +1138,122 @@ async def test_me_is_401_when_the_session_user_no_longer_exists(
     assert (await client.get("/api/auth/me")).status_code == 401
 
 
+async def test_patch_me_sets_the_preferred_name(client, monkeypatch, cleanup) -> None:
+    tid, oid = str(uuid.uuid4()), uuid.uuid4().hex
+    cleanup.append(uuid.UUID(tid))
+    await sign_in(client, monkeypatch, token_response(tid, oid, "rachel@agency-a.sg"))
+
+    patched = await client.patch("/api/auth/me", json={"preferred_name": "Wong"})
+    assert patched.status_code == 200
+    assert patched.json()["user"]["preferred_name"] == "Wong"
+    # Same shape as GET, so the frontend can swap its cache wholesale.
+    assert set(patched.json()) == {"user", "tenant", "mailbox"}
+
+    me = (await client.get("/api/auth/me")).json()
+    assert me["user"]["preferred_name"] == "Wong"
+    assert me["user"]["display_name"] == "Rachel Tan", "display_name is untouched"
+
+
+async def test_preferred_name_survives_a_returning_sign_in(client, monkeypatch, cleanup) -> None:
+    """The regression this whole feature exists to fix: sign-in used to upsert
+    `display_name` from the claims on every login, and an editable
+    `display_name` would have been silently reverted the next time this
+    person signed in. `preferred_name` must not be touched by that upsert."""
+    tid, oid = str(uuid.uuid4()), uuid.uuid4().hex
+    cleanup.append(uuid.UUID(tid))
+    await sign_in(
+        client, monkeypatch, token_response(tid, oid, "rachel@agency-a.sg", name="Rachel Tan")
+    )
+    await client.patch("/api/auth/me", json={"preferred_name": "Wong"})
+
+    # A returning sign-in, through the real callback path, with a changed
+    # claims name — exactly what happens if Rachel updates her name in Entra.
+    await sign_in(
+        client, monkeypatch, token_response(tid, oid, "rachel@agency-a.sg", name="Rachel T. Tan")
+    )
+
+    me = (await client.get("/api/auth/me")).json()
+    assert me["user"]["preferred_name"] == "Wong", "preferred_name must survive sign-in"
+    assert me["user"]["display_name"] == "Rachel T. Tan", "display_name still refreshes from claims"
+
+
+async def test_patch_me_blank_or_whitespace_stores_null(client, monkeypatch, cleanup) -> None:
+    tid, oid = str(uuid.uuid4()), uuid.uuid4().hex
+    cleanup.append(uuid.UUID(tid))
+    await sign_in(client, monkeypatch, token_response(tid, oid, "rachel@agency-a.sg"))
+    await client.patch("/api/auth/me", json={"preferred_name": "Wong"})
+
+    patched = await client.patch("/api/auth/me", json={"preferred_name": "   "})
+    assert patched.status_code == 200
+    assert patched.json()["user"]["preferred_name"] is None
+
+
+async def test_patch_me_explicit_null_clears_it(client, monkeypatch, cleanup) -> None:
+    tid, oid = str(uuid.uuid4()), uuid.uuid4().hex
+    cleanup.append(uuid.UUID(tid))
+    await sign_in(client, monkeypatch, token_response(tid, oid, "rachel@agency-a.sg"))
+    await client.patch("/api/auth/me", json={"preferred_name": "Wong"})
+
+    patched = await client.patch("/api/auth/me", json={"preferred_name": None})
+    assert patched.status_code == 200
+    assert patched.json()["user"]["preferred_name"] is None
+    assert patched.json()["user"]["display_name"] == "Rachel Tan", "returns to the provider's name"
+
+
+async def test_patch_me_rejects_an_overlong_name(client, monkeypatch, cleanup) -> None:
+    tid, oid = str(uuid.uuid4()), uuid.uuid4().hex
+    cleanup.append(uuid.UUID(tid))
+    await sign_in(client, monkeypatch, token_response(tid, oid, "rachel@agency-a.sg"))
+
+    too_long = "x" * (auth_api.MAX_PREFERRED_NAME_LENGTH + 1)
+    response = await client.patch("/api/auth/me", json={"preferred_name": too_long})
+    assert response.status_code == 422
+    assert "preferred_name" in response.text
+
+
+async def test_patch_me_rejects_a_newline(client, monkeypatch, cleanup) -> None:
+    """This value is interpolated into a WhatsApp draft — a newline would let
+    a "name" forge extra lines of the message."""
+    tid, oid = str(uuid.uuid4()), uuid.uuid4().hex
+    cleanup.append(uuid.UUID(tid))
+    await sign_in(client, monkeypatch, token_response(tid, oid, "rachel@agency-a.sg"))
+
+    response = await client.patch(
+        "/api/auth/me", json={"preferred_name": "Wong\nThis is a fake line"}
+    )
+    assert response.status_code == 422
+
+
+async def test_patch_me_only_touches_the_signed_in_users_own_row(
+    client, monkeypatch, cleanup
+) -> None:
+    """No id in the route at all — proven by having two signed-in users each
+    end up with their own value, never the other's."""
+    tid = str(uuid.uuid4())
+    cleanup.append(uuid.UUID(tid))
+    oid_a, oid_b = uuid.uuid4().hex, uuid.uuid4().hex
+    await sign_in(client, monkeypatch, token_response(tid, oid_a, "rachel@agency-a.sg"))
+    await client.patch("/api/auth/me", json={"preferred_name": "Rachel"})
+
+    # A second colleague signs in on the same client, replacing the session.
+    await sign_in(client, monkeypatch, token_response(tid, oid_b, "sam@agency-a.sg"))
+    sam_me = (await client.get("/api/auth/me")).json()
+    assert sam_me["user"]["preferred_name"] is None
+    await client.patch("/api/auth/me", json={"preferred_name": "Sam"})
+
+    async with tenant_session(uuid.UUID(tid)) as s:
+        rows = (
+            await s.execute(text("SELECT email, preferred_name FROM users ORDER BY email"))
+        ).all()
+    assert dict(rows) == {"rachel@agency-a.sg": "Rachel", "sam@agency-a.sg": "Sam"}
+
+
+async def test_patch_me_requires_a_session(client) -> None:
+    assert (
+        await client.patch("/api/auth/me", json={"preferred_name": "Wong"})
+    ).status_code == 401
+
+
 async def test_logout_clears_the_session(client, monkeypatch, cleanup) -> None:
     tid = str(uuid.uuid4())
     cleanup.append(uuid.UUID(tid))

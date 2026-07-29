@@ -6,7 +6,15 @@ import { CHOOSE_ACCOUNT_PARAM, ME_PATH, SIGN_IN_PATH, SWITCH_ACCOUNT_PATH } from
 import { useLive } from "./events";
 
 export type Me = {
-  user: { id: string; email: string; display_name: string | null; role: string };
+  user: {
+    id: string;
+    email: string;
+    display_name: string | null;
+    /** Set by the user in Settings → Account. Takes priority over
+     *  `display_name` everywhere a name is shown — see `displayNameOf`. */
+    preferred_name: string | null;
+    role: string;
+  };
   tenant: { id: string; name: string; is_personal_account: boolean };
   mailbox: {
     provider: string;
@@ -191,7 +199,8 @@ export function useSignInHref(): string {
   return href;
 }
 
-/** What to call someone: their display name, else their email address. */
+/** What to call someone: the name they set themselves, else their provider
+ *  display name, else their email address. */
 export function displayNameOf(me: Me): string {
-  return me.user.display_name?.trim() || me.user.email;
+  return me.user.preferred_name?.trim() || me.user.display_name?.trim() || me.user.email;
 }

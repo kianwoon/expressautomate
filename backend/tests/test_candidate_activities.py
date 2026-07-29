@@ -162,6 +162,91 @@ def test_the_article_follows_how_the_title_is_said(title, expected) -> None:
     assert f"regarding {expected} opportunity." in message
 
 
+async def test_draft_uses_preferred_name_over_display_name(agency_with_candidates) -> None:
+    tid, uid, ids = agency_with_candidates
+    async with AdminSessionLocal() as s:
+        await s.execute(
+            text("UPDATE users SET preferred_name = :p WHERE id = :i"),
+            {"p": "W.", "i": uid},
+        )
+        await s.commit()
+    try:
+        async with await _client_for(tid, uid) as http:
+            body = (
+                await http.get(f"/api/candidates/{ids['with_phone']}/whatsapp-draft")
+            ).json()
+        assert "This is W. from" in body["message"]
+        assert "Wong" not in body["message"], "preferred_name must take priority"
+    finally:
+        async with AdminSessionLocal() as s:
+            await s.execute(
+                text("UPDATE users SET preferred_name = NULL WHERE id = :i"), {"i": uid}
+            )
+            await s.commit()
+
+
+async def test_draft_falls_back_to_display_name_when_no_preferred_name(
+    agency_with_candidates,
+) -> None:
+    tid, uid, ids = agency_with_candidates
+    async with await _client_for(tid, uid) as http:
+        body = (
+            await http.get(f"/api/candidates/{ids['with_phone']}/whatsapp-draft")
+        ).json()
+    assert "This is Wong from" in body["message"]
+
+
+async def test_draft_with_no_name_at_all_has_no_email_and_reads_properly(
+    agency_with_candidates,
+) -> None:
+    """Neither `preferred_name` nor `display_name` set: the message must not
+    fall back to the recruiter's email, and the sentence must still read as a
+    complete sentence rather than a gap where the name would go."""
+    tid, uid, ids = agency_with_candidates
+    async with AdminSessionLocal() as s:
+        await s.execute(text("UPDATE users SET display_name = NULL WHERE id = :i"), {"i": uid})
+        await s.commit()
+    try:
+        async with await _client_for(tid, uid) as http:
+            body = (
+                await http.get(f"/api/candidates/{ids['with_phone']}/whatsapp-draft")
+            ).json()
+        message = body["message"]
+        assert "@" not in message
+        assert f"I am writing from agency-{tid.hex[:6]}." in message
+    finally:
+        async with AdminSessionLocal() as s:
+            await s.execute(
+                text("UPDATE users SET display_name = :d WHERE id = :i"), {"d": "Wong", "i": uid}
+            )
+            await s.commit()
+
+
+async def test_actor_name_on_timeline_still_falls_back_to_email(agency_with_candidates) -> None:
+    """`actor_name` is seen only by colleagues in this tenant, so the email
+    fallback stays — unlike the candidate-facing draft."""
+    tid, uid, ids = agency_with_candidates
+    async with AdminSessionLocal() as s:
+        await s.execute(text("UPDATE users SET display_name = NULL WHERE id = :i"), {"i": uid})
+        email = (
+            await s.execute(text("SELECT email FROM users WHERE id = :i"), {"i": uid})
+        ).scalar_one()
+        await s.commit()
+    try:
+        async with await _client_for(tid, uid) as http:
+            response = await http.post(
+                f"/api/candidates/{ids['with_phone']}/activities",
+                json={"activity_type": "whatsapp_opened", "channel": "whatsapp"},
+            )
+        assert response.json()["actor_name"] == email
+    finally:
+        async with AdminSessionLocal() as s:
+            await s.execute(
+                text("UPDATE users SET display_name = :d WHERE id = :i"), {"d": "Wong", "i": uid}
+            )
+            await s.commit()
+
+
 async def test_no_phone_is_409_with_a_useful_message(agency_with_candidates) -> None:
     tid, uid, ids = agency_with_candidates
     async with await _client_for(tid, uid) as http:

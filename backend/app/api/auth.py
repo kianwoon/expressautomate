@@ -18,7 +18,8 @@ from cryptography.fernet import Fernet, InvalidToken
 from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
-from sqlalchemy import select, text
+from pydantic import BaseModel
+from sqlalchemy import select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.core.config import settings
@@ -835,6 +836,75 @@ async def _store_mailbox_consent(
     return response
 
 
+# The widest value `users.preferred_name` can physically hold, derived from
+# the column rather than written out — same reasoning as `MAX_EXPECTED_SALARY`
+# in app/api/candidates.py, so a migration that resizes the column moves this
+# bound with it instead of leaving a stale literal behind.
+MAX_PREFERRED_NAME_LENGTH = User.__table__.c.preferred_name.type.length
+
+# This string is interpolated straight into a WhatsApp draft (see
+# `_whatsapp_draft_text` in app/api/candidates.py). A newline or other control
+# character would let a "name" forge extra lines in a message the candidate
+# reads as coming from the agency, so it is refused outright rather than
+# stripped — stripping would silently change what the user asked to be called.
+_CONTROL_CHARACTERS = re.compile(r"[\x00-\x1f\x7f]")
+
+
+class PreferredNameIn(BaseModel):
+    # `str | None` so an explicit `{"preferred_name": null}` is distinguishable
+    # from omitting the field entirely once decoded — FastAPI/Pydantic gives a
+    # required field no way to be "absent", which is fine here: this endpoint
+    # has exactly one field, and PATCH-ing it with nothing to say is not a
+    # request this route needs to support.
+    preferred_name: str | None
+
+
+@router.patch("/auth/me")
+async def update_me(request: Request, body: PreferredNameIn) -> dict[str, dict]:
+    """Set or clear the caller's own display name. No admin path, no user id
+    in the URL — `_require_session` is the only source of whose row this
+    touches, so there is nothing here that could target anyone else's.
+
+    Returns the same shape as `GET /auth/me` so the frontend can replace its
+    cached `me` wholesale rather than patching two representations by hand.
+    """
+    user_uuid, tenant_uuid = _require_session(request)
+
+    if body.preferred_name is None:
+        # Explicit null clears the choice and returns the user to whatever
+        # the provider's `display_name` says — that is the escape hatch, not
+        # a bug: there is no other way back to "unset" once a name is typed.
+        cleaned: str | None = None
+    else:
+        stripped = body.preferred_name.strip()
+        if _CONTROL_CHARACTERS.search(stripped):
+            raise HTTPException(
+                status_code=422,
+                detail="preferred_name must not contain newlines or control characters",
+            )
+        if len(stripped) > MAX_PREFERRED_NAME_LENGTH:
+            raise HTTPException(
+                status_code=422,
+                detail=f"preferred_name must be at most {MAX_PREFERRED_NAME_LENGTH} characters",
+            )
+        # A blank or whitespace-only string stores NULL, not "" — "" would be
+        # indistinguishable from "unset" to nothing, and the resolution chain
+        # in app/services/user_naming.py needs to tell "no choice made" apart
+        # from "chose an empty name" (which is not a real choice at all).
+        cleaned = stripped or None
+
+    async with tenant_session(tenant_uuid) as session:
+        result = await session.execute(
+            update(User).where(User.id == user_uuid).values(preferred_name=cleaned)
+        )
+        if result.rowcount == 0:
+            # A deleted user with a live cookie must not look signed in.
+            raise HTTPException(status_code=401, detail="Not signed in.")
+        await session.commit()
+
+    return await me(request)
+
+
 @router.post("/auth/logout")
 async def logout(response: Response) -> dict[str, str]:
     """Clearing the cookie is the whole logout — no server-side session exists."""
@@ -895,6 +965,7 @@ async def me(request: Request) -> dict[str, dict]:
             "id": str(user.id),
             "email": user.email,
             "display_name": user.display_name,
+            "preferred_name": user.preferred_name,
             "role": user.role,
         },
         "tenant": {
