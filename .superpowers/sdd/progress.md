@@ -270,3 +270,14 @@ P5 Task 8: complete. PIECE 5 COMPLETE (4cca6ad..8fece81, 19 commits, 1208 passed
     with a rendered breakdown; (2) a coded job order shows the protected-attribute notice;
     (3) an unresolved-client run shows its notice and "Mark submitted" is disabled with the
     explanation.
+P5 final fix reviewed by Fable (9/10 APPROVE). Cap sits immediately after the sort so it
+  keeps the best, not a slice; candidates_considered still records the full population; the
+  test is a genuine prefix check, not coincidence-passable; both safeguard copy branches are
+  true against the code.
+  VALIDATOR RULING - ACCEPT, do not add one. If SOURCING_MAX_MATCHES < SOURCING_EXPLAIN_TOP_N
+  the behaviour degrades coherently (you cannot explain more than you keep); a cross-field
+  validator would turn harmless config into a startup failure, which is worse. Add a one-line
+  "must stay >=" comment on the setting next time that file is touched.
+  MINOR accepted: when protected_attribute_noticed is set with no note, the banner shows but
+  the recruiter cannot tell coded from plainly-worded. The copy omits the pointer rather than
+  guessing, so it is honest - cosmetic only.
