@@ -71,6 +71,7 @@ touched:
 | `entity_type`, `entity_id` | `candidate` or `candidate_role`, and which one |
 | `action` | `created` or `updated` |
 | `field_name`, `previous_value` | Null on a `created` row — there was nothing before |
+| `new_value` | What the import wrote. Without it the restore rule below cannot be evaluated at all |
 
 A created row also carries its `import_id` directly on `candidates` /
 `candidate_roles`, so the common case — undo everything this import made —
@@ -82,9 +83,14 @@ few thousand narrow rows, written once and read only by an undo.
 ### The restore rule, which is what makes undo safe
 
 **A field is restored only if its current value still equals what the import
-wrote.** If a recruiter has since corrected it by hand, the import's undo has
-no business reaching in — their edit is newer and better, and reverting it
-would be the import damaging exactly the data a person cared enough to fix.
+wrote** — which is why `new_value` is recorded alongside `previous_value`. With
+only the previous value there is nothing to compare against, and the rule
+cannot be evaluated: a field now holding something a recruiter typed is
+indistinguishable from one still holding what the import put there.
+
+If a recruiter has since corrected it by hand, the import's undo has no
+business reaching in — their edit is newer and better, and reverting it would
+be the import damaging exactly the data a person cared enough to fix.
 
 That single rule is what makes the two promises above true: calling undo twice
 is harmless because the second pass finds nothing matching, and edits made
@@ -97,7 +103,7 @@ less than the whole import says so rather than implying a clean reversal.
 
 **`candidate_imports`**, inheriting `TenantScoped`, shaped like
 `candidate_documents`: `filename`, `content_type`, `byte_size`, `object_key`,
-a state of `pending` | `parsing` | `done` | `failed`, per-outcome counts
+a state of `pending` | `parsing` | `done` | `failed` | `undone`, per-outcome counts
 (candidates created and updated, roles created and updated, rows failed),
 `error_report_key`, `uploaded_by` and timestamps.
 
@@ -165,6 +171,27 @@ names both candidates it collided with, and the recruiter decides. This is the
 same instinct the manual path already has: merging two real people is worse
 than a duplicate somebody can merge later.
 
+### What a real export actually contains
+
+A spreadsheet exported from an agency's old system is not clean, and every one
+of these appears:
+
+- **Empty trailing rows.** Skipped silently. They are an artefact of how the
+  file was saved, not a problem a recruiter should be shown five hundred times.
+- **Merged cells** read as empty in every row but the first. Treated as empty,
+  which the rules below already handle.
+- **The same candidate twice in one file.** The second row is applied to the
+  same person, not a second one — the run keeps what it has already matched or
+  created, so a sheet listing somebody twice does not produce two of them.
+- **A history row naming nobody in the Candidates sheet.** It is matched
+  against candidates already in the system; if that finds nothing, it is a
+  reported problem, not a new person. A history row carries no name, so
+  inventing a candidate from one would create a record with a job and no human
+  attached to it.
+- **Candidates are applied before history**, in one run, so a history row can
+  attach to a person created moments earlier in the same file. Any other order
+  makes a single-file migration impossible.
+
 ### Why imported rows are confirmed
 
 `unconfirmed` means a model proposed something and no person has looked at it.
@@ -226,8 +253,11 @@ Undo asks for confirmation and says what it will reverse, in counts.
     and the report says how many were skipped and why.
 12. A row whose email and phone name two different candidates is reported as a
     conflict, writes nothing, and names both.
-13. "Mar 2019" imports as month precision, with no day.
-14. RLS is enforced on every new table, including `candidate_import_changes`.
+13. The same candidate listed twice in one file produces one person, not two.
+14. A history row naming nobody is reported, and no candidate is invented for it.
+15. Empty trailing rows are skipped silently, not reported.
+16. "Mar 2019" imports as month precision, with no day.
+17. RLS is enforced on every new table, including `candidate_import_changes`.
 
 ## Out of scope
 

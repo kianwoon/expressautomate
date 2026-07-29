@@ -38,7 +38,7 @@ It sources `backend/.env.test` and hides any root `.env`. **Do not hand-roll env
 | `backend/app/services/imports/table.py` (create) | Bytes → rows. Sniffing, CSV, XLSX. Pure. |
 | `backend/app/services/imports/rows.py` (create) | Rows → typed records, with per-row problems. Pure. |
 | `backend/app/services/imports/apply.py` (create) | Matching, writing, change recording |
-| `backend/app/services/imports/undo.py` (create) | Replaying changes backwards |
+| `backend/app/services/imports/undo.py` (create) | Replaying changes backwards (Task 6) |
 | `backend/app/workers/import_jobs.py` (create) | `run_candidate_import`. **Not** `jobs.py` |
 | `backend/app/workers/settings.py`, `tasks.py` (modify) | Register the job; join the stuck sweep |
 | `backend/app/api/candidate_imports.py` (create) | Upload, list, errors, template, undo |
@@ -57,8 +57,11 @@ It sources `backend/.env.test` and hides any root `.env`. **Do not hand-roll env
 
 **Interfaces produced:**
 - `CandidateImport` — `filename`, `content_type`, `byte_size`, `object_key`, `state`, `error_report_key`, `candidates_created`, `candidates_updated`, `roles_created`, `roles_updated`, `rows_failed`, `uploaded_by`. Constants `PENDING`, `PARSING`, `DONE`, `FAILED`, `UNDONE`, `IMPORT_STATES`.
-- `CandidateImportChange` — `import_id`, `entity_type`, `entity_id`, `action`, `field_name`, `previous_value`. Constants `CANDIDATE`, `ROLE`, `CREATED`, `UPDATED`.
+- `CandidateImportChange` — `import_id`, `entity_type`, `entity_id`, `action`, `field_name`, `previous_value`, **`new_value`**. Constants `CANDIDATE`, `ROLE`, `CREATED`, `UPDATED`.
+
 - `Candidate.import_id` and `CandidateRole.import_id`, both nullable.
+
+**`new_value` is load-bearing, not bookkeeping.** The restore rule is "restore only if the current value still equals what the import wrote". With `previous_value` alone there is nothing to compare the current value against, and the rule cannot be evaluated at all: a field holding something a recruiter typed afterwards is indistinguishable from one still holding what the import put there. Omit this column and undo is not merely incomplete — it is undecidable.
 
 Model these on `CandidateDocument` (`models/candidate.py:300-376`) — same mixins, same composite-FK idiom, same constant style. Read it before writing.
 
@@ -152,6 +155,8 @@ Move the existing bomb tests from `tests/test_cv_text.py` that exercise the infl
 
 Lift both functions into `app/services/archive.py` with public names, drop the DOCX-specific naming, and have `cv/text.py` import them. **The CV tests must still pass unchanged** — that is the proof the move was faithful.
 
+**One thing will not survive a naive move.** `_inflate_bounded` currently raises `UnsupportedDocument` (`cv/text.py:180-192`), which is a CV concept and has no business in a shared archive module. `archive.py` raises `BoundedArchiveTooLarge`; `cv/text.py` catches it and re-raises `UnsupportedDocument`, so its callers and its tests see exactly what they saw before.
+
 - [ ] **Step 3: Add `openpyxl`**
 
 `uv add openpyxl` (or edit `pyproject.toml` and `uv sync`). Nothing else in the repo reads tabular files.
@@ -210,6 +215,8 @@ git commit -m "Read a spreadsheet by what it is, and by the names in its header"
 - **Dates keep the precision the cell had.** `2019` is year precision, `Mar 2019` month, a real date cell day. Never invent a component — this is §15, and `started_precision` exists for it.
 - A row with neither email nor phone is a problem: nothing can match it to a person.
 - A parse never raises. Every failure becomes a `RowProblem` and the run continues.
+- **An entirely empty row is skipped silently, not reported.** Every real export has trailing blanks, and five hundred `RowProblem`s about them would bury the twelve that matter.
+- **A merged cell reads as empty** in every row but the first — openpyxl reports it that way, and the rules above already handle empty.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -226,28 +233,31 @@ git commit -m "Turn a row into a record, or into a sentence a recruiter can act 
 ### Task 5: Matching, writing, and remembering what changed
 
 **Files:**
-- Create: `backend/app/services/imports/apply.py`, `backend/app/services/imports/undo.py`
-- Test: `backend/tests/test_import_apply.py`, `backend/tests/test_import_undo.py`
+- Create: `backend/app/services/imports/apply.py`
+- Test: `backend/tests/test_import_apply.py`
 
 **Interfaces consumed — reuse these, do not write new rules:**
 - `find_candidate(session, tenant_id, email, phone_e164) -> MatchResult` (`app/services/candidate_matching.py:58`). `MatchResult` has three branches: a `candidate_id` with `matched_on`; a `conflict` tuple of `(email_id, phone_id)`; or neither.
 - `match_existing_role(employer_normalized, started_on, started_precision, ended_on, ended_precision, existing, today) -> uuid.UUID | None` (`app/services/cv/persist.py:255`).
-- `overridden_fields(...)` (`app/api/candidate_roles.py:202`) — the set of fields a human edited.
+- `overridden_fields(session, candidate_id) -> set[str]` — the set of fields a human edited. It currently lives at `app/api/candidate_roles.py:202`. **Move it to a service module** (`app/services/candidate_overrides.py`) and have the API import it from there. Importing an API module from a service is backwards, and it will be the thing that eventually creates a cycle; the worker needs it too. Update both existing call sites.
 
 **Interfaces produced:**
 - `apply_import(session, *, tenant_id, import_id, candidates, roles, today) -> ImportOutcome` with counts and problems.
-- `undo_import(session, *, tenant_id, import_id) -> UndoOutcome` with counts restored, deleted and skipped.
 
 **The rules, exactly:**
 1. A `conflict` from `find_candidate` is a **`RowProblem`, never a match.** Nothing is written; the report names both candidates. Picking a side would merge or split two real people.
 2. On a candidate match, **the import wins except on a field in `overridden_fields`.** Every field actually changed gets a `CandidateImportChange` with its previous value, written **before** the update.
 3. A created row carries `import_id` and gets a `created` change row.
 4. A role matches via `match_existing_role`; a match updates, no match creates. Imported rows are `source="import"`, `status="confirmed"` — a spreadsheet is a person's own record, not a proposal.
-5. **Undo restores a field only if its current value still equals what the import wrote.** A recruiter's later correction is newer and better; reverting it would damage the data somebody cared enough to fix. Skipped fields are counted and reported. This rule is also what makes undo safe to call twice.
 
+**Ordering and duplicates within one file** — the plan was silent on these and an implementer would guess:
+
+- **Candidates are applied first, and flushed, before any history row is touched.** A history row must be able to attach to a person created moments earlier in the same file, or a single-file migration is impossible.
+- **The same candidate appearing twice in one file produces one person.** Keep a per-run map of what has already been matched or created, keyed on normalised email and phone, and consult it before `find_candidate`. Without this a sheet listing somebody twice creates them, then updates them — which is survivable — but a sheet listing them twice with *different* details silently applies whichever row came last, with no record that the two disagreed. Report the second row as a problem naming the disagreement.
+- **A history row matching no candidate is a reported problem, and creates nobody.** A history row carries an employer and a title but no name; inventing a candidate from one would produce a record with a job and no human attached to it.
 - [ ] **Step 1: Write the failing tests**
 
-Every rule above, plus: re-applying the same records changes nothing and duplicates nothing; undo twice is harmless; undo deletes created rows **and** restores updated fields.
+Every rule above, plus: re-applying the same records changes nothing and duplicates nothing.
 
 - [ ] **Step 2: Implement, then verify and commit**
 
@@ -257,7 +267,41 @@ git commit -m "Let the sheet win, except where a person already spoke"
 
 ---
 
-### Task 6: The job, the routes, and the way back
+### Task 6: The way back
+
+**Files:**
+- Create: `backend/app/services/imports/undo.py`
+- Test: `backend/tests/test_import_undo.py`
+
+**Interfaces consumed:** `CandidateImportChange` from Task 1, with its `previous_value` **and** `new_value`.
+
+**Interfaces produced:** `undo_import(session, *, tenant_id, import_id) -> UndoOutcome` — counts of rows deleted, fields restored and fields skipped, plus the reason each was skipped.
+
+**The rule, and it is the whole task:**
+
+**A field is restored only if its current value still equals `new_value`** — what the import wrote. If a recruiter corrected it afterwards, their edit is newer and better, and an undo reaching past it would damage exactly the data somebody cared enough to fix.
+
+That one comparison is what makes both promises true: calling undo twice is harmless, because the second pass finds nothing still matching; and edits made after the import survive being taken back.
+
+Rows the import **created** are deleted by `import_id`. Undo sets the import's state to `undone`, refuses while it is `parsing`, and reports what it skipped rather than implying a clean reversal.
+
+- [ ] **Step 1: Write the failing tests**
+
+Walk both sequences explicitly, because they are what the rule exists for:
+- Import writes A→B; recruiter edits B→C; undo runs. **C survives**, and the skip is counted and reported.
+- Import writes A→B; undo restores A; the import runs again writing A→B; undo runs again and restores A. Both undos behave identically.
+
+Plus: undo twice in a row is harmless; undo deletes created rows; undo refuses while `parsing`; a field a human had already overridden was never written by the import and so is never touched by undo.
+
+- [ ] **Step 2: Implement, then verify and commit**
+
+```bash
+git commit -m "Put back only what the import is still responsible for"
+```
+
+---
+
+### Task 7: The job and the routes
 
 **Files:**
 - Create: `backend/app/workers/import_jobs.py`, `backend/app/api/candidate_imports.py`
@@ -268,7 +312,7 @@ git commit -m "Let the sheet win, except where a person already spoke"
 
 **Join the stuck sweep.** `rescan_stuck` (`app/workers/tasks.py:111`) already has a second query/enqueue block for `candidate_documents` at `:150-161`. Add a third for imports stranded in `pending` or `parsing`, and include them in the count it returns.
 
-**Routes**, in `app/api/candidate_imports.py`, following `candidate_documents.py:172-262` for ordering and the size cap (`_read_within_limit` at `:140`) — but using `sniff_table` from Task 3, not the CV sniff:
+**Routes**, in `app/api/candidate_imports.py`, following `candidate_documents.py:172-262` for ordering and the size cap (`_read_within_limit` at `:140`) — but using `sniff_table` from Task 3, and `undo_import` from Task 6, not the CV sniff:
 
 - `POST /api/candidates/imports` → **202**. On a `False` from `enqueue()` — it returns a bool and never raises — the row goes to `failed` with a retryable message.
 - `GET /api/candidates/imports` — recent imports with state and counts.
@@ -290,7 +334,7 @@ git commit -m "Run the import out of the request, and leave a way back"
 
 ---
 
-### Task 7: Where a migration is watched
+### Task 8: Where a migration is watched
 
 **Files:**
 - Create: `frontend/app/dashboard/candidates/candidate-imports.tsx`
@@ -298,7 +342,7 @@ git commit -m "Run the import out of the request, and leave a way back"
 
 **On the candidates page, not the detail panel** — this is a bulk action on the list.
 
-**Interfaces consumed:** the five routes from Task 6.
+**Interfaces consumed:** the five routes from Task 7.
 
 - Upload in the avatar's house style — drop or click, no grey button pair, controls revealed on hover **and** `:focus-within` so they never leave the tab order.
 - A recent-imports table with state and counts, polled only while `pending` or `parsing`.
@@ -323,8 +367,8 @@ git commit -m "Let an agency watch its list arrive, and take it back"
 
 ## Self-Review
 
-**Spec coverage.** Both tables and the change trail → Task 1. Bounded inflate shared → Task 2. Sniffing, CSV, XLSX, named columns → Task 3. Row parsing, precision, problems with line numbers → Task 4. Candidate and role matching, conflict-as-problem, import-wins-except-overridden, undo and its restore rule → Task 5. Job, sweep, routes, template, settings → Task 6. UI, undo confirmation, skipped reporting → Task 7. All 14 spec tests appear across Tasks 1-7.
+**Spec coverage.** Both tables and the change trail → Task 1. Bounded inflate shared → Task 2. Sniffing, CSV, XLSX, named columns → Task 3. Row parsing, precision, problems with line numbers → Task 4. Candidate and role matching, conflict-as-problem, import-wins-except-overridden, → Task 5. Undo and its restore rule → Task 6. Job, sweep, routes, template, settings → Task 7. UI, undo confirmation, skipped reporting → Task 8. All 17 spec tests appear across Tasks 1-8.
 
 **Placeholders.** None. Four steps deliberately point at a file to copy rather than quoting it — the test fixtures, `CandidateDocument`, `parse_candidate_cv`'s guards, and the upload route — because quoting a signature that may have drifted is worse than naming the source of truth.
 
-**Type consistency.** `sniff_table` returns `"csv" | "xlsx" | None` in Tasks 3 and 6. `read_sheets` is defined in Task 3 and called in Task 6. `CandidateRecord` / `RoleRecord` / `RowProblem` are defined in Task 4 and consumed in Task 5. `apply_import` and `undo_import` are defined in Task 5 and called in Task 6. `bounded_archive` is defined in Task 2 and used in Task 3. `CandidateImport`'s state constants are defined in Task 1 and used in Tasks 5, 6 and 7.
+**Type consistency.** `sniff_table` returns `"csv" | "xlsx" | None` in Tasks 3 and 6. `read_sheets` is defined in Task 3 and called in Task 6. `CandidateRecord` / `RoleRecord` / `RowProblem` are defined in Task 4 and consumed in Task 5. `apply_import` is defined in Task 5 and `undo_import` in Task 6; both are called in Task 7. `bounded_archive` is defined in Task 2 and used in Task 3. `CandidateImport`'s state constants are defined in Task 1 and used in Tasks 5, 6, 7 and 8.
