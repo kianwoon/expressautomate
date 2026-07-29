@@ -97,8 +97,16 @@ reason as the two above:
 | Setting (service `gateway`) | Value |
 |---|---|
 | Route | **none** — no public route at all. It is called only by `api` over the private mesh; the browser never reaches it. |
+| Port | `7300:tcp` — **`tcp`, not `http`, and that is what makes it private.** Creating the service with `--ports 7300:http` silently added a public route `/` on it, which `api` already owns in this app. Removing the route alone does not stick: a http port keeps its route. The two changes have to travel together — `--port 7300:tcp --route '!/'`. |
 | Health check | `GET /health` on port **7300** (`WA_GATEWAY_PORT`). Unauthenticated by design — an authenticated health check fails the same way a 404 does. |
 | Scale | **pinned to 1, autoscaling off, forever.** A Baileys socket is process-local; two instances fight over the same WhatsApp session and get both logged out. |
+
+**Created 2026-07-29**, service id `50680cdb`, region `was`, `eco-nano`. The
+shared secret lives once, as the Koyeb secret `ea-wa-gateway-shared-secret`,
+and both services reference it rather than each holding a copy — two copies
+are two things that can drift, which is what this whole section is about. It
+is reached at `http://gateway.expressautomate:7300`, the `<service>.<app>`
+name Koyeb's mesh gives every service.
 
 Its env vars are set by hand and start empty: `WA_GATEWAY_SHARED_SECRET`
 (required — the process refuses to boot without it) and, from P2, the database

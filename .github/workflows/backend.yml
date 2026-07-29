@@ -41,7 +41,7 @@ env:
   ARQ_SERVICE_ID: 0822002c-1024-4eb7-816e-25b75adf721c
   # Set once the Koyeb `gateway` service exists (see CLAUDE.md deploy table).
   # Empty means: deploy it, but do not verify — same contract as ARQ_SERVICE_ID.
-  GATEWAY_SERVICE_ID: ''
+  GATEWAY_SERVICE_ID: '50680cdb'
 
 jobs:
   # The image depends only on backend/, frontend/ and the Dockerfile. Tagging by
