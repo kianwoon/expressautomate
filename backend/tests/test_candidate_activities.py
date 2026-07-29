@@ -133,6 +133,17 @@ async def test_no_title_reads_properly_with_no_blank_gap(agency_with_candidates)
         ("SENIOR ENGINEER", "a SENIOR ENGINEER"),
         ("MARKETING MANAGER", "a MARKETING MANAGER"),
         ("ENROLLED NURSE", "an ENROLLED NURSE"),
+        # Four letters or fewer and capitalised is not enough on its own:
+        # these are shouted words, not initials.
+        ("HEAD OF SALES", "a HEAD OF SALES"),
+        ("LEAD ENGINEER", "a LEAD ENGINEER"),
+        # Four-letter initialisms are why the threshold is 4 and not 3 —
+        # NTUC and SMRT are everyday employers here.
+        ("NTUC Officer", "an NTUC Officer"),
+        ("SMRT Technician", "an SMRT Technician"),
+        # One word in caps with nothing to shout alongside it stays an
+        # initialism; there is no sentence for caps lock to have shouted.
+        ("HR", "an HR"),
         # Nothing to sound out; "a" is the safe default.
         ("3D Artist", "a 3D Artist"),
     ],

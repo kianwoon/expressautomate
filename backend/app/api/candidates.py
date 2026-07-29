@@ -966,7 +966,8 @@ def _article_for(noun_phrase: str) -> str:
     Two rules, because job titles are mostly ordinary words with a seam of
     initialisms running through them:
 
-    - An initialism (two or more leading capitals, as in "HR", "IT", "QA")
+    - An initialism — a short all-caps first word (≤4 letters, as in "HR",
+      "IT", "QA", "MRT", "NTUC") in a title that is not otherwise shouting —
       is read letter by letter, so the first letter's *name* decides.
     - Anything else goes by its first letter, with `u` deliberately excluded
       from the vowels: a title starting with u almost always says "you" —
@@ -983,14 +984,20 @@ def _article_for(noun_phrase: str) -> str:
         # Nothing to read — "a" is the safer default, and a title starting
         # with a digit ("3D Artist") is said "three-dee" anyway.
         return "a"
-    # An initialism is short as well as capitalised. Testing only "first two
-    # letters are capitals" catches a title someone typed in caps lock —
-    # "SENIOR ENGINEER" would be read as initials and take "an" — and titles
-    # arrive capitalised from CV extraction often enough that this is a real
-    # sentence, not a hypothetical one. Four characters covers HR, IT, QA, UX
-    # and MRT without reaching an ordinary word.
+    # Two signals have to agree before a word is read as initials.
+    #
+    # Short: four letters covers HR, IT, QA, UX, MRT and NTUC without
+    # reaching an ordinary word. Three would be tidier but loses the
+    # four-letter Singapore initialisms, which are the commoner case here.
+    #
+    # And not shouting: a title arriving in caps lock from CV extraction is
+    # every word capitalised, not an initialism, so "HEAD OF SALES" must not
+    # become "an HEAD OF SALES". Where the whole title is upper case there is
+    # no signal left to separate the two, and reading it as words is wrong
+    # less often — it costs "a HR MANAGER" and saves every shouted sentence.
     first_word = stripped.split()[0]
-    if first_word.isupper() and first_word.isalpha() and len(first_word) <= 4:
+    shouting = stripped.isupper() and " " in stripped.strip()
+    if not shouting and first_word.isupper() and first_word.isalpha() and len(first_word) <= 4:
         return "an" if first_word[0] in _VOWEL_SOUNDED_LETTERS else "a"
     return "an" if stripped[0].lower() in "aeio" else "a"
 
