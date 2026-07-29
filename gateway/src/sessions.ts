@@ -85,6 +85,26 @@ const QR_TTL_MS = 20_000;
  *  rather than retrying forever against a dead network or a banned number. */
 const MAX_RECONNECT_ATTEMPTS = 3;
 
+/** First retry waits this long; each subsequent one doubles. */
+const RECONNECT_BASE_MS = 1_000;
+/** Ceiling, so a long outage does not push the wait somewhere absurd. */
+const RECONNECT_MAX_MS = 30_000;
+
+/**
+ * How long to wait before retry number `attempts`.
+ *
+ * Doubling, with a jitter of up to a quarter of the delay. The jitter is not
+ * decoration: the gateway holds every recruiter's socket in one process, so a
+ * WhatsApp-side blip drops them together and a fixed delay would march them
+ * all back in lockstep — a burst that looks far more like an attack than the
+ * outage it actually is.
+ */
+export function backoffMs(attempts: number): number {
+  const doubled = RECONNECT_BASE_MS * 2 ** Math.max(0, attempts - 1);
+  const capped = Math.min(doubled, RECONNECT_MAX_MS);
+  return capped + Math.floor(Math.random() * (capped / 4));
+}
+
 interface Runtime {
   socket: WASocket | null;
   status: SessionStatus;
@@ -131,16 +151,26 @@ export class SessionManager {
   readonly #socketFactory: SocketFactory;
   readonly #onStatusChange: StatusCallback | undefined;
   readonly #runtimes = new Map<string, Runtime>();
+  /** Opens that have started but not yet reached `#runtimes` — see `#openOnce`. */
+  readonly #opening = new Map<string, Promise<Runtime>>();
+  readonly #sleep: (ms: number) => Promise<void>;
 
   constructor(
     pool: Pool,
     cipher: ConstructorParameters<typeof PostgresAuthStore>[1],
-    opts: { socketFactory?: SocketFactory; onStatusChange?: StatusCallback } = {},
+    opts: {
+      socketFactory?: SocketFactory;
+      onStatusChange?: StatusCallback;
+      /** Injectable so a test can prove the backoff without waiting for it. */
+      sleep?: (ms: number) => Promise<void>;
+    } = {},
   ) {
     this.#pool = pool;
     this.#store = new PostgresAuthStore(pool, cipher);
     this.#socketFactory = opts.socketFactory ?? realSocketFactory;
     this.#onStatusChange = opts.onStatusChange;
+    this.#sleep =
+      opts.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   }
 
   /** `GET /sessions/status` — never opens a socket for a session that isn't
@@ -156,7 +186,7 @@ export class SessionManager {
     }
     // Known to the store but not to this process — a fresh boot. Resume it,
     // which is the property described in this file's docstring.
-    const runtime = await this.#open(ref);
+    const runtime = await this.#openOnce(ref);
     return snapshotOf(runtime);
   }
 
@@ -168,7 +198,7 @@ export class SessionManager {
     if (existing && (existing.status === 'connected' || existing.status === 'pairing' || existing.status === 'reconnecting')) {
       return snapshotOf(existing);
     }
-    const runtime = await this.#open(ref);
+    const runtime = await this.#openOnce(ref);
     return snapshotOf(runtime);
   }
 
@@ -209,7 +239,35 @@ export class SessionManager {
     return stored !== undefined;
   }
 
-  async #open(ref: SessionRef): Promise<Runtime> {
+  /**
+   * `#open`, but at most one at a time per session.
+   *
+   * `#open` only reaches `#runtimes.set` after two awaits, so the map is empty
+   * for the whole time it spends in the database. Two callers arriving in that
+   * window — two tabs pressing Connect, or an SSE-driven refetch racing a
+   * click — both looked, both saw nothing, and both built a socket over the
+   * same credentials. WhatsApp answers a second socket on one identity with a
+   * stream conflict, which closes them both and feeds the reconnect path.
+   *
+   * The in-flight promise is what the second caller finds instead, so it waits
+   * for the first one's socket rather than starting a rival.
+   */
+  async #openOnce(ref: SessionRef, carriedAttempts = 0): Promise<Runtime> {
+    const key = keyFor(ref);
+    const existing = this.#runtimes.get(key);
+    if (existing) return existing;
+
+    const inFlight = this.#opening.get(key);
+    if (inFlight) return inFlight;
+
+    const attempt = this.#open(ref, carriedAttempts).finally(() => {
+      this.#opening.delete(key);
+    });
+    this.#opening.set(key, attempt);
+    return attempt;
+  }
+
+  async #open(ref: SessionRef, carriedAttempts = 0): Promise<Runtime> {
     const key = keyFor(ref);
     // Must precede the auth-state read/write below: `wa_session_keys` FK's
     // to `wa_sessions(tenant_id, id)`, so the row has to exist first. See
@@ -226,7 +284,12 @@ export class SessionManager {
       qrExpiresAt: null,
       phoneNumber: null,
       connectedAt: null,
-      reconnectAttempts: 0,
+      // Carried across a reconnect rather than reset. Each retry used to build
+      // a runtime starting from zero, so the ceiling below could never be
+      // reached and a session that would never come back retried at whatever
+      // speed the machine allowed — the exact repeated-reconnect pattern the
+      // plan calls a ban signal.
+      reconnectAttempts: carriedAttempts,
       lastPushed: '',
     };
     this.#runtimes.set(key, runtime);
@@ -296,12 +359,25 @@ export class SessionManager {
         return;
       }
 
+      const attempts = runtime.reconnectAttempts;
       runtime.status = 'reconnecting';
       runtime.statusDetail = 'Connection dropped; retrying.';
       await this.#push(ref, snapshotOf(runtime), runtime.statusDetail);
+
+      // The old runtime is finished; drop it so `#openOnce` builds the
+      // replacement rather than handing back a socket that has closed.
+      this.#runtimes.delete(keyFor(ref));
+
+      // Wait before retrying, longer each time. Reconnecting instantly and
+      // forever is what a banned or blocked number looks like from WhatsApp's
+      // side, and it is the behaviour most likely to turn a temporary refusal
+      // into a permanent one.
+      await this.#sleep(backoffMs(attempts));
+
       // Baileys does not auto-reconnect; a fresh socket over the same
-      // (now-updated) auth state is what resumes without a new QR.
-      await this.#open(ref);
+      // (now-updated) auth state is what resumes without a new QR. The attempt
+      // count travels with it, so the ceiling above is reachable.
+      await this.#openOnce(ref, attempts);
     }
   }
 

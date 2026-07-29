@@ -23,6 +23,48 @@ type Handler = (payload: unknown) => void;
 
 /** A Baileys socket with none of Baileys: just enough surface for
  * `SessionManager` to drive, plus a way for the test to fire events on it. */
+/**
+ * A factory that hands out a **fresh** socket per call and counts them.
+ *
+ * `fakeSocketFactory` returns one shared instance, which is fine for the tests
+ * that only care about events — but it cannot tell one open from two, and it
+ * cannot model a reconnect, where each attempt genuinely gets a new socket
+ * with its own handlers.
+ */
+function countingSocketFactory(): {
+  factory: SocketFactory;
+  opened: () => number;
+  emitLatest: (event: string, payload?: unknown) => void;
+} {
+  let latest: Map<string, Handler[]> | null = null;
+  let count = 0;
+
+  const factory = (() => {
+    count += 1;
+    const handlers = new Map<string, Handler[]>();
+    latest = handlers;
+    return {
+      user: { id: '6591234567:1@s.whatsapp.net' },
+      ev: {
+        on(event: string, cb: Handler) {
+          const list = handlers.get(event) ?? [];
+          list.push(cb);
+          handlers.set(event, list);
+        },
+      },
+      logout: async () => {},
+    };
+  }) as unknown as SocketFactory;
+
+  return {
+    factory,
+    opened: () => count,
+    emitLatest: (event, payload) => {
+      for (const cb of latest?.get(event) ?? []) cb(payload);
+    },
+  };
+}
+
 function fakeSocketFactory(): { factory: SocketFactory; emit: (event: string, payload?: unknown) => void; sockets: unknown[] } {
   const handlers = new Map<string, Handler[]>();
   let loggedOut = false;
@@ -205,5 +247,54 @@ describe('SessionManager', { skip: SKIP }, () => {
 
     const again = await manager.status(ref);
     assert.equal(again.status, 'disconnected');
+  });
+
+  test('two callers racing to open a session get one socket, not two', async () => {
+    // `#open` reaches the runtime map only after two awaits. Two tabs pressing
+    // Connect inside that window both used to build a socket over the same
+    // credentials, and WhatsApp answers a second socket on one identity with a
+    // stream conflict that closes both — straight into the reconnect path.
+    const ref = await seedTenantAndUser();
+    const counting = countingSocketFactory();
+    const manager = new SessionManager(pool, cipher, { socketFactory: counting.factory });
+
+    // Both callers must be ones that actually open. `status()` short-circuits
+    // to `disconnected` for a session with no stored creds without touching
+    // the factory, so racing it against `pair()` would assert nothing.
+    const [a, b] = await Promise.all([manager.pair(ref), manager.pair(ref)]);
+
+    assert.equal(counting.opened(), 1, 'a raced open must not create a second socket');
+    assert.equal(a.status, b.status);
+    assert.equal(a.status, 'pairing');
+  });
+
+  test('a session that will not come back stops retrying, and waits longer each time', async () => {
+    // Each retry used to build a runtime with the attempt count reset, so the
+    // ceiling was unreachable and a dead session reconnected at whatever speed
+    // the machine allowed — the repeated-reconnect pattern the plan names as a
+    // ban signal.
+    const ref = await seedTenantAndUser();
+    const counting = countingSocketFactory();
+    const waits: number[] = [];
+    const manager = new SessionManager(pool, cipher, {
+      socketFactory: counting.factory,
+      sleep: async (ms) => {
+        waits.push(ms);
+      },
+    });
+
+    await manager.pair(ref);
+    // Drop the connection repeatedly. Every close lands on whichever socket is
+    // current, exactly as a genuinely unreachable number would behave.
+    for (let i = 0; i < 6; i += 1) {
+      counting.emitLatest('connection.update', { connection: 'close' });
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+
+    const final = await manager.status(ref);
+    assert.equal(final.status, 'disconnected', 'retries must be given up on, not repeated forever');
+    assert.ok(waits.length >= 2, `expected several backoff waits, saw ${waits.length}`);
+    const [first, second] = waits as [number, number];
+    assert.ok(second > first, `each wait must exceed the last: ${first} then ${second}`);
   });
 });

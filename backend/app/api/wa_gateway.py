@@ -35,7 +35,7 @@ flight.
 import secrets as secrets_module
 import uuid
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Header, HTTPException, Request
 from pydantic import BaseModel
@@ -170,7 +170,12 @@ class InternalStatusIn(BaseModel):
 
     tenant_id: uuid.UUID
     user_id: uuid.UUID
-    status: str
+    # The five the CHECK constraint allows, stated here so an unknown value is
+    # a 422 naming the field rather than an IntegrityError surfacing as a 500.
+    # `gateway_unreachable` is deliberately absent: it is this API's way of
+    # saying it could not see, never something the gateway observed, and a row
+    # claiming it would be a fact we never had.
+    status: Literal["pairing", "connected", "reconnecting", "disconnected", "logged_out"]
     status_detail: str | None = None
     phone_e164: str | None = None
     connected_at: datetime | None = None
