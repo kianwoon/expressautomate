@@ -279,6 +279,11 @@ h3 { font-size: 1.125rem; letter-spacing: -0.01em; font-weight: 650; }
   font: inherit;
   font-size: 0.9375rem;
   font-weight: 600;
+  /* Pinned rather than `normal`: the height of a text button is padding plus
+     this line box, and an icon button has to match it exactly. Leaving it to
+     the font meant the two disagreed by a few pixels, which is visible the
+     moment they stand side by side. */
+  line-height: 1.2;
   padding: 11px 20px;
   border-radius: var(--radius);
   border: 1px solid transparent;
@@ -291,11 +296,14 @@ h3 { font-size: 1.125rem; letter-spacing: -0.01em; font-weight: 650; }
 .btn-secondary { background: var(--surface); color: var(--ink-900); border-color: var(--line); }
 .btn-secondary:hover { background: var(--surface-alt); }
 /* A button whose whole label is an icon. Square rather than text-width, and
-   sized to match the height of the text buttons it stands beside, so an
-   action row does not go ragged where the words stop. The tap target stays
-   above the 44px guidance on a touch screen via the padding, not the glyph. */
-.btn-icon { display: inline-flex; align-items: center; justify-content: center; padding: 8px 10px; }
-.btn-icon svg, .btn-icon img { display: block; }
+   the same height as the text buttons it stands beside, so an action row does
+   not go ragged where the words stop.
+
+   The height is matched by construction, not by a magic number: the vertical
+   padding is `.btn`'s own, and the glyph is sized to the text line box above
+   (0.9375rem × 1.2 = 18px). Change either and both buttons move together. */
+.btn-icon { display: inline-flex; align-items: center; justify-content: center; padding: 11px 12px; }
+.btn-icon svg, .btn-icon img { display: block; width: 18px; height: 18px; }
 /* `.btn` carries no focus ring of its own, so every button on the site —
    landing page and app alike — needs this one rule to be visibly focusable. */
 .btn:focus-visible { outline: 2px solid var(--blue-500); outline-offset: 2px; }

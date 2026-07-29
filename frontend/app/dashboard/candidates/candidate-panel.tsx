@@ -251,7 +251,7 @@ function Detail({
       )}
 
       <div className="jo-detail-actions">
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+        <div className="jo-action-row">
           <button type="button" className="btn btn-primary" onClick={onEdit} disabled={busy}>
             Edit
           </button>

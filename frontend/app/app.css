@@ -171,6 +171,15 @@
 .jo-detail-source { margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--line); }
 .jo-detail-source p { margin-top: 6px; }
 .jo-detail-actions { margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--line); }
+/* Every action on one line. These four buttons are one decision — "what do I
+   do with this person" — and wrapping split them into a group of three and an
+   orphan, which read as two unrelated groups.
+   `nowrap` needs somewhere to give when the panel is narrow, so the padding
+   on the text buttons is what compresses, down to a floor that keeps the
+   labels legible. The icon button is exempt: it is already square. */
+.jo-action-row { display: flex; gap: 8px; flex-wrap: nowrap; }
+.jo-action-row .btn { min-width: 0; padding-inline: clamp(10px, 2.2vw, 20px); }
+.jo-action-row .btn-icon { padding-inline: 12px; }
 .jo-detail-hint { margin-top: 10px; }
 .jo-detail-error { margin-top: 12px; color: var(--amber-700); font-size: 0.875rem; }
 
