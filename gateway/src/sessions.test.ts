@@ -297,4 +297,53 @@ describe('SessionManager', { skip: SKIP }, () => {
     const [first, second] = waits as [number, number];
     assert.ok(second > first, `each wait must exceed the last: ${first} then ${second}`);
   });
+
+  test('asking about a session mid-backoff reports reconnecting and opens nothing', async () => {
+    // The regression that made the first fix worthless. Pushing `reconnecting`
+    // nudges the browser, the browser refetches, and if that refetch found no
+    // runtime it reopened immediately with the attempt count back at zero —
+    // so watching the panel drove the very loop the backoff prevents.
+    const ref = await seedTenantAndUser();
+    const counting = countingSocketFactory();
+    const gate: { release: () => void } = { release: () => {} };
+    const manager = new SessionManager(pool, cipher, {
+      socketFactory: counting.factory,
+      // Hold the retry inside the sleep so the assertions below run in exactly
+      // the window the bug lived in.
+      sleep: () => new Promise<void>((resolve) => { gate.release = resolve; }),
+    });
+
+    await manager.pair(ref);
+    counting.emitLatest('connection.update', { connection: 'close' });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const during = await manager.status(ref);
+    assert.equal(during.status, 'reconnecting', 'a session waiting to retry is reconnecting');
+    assert.equal(counting.opened(), 1, 'asking must not start a second socket mid-backoff');
+
+    gate.release();
+  });
+
+  test('disconnecting mid-backoff stays disconnected — the sleeping retry gives up', async () => {
+    const ref = await seedTenantAndUser();
+    const counting = countingSocketFactory();
+    const gate: { release: () => void } = { release: () => {} };
+    const manager = new SessionManager(pool, cipher, {
+      socketFactory: counting.factory,
+      sleep: () => new Promise<void>((resolve) => { gate.release = resolve; }),
+    });
+
+    await manager.pair(ref);
+    counting.emitLatest('connection.update', { connection: 'close' });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    await manager.disconnect(ref);
+    // Let the retry wake up now that the recruiter has already disconnected.
+    gate.release();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const after = await manager.status(ref);
+    assert.equal(after.status, 'disconnected', 'a retry must not resurrect a disconnected session');
+    assert.equal(after.qr, null);
+  });
 });

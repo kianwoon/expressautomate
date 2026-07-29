@@ -114,6 +114,9 @@ interface Runtime {
   phoneNumber: string | null;
   connectedAt: Date | null;
   reconnectAttempts: number;
+  /** Bumped when the session is deliberately ended, so a sleeping retry can
+   *  tell it has been superseded and abandon itself. */
+  generation: number;
   /** Baileys fires `connection.update` more than once per logical change;
    *  this dedupes the callback so the push (and its SSE nudge) don't spam. */
   lastPushed: string;
@@ -217,6 +220,12 @@ export class SessionManager {
       }
     }
     await this.#store.clear(ref);
+    // A reconnect may be asleep right now, holding this exact runtime and
+    // about to reopen it. Bumping the generation is what tells it to stop:
+    // without it the retry wakes after the recruiter has disconnected,
+    // re-creates the session row, and opens a pairing socket over credentials
+    // this line has just cleared.
+    if (runtime) runtime.generation += 1;
     this.#runtimes.delete(key);
     const snapshot: SessionSnapshot = {
       status: 'disconnected',
@@ -267,7 +276,16 @@ export class SessionManager {
     return attempt;
   }
 
-  async #open(ref: SessionRef, carriedAttempts = 0): Promise<Runtime> {
+  /**
+   * Build a socket for `ref`, either into a fresh runtime or into one that is
+   * already there.
+   *
+   * `reuse` is what a reconnect passes. The retry must keep the *same* runtime
+   * object rather than replace it: the runtime is what `status()` and `pair()`
+   * find, and a session that vanishes from the map while it waits to retry is
+   * a session anything can reopen from scratch — see `#handleUpdate`.
+   */
+  async #open(ref: SessionRef, carriedAttempts = 0, reuse?: Runtime): Promise<Runtime> {
     const key = keyFor(ref);
     // Must precede the auth-state read/write below: `wa_session_keys` FK's
     // to `wa_sessions(tenant_id, id)`, so the row has to exist first. See
@@ -276,25 +294,39 @@ export class SessionManager {
     // callback" — this never touches `status`.
     await ensureWaSessionRow(this.#pool, ref);
     const { state, saveCreds } = await usePostgresAuthState(this.#store, ref);
-    const runtime: Runtime = {
-      socket: null,
-      status: 'pairing',
-      statusDetail: null,
-      qr: null,
-      qrExpiresAt: null,
-      phoneNumber: null,
-      connectedAt: null,
-      // Carried across a reconnect rather than reset. Each retry used to build
-      // a runtime starting from zero, so the ceiling below could never be
-      // reached and a session that would never come back retried at whatever
-      // speed the machine allowed — the exact repeated-reconnect pattern the
-      // plan calls a ban signal.
-      reconnectAttempts: carriedAttempts,
-      lastPushed: '',
-    };
-    this.#runtimes.set(key, runtime);
+    const runtime: Runtime =
+      reuse ??
+      {
+        socket: null,
+        status: 'pairing',
+        statusDetail: null,
+        qr: null,
+        qrExpiresAt: null,
+        phoneNumber: null,
+        connectedAt: null,
+        // Carried across a reconnect rather than reset. Each retry used to
+        // build a runtime starting from zero, so the ceiling below could never
+        // be reached and a session that would never come back retried at
+        // whatever speed the machine allowed — the exact repeated-reconnect
+        // pattern the plan calls a ban signal.
+        reconnectAttempts: carriedAttempts,
+        // Bumped whenever the session is deliberately ended, so a retry that
+        // was already sleeping can tell it has been superseded.
+        generation: 0,
+        lastPushed: '',
+      };
+    if (!reuse) this.#runtimes.set(key, runtime);
 
-    const socket = this.#socketFactory(state);
+    let socket;
+    try {
+      socket = this.#socketFactory(state);
+    } catch (error) {
+      // Without this a failed factory leaves a socketless `pairing` runtime in
+      // the map forever: `status()` would report pairing, and `pair()` would
+      // hand that same dead entry back rather than trying again.
+      if (!reuse) this.#runtimes.delete(key);
+      throw error;
+    }
     runtime.socket = socket;
 
     socket.ev.on('creds.update', () => {
@@ -314,6 +346,12 @@ export class SessionManager {
     runtime: Runtime,
     update: { connection?: string; qr?: string; lastDisconnect?: { error?: unknown } },
   ): Promise<void> {
+    const key = keyFor(ref);
+    // Events from a socket this session has already moved on from. A `close`
+    // arriving late from a replaced socket would otherwise delete its
+    // successor from the map and schedule a rival reconnect against it.
+    if (this.#runtimes.get(key) !== runtime) return;
+
     if (update.qr) {
       runtime.status = 'pairing';
       runtime.qr = update.qr;
@@ -360,13 +398,18 @@ export class SessionManager {
       }
 
       const attempts = runtime.reconnectAttempts;
+      const generation = runtime.generation;
       runtime.status = 'reconnecting';
       runtime.statusDetail = 'Connection dropped; retrying.';
+      // The dead socket is dropped, but the runtime deliberately stays in the
+      // map. Removing it was a bug: `reconnecting` is pushed, which nudges the
+      // browser, which refetches `GET /session`, which found no runtime, saw
+      // stored creds, and opened a fresh one — immediately, with the attempt
+      // count back at zero. Watching the panel drove exactly the loop the
+      // backoff exists to prevent. Left in the map, `status()` answers
+      // `reconnecting` and opens nothing, which is also the honest answer.
+      runtime.socket = null;
       await this.#push(ref, snapshotOf(runtime), runtime.statusDetail);
-
-      // The old runtime is finished; drop it so `#openOnce` builds the
-      // replacement rather than handing back a socket that has closed.
-      this.#runtimes.delete(keyFor(ref));
 
       // Wait before retrying, longer each time. Reconnecting instantly and
       // forever is what a banned or blocked number looks like from WhatsApp's
@@ -374,10 +417,16 @@ export class SessionManager {
       // into a permanent one.
       await this.#sleep(backoffMs(attempts));
 
+      // The wait is long enough for the session to have been ended, or
+      // replaced, while it elapsed. A retry that ignored that would resurrect
+      // a session the recruiter had just disconnected — re-creating its row
+      // and opening a pairing socket over credentials that were cleared.
+      if (this.#runtimes.get(key) !== runtime || runtime.generation !== generation) return;
+
       // Baileys does not auto-reconnect; a fresh socket over the same
-      // (now-updated) auth state is what resumes without a new QR. The attempt
-      // count travels with it, so the ceiling above is reachable.
-      await this.#openOnce(ref, attempts);
+      // (now-updated) auth state is what resumes without a new QR. Reusing the
+      // runtime keeps the attempt count, so the ceiling above is reachable.
+      await this.#open(ref, attempts, runtime);
     }
   }
 
