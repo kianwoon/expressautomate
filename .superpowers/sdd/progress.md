@@ -108,3 +108,9 @@ PIECE 4 COMPLETE. Fable final: SHIP WITH FIXES 8/10; all closed in 8851cd8.
     and candidates visible; (2) undo a small import - confirm sentence, skips list, refresh;
     (3) error-report link downloads via presigned URL.
   BEFORE DEPLOY: check Koyeb api AND worker env, and apply the migration before the worker.
+P4 final fix reviewed by Fable (8.5/10 APPROVE WITH CHANGES) and closed in 62ec2d0:
+  the conditional-UPDATE claim that makes undo safe was verified only by inspection - both
+  sides now have a test that forces the race and fails if the WHERE clause is removed.
+  Lost race now answers 409, not 500.
+  ACCEPTED: avatar-only later work; a later import's updates do not protect a created
+  candidate from the creating import's undo.
