@@ -69,6 +69,19 @@ def test_the_version_is_a_hash_of_the_text_not_a_hand_maintained_string() -> Non
     assert NOTICE_VERSION == _content_version(NOTICE_TEXT)
     assert _content_version(NOTICE_TEXT + " ") != NOTICE_VERSION
 
+    # And the literal, which is the half that actually guards the wording.
+    # The two assertions above only prove the version is derived — they hold
+    # just as well after somebody edits the notice, because the derivation
+    # follows the edit. Pinning the value means a changed word fails here and
+    # has to be acknowledged deliberately, which is the point: recruiters have
+    # already accepted the old text, and a silent edit would leave their
+    # stored version pointing at wording nobody can reproduce.
+    assert NOTICE_VERSION == "2026-07-29-74cc66971c44", (
+        "The notice text changed. That is allowed — but update this literal in "
+        "the same commit, and know that every existing acknowledgement now "
+        "refers to the previous wording and will be re-asked for."
+    )
+
 
 async def test_get_session_reports_no_acknowledgement_for_a_fresh_user(client, signed_in) -> None:
     response = await client.get("/api/wa/session")
