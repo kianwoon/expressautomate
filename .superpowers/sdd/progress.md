@@ -118,3 +118,8 @@ P4 final fix reviewed by Fable (8.5/10 APPROVE WITH CHANGES) and closed in 62ec2
 ## Piece 5 - candidate sourcing
 Plan: docs/superpowers/plans/2026-07-29-candidate-sourcing.md (8 tasks)
 P5 Task 1: complete (4cca6ad..3c1f0aa, 1104 passed, review clean)
+P5 Task 2: complete (3c1f0aa..c74d1a8, 1135 passed, review clean after test fixes)
+  CARRY TO TASK 3 (IMPORTANT): tokens() strips ALL punctuation, so "C++" -> "c" and collides
+    with plain "C". Fine for job titles. WRONG for skills - use normalize_skill from
+    candidate_naming.py:83 for skill comparison, NOT tokens()/overlap().
+  Period basis is annual: 2080 hr, 260 day, 52 week, 12 month per year, commented.

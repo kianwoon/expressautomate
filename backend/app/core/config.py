@@ -540,6 +540,35 @@ class Settings(BaseSettings):
     # ten thousand jobs in a single sweep.
     NOTIFY_FLUSH_LIMIT: int = Field(default=200, gt=0)
 
+    # How much each signal counts when ranking a candidate against a job order.
+    # These are the knobs an agency owner will want to turn — one desk lives on
+    # skills, another on who the person already worked for — so they are
+    # settings rather than numbers buried in `services/sourcing/score.py`.
+    # Only their ratios matter: the total is a weighted *mean* over the
+    # components that had data, so the set never has to sum to anything.
+    SOURCING_WEIGHT_TITLE: float = Field(default=3.0, ge=0)
+    SOURCING_WEIGHT_SKILLS: float = Field(default=3.0, ge=0)
+    SOURCING_WEIGHT_EMPLOYER: float = Field(default=1.0, ge=0)
+    SOURCING_WEIGHT_SALARY: float = Field(default=2.0, ge=0)
+    SOURCING_WEIGHT_TENURE: float = Field(default=1.0, ge=0)
+    SOURCING_WEIGHT_RECENCY: float = Field(default=1.0, ge=0)
+
+    # The experience at which the tenure signal is already full marks. Beyond
+    # it more years say nothing further about this job, and letting them keep
+    # climbing would rank a thirty-year career above a well-matched ten-year
+    # one on tenure alone. Months, because early-career candidates are exactly
+    # where the resolution is needed.
+    SOURCING_TENURE_FULL_MONTHS: int = Field(default=120, gt=0)
+    # How long a candidate's most recent role may have ended before the
+    # recency signal reaches zero. This measures distance from the workforce,
+    # not age — a career break and a young candidate look identical to it, and
+    # that is the point.
+    SOURCING_RECENCY_STALE_MONTHS: int = Field(default=36, gt=0)
+    # Scores are compared, stored and shown; rounding them at one agreed place
+    # is what makes "the same inputs give the same score" true of the value a
+    # recruiter reads rather than only of the arithmetic behind it.
+    SOURCING_SCORE_DECIMAL_PLACES: int = Field(default=4, ge=0, le=6)
+
     @field_validator("MS_IDENTITY_SCOPES", "MS_MAILBOX_SCOPES")
     @classmethod
     def _non_empty_when_configured(cls, v: str) -> str:

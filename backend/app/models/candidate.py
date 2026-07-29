@@ -44,7 +44,11 @@ class Candidate(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
     ACTIVE = "active"
     ARCHIVED = "archived"
     MERGED = "merged"
-    STAGES = ("new", "contacted", "submitted", "placed", "rejected")
+    # Named because sourcing has to exclude it by name (a placed person is not
+    # available), and a stage spelled out at the query is a stage that can
+    # drift from this tuple without anything failing.
+    PLACED = "placed"
+    STAGES = ("new", "contacted", "submitted", PLACED, "rejected")
 
     full_name: Mapped[str] = mapped_column(Text, nullable=False)
     email: Mapped[str | None] = mapped_column(String(320))
