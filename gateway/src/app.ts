@@ -50,6 +50,48 @@ export function buildApp(config: GatewayConfig, sessions?: SessionManager): Fast
       return toWire(await sessions.pair(ref));
     });
 
+    /**
+     * `POST /send` — plan §7.
+     *
+     * **Singular by design and it stays singular.** There is no `/send/bulk`,
+     * no array of recipients, and no broadcast: plan §9 makes the API shape
+     * itself the day-one ban-risk mitigation, so the missing endpoint is the
+     * feature. Text only, one recipient, one message.
+     *
+     * A refused send is a 409 rather than a 500 or a silent success, and the
+     * body names the status the session is actually in — the recruiter's
+     * modal renders "still reconnecting" differently from "you were logged
+     * out", and cannot if the gateway only says "not connected".
+     */
+    guarded.post('/send', async (request, reply) => {
+      const ref = refFrom(request.body);
+      if (!ref) return reply.code(400).send({ error: 'tenantId and userId are required' });
+      const body = request.body as Record<string, unknown>;
+      const to = typeof body['to'] === 'string' ? body['to'] : '';
+      const text = typeof body['text'] === 'string' ? body['text'] : '';
+      if (to === '' || text === '') {
+        return reply.code(400).send({ error: 'to and text are required' });
+      }
+
+      // `sessions.send` goes through the same public `status()` path
+      // `/sessions/status` uses, so a session whose socket died with the last
+      // deploy is resumed from stored credentials rather than reported gone.
+      const outcome = await sessions.send(ref, to, text);
+      if (!outcome.ok) {
+        // Two different failures, two different codes, because the API turns
+        // them into two different records. 409: never attempted, the session
+        // was not connected — no activity row at all. 422: attempted on a
+        // live socket and WhatsApp refused it — a `failed` row carrying this
+        // exact `error` string. A 5xx is reserved for "we do not know what
+        // happened", which is neither of these.
+        if ('refusal' in outcome) {
+          return reply.code(422).send({ error: outcome.refusal, status: 'connected' });
+        }
+        return reply.code(409).send({ error: 'session is not connected', status: outcome.status });
+      }
+      return { status: 'sent', providerMessageId: outcome.providerMessageId };
+    });
+
     guarded.post('/sessions/disconnect', async (request, reply) => {
       const ref = refFrom(request.body);
       if (!ref) return reply.code(400).send({ error: 'tenantId and userId are required' });

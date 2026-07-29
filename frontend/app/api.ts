@@ -296,10 +296,22 @@ export function candidateWhatsappDraftPath(id: string): string {
   return `${candidatePath(id)}/whatsapp-draft`;
 }
 
-/** The candidate's activity log — so far just "WhatsApp opened" entries, each
- *  recorded after the popup actually opened, never before. */
+/** The candidate's activity log — now "WhatsApp opened", "sent" and "failed"
+ *  entries, each recorded after the corresponding thing actually happened,
+ *  never before. */
 export function candidateActivitiesPath(id: string): string {
   return `${candidatePath(id)}/activities`;
+}
+
+/** Sends the draft message via the recruiter's own linked WhatsApp session
+ *  (see `WA_SESSION_PATH`). POST only; flat, matching the shipped sibling
+ *  `whatsapp-draft` above rather than a nested `/whatsapp/send`. A 409 means
+ *  the session is not `connected` right now, a 429 means the daily send cap
+ *  is hit, and a 422 means the candidate has no number — the caller falls
+ *  back to the `Open WhatsApp` popup for the first two rather than
+ *  dead-ending. */
+export function candidateWhatsappSendPath(id: string): string {
+  return `${candidatePath(id)}/whatsapp-send`;
 }
 
 /** The roles a candidate held. Nested under the candidate because a role has

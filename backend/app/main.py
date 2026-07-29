@@ -17,6 +17,7 @@ from app.api import (
     candidate_documents,
     candidate_imports,
     candidate_roles,
+    candidate_whatsapp,
     candidates,
     candidates_avatar,
     clients,
@@ -138,6 +139,10 @@ api.include_router(glossary.router)
 # Before `candidates`, deliberately: `/candidates/imports` would otherwise be
 # matched by `/candidates/{candidate_id}` and answered as a malformed UUID.
 api.include_router(candidate_imports.router)
+# Before `candidates`, for the reason the comment above gives: `candidates`
+# owns `/candidates/{candidate_id}`, and `/candidates/{id}/whatsapp-send`
+# would be shadowed if that generic route were declared first.
+api.include_router(candidate_whatsapp.router)
 api.include_router(candidates.router)
 api.include_router(candidate_roles.router)
 api.include_router(candidates_avatar.router)

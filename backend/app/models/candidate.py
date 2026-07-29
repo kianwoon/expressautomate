@@ -287,14 +287,43 @@ class CandidateRole(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
 
 
 class CandidateActivity(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
-    """Something a recruiter did towards a candidate outside this app.
+    """Something a recruiter did towards a candidate, here or outside this app.
 
-    Step 1 of WhatsApp outreach: the platform renders a message and opens
-    WhatsApp Web, but the recruiter presses send there, not here. So this
-    table may only ever record that an outreach surface was *opened* — never
-    that a message was *sent*, because nothing in this system observes a send
-    (§15). `STATUSES` is deliberately narrow to just "opened" for that reason,
-    not as a placeholder for values to fill in later.
+    Two outreach paths write here, and they claim different things:
+
+    - The popup path (step 1) renders a message and opens WhatsApp Web; the
+      recruiter presses send there, not here. It writes `whatsapp_opened` /
+      `OPENED`, which records only that an outreach surface was opened.
+    - The WA gateway path (Baileys, plan §7-§8) holds the socket itself, so it
+      does observe the handover. It writes `whatsapp_sent` / `SENT`, `FAILED`
+      or `UNKNOWN`.
+
+    §15 honesty, the sentence this whole vocabulary turns on:
+
+    `sent` means the gateway's socket accepted the message and WhatsApp
+    returned a provider message id — it does not mean delivered, and never
+    means read.
+
+    `FAILED` is narrower than "it did not work". It means the gateway
+    **explicitly refused**, and `error` then holds the gateway's own message
+    verbatim — never paraphrased, never inferred from a status code.
+
+    `UNKNOWN` is the honest answer when we dispatched and never learned the
+    outcome: the request went out and the connection timed out or dropped
+    before the reply came back, so WhatsApp may well have accepted it. This
+    row says exactly that and nothing more. Recording it as `FAILED` would be
+    a claim about the world we cannot support, and would invite a recruiter to
+    send the same message a second time.
+
+    A row is written only when a dispatch was actually attempted. A refusal
+    that happens *before* dispatch — no paired session, no phone number, the
+    daily cap already reached — writes nothing at all, because nothing was
+    attempted and an activity row is a record of an attempt.
+
+    Delivery receipts are deliberately not ingested in v1, so there is no
+    `delivered` or `read` here; adding one requires actually observing
+    Baileys' `messages.update`, its own migration, and nothing else may write
+    them. `OPENED` keeps its exact original meaning.
 
     The vocabularies below are enforced twice, the same pattern
     `20260729_0900_opportunity_vocabularies.py` set for
@@ -302,21 +331,25 @@ class CandidateActivity(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
     Pydantic, and once as a database CHECK constraint so the rule holds even
     for a row a future migration or script writes directly.
 
-    Narrow on purpose. `activity_type`/`channel`/`status` hold exactly the
-    one value each that step 1 writes; more values arrive only when there is
-    code that writes them, not by speculating a fuller vocabulary now.
+    Still narrow on purpose. Every value below has code that writes it; none
+    is here on speculation, which is why `delivered` and `read` are absent
+    despite being the obvious next two.
     """
 
     __tablename__ = "candidate_activities"
 
     WHATSAPP_OPENED = "whatsapp_opened"
-    ACTIVITY_TYPES = (WHATSAPP_OPENED,)
+    WHATSAPP_SENT = "whatsapp_sent"
+    ACTIVITY_TYPES = (WHATSAPP_OPENED, WHATSAPP_SENT)
 
     WHATSAPP = "whatsapp"
     CHANNELS = (WHATSAPP,)
 
     OPENED = "opened"
-    STATUSES = (OPENED,)
+    SENT = "sent"
+    FAILED = "failed"
+    UNKNOWN = "unknown"
+    STATUSES = (OPENED, SENT, FAILED, UNKNOWN)
 
     candidate_id: Mapped[uuid.UUID] = mapped_column(
         PgUUID(as_uuid=True), nullable=False, index=True
@@ -331,6 +364,19 @@ class CandidateActivity(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
     # what was true the day it was opened.
     message_text: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(16), nullable=False)
+    # WhatsApp's own id for the message, from the gateway's send call. Null on
+    # every `opened` and every `failed` row — the two are mutually exclusive
+    # with `error` by construction.
+    provider_message_id: Mapped[str | None] = mapped_column(Text)
+    # The gateway's own refusal message, verbatim, for a `failed` row. Only
+    # ever a message the gateway itself produced — never this module's guess
+    # at one, and never a string that could carry the gateway URL or the
+    # shared secret into a column the browser reads back.
+    error: Mapped[str | None] = mapped_column(Text)
+    # The caller's idempotency key: a retried click carries the same one, and
+    # gets the original row back rather than sending twice. Unique per tenant
+    # (see the migration), not global.
+    client_request_id: Mapped[uuid.UUID | None] = mapped_column(PgUUID(as_uuid=True))
 
     __table_args__ = (
         ForeignKeyConstraint(
@@ -338,6 +384,12 @@ class CandidateActivity(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
             ["candidates.tenant_id", "candidates.id"],
             name="fk_candidate_activities_candidate_same_tenant",
             ondelete="CASCADE",
+        ),
+        Index(
+            "uq_candidate_activities_tenant_client_request",
+            "tenant_id",
+            "client_request_id",
+            unique=True,
         ),
     )
 

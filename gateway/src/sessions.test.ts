@@ -65,8 +65,14 @@ function countingSocketFactory(): {
   };
 }
 
-function fakeSocketFactory(): { factory: SocketFactory; emit: (event: string, payload?: unknown) => void; sockets: unknown[] } {
+function fakeSocketFactory(): {
+  factory: SocketFactory;
+  emit: (event: string, payload?: unknown) => void;
+  sockets: unknown[];
+  sent: { jid: string; text: string }[];
+} {
   const handlers = new Map<string, Handler[]>();
+  const sent: { jid: string; text: string }[] = [];
   let loggedOut = false;
   const socket = {
     user: undefined as { id: string } | undefined,
@@ -83,6 +89,10 @@ function fakeSocketFactory(): { factory: SocketFactory; emit: (event: string, pa
     get loggedOut() {
       return loggedOut;
     },
+    sendMessage: async (jid: string, content: { text: string }) => {
+      sent.push({ jid, text: content.text });
+      return { key: { id: `WAMSG-${sent.length}` } };
+    },
   };
   const sockets = [socket];
   return {
@@ -98,6 +108,7 @@ function fakeSocketFactory(): { factory: SocketFactory; emit: (event: string, pa
       for (const cb of handlers.get(event) ?? []) cb(payload);
     },
     sockets,
+    sent,
   };
 }
 
@@ -345,5 +356,112 @@ describe('SessionManager', { skip: SKIP }, () => {
     const after = await manager.status(ref);
     assert.equal(after.status, 'disconnected', 'a retry must not resurrect a disconnected session');
     assert.equal(after.qr, null);
+  });
+  test('send refuses a session that is not connected, and says which status it is', async () => {
+    const ref = await seedTenantAndUser();
+    const fake = fakeSocketFactory();
+    const manager = new SessionManager(pool, cipher, { socketFactory: fake.factory });
+
+    // Never paired at all.
+    assert.deepEqual(await manager.send(ref, '+6591234567', 'hi'), {
+      ok: false,
+      status: 'disconnected',
+    });
+
+    // Pairing: a QR is outstanding, so there is no socket to accept a message.
+    await manager.pair(ref);
+    fake.emit('connection.update', { qr: 'raw-qr-string' });
+    assert.deepEqual(await manager.send(ref, '+6591234567', 'hi'), {
+      ok: false,
+      status: 'pairing',
+    });
+
+    assert.deepEqual(fake.sent, [], 'nothing may be handed to a socket in these states');
+  });
+
+  test('send refuses a reconnecting session rather than waiting on it', async () => {
+    const ref = await seedTenantAndUser();
+    const counting = countingSocketFactory();
+    const manager = new SessionManager(pool, cipher, {
+      socketFactory: counting.factory,
+      // Hold the retry open so the session stays observably `reconnecting`.
+      sleep: () => new Promise<void>(() => {}),
+    });
+    await manager.pair(ref);
+    counting.emitLatest('connection.update', { connection: 'close' });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const outcome = await manager.send(ref, '+6591234567', 'hi');
+    assert.deepEqual(outcome, { ok: false, status: 'reconnecting' });
+  });
+
+  test('a connected session sends, and returns WhatsApp\'s own message id', async () => {
+    const ref = await seedTenantAndUser();
+    const fake = fakeSocketFactory();
+    const manager = new SessionManager(pool, cipher, { socketFactory: fake.factory });
+    await manager.pair(ref);
+    fake.emit('connection.update', { connection: 'open' });
+
+    const outcome = await manager.send(ref, '+65 9123 4567', 'Hi Hui Ling Tan,');
+    assert.equal(outcome.ok, true);
+    assert.equal(outcome.ok && outcome.providerMessageId, 'WAMSG-1');
+    // E.164 in, WhatsApp jid out — the separators and the `+` are not part of
+    // a jid's user part, and the digits came from the candidate row.
+    assert.deepEqual(fake.sent, [{ jid: '6591234567@s.whatsapp.net', text: 'Hi Hui Ling Tan,' }]);
+  });
+
+  test('a throw from sendMessage becomes a refusal carrying WhatsApp\'s own words', async () => {
+    // Not an exception out of `send`, and not a status: the socket was live,
+    // so this is a real observed refusal of this one message. It is the only
+    // thing the API is allowed to record as `failed`, and the string is
+    // passed on unchanged — rewording it would be inventing a reason for
+    // someone else's refusal.
+    const ref = await seedTenantAndUser();
+    const fake = fakeSocketFactory();
+    const manager = new SessionManager(pool, cipher, { socketFactory: fake.factory });
+    await manager.pair(ref);
+    fake.emit('connection.update', { connection: 'open' });
+    (fake.sockets[0] as { sendMessage: () => Promise<never> }).sendMessage = async () => {
+      throw new Error('not-authorized: blocked by recipient');
+    };
+
+    const outcome = await manager.send(ref, '+6591234567', 'hi');
+    assert.equal(outcome.ok, false);
+    assert.equal(!outcome.ok && 'refusal' in outcome && outcome.refusal,
+      'not-authorized: blocked by recipient');
+    assert.equal(outcome.status, 'connected');
+  });
+
+  test('send wakes a session this process has forgotten, instead of calling it disconnected', async () => {
+    // The redeploy case, and the reason `send` goes through `status()`: every
+    // socket dies on deploy, and sending is usually the first thing a
+    // recruiter does afterwards. A `send` that only looked in this process's
+    // memory would report a perfectly good pairing as disconnected.
+    const ref = await seedTenantAndUser();
+    const first = fakeSocketFactory();
+    const manager1 = new SessionManager(pool, cipher, { socketFactory: first.factory });
+    await manager1.pair(ref);
+    first.emit('creds.update');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    first.emit('connection.update', { connection: 'open' });
+
+    // A brand-new manager: the process restarted, only the store remembers.
+    const second = fakeSocketFactory();
+    const manager2 = new SessionManager(pool, cipher, { socketFactory: second.factory });
+    const outcome = await manager2.send(ref, '+6591234567', 'hi');
+
+    // It resumed from stored credentials with no QR. The resumed socket is
+    // still `pairing` until Baileys reports `open`, so the honest answer is a
+    // refusal naming that — not `disconnected`, which would have sent the
+    // recruiter back to Settings to re-pair a session that is fine.
+    assert.equal(outcome.ok, false);
+    assert.equal(outcome.ok === false && outcome.status, 'pairing');
+    assert.equal((await manager2.status(ref)).qr, null, 'no fresh QR was demanded');
+
+    // And once it reports open, the same session sends without re-pairing.
+    second.emit('connection.update', { connection: 'open' });
+    const after = await manager2.send(ref, '+6591234567', 'hi');
+    assert.equal(after.ok, true);
+    assert.deepEqual(second.sent, [{ jid: '6591234567@s.whatsapp.net', text: 'hi' }]);
   });
 });

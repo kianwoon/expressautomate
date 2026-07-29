@@ -7,7 +7,7 @@ import type { FastifyInstance } from 'fastify';
 import { buildApp } from './app.js';
 import { secretMatches } from './auth.js';
 import { ConfigError, loadConfig } from './config.js';
-import type { SessionManager } from './sessions.js';
+import type { SendOutcome, SessionManager } from './sessions.js';
 
 const SECRET = 'test-shared-secret-not-a-real-one';
 
@@ -160,6 +160,106 @@ describe('/sessions/* routes (P3)', () => {
     });
     assert.equal(res.statusCode, 200);
     assert.equal(res.json().status, 'disconnected');
+  });
+});
+
+describe('POST /send (P4)', () => {
+  let app: FastifyInstance;
+  const sends: { ref: unknown; to: string; text: string }[] = [];
+  let outcome: SendOutcome = { ok: true, status: 'connected', providerMessageId: 'WAMSG-1' };
+  const fakeSessions = {
+    send: async (ref: unknown, to: string, text: string) => {
+      sends.push({ ref, to, text });
+      return outcome;
+    },
+  } as unknown as SessionManager;
+
+  before(() => {
+    app = buildApp(
+      {
+        host: '127.0.0.1',
+        port: 0,
+        sharedSecret: SECRET,
+        databaseUrl: 'postgresql://unused:unused@127.0.0.1:1/unused',
+        encryptionKey: randomBytes(32),
+      },
+      fakeSessions,
+    );
+  });
+
+  after(async () => {
+    await app.close();
+  });
+
+  function send(payload: unknown, secret: string | null = SECRET) {
+    return app.inject({
+      method: 'POST',
+      url: '/send',
+      headers: secret === null ? {} : { authorization: `Bearer ${secret}` },
+      payload: payload as object,
+    });
+  }
+
+  test('is behind the shared secret like every other guarded route', async () => {
+    const res = await send({ tenantId: 't', userId: 'u', to: '+6591234567', text: 'hi' }, null);
+    assert.equal(res.statusCode, 401);
+  });
+
+  test('a successful send returns the provider message id', async () => {
+    outcome = { ok: true, status: 'connected', providerMessageId: 'WAMSG-42' };
+    const res = await send({ tenantId: 'tenant-1', userId: 'user-1', to: '+6591234567', text: 'hi' });
+    assert.equal(res.statusCode, 200);
+    assert.deepEqual(res.json(), { status: 'sent', providerMessageId: 'WAMSG-42' });
+    assert.deepEqual(sends.at(-1), {
+      ref: { tenantId: 'tenant-1', sessionId: 'user-1' },
+      to: '+6591234567',
+      text: 'hi',
+    });
+  });
+
+  // The point of the loop: a refusal must name the status it actually is.
+  // "Not connected" alone would leave the recruiter unable to tell "wait a
+  // moment" from "pair again", which are the two ends of this list.
+  for (const status of ['pairing', 'reconnecting', 'disconnected', 'logged_out'] as const) {
+    test(`refuses a ${status} session with 409 naming that status`, async () => {
+      outcome = { ok: false, status };
+      const res = await send({ tenantId: 't', userId: 'u', to: '+6591234567', text: 'hi' });
+      assert.equal(res.statusCode, 409);
+      assert.equal(res.json().status, status);
+    });
+  }
+
+  // 409 and 422 are two different facts, and the API records them as two
+  // different rows: 409 means we never tried, so no activity row exists at
+  // all; 422 means WhatsApp itself refused on a live socket, which is the
+  // only thing that earns a `failed` row. Collapsing them would make every
+  // refusal look like a broken pairing.
+  test('a message WhatsApp refused on a live socket is 422 carrying its own words', async () => {
+    outcome = { ok: false, status: 'connected', refusal: 'not-authorized: blocked by recipient' };
+    const res = await send({ tenantId: 't', userId: 'u', to: '+6591234567', text: 'hi' });
+    assert.equal(res.statusCode, 422);
+    assert.equal(res.json().error, 'not-authorized: blocked by recipient');
+    assert.equal(res.json().status, 'connected');
+  });
+
+  test('a missing recipient or empty text is 400, not an empty message sent to nobody', async () => {
+    outcome = { ok: true, status: 'connected', providerMessageId: 'WAMSG-1' };
+    const before = sends.length;
+    assert.equal((await send({ tenantId: 't', userId: 'u', text: 'hi' })).statusCode, 400);
+    assert.equal((await send({ tenantId: 't', userId: 'u', to: '+65', text: '' })).statusCode, 400);
+    assert.equal(sends.length, before, 'nothing reached the SessionManager');
+  });
+
+  test('there is no bulk send endpoint, and that omission is the rate limit (plan §9)', async () => {
+    for (const url of ['/send/bulk', '/broadcast', '/sends']) {
+      const res = await app.inject({
+        method: 'POST',
+        url,
+        headers: { authorization: `Bearer ${SECRET}` },
+        payload: { tenantId: 't', userId: 'u', to: ['a', 'b'], text: 'hi' },
+      });
+      assert.equal(res.statusCode, 404, `${url} must not exist`);
+    }
   });
 });
 

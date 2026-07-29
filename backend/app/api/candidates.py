@@ -20,6 +20,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app.api.auth import _require_session
 from app.core.config import settings
+from app.core.logging import get_logger
 from app.db.rls import tenant_session
 from app.models.candidate import (
     Candidate,
@@ -27,7 +28,7 @@ from app.models.candidate import (
     CandidateFieldOverride,
     CandidateSkill,
 )
-from app.models.tenant import Tenant, User
+from app.models.tenant import User
 from app.services.candidate_matching import find_candidate
 from app.services.candidate_naming import (
     is_matchable_phone,
@@ -37,8 +38,9 @@ from app.services.candidate_naming import (
 )
 from app.services.candidate_overrides import overridden_fields
 from app.services.candidate_tenure import derive
-from app.services.user_naming import actor_name, recruiter_name
+from app.services.user_naming import actor_name
 
+log = get_logger(__name__)
 router = APIRouter(tags=["candidates"])
 
 StageFilter = Literal["new", "contacted", "submitted", "placed", "rejected"]
@@ -937,151 +939,6 @@ ActivityChannel = Literal[CandidateActivity.WHATSAPP]
 ActivityStatus = Literal[CandidateActivity.OPENED]
 
 
-# Letters whose *name* opens with a vowel sound, for a title that begins with
-# an initialism. "HR Manager" is read "aitch-are", so it takes "an", while its
-# spelled-out twin "Human Resources Manager" takes "a" — the article follows
-# the sound, and for an initialism the sound is the letter's name.
-_VOWEL_SOUNDED_LETTERS = frozenset("AEFHILMNORSX")
-
-
-def _article_for(noun_phrase: str) -> str:
-    """"a" or "an", chosen by how the phrase is said rather than spelled.
-
-    The draft used to hardcode "a", which wrote "a Engineer" and — for the
-    Enrolled Nurse in the plan this feature was built from — "a Enrolled
-    Nurse". It is the first line a candidate reads from the agency, so it is
-    worth getting right.
-
-    Two rules, because job titles are mostly ordinary words with a seam of
-    initialisms running through them:
-
-    - An initialism — a short all-caps first word (≤4 letters, as in "HR",
-      "IT", "QA", "MRT", "NTUC") in a title that is not otherwise shouting —
-      is read letter by letter, so the first letter's *name* decides.
-    - Anything else goes by its first letter, with `u` deliberately excluded
-      from the vowels: a title starting with u almost always says "you" —
-      "a UX Designer", "a Unit Manager", "a University Lecturer".
-
-    Both rules are about spelling standing in for pronunciation, so both can
-    be wrong: "an Hour" and "a Euro" are the classic misses. Neither shape
-    occurs in a job title, and the recruiter edits the message before it is
-    sent, so the cost of a miss is a word they retype — not a wrong claim
-    about the candidate.
-    """
-    stripped = noun_phrase.lstrip()
-    if not stripped or not stripped[0].isalpha():
-        # Nothing to read — "a" is the safer default, and a title starting
-        # with a digit ("3D Artist") is said "three-dee" anyway.
-        return "a"
-    # Two signals have to agree before a word is read as initials.
-    #
-    # Short: four letters covers HR, IT, QA, UX, MRT and NTUC without
-    # reaching an ordinary word. Three would be tidier but loses the
-    # four-letter Singapore initialisms, which are the commoner case here.
-    #
-    # And not shouting: a title arriving in caps lock from CV extraction is
-    # every word capitalised, not an initialism, so "HEAD OF SALES" must not
-    # become "an HEAD OF SALES". Where the whole title is upper case there is
-    # no signal left to separate the two, and reading it as words is wrong
-    # less often — it costs "a HR MANAGER" and saves every shouted sentence.
-    first_word = stripped.split()[0]
-    shouting = stripped.isupper() and " " in stripped.strip()
-    if not shouting and first_word.isupper() and first_word.isalpha() and len(first_word) <= 4:
-        return "an" if first_word[0] in _VOWEL_SOUNDED_LETTERS else "a"
-    return "an" if stripped[0].lower() in "aeio" else "a"
-
-
-# allow-hardcode: this is the only outreach template step 1 ships, and its
-# wording is user-facing copy the recruiter reviews and can edit in the UI
-# before opening WhatsApp — the same category `frontend/app/dashboard/
-# candidates/page.tsx` marks with this tag for its own hardcoded copy.
-def _whatsapp_draft_text(
-    *,
-    candidate_greeting_name: str,
-    recruiter_name: str | None,
-    agency_name: str,
-    job_title: str | None,
-) -> str:
-    # With a title: "...regarding a Senior Engineer opportunity." Without one,
-    # the sentence is rewritten rather than leaving a blank ("regarding a
-    # opportunity") or a dangling article ("regarding a  opportunity") — step
-    # 1 has no job selector, so a candidate with no `current_title` on file is
-    # the common case, not an edge case.
-    if job_title:
-        article = _article_for(job_title)
-        interest_line = (
-            f"I would like to speak with you regarding {article} {job_title} opportunity."
-        )
-    else:
-        interest_line = "I would like to speak with you regarding an opportunity."
-    # Same treatment as a missing job title: rewrite the sentence rather than
-    # leave a gap. `recruiter_name` is None when neither `preferred_name` nor
-    # `display_name` is set (see app/services/user_naming.py) — that chain
-    # deliberately has no email fallback, since this sentence is read by the
-    # candidate, not a colleague.
-    if recruiter_name:
-        intro_line = f"This is {recruiter_name} from {agency_name}."
-    else:
-        intro_line = f"I am writing from {agency_name}."
-    return (
-        f"Hi {candidate_greeting_name},\n\n"
-        f"{intro_line}\n\n"
-        f"{interest_line}\n\n"
-        "Would you be available for a quick discussion?"
-    )
-
-
-@router.get("/candidates/{candidate_id}/whatsapp-draft")
-async def whatsapp_draft(request: Request, candidate_id: uuid.UUID) -> dict:
-    """The message a recruiter reviews before WhatsApp Web opens (step 1).
-
-    Rendered server-side so the template lives in one testable place instead
-    of being duplicated in the frontend. The platform never sends this — see
-    `CandidateActivity`.
-    """
-    user_uuid, tenant_uuid = _require_session(request)
-    async with tenant_session(tenant_uuid) as session:
-        candidate = await _load(session, candidate_id)
-        if candidate.phone_e164 is None:
-            # 409, not 404: the candidate exists, but `_identity_phone` stores
-            # NULL here for any number that could not identify a person as a
-            # WhatsApp-reachable mobile — including a switchboard/fixed line —
-            # so "no phone_e164" means "no number WhatsApp could reach".
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    "This candidate has no mobile number on file that WhatsApp "
-                    "could reach. Add a phone number first."
-                ),
-            )
-        user = (
-            await session.execute(select(User).where(User.id == user_uuid))
-        ).scalar_one()
-        tenant_name = (
-            await session.execute(select(Tenant.name).where(Tenant.id == tenant_uuid))
-        ).scalar_one()
-
-    # The whole name, because which part of it is the given name is not
-    # something this code can know. "Tan Hui Ling" is surname-first, so the
-    # first token is `Tan` and greeting her by it addresses a stranger by her
-    # surname; written the other way round the first token is `Hui`, half of
-    # a two-syllable given name. Malay (bin/binti) and Indian (s/o, d/o)
-    # names break a positional rule differently again, and this is a Singapore
-    # vertical where all four conventions sit in the same list.
-    #
-    # So the draft greets the name as recorded and the recruiter shortens it
-    # — they know the person. Picking a token here would be the same guess
-    # §15 forbids everywhere else, made in the first line the candidate reads.
-    candidate_greeting_name = candidate.full_name.strip()
-    message = _whatsapp_draft_text(
-        candidate_greeting_name=candidate_greeting_name,
-        recruiter_name=recruiter_name(user.preferred_name, user.display_name),
-        agency_name=tenant_name,
-        job_title=candidate.current_title,
-    )
-    return {"phone_e164": candidate.phone_e164, "message": message}
-
-
 class ActivityIn(BaseModel):
     activity_type: ActivityType
     channel: ActivityChannel
@@ -1095,6 +952,10 @@ def _serialize_activity(activity: CandidateActivity, actor_name: str) -> dict:
         "channel": activity.channel,
         "message_text": activity.message_text,
         "status": activity.status,
+        # Both null on an `opened` row, and mutually exclusive on the other
+        # two: the timeline shows what WhatsApp answered, or why it did not.
+        "provider_message_id": activity.provider_message_id,
+        "error": activity.error,
         "actor_name": actor_name,
         "created_at": activity.created_at.isoformat(),
     }

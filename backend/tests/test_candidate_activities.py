@@ -151,9 +151,9 @@ async def test_no_title_reads_properly_with_no_blank_gap(agency_with_candidates)
 def test_the_article_follows_how_the_title_is_said(title, expected) -> None:
     """A unit test, not an API one: this is a sentence-level judgement and
     deserves to fail on its own terms rather than inside a 200 response."""
-    from app.api.candidates import _whatsapp_draft_text
+    from app.api.candidate_whatsapp import whatsapp_draft_text
 
-    message = _whatsapp_draft_text(
+    message = whatsapp_draft_text(
         candidate_greeting_name="Hui Ling",
         recruiter_name="Wong",
         agency_name="ABC Recruitment",
@@ -283,10 +283,44 @@ async def test_invalid_vocabulary_is_422(agency_with_candidates) -> None:
             f"/api/candidates/{ids['with_phone']}/activities",
             json={"activity_type": "whatsapp_sent", "channel": "whatsapp"},
         )
+    # `whatsapp_sent` is a legal value in the table now, but this endpoint is
+    # the *popup* path and writes `opened`; a `whatsapp_sent` row may only be
+    # written by the code that actually saw a send (see
+    # `test_candidate_whatsapp_send.py`), so the manual-log route still
+    # refuses the word.
     assert resp.status_code == 422
 
 
-async def test_the_check_constraint_refuses_a_direct_insert_of_sent(agency_with_candidates) -> None:
+@pytest.mark.parametrize("status", ["opened", "sent", "failed"])
+async def test_the_check_constraint_accepts_the_whole_vocabulary(
+    agency_with_candidates, status
+) -> None:
+    """Three statuses, and exactly three.
+
+    `opened` is the popup path; `sent` and `failed` arrived with the WA
+    gateway, which holds the socket and so does observe the handover. `sent`
+    means WhatsApp returned a message id — not delivered, never read.
+    """
+    tid, uid, ids = agency_with_candidates
+    async with AdminSessionLocal() as s:
+        await s.execute(
+            text(
+                "INSERT INTO candidate_activities "
+                "(id, tenant_id, candidate_id, user_id, activity_type, channel, status) "
+                "VALUES (:i, :t, :c, :u, 'whatsapp_sent', 'whatsapp', :s)"
+            ),
+            {"i": uuid.uuid4(), "t": tid, "c": ids["with_phone"], "u": uid, "s": status},
+        )
+        await s.commit()
+
+
+@pytest.mark.parametrize("status", ["delivered", "read", "queued", "SENT", ""])
+async def test_the_check_constraint_still_refuses_anything_else(
+    agency_with_candidates, status
+) -> None:
+    """`delivered` and `read` are the two that matter here: no receipts are
+    ingested in v1, so the database refuses to record a claim nothing in this
+    system has observed (§15) — not merely undocumented, impossible."""
     tid, uid, ids = agency_with_candidates
     async with AdminSessionLocal() as s:
         with pytest.raises(IntegrityError) as exc_info:
@@ -294,12 +328,30 @@ async def test_the_check_constraint_refuses_a_direct_insert_of_sent(agency_with_
                 text(
                     "INSERT INTO candidate_activities "
                     "(id, tenant_id, candidate_id, user_id, activity_type, channel, status) "
-                    "VALUES (:i, :t, :c, :u, 'whatsapp_opened', 'whatsapp', 'sent')"
+                    "VALUES (:i, :t, :c, :u, 'whatsapp_sent', 'whatsapp', :s)"
+                ),
+                {"i": uuid.uuid4(), "t": tid, "c": ids["with_phone"], "u": uid, "s": status},
+            )
+        await s.rollback()
+    assert "ck_candidate_activities_status_known" in str(exc_info.value)
+
+
+async def test_the_check_constraint_refuses_an_unknown_activity_type(
+    agency_with_candidates,
+) -> None:
+    tid, uid, ids = agency_with_candidates
+    async with AdminSessionLocal() as s:
+        with pytest.raises(IntegrityError) as exc_info:
+            await s.execute(
+                text(
+                    "INSERT INTO candidate_activities "
+                    "(id, tenant_id, candidate_id, user_id, activity_type, channel, status) "
+                    "VALUES (:i, :t, :c, :u, 'email_sent', 'whatsapp', 'sent')"
                 ),
                 {"i": uuid.uuid4(), "t": tid, "c": ids["with_phone"], "u": uid},
             )
         await s.rollback()
-    assert "ck_candidate_activities_status_known" in str(exc_info.value)
+    assert "ck_candidate_activities_type_known" in str(exc_info.value)
 
 
 async def test_agency_b_cannot_read_or_write_agency_as_activities(agency_with_candidates) -> None:

@@ -2,25 +2,38 @@
 
 import { useEffect, useRef, useState } from "react";
 
-import { SETTINGS_ACCOUNT_PATH } from "../../api";
+import { SETTINGS_ACCOUNT_PATH, SETTINGS_WHATSAPP_PATH } from "../../api";
 import { useAuth } from "../../auth";
 import type { Candidate } from "../candidates";
 import {
   ApiError,
   getCandidateActivities,
+  getWaSessionStatus,
   getWhatsappDraft,
   logCandidateActivity,
+  sendCandidateWhatsapp,
+  WhatsappSendError,
   type ActivityItem,
+  type WaSessionStatus,
 } from "../candidates";
 import { when } from "../format";
 
 /**
  * The WhatsApp button, its draft modal, and the activity timeline below it.
  *
- * We never send the message ourselves — the recruiter reviews it in the
- * modal, presses Open WhatsApp, and presses send inside WhatsApp itself.
- * Every string in this file says "opened", never "sent", because we have no
- * way of observing whether a send ever happened.
+ * Two ways out of this modal now. When the recruiter's own WhatsApp is
+ * linked (Settings → WhatsApp, `whatsapp-panel.tsx`) and its session is
+ * `connected`, `Send` submits the draft through the server, which relays it
+ * over that linked session. Every other session state — including "we
+ * haven't checked yet" — falls back to the original popup path: `Open
+ * WhatsApp` opens `web.whatsapp.com/send` and the recruiter presses send
+ * themselves inside WhatsApp. That popup keeps working unconditionally; a
+ * blocked popup or a failed send always leaves it on screen as the way out.
+ *
+ * "sent" here means WhatsApp accepted the message from the API, nothing
+ * more — not delivered, not read (§15: don't claim what we don't know). The
+ * popup path still says "opened", because that is all a `window.open` call
+ * can ever tell us.
  *
  * There is no dialog primitive anywhere else in this codebase (checked
  * candidate-form.tsx, candidate-history.tsx, the settings panels — all of
@@ -127,6 +140,77 @@ type DraftState =
   | { status: "ready"; phone_e164: string; message: string }
   | { status: "error"; message: string };
 
+/** Why `Send` is or isn't offered. `unknown` is the state while the session
+ *  fetch is still in flight — deliberately treated the same as "not
+ *  connected" (popup only), per the build note: a modal that hesitates on a
+ *  disabled Send is worse than one that just works via the popup. */
+type SendAvailability = "unknown" | WaSessionStatus;
+
+/** One sentence a recruiter can act on for a failed send, plus which of the
+ *  two fallback links (if any) belongs under it. Mirrors the honesty rules in
+ *  `whatsapp-panel.tsx`: never call `gateway_unreachable` "disconnected".
+ *
+ * - `kind: "no_number"` (422) — the fix is on the candidate record. Settings
+ *   → WhatsApp would be the wrong advice, so neither fallback link is shown;
+ *   `Open WhatsApp` itself is also useless with no number, which is exactly
+ *   why the button is disabled at the top of this file when `phone_e164` is
+ *   null — this modal cannot even have opened in that state normally, but
+ *   the copy still has to be correct if a session change races the open.
+ * - `kind: "rate_limited"` (429) — the daily cap, not a link problem. Offer
+ *   the popup, not Settings.
+ * - `kind: "session"` (409) — branches on `session_status` for the reason
+ *   above; `pointToSettings` is true only where a relink or a wait in
+ *   Settings is the actual fix. */
+function sendFailureCopy(
+  kind: "session" | "rate_limited" | "no_number",
+  sessionStatus: string | null,
+  serverDetail: string,
+): { text: string; pointToSettings: boolean; offerPopup: boolean } {
+  if (kind === "no_number") {
+    return { text: serverDetail, pointToSettings: false, offerPopup: false };
+  }
+  if (kind === "rate_limited") {
+    return { text: serverDetail, pointToSettings: false, offerPopup: true };
+  }
+  switch (sessionStatus) {
+    case "gateway_unreachable":
+      return {
+        text: "We can't tell right now whether your WhatsApp is linked — this isn't the same as being disconnected. Try again in a moment.",
+        pointToSettings: false,
+        offerPopup: true,
+      };
+    case "logged_out":
+      return { text: "WhatsApp ended your link.", pointToSettings: true, offerPopup: true };
+    case "disconnected":
+      return { text: "Your WhatsApp isn't linked yet.", pointToSettings: true, offerPopup: true };
+    case "reconnecting":
+      return {
+        text: "Your WhatsApp is reconnecting after a restart — this usually clears within a minute. Try again shortly.",
+        pointToSettings: false,
+        offerPopup: true,
+      };
+    case "pairing":
+      return {
+        text: "Your WhatsApp link is still pairing.",
+        pointToSettings: true,
+        offerPopup: true,
+      };
+    default:
+      return { text: serverDetail, pointToSettings: false, offerPopup: true };
+  }
+}
+
+/** A fresh id per composed message, not per click — regenerated only when the
+ *  draft is (re)loaded or the recruiter edits the text, so a retry of the
+ *  *same* message reuses the *same* id and the server's unique index turns a
+ *  double-click or a client-side timeout-then-retry into a no-op instead of a
+ *  second message reaching the candidate. */
+function newClientRequestId(): string {
+  return typeof crypto !== "undefined" && "randomUUID" in crypto
+    ? crypto.randomUUID()
+    : `wa-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
 function WhatsappModal({
   row,
   onClose,
@@ -139,6 +223,14 @@ function WhatsappModal({
   const [draft, setDraft] = useState<DraftState>({ status: "loading" });
   const [text, setText] = useState("");
   const [blocked, setBlocked] = useState<string | null>(null);
+  const [availability, setAvailability] = useState<SendAvailability>("unknown");
+  const [sending, setSending] = useState(false);
+  const [sendError, setSendError] = useState<{
+    text: string;
+    pointToSettings: boolean;
+    offerPopup: boolean;
+  } | null>(null);
+  const [clientRequestId, setClientRequestId] = useState(() => newClientRequestId());
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const headingRef = useRef<HTMLHeadingElement | null>(null);
   // Not a blocker: the backend already rewrites the message to omit the name
@@ -157,6 +249,9 @@ function WhatsappModal({
         if (cancelled) return;
         setDraft({ status: "ready", phone_e164: body.phone_e164, message: body.message });
         setText(body.message);
+        // A freshly loaded draft is a new message, distinct from whatever
+        // was retried before this modal opened.
+        setClientRequestId(newClientRequestId());
       } catch (err) {
         if (cancelled) return;
         setDraft({
@@ -169,6 +264,21 @@ function WhatsappModal({
       cancelled = true;
     };
   }, [row.id]);
+
+  // Session status is fetched once, when the modal opens — not polled and
+  // not tied to the SSE stream the settings panel uses, because this modal
+  // is short-lived and only needs one answer: is Send offerable right now.
+  // Left at "unknown" (popup-only) on any failure, per the build note.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const status = await getWaSessionStatus();
+      if (!cancelled) setAvailability(status);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Focus trap + Escape-to-close + return focus on unmount, since this is a
   // hand-built dialog rather than a native <dialog> — see the file header for
@@ -233,6 +343,42 @@ function WhatsappModal({
     onClose();
   }
 
+  async function sendNow() {
+    // `sending` alone is the guard against a double-submit from this button;
+    // `clientRequestId` is the guard against the harder case — a request
+    // that timed out client-side after the gateway already accepted it — so
+    // both stay in place even though either would stop a same-session
+    // double-click.
+    if (draft.status !== "ready" || sending) return;
+    setSending(true);
+    setSendError(null);
+    try {
+      await sendCandidateWhatsapp(row.id, text, clientRequestId);
+      // The server already logged the activity — unlike the popup path,
+      // there is nothing left to POST here. Close and let the timeline
+      // refetch pick up the new "sent" row.
+      onLogged();
+      onClose();
+    } catch (err) {
+      // A failed send is not a dead end: the modal stays open, says what the
+      // server said, and `Open WhatsApp` is still there below when offered.
+      if (err instanceof WhatsappSendError) {
+        setSendError(sendFailureCopy(err.kind, err.session_status, err.message));
+        if (err.kind === "session" && err.session_status) {
+          setAvailability(err.session_status as WaSessionStatus);
+        }
+      } else {
+        setSendError({
+          text: err instanceof ApiError ? err.message : "We could not send that just now.",
+          pointToSettings: false,
+          offerPopup: true,
+        });
+      }
+    } finally {
+      setSending(false);
+    }
+  }
+
   return (
     <div className="wa-overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div
@@ -277,7 +423,14 @@ function WhatsappModal({
                 className="jo-search"
                 style={{ minHeight: 160 }}
                 value={text}
-                onChange={(e) => setText(e.target.value)}
+                onChange={(e) => {
+                  setText(e.target.value);
+                  // An edit makes this a different message than whatever was
+                  // last attempted — a retry of the *edited* text must not
+                  // dedupe against a send the server has no reason to treat
+                  // as the same request.
+                  setClientRequestId(newClientRequestId());
+                }}
               />
             </label>
 
@@ -291,11 +444,48 @@ function WhatsappModal({
               </p>
             )}
 
+            {sendError && (
+              <p className="body jo-detail-error" role="alert">
+                {sendError.text}
+                {sendError.pointToSettings && (
+                  <>
+                    {" "}
+                    <a href={SETTINGS_WHATSAPP_PATH}>Fix this in Settings → WhatsApp</a>, or use Open
+                    WhatsApp below.
+                  </>
+                )}
+                {!sendError.pointToSettings && sendError.offerPopup && (
+                  <> Use Open WhatsApp below.</>
+                )}
+              </p>
+            )}
+
             <div className="wa-actions">
-              <button type="button" className="btn btn-primary" onClick={openWhatsapp}>
-                Open WhatsApp
-              </button>
-              <button type="button" className="btn btn-secondary" onClick={onClose}>
+              {availability === "connected" ? (
+                <>
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    onClick={() => void sendNow()}
+                    disabled={sending}
+                  >
+                    {sending ? "Sending…" : "Send"}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={openWhatsapp}
+                    disabled={sending}
+                  >
+                    Open WhatsApp instead
+                  </button>
+                </>
+              ) : (
+                <button type="button" className="btn btn-primary" onClick={openWhatsapp}>
+                  Open WhatsApp
+                </button>
+              )}
+              <button type="button" className="btn btn-secondary" onClick={onClose} disabled={sending}>
                 Cancel
               </button>
             </div>
@@ -306,8 +496,40 @@ function WhatsappModal({
   );
 }
 
-/** "WhatsApp opened for <name> by <actor>" — reusing `when` from
- *  `format.tsx` for the timestamp rather than writing a second formatter. */
+/** One line of the timeline, from an activity's own `status` — the same
+ *  field the server already sets on every row, not something inferred from
+ *  `activity_type`.
+ *
+ * - `sent` says only that WhatsApp accepted it (§15: not delivered, not
+ *   read).
+ * - `failed` must stay visible rather than being filtered out — a silent
+ *   failure is the one outcome a recruiter cannot recover from unnoticed.
+ * - `unknown` is the one that is easiest to get wrong: a dispatch whose
+ *   outcome was never learned (a timeout, a lost reply) is neither a success
+ *   nor a failure, and rendering it as either is a §15 breach in whichever
+ *   direction is wrong. The copy says exactly that and tells the recruiter
+ *   to check WhatsApp before resending, rather than guessing on their
+ *   behalf.
+ * - anything else (`opened`, or a status this file predates) keeps the
+ *   original "opened" wording, since the popup path never claims more than
+ *   that either. */
+function whatsappActivityLine(item: ActivityItem, fullName: string): string {
+  if (item.status === "sent") {
+    return `WhatsApp sent to ${fullName} by ${item.actor_name}`;
+  }
+  if (item.status === "failed") {
+    return `WhatsApp send to ${fullName} failed (by ${item.actor_name})`;
+  }
+  if (item.status === "unknown") {
+    return `WhatsApp send to ${fullName} by ${item.actor_name} — outcome unknown, check WhatsApp before resending`;
+  }
+  return `WhatsApp opened for ${fullName} by ${item.actor_name}`;
+}
+
+/** One row per activity — `opened`, `sent`, `failed`, or `unknown` — reusing
+ *  `when` from `format.tsx` for the timestamp rather than writing a second
+ *  formatter. A refusal (no linked session, no candidate number) produces no
+ *  row at all: nothing was attempted, so there is nothing to log. */
 export function WhatsappActivityTimeline({
   row,
   version,
@@ -351,8 +573,24 @@ export function WhatsappActivityTimeline({
       <span className="row-k">Activity</span>
       <ul className="wa-timeline">
         {whatsappOnly.map((item) => (
-          <li key={item.id} className="body muted">
-            WhatsApp opened for {row.full_name} by {item.actor_name} — {when(item.created_at)}
+          <li
+            key={item.id}
+            // `failed` gets the same error styling as the modal's own error
+            // text, rather than blending into the muted rows around it — a
+            // failed send that reads like every other row is a failure a
+            // recruiter can miss. `unknown` gets its own warning treatment:
+            // it must look neither as settled as a plain muted row nor as
+            // alarming as a confirmed failure, because it is neither.
+            className={
+              item.status === "failed"
+                ? "body jo-detail-error"
+                : item.status === "unknown"
+                  ? "body jo-sub"
+                  : "body muted"
+            }
+            role={item.status === "failed" || item.status === "unknown" ? "alert" : undefined}
+          >
+            {whatsappActivityLine(item, row.full_name)} — {when(item.created_at)}
           </li>
         ))}
       </ul>

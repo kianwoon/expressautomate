@@ -74,6 +74,24 @@ export interface SessionSnapshot {
   readonly connectedAt: string | null;
 }
 
+/**
+ * What `send()` answers with.
+ *
+ * A refused send is not an exception: "your session is `reconnecting`" is an
+ * ordinary answer the recruiter's modal renders, and `status` carries which
+ * of the five it actually is so the API can say so rather than "not
+ * connected" — plan §7's typed error.
+ */
+export type SendOutcome =
+  | { readonly ok: true; readonly status: 'connected'; readonly providerMessageId: string | null }
+  | { readonly ok: false; readonly status: SessionStatus }
+  // WhatsApp itself refused this specific message on a session that *was*
+  // connected — a blocked number, a bad JID, a rate limit. Distinct from the
+  // `status` variant above, which means we never got as far as trying, and
+  // the distinction is the whole point: only this one is a `failed` row on
+  // the API side, and `refusal` is Baileys' own wording, carried verbatim.
+  | { readonly ok: false; readonly status: 'connected'; readonly refusal: string };
+
 /** Pushed to FastAPI on every change; matches `InternalStatusIn` in `wa_gateway.py`. */
 export interface StatusCallback {
   (ref: SessionRef, snapshot: SessionSnapshot, statusDetail: string | null): void | Promise<void>;
@@ -203,6 +221,53 @@ export class SessionManager {
     }
     const runtime = await this.#openOnce(ref);
     return snapshotOf(runtime);
+  }
+
+  /**
+   * `POST /send` — one recipient, one text message (plan §7).
+   *
+   * **There is deliberately no bulk or broadcast form of this method.** Plan
+   * §9 makes the API shape itself the rate limit: one candidate, one click,
+   * one message, so a blast campaign has nothing to call. Adding an array
+   * parameter here would quietly undo that, and the ban risk it mitigates is
+   * the recruiter's own number.
+   *
+   * Text only in v1 — no media, for the same smaller-surface reason.
+   *
+   * The wake-up matters as much as the send: this goes through `status()`,
+   * the same public path `GET /sessions/status` uses, so a session whose
+   * socket died with the last deploy is *resumed from stored credentials*
+   * here rather than reported missing. Sending is usually the first thing a
+   * recruiter does after a redeploy, so treating "not in this process's map"
+   * as "not connected" would make every deploy look like a broken pairing.
+   */
+  async send(ref: SessionRef, to: string, text: string): Promise<SendOutcome> {
+    const snapshot = await this.status(ref);
+    if (snapshot.status !== 'connected') {
+      return { ok: false, status: snapshot.status };
+    }
+    const runtime = this.#runtimes.get(keyFor(ref));
+    if (!runtime?.socket) {
+      // `status()` said connected, so the runtime was there a moment ago; a
+      // close event between then and now is the only way to land here. Honest
+      // answer is the same one the recruiter needs: not connected right now.
+      return { ok: false, status: 'reconnecting' };
+    }
+    let receipt;
+    try {
+      receipt = await runtime.socket.sendMessage(toJid(to), { text });
+    } catch (error) {
+      // A throw here is WhatsApp (or Baileys) refusing this message on a live
+      // socket, and it is the only thing that earns a `failed` row upstream.
+      // The message is passed on as-is: the API stores it verbatim, so
+      // rewording it here would be inventing a reason for someone else's
+      // refusal. Nothing in this string is ours — it carries no gateway URL
+      // and no shared secret, both of which live in config, not in a send.
+      const refusal = error instanceof Error ? error.message : String(error);
+      return { ok: false, status: 'connected', refusal };
+    }
+    const providerMessageId = receipt?.key?.id ?? null;
+    return { ok: true, status: 'connected', providerMessageId };
   }
 
   /** `POST /sessions/disconnect` — the recruiter's own choice; distinct from
@@ -449,6 +514,20 @@ export class SessionManager {
       // thing it's a convenience for" rule on the Python side.
     }
   }
+}
+
+/**
+ * `"+65 9123 4567"` → `"6591234567@s.whatsapp.net"`; an address that already
+ * looks like a jid is passed through untouched.
+ *
+ * The digits come from `candidates.phone_e164` server-side (plan §9: the jid
+ * is derived from the candidate record, never from the browser), so the only
+ * work here is stripping the `+` and separators E.164 carries and WhatsApp's
+ * user part does not.
+ */
+export function toJid(to: string): string {
+  if (to.includes('@')) return to;
+  return `${to.replace(/\D/g, '')}@s.whatsapp.net`;
 }
 
 /** `"6591234567:12@s.whatsapp.net"` → `"6591234567"`. Baileys' own jid can

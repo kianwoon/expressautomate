@@ -524,6 +524,15 @@ class Settings(BaseSettings):
     # request open. Baileys' own reconnect logic runs independently on the
     # gateway side and is unaffected by this timeout.
     WA_GATEWAY_TIMEOUT_SECONDS: float = 5.0
+    # How many messages one recruiter may send through their own paired
+    # WhatsApp per UTC day. Plan §9's ban-risk mitigation, and the reason it
+    # is a per-user counter rather than per-tenant: WhatsApp bans the *number*,
+    # and each recruiter pairs their own. Low by default on purpose — a
+    # personal account that suddenly sends hundreds is the exact pattern
+    # WhatsApp acts on, and a cap that has to be raised deliberately is safer
+    # than one discovered after a ban. Spacing and jitter between sends are a
+    # separate concern (P5); this is only the daily ceiling.
+    WA_SEND_DAILY_LIMIT: int = 50
     # Telegram echoes this in `X-Telegram-Bot-Api-Secret-Token`. Without it the
     # webhook accepts anything that can reach the URL, and the URL is public.
     TELEGRAM_WEBHOOK_SECRET: str = ""

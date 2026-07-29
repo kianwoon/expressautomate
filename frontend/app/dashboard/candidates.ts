@@ -24,6 +24,8 @@ import {
   candidateRolesPath,
   candidateUnmergePath,
   candidateWhatsappDraftPath,
+  candidateWhatsappSendPath,
+  WA_SESSION_PATH,
 } from "../api";
 
 /**
@@ -718,6 +720,102 @@ export type ActivityItem = {
   actor_name: string;
   created_at: string;
 };
+
+/** The WA gateway session status, mirrored from `whatsapp-panel.tsx`'s wire
+ *  vocabulary (the database CHECK constraint plus the API-only
+ *  `gateway_unreachable`). Duplicated here rather than imported: that panel's
+ *  type is a `SessionResponse` shaped for its own richer QR/expiry fields, and
+ *  the draft modal only ever needs the bare status string. */
+export type WaSessionStatus =
+  | "pairing"
+  | "connected"
+  | "reconnecting"
+  | "disconnected"
+  | "logged_out"
+  | "gateway_unreachable";
+
+/** Whether the recruiter's own WhatsApp is linked right now — just enough to
+ *  decide whether the draft modal can offer `Send` as well as `Open
+ *  WhatsApp`. `gateway_unreachable` covers both a non-2xx and a network
+ *  failure, same as the settings panel: "we cannot tell", never "you are
+ *  disconnected". */
+export async function getWaSessionStatus(): Promise<WaSessionStatus> {
+  try {
+    const res = await fetch(WA_SESSION_PATH, {
+      credentials: "include",
+      headers: { Accept: "application/json" },
+    });
+    if (!res.ok) return "gateway_unreachable";
+    const body = (await res.json()) as { status: WaSessionStatus };
+    return body.status;
+  } catch {
+    return "gateway_unreachable";
+  }
+}
+
+/** What a send either returns (200) or throws as (409/429/422, via
+ *  `WhatsappSendError`). */
+export type WhatsappSendResult = { activity_id: string; provider_message_id: string };
+
+/** A 409/429/422 is not a generic failure — it carries the server's own
+ *  sentence, so the modal can say something a recruiter can act on. `kind`
+ *  distinguishes the three because each has a different fix: `session` (409,
+ *  `session_status` set) means link or wait; `rate_limited` (429) means the
+ *  daily cap is hit — the popup is still open to them; `no_number` (422)
+ *  means the fix is on the candidate record, not in Settings → WhatsApp, so
+ *  the modal must not point there. */
+export class WhatsappSendError extends ApiError {
+  kind: "session" | "rate_limited" | "no_number";
+  session_status: string | null;
+  constructor(
+    message: string,
+    kind: "session" | "rate_limited" | "no_number",
+    session_status: string | null,
+  ) {
+    super(message);
+    this.kind = kind;
+    this.session_status = session_status;
+  }
+}
+
+/** Sends the draft through the recruiter's own linked WhatsApp session.
+ *
+ * `client_request_id` is generated once per composed draft (by the caller,
+ * on modal open or on edit) and resent unchanged on every retry of that same
+ * message — the server unique-indexes it, so a client-side timeout that hits
+ * after the gateway already accepted the send turns a recruiter's retry into
+ * a no-op instead of a second message to the candidate.
+ *
+ * The server logs the activity itself on success — unlike
+ * `logCandidateActivity` above, which the popup path calls because the
+ * browser, not the server, is what knows the popup opened. */
+export async function sendCandidateWhatsapp(
+  id: string,
+  message: string,
+  clientRequestId: string,
+): Promise<WhatsappSendResult> {
+  const res = await fetch(candidateWhatsappSendPath(id), {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify({ message, client_request_id: clientRequestId }),
+  });
+  if (res.status === 409 || res.status === 429 || res.status === 422) {
+    let detail = "We could not send that just now.";
+    let session_status: string | null = null;
+    try {
+      const body = (await res.json()) as { detail?: string; session_status?: string };
+      if (body.detail) detail = body.detail;
+      if (body.session_status) session_status = body.session_status;
+    } catch {
+      /* not JSON, or empty */
+    }
+    const kind = res.status === 429 ? "rate_limited" : res.status === 422 ? "no_number" : "session";
+    throw new WhatsappSendError(detail, kind, session_status);
+  }
+  if (!res.ok) throw new ApiError(await readError(res));
+  return (await res.json()) as WhatsappSendResult;
+}
 
 export type ActivityBody = { activity_type: string; channel: string; message_text: string };
 
