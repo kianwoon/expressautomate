@@ -291,8 +291,10 @@ function Workspace({ role }: { role: string }) {
 
   return (
     <>
-      <span className="eyebrow">Candidates</span>
-      <h1 style={{ marginTop: 14, fontSize: "clamp(1.75rem, 3.4vw, 2.5rem)" }}>
+      {/* No eyebrow above the heading: "CANDIDATES" over "The people you
+          place." labelled the page twice, and the nav already says which page
+          this is. The heading starts the page. */}
+      <h1 style={{ fontSize: "clamp(1.75rem, 3.4vw, 2.5rem)" }}>
         The people you place.
       </h1>
       <p className="lede" style={{ marginTop: 18 }}>

@@ -71,8 +71,10 @@ export function SettingsShell({
       <main>
         <section className="hero" style={{ paddingBottom: 48 }}>
           <div className="wrap" aria-live="polite">
-            <span className="eyebrow">Settings</span>
-            <h1 style={{ marginTop: 14, fontSize: "clamp(1.75rem, 3.4vw, 2.5rem)" }}>{heading}</h1>
+            {/* No eyebrow above the heading: "SETTINGS" over "Settings." said
+                the word twice, and the nav already says which page this is.
+                The heading starts the page. */}
+            <h1 style={{ fontSize: "clamp(1.75rem, 3.4vw, 2.5rem)" }}>{heading}</h1>
             <nav className="nt-tabs" aria-label="Settings sections">
               {TABS.map((t) => (
                 <a

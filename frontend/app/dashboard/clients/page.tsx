@@ -154,8 +154,10 @@ function Workspace() {
 
   return (
     <>
-      <span className="eyebrow">Clients</span>
-      <h1 style={{ marginTop: 14, fontSize: "clamp(1.75rem, 3.4vw, 2.5rem)" }}>
+      {/* No eyebrow above the heading: "CLIENTS" over "The companies behind
+          your job orders." labelled the page twice, and the nav already says
+          which page this is. The heading starts the page. */}
+      <h1 style={{ fontSize: "clamp(1.75rem, 3.4vw, 2.5rem)" }}>
         The companies behind your job orders.
       </h1>
       <p className="lede" style={{ marginTop: 18 }}>
