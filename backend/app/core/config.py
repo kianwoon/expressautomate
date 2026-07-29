@@ -242,6 +242,13 @@ class Settings(BaseSettings):
     # cuts short — so the cost of a genuinely huge file is a retry, not a
     # worker slot held for the life of the process.
     IMPORT_JOB_TIMEOUT_SECONDS: float = Field(default=600.0, gt=0)
+    # How many times a worker may pick one import up before giving up on it.
+    # `rescan_stuck` re-enqueues any import left non-terminal, which is the
+    # right answer to a crashed worker or a database outage and the wrong one
+    # to a file that crashes the apply every single time — that pair loops for
+    # ever, burning a worker slot per sweep and telling nobody. Above one so a
+    # genuinely transient failure still gets its retry.
+    IMPORT_MAX_ATTEMPTS: int = Field(default=3, gt=0)
 
     # --- AI extraction ---
     # Kept although nothing calls the router any more: OPENROUTER_API_KEY and

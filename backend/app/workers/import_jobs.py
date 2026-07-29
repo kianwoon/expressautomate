@@ -14,6 +14,13 @@ with `IMPORT_JOB_TIMEOUT_SECONDS` as arq's job timeout. A timed-out run leaves
 the row at `parsing`, which `rescan_stuck` picks up — the cost of a genuinely
 huge file is a retry, not a worker slot held for the life of the process.
 
+**An import is also bounded in attempts.** Every failure this module can name
+— a bad file, the row cap, missing bytes — already ends in `failed`, but a
+crash inside `apply_import` ends nowhere: the row stays non-terminal and
+`rescan_stuck` hands it straight back. `candidate_imports.attempts` counts
+pickups, and past `IMPORT_MAX_ATTEMPTS` the run parks the row in `failed`
+rather than trying a file that has already defeated it.
+
 **Every failure ends in the error report, not in a column.** `CandidateImport`
 has no `error` field on purpose: a five-hundred-row migration can produce
 hundreds of problems, so the file in R2 is where a recruiter reads what went
@@ -24,7 +31,7 @@ the same reason a run with bad rows writes a long one — one place to look.
 import uuid
 from datetime import UTC, date, datetime
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from app.core.config import settings
 from app.core.logging import get_logger
@@ -57,6 +64,15 @@ _RESUMABLE = (CandidateImport.PENDING, CandidateImport.PARSING)
 
 # What the recruiter is told when the bytes we stored cannot be read back.
 _MISSING = "The uploaded file could not be read back from storage. Please upload it again."
+
+# What the recruiter is told when the file has defeated every attempt. Phrased
+# as a fact about the file rather than as an apology for the worker, because
+# the only action left is theirs: nothing will pick this row up again.
+_EXHAUSTED = (
+    "This file could not be processed after {attempts} attempts, so it was not retried "
+    "again. Nothing from it was applied on the attempt that failed. Please check the file "
+    "and upload it again."
+)
 
 
 def body_store():
@@ -179,9 +195,51 @@ async def run_candidate_import(ctx, *, tenant_id: str, import_id: str) -> None:
                 state=row.state,
             )
             return
-        object_key = row.object_key
-        row.state = CandidateImport.PARSING
+
+        # The claim is a conditional UPDATE, not the read above followed by a
+        # write. The read is only good enough to log with: between it and the
+        # write, an undo can move this row to `undone`, and a blind write
+        # would put `parsing` straight over that decision and then apply the
+        # whole file the recruiter was told had been reversed. Restating the
+        # state in the WHERE clause makes the check and the write one
+        # indivisible statement — whoever loses simply matches no row.
+        #
+        # The attempt is spent in that same statement. Counting at the end
+        # instead would count nothing on exactly the runs this bounds — a
+        # crash inside `apply_import` never reaches an end — and a file that
+        # deterministically crashes would be re-enqueued by `rescan_stuck`
+        # for ever, one worker slot per sweep, silently.
+        claimed = (
+            await session.execute(
+                update(CandidateImport)
+                .where(
+                    CandidateImport.id == record,
+                    CandidateImport.state.in_(_RESUMABLE),
+                )
+                .values(
+                    state=CandidateImport.PARSING,
+                    attempts=CandidateImport.attempts + 1,
+                )
+                .returning(CandidateImport.object_key, CandidateImport.attempts)
+                .execution_options(synchronize_session=False)
+            )
+        ).first()
+        if claimed is None:
+            log.info("import_skipped_claimed_elsewhere", candidate_import_id=import_id)
+            return
+        object_key, attempts = claimed
         await session.commit()
+
+    if attempts > settings.IMPORT_MAX_ATTEMPTS:
+        # Terminal, so `rescan_stuck` stops seeing it. The row is claimed
+        # first and refused second on purpose: leaving it at `pending` while
+        # refusing would let the sweep pick it up again on the next pass and
+        # discover the same thing, which is the loop rather than the end of it.
+        log.warning(
+            "import_attempts_exhausted", candidate_import_id=import_id, attempts=attempts
+        )
+        await _fail(tenant, record, _EXHAUSTED.format(attempts=settings.IMPORT_MAX_ATTEMPTS))
+        return
 
     data = await body_store().get_bytes(object_key)
     if not data:

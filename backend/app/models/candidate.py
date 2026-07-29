@@ -442,6 +442,16 @@ class CandidateImport(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
     roles_updated: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     rows_failed: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
+    # How many times a worker has picked this import up. Counted at pickup
+    # rather than at completion, because the run this bounds is the one that
+    # never completes: a file that crashes `apply_import` leaves the row
+    # non-terminal, `rescan_stuck` re-enqueues it, and without a count that
+    # survives the crash the pair loop for ever. Past
+    # `IMPORT_MAX_ATTEMPTS` the job parks the row in `failed` instead.
+    attempts: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+
     uploaded_by: Mapped[uuid.UUID | None] = mapped_column(
         PgUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL")
     )

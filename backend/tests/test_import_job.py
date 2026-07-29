@@ -293,6 +293,92 @@ async def test_the_stuck_sweep_requeues_an_import_stranded_in_parsing(
     await _cleanup(tenant_id)
 
 
+@pytest.mark.asyncio
+async def test_a_file_that_always_crashes_the_apply_stops_being_retried(
+    agency,  # noqa: F811
+    store,
+    monkeypatch,
+):
+    """The loop this bounds: crash, stay non-terminal, get swept up, crash again.
+
+    Every other failure already ends in `failed`. A crash inside
+    `apply_import` ends nowhere, so without the attempt counter this file
+    would burn a worker slot every sweep for ever and tell nobody.
+    """
+    tenant_id, _user_id = agency
+    import_id = await _seed(tenant_id, store, b"full name,email\nJane Tan,jane@acme.sg\n")
+
+    async def _explode(*args, **kwargs):
+        raise RuntimeError("this file breaks the apply")
+
+    monkeypatch.setattr(import_jobs, "apply_import", _explode)
+
+    for _attempt in range(settings.IMPORT_MAX_ATTEMPTS):
+        with pytest.raises(RuntimeError):
+            await run_candidate_import(None, tenant_id=str(tenant_id), import_id=str(import_id))
+        # Still non-terminal, which is exactly why the sweep keeps finding it.
+        assert (await _row(import_id)).state == CandidateImport.PARSING
+
+    # The attempt after the last allowed one gives up instead of trying again.
+    await run_candidate_import(None, tenant_id=str(tenant_id), import_id=str(import_id))
+    row = await _row(import_id)
+    assert row.state == CandidateImport.FAILED
+    assert row.error_report_key is not None
+    report = (await store.get_bytes(row.error_report_key)).decode()
+    assert "not retried again" in report
+
+    # And a terminal row is invisible to the sweep, so nothing re-enqueues it.
+    async with AdminSessionLocal() as s:
+        await s.execute(
+            text(
+                "UPDATE candidate_imports SET updated_at = now() - interval '2 hours'"
+                " WHERE id = :i"
+            ),
+            {"i": import_id},
+        )
+        await s.commit()
+
+    enqueued: list[tuple[str, dict]] = []
+
+    async def _enqueue(name, **kwargs):
+        enqueued.append((name, kwargs))
+        return True
+
+    monkeypatch.setattr(tasks, "enqueue", _enqueue)
+    await tasks.rescan_stuck()
+    assert [k for _n, k in enqueued if k.get("import_id") == str(import_id)] == []
+    await _cleanup(tenant_id)
+
+
+@pytest.mark.asyncio
+async def test_the_job_will_not_apply_a_file_over_an_undo(
+    agency,  # noqa: F811
+    store,
+    monkeypatch,
+):
+    """The race undo used to lose: a `pending` row undone, then applied anyway.
+
+    The job claims the row with a conditional update rather than a read
+    followed by a write, so an `undone` state it did not expect stops it dead
+    instead of being overwritten with `parsing`.
+    """
+    tenant_id, _user_id = agency
+    import_id = await _seed(tenant_id, store, b"full name,email\nJane Tan,jane@acme.sg\n")
+    async with AdminSessionLocal() as s:
+        await s.execute(
+            text("UPDATE candidate_imports SET state = 'undone' WHERE id = :i"),
+            {"i": import_id},
+        )
+        await s.commit()
+
+    await run_candidate_import(None, tenant_id=str(tenant_id), import_id=str(import_id))
+
+    row = await _row(import_id)
+    assert row.state == CandidateImport.UNDONE
+    assert row.candidates_created == 0
+    await _cleanup(tenant_id)
+
+
 def test_the_job_is_registered_with_a_timeout_under_the_name_producers_use():
     """Both halves matter and neither is visible in production until too late.
 

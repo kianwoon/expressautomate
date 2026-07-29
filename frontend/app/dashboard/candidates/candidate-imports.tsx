@@ -379,9 +379,14 @@ function ImportRow({
   onUndo: () => void;
 }) {
   const counts = countLine(row);
+  // Offered only once the import has settled. `pending` is not settled: the
+  // job can claim it at any moment, so an undo from here would race the run
+  // and could report a reversal the job then wrote straight over. The server
+  // refuses it either way; the button should not invite it.
+  //
   // Refused while parsing, and pointless once undone — the server says both,
   // but offering a button that can only be told off is its own small lie.
-  const canUndo = row.state === "done" || row.state === "failed" || row.state === "pending";
+  const canUndo = row.state === "done" || row.state === "failed";
 
   return (
     <li className="ci-row" data-state={row.state}>
@@ -444,10 +449,15 @@ function ImportRow({
  * What undo will reverse, in counts, before it runs.
  *
  * Undo deletes the candidates this import created. It protects fields a
- * recruiter has since corrected, and it keeps a created candidate that has
- * gained a role by hand — but a plain created row with no later work on it
- * simply goes. That is worth a sentence and a second click, not a silent
- * button.
+ * recruiter has since corrected, and it keeps any created candidate somebody
+ * has since worked on at all — a role, an edited field, an uploaded CV, a
+ * skill, a move through the pipeline — but a plain created row with no later
+ * work on it simply goes. That is worth a sentence and a second click, not a
+ * silent button.
+ *
+ * The sentence below names the kinds rather than saying "later work", because
+ * the reader is about to decide whether their own afternoon is safe and only
+ * they know which kind of work they did.
  *
  * The counts are the import's own, so this is honestly phrased as the most it
  * will do rather than as a promise: the protections above can only ever make
@@ -488,8 +498,9 @@ function UndoConfirm({
         {deletes > 0 && (
           <>
             {" "}
-            Anyone who has since had a role added by hand is kept, and a field somebody has
-            corrected is left alone.
+            Anyone somebody has worked on since — a role or skill added, a field edited, a CV
+            uploaded, a move to another stage — is kept, and a field somebody has corrected is
+            left alone.
           </>
         )}
       </p>

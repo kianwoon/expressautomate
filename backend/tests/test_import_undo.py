@@ -19,6 +19,7 @@ from sqlalchemy import select, text
 from app.db.rls import tenant_session
 from app.models.candidate import (
     Candidate,
+    CandidateDocument,
     CandidateFieldOverride,
     CandidateImport,
     CandidateImportChange,
@@ -493,7 +494,91 @@ async def test_a_field_a_human_had_overridden_is_never_touched(agency):  # noqa:
     assert candidate.full_name == "Jane T"
 
 
+@pytest.mark.asyncio
+async def test_a_created_candidate_with_a_hand_edited_field_is_kept(agency):  # noqa: F811
+    """An override is the record of a human asserting a value, and the cascade
+    would take it — along with the value itself — with no way back."""
+    tenant_id, _user = agency
+    import_id = await _an_import(tenant_id)
+    await _apply(tenant_id, import_id, [_candidate()])
+    candidate_id = (await _one_candidate(tenant_id)).id
+
+    async with AdminSessionLocal() as s:
+        s.add(
+            CandidateFieldOverride(
+                tenant_id=tenant_id,
+                candidate_id=candidate_id,
+                field_name="current_title",
+                human_value="Senior Staff Nurse",
+            )
+        )
+        await s.commit()
+
+    undone = await _undo(tenant_id, import_id)
+
+    assert undone.rows_deleted == 0
+    assert len(undone.skips) == 1
+    assert "edited by hand" in undone.skips[0].reason
+    assert (await _one_candidate(tenant_id)).id == candidate_id
+
+
+@pytest.mark.asyncio
+async def test_a_created_candidate_with_an_uploaded_document_is_kept(agency):  # noqa: F811
+    """The worst cascade of the lot: the CV stays in R2 and the row naming it
+    is gone, so no sweep can ever find the object again."""
+    tenant_id, _user = agency
+    import_id = await _an_import(tenant_id)
+    await _apply(tenant_id, import_id, [_candidate()])
+    candidate_id = (await _one_candidate(tenant_id)).id
+
+    async with AdminSessionLocal() as s:
+        s.add(
+            CandidateDocument(
+                tenant_id=tenant_id,
+                candidate_id=candidate_id,
+                filename="jane-tan-cv.pdf",
+                content_type="application/pdf",
+                byte_size=1024,
+                object_key=f"{tenant_id}/candidates/{candidate_id}/cv.pdf",
+            )
+        )
+        await s.commit()
+
+    undone = await _undo(tenant_id, import_id)
+
+    assert undone.rows_deleted == 0
+    assert len(undone.skips) == 1
+    assert "uploaded to it" in undone.skips[0].reason
+    assert (await _one_candidate(tenant_id)).id == candidate_id
+
+
 # State --------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_undo_refuses_an_import_the_job_has_not_started(agency):  # noqa: F811
+    """`pending` is not settled: the job can claim it a microsecond later, and
+    an undo reported as done would be written straight over."""
+    tenant_id, _user = agency
+    import_id = await _an_import(tenant_id, state=CandidateImport.PENDING)
+    await _apply(tenant_id, import_id, [_candidate()])
+
+    with pytest.raises(ValueError, match="only be undone once it has finished"):
+        await _undo(tenant_id, import_id)
+
+    async with tenant_session(tenant_id) as session:
+        record = (
+            (await session.execute(select(CandidateImport).where(CandidateImport.id == import_id)))
+            .scalars()
+            .one()
+        )
+        # Not reversed, and not claimed to have been: the row is exactly as
+        # the job will find it.
+        assert record.state == CandidateImport.PENDING
+    assert (await _one_candidate(tenant_id)).full_name == "Jane Tan"
+
+
+
 
 
 @pytest.mark.asyncio

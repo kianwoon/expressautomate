@@ -49,7 +49,7 @@ from app.services.imports.rows import (
     HISTORY_SHEET,
 )
 from app.services.imports.table import sniff_table
-from app.services.imports.undo import undo_import
+from app.services.imports.undo import SETTLED, undo_import
 from app.services.storage.r2 import (
     BodyStore,
     R2BodyStore,
@@ -336,9 +336,13 @@ async def undo(request: Request, import_id: uuid.UUID) -> dict:
     — technically harmless, and a confusing answer to give a recruiter who
     clicked once and lost the response.
 
-    A run still `parsing` is refused with 409 rather than 404: the import is
-    the caller's own and the state is the objection, so telling them to wait
-    is both true and actionable.
+    A run that has not settled is refused with 409 rather than 404: the import
+    is the caller's own and the state is the objection, so telling them to
+    wait is both true and actionable. `pending` is refused alongside
+    `parsing`, because the job can claim a pending row between this check and
+    the undo — the guarantee is not this gate but the conditional claim inside
+    `undo_import`, and this gate is what turns losing that race into a
+    sentence rather than an exception.
     """
     _user_uuid, tenant_uuid = _require_session(request)
 
@@ -346,10 +350,10 @@ async def undo(request: Request, import_id: uuid.UUID) -> dict:
         record = await _load(session, import_id)
         if record.state == CandidateImport.UNDONE:
             return {"import": serialize(record), "already_undone": True}
-        if record.state == CandidateImport.PARSING:
+        if record.state not in SETTLED:
             raise HTTPException(
                 status_code=409,
-                detail="This import is still running. It can be undone once it finishes.",
+                detail="This import has not finished. It can be undone once it has.",
             )
 
         outcome = await undo_import(session, tenant_id=tenant_uuid, import_id=import_id)
