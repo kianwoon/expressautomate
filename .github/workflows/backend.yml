@@ -41,7 +41,12 @@ env:
   ARQ_SERVICE_ID: 0822002c-1024-4eb7-816e-25b75adf721c
   # Set once the Koyeb `gateway` service exists (see CLAUDE.md deploy table).
   # Empty means: deploy it, but do not verify — same contract as ARQ_SERVICE_ID.
-  GATEWAY_SERVICE_ID: '50680cdb'
+  # The full UUID, like the three above. `koyeb services list` prints a
+  # shortened id and the CLI accepts it, but verify_koyeb.py talks to the REST
+  # API directly, and `GET /v1/services/50680cdb` is a 400 — so a short id here
+  # fails the verify step rather than the deploy, after the deploy has already
+  # happened.
+  GATEWAY_SERVICE_ID: 50680cdb-bb25-40e7-b382-76df7259a442
 
 jobs:
   # The image depends only on backend/, frontend/ and the Dockerfile. Tagging by
