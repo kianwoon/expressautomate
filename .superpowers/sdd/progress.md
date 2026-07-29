@@ -205,3 +205,25 @@ P5 Task 6: complete (eaf5fc6..15b3756, 1190 passed). Fable 8.5/10 APPROVE WITH C
     failures that look like flakiness.)  Also: uv run ruff check .
   Task 7 is bigger than the plan says - see the four TASK 7 MUST directives above.
   Nothing in piece 5 is pushed, and no piece 5 migration has been applied to Koyeb.
+P5 Task 7: complete (5fe53f8..583bb65, 1207 passed). Fable 9/10 APPROVE, nothing to fix.
+  The client hole is CLOSED: resolved in the route at enqueue, passed explicitly, stored on
+  sourcing_runs.client_id; the nil-UUID sentinel is DELETED not bypassed; the sweep sends
+  routing ids only and the worker falls back to the stored column.
+  Resolution matches the real stored value 'email_domain' (NOT 'domain' as my directive said
+  - a wrong string would have silently made every resolution fall back to unresolved).
+  Domain beats name by set logic, no created_at tiebreak, ambiguity => unresolved and flagged.
+  New alembic head: f4b8c1e7d290.
+  DEFERRED by owner: a merged client is not chased to its survivor, so the exclusion applies
+    to the loser row - a candidate submitted to the SURVIVOR can reappear (re-pitch risk),
+    but nobody wrongly disappears. Wrong-inclusion is recoverable, wrong-exclusion is not,
+    so deferral is safe. Own small task.
+  MINOR deferred: the routing test reads app.openapi() paths, which lists a shadowed route
+    too, so it does not itself prove non-shadowing (the functional HTTP tests do); quota
+    check and insert are not atomic, so concurrent requests can slightly overshoot a daily
+    soft quota.
+  CARRY TO TASK 8 (UI):
+   - a worker-failed run can have failure_reason NULL - do not assume every failed run has
+     a sentence to show.
+   - render BOTH client_id and client_unresolved_reason; an unresolved run must say the
+     already-submitted exclusion could not be applied.
+   - score arrives as a STRING, not a number.
