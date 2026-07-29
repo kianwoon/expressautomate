@@ -50,7 +50,12 @@ log = get_logger(__name__)
 KIND_MAIL = "mail"
 KIND_EXTRACTION = "extraction"
 KIND_MAILBOX = "mailbox"
-EVENT_KINDS = frozenset({KIND_MAIL, KIND_EXTRACTION, KIND_MAILBOX})
+# WA gateway plan §5: a QR/status change is pushed by the gateway to
+# `POST /api/wa/internal/status`, which republishes it here so the settings
+# page refetches `GET /api/wa/session` instead of polling. Carries no payload,
+# like every other kind — the refetch is what returns the live status and QR.
+KIND_WA_SESSION = "wa_session"
+EVENT_KINDS = frozenset({KIND_MAIL, KIND_EXTRACTION, KIND_MAILBOX, KIND_WA_SESSION})
 
 _client: Redis | None = None
 # Guards the open, so a burst of notifications on a cold process opens one

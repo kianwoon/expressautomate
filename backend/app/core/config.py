@@ -496,6 +496,34 @@ class Settings(BaseSettings):
     # the token, and a wrong one produces a link to somebody else's bot.
     TELEGRAM_BOT_USERNAME: str = ""
     TELEGRAM_API_BASE_URL: str = ""
+
+    # --- WA gateway (Baileys, per-recruiter outbound WhatsApp) ---
+    # Distinct from TELEGRAM_*/WHATSAPP_* above on purpose (spec
+    # 2026-07-29-baileys-gateway-plan.md, "Where the gateway lives"): those
+    # names belong to the existing Meta Cloud API notification channel
+    # (`whatsapp_webhook.py`), which this code never touches. `WA_GATEWAY_*`
+    # is the one prefix the Baileys build is allowed to use anywhere.
+    #
+    # Empty by default for the same reason GRAPH_BASE_URL is: this is the
+    # first call `api` makes to the gateway service, and CLAUDE.md records two
+    # outages (GRAPH_BASE_URL, R2_*) from a service's first external call
+    # going out with an unset env var. `wa_gateway_configured()` below is what
+    # makes the absence answerable at the edge instead of an httpx error deep
+    # in a traceback.
+    WA_GATEWAY_URL: str = ""
+    # Presented as `Authorization: Bearer …` on every call to the gateway, and
+    # required identically on the gateway's own `WA_GATEWAY_SHARED_SECRET`
+    # (gateway/src/config.ts) — the two must be set to the same value on
+    # Koyeb. Also the credential the gateway uses to authenticate ITS calls
+    # back to `POST /api/wa/internal/status`, so a wrong or missing value
+    # breaks both directions identically rather than one silently.
+    WA_GATEWAY_SHARED_SECRET: str = ""
+    # Short: every WA gateway route is called synchronously from a browser
+    # request (pairing, a status refetch, a disconnect click), so a slow
+    # gateway should fail fast into `gateway_unreachable` rather than hold the
+    # request open. Baileys' own reconnect logic runs independently on the
+    # gateway side and is unaffected by this timeout.
+    WA_GATEWAY_TIMEOUT_SECONDS: float = 5.0
     # Telegram echoes this in `X-Telegram-Bot-Api-Secret-Token`. Without it the
     # webhook accepts anything that can reach the URL, and the URL is public.
     TELEGRAM_WEBHOOK_SECRET: str = ""
@@ -727,6 +755,10 @@ class Settings(BaseSettings):
         Anything that talks to Graph asks this first.
         """
         return bool(self.GRAPH_BASE_URL)
+
+    def wa_gateway_configured(self) -> bool:
+        """Same question, asked of the Baileys gateway (see WA_GATEWAY_URL)."""
+        return bool(self.WA_GATEWAY_URL and self.WA_GATEWAY_SHARED_SECRET)
 
     def google_configured(self) -> bool:
         """Identity only — Google users have no mailbox to ingest."""

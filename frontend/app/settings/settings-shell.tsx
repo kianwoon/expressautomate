@@ -8,6 +8,7 @@ import {
   SETTINGS_GLOSSARY_PATH,
   SETTINGS_NOTIFICATIONS_PATH,
   SETTINGS_PATH,
+  SETTINGS_WHATSAPP_PATH,
 } from "../api";
 import { useAuth } from "../auth";
 import { SiteFooter } from "../site-footer";
@@ -28,12 +29,13 @@ import { SiteNav } from "../site-nav";
  * not a list anything is matched against.
  */
 
-type Tab = "inbox" | "glossary" | "notifications" | "account";
+type Tab = "inbox" | "glossary" | "notifications" | "account" | "whatsapp";
 
 const TABS: { key: Tab; label: string; href: string }[] = [
   { key: "inbox", label: "Inbox", href: SETTINGS_PATH },
   { key: "glossary", label: "Shorthand", href: SETTINGS_GLOSSARY_PATH },
   { key: "notifications", label: "Notifications", href: SETTINGS_NOTIFICATIONS_PATH },
+  { key: "whatsapp", label: "WhatsApp", href: SETTINGS_WHATSAPP_PATH },
   { key: "account", label: "Account", href: SETTINGS_ACCOUNT_PATH },
 ];
 

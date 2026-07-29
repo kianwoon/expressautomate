@@ -168,6 +168,21 @@ export const CANDIDATES_DASHBOARD_PATH = "/dashboard/candidates";
 export const SETTINGS_GLOSSARY_PATH = "/settings/glossary";
 export const SETTINGS_NOTIFICATIONS_PATH = "/settings/notifications";
 export const SETTINGS_ACCOUNT_PATH = "/settings/account";
+export const SETTINGS_WHATSAPP_PATH = "/settings/whatsapp";
+
+/**
+ * The recruiter's own WhatsApp link — the "WA gateway" (Baileys), a separate
+ * concern from the `whatsapp`/`WHATSAPP_*` Meta Cloud API integration that
+ * sends notifications to recruiters. The two are deliberately namespaced apart
+ * (`wa` vs `whatsapp`) so nothing here is ever confused with that channel.
+ *
+ * `POST /session` starts or resumes pairing; `GET /session` reads the current
+ * state; `POST /session/disconnect` tears the link down. All three return the
+ * DB-backed status vocabulary: `pairing | connected | reconnecting |
+ * disconnected | logged_out`, plus the API-only `gateway_unreachable`.
+ */
+export const WA_SESSION_PATH = `${API_BASE}/api/wa/session`;
+export const WA_SESSION_DISCONNECT_PATH = `${WA_SESSION_PATH}/disconnect`;
 
 /**
  * Everything the notifications screen needs in one read: which channels are

@@ -208,6 +208,25 @@ One thing to know before touching `gateway/`: the image tag hashes the whole
 directory, tests included, so a test-only edit still redeploys the gateway and
 drops every live socket. Once real sessions exist, that is a reason to batch
 gateway changes rather than trickle them.
+
+**Amended by P3: sessions restore lazily, not at boot.** §2 said the gateway
+would restore every session when it starts. That cannot be written. Both
+session tables are FORCE RLS scoped on `app.tenant_id`, and `tenants` is
+RLS'd on its own id, so with no tenant set a query sees nothing anywhere —
+there is no way to enumerate "every tenant holding a session" without a
+bypass role, and the boot assertion added in this same phase exists precisely
+to refuse one. The two requirements were in direct conflict and the RLS one
+wins.
+
+What happens instead: a session resumes from stored credentials the moment it
+is first asked about, and never asks for a fresh QR to do it. The property
+P2 was built to guarantee still holds; only the trigger moved, from a boot
+sweep to first touch.
+
+**P5's kill-and-restart test must therefore ask.** Restarting the process and
+waiting proves nothing now — nothing wakes a session on its own. The test has
+to restart, then call `GET /api/wa/session` for a known session, and assert
+that it comes back `connected` without a QR.
 **P4 — Send path + activities migration + modal fallback**
 (`whatsapp-send` endpoint, CHECK-widening migration, `candidate-whatsapp.tsx`):
 **Sonnet** — 1–3 file changes per side, design fully specified here.

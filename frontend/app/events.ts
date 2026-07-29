@@ -14,11 +14,11 @@ import { EVENTS_PATH } from "./api";
  * session; a stream that carried the rows themselves would be a second data
  * path to get tenant scoping wrong in.
  *
- * allow-hardcode: the three kinds below are a wire protocol shared with
+ * allow-hardcode: the kinds below are a wire protocol shared with
  * `backend/app/api/events.py`, not configuration. A setting that had to match
  * the other end of a socket would be a setting that could only ever be wrong.
  */
-export type EventKind = "mail" | "extraction" | "mailbox";
+export type EventKind = "mail" | "extraction" | "mailbox" | "wa_session";
 
 /**
  * Why a listener is being called.
@@ -193,7 +193,8 @@ function open(): void {
     } catch {
       return;
     }
-    if (kind === "mail" || kind === "extraction" || kind === "mailbox") announce(kind);
+    if (kind === "mail" || kind === "extraction" || kind === "mailbox" || kind === "wa_session")
+      announce(kind);
   });
 
   stream.addEventListener("error", () => {

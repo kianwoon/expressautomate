@@ -56,5 +56,10 @@ set +a
 # so the store tests prove the policy admits the gateway's own writes rather
 # than silently running as a superuser that ignores RLS entirely.
 export WA_GATEWAY_TEST_DATABASE_URL="$DATABASE_URL"
+# The negative case for the boot-time assertion in db.ts: `postgres` here is
+# the container superuser (`rolbypassrls = true`), which is exactly the role
+# `assertRlsNotBypassed` exists to refuse. Never used to open a real pool
+# except inside that one test.
+export WA_GATEWAY_TEST_BYPASS_DATABASE_URL="$DATABASE_ADMIN_URL"
 cd "$HERE"
 exec npm test "$@"

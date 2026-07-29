@@ -7,6 +7,7 @@ import type { FastifyInstance } from 'fastify';
 import { buildApp } from './app.js';
 import { secretMatches } from './auth.js';
 import { ConfigError, loadConfig } from './config.js';
+import type { SessionManager } from './sessions.js';
 
 const SECRET = 'test-shared-secret-not-a-real-one';
 
@@ -76,6 +77,89 @@ describe('gateway HTTP surface', () => {
     });
     assert.equal(res.statusCode, 200);
     assert.equal(res.json().baileys, 'not-wired');
+  });
+});
+
+describe('/sessions/* routes (P3)', () => {
+  let app: FastifyInstance;
+  const calls: { method: string; ref: unknown }[] = [];
+  const fakeSessions = {
+    status: async (ref: unknown) => {
+      calls.push({ method: 'status', ref });
+      return { status: 'disconnected', qr: null, expiresAt: null, phoneNumber: null, connectedAt: null };
+    },
+    pair: async (ref: unknown) => {
+      calls.push({ method: 'pair', ref });
+      return { status: 'pairing', qr: 'abc123', expiresAt: '2026-07-29T00:00:20Z', phoneNumber: null, connectedAt: null };
+    },
+    disconnect: async (ref: unknown) => {
+      calls.push({ method: 'disconnect', ref });
+      return { status: 'disconnected', qr: null, expiresAt: null, phoneNumber: null, connectedAt: null };
+    },
+  } as unknown as SessionManager;
+
+  before(() => {
+    app = buildApp(
+      {
+        host: '127.0.0.1',
+        port: 0,
+        sharedSecret: SECRET,
+        databaseUrl: 'postgresql://unused:unused@127.0.0.1:1/unused',
+        encryptionKey: randomBytes(32),
+      },
+      fakeSessions,
+    );
+  });
+
+  after(async () => {
+    await app.close();
+  });
+
+  test('GET /sessions/status requires the shared secret like every other guarded route', async () => {
+    const res = await app.inject({ method: 'GET', url: '/sessions/status?tenantId=t&userId=u' });
+    assert.equal(res.statusCode, 401);
+  });
+
+  test('GET /sessions/status forwards tenantId/userId from the query string', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: '/sessions/status?tenantId=tenant-1&userId=user-1',
+      headers: { authorization: `Bearer ${SECRET}` },
+    });
+    assert.equal(res.statusCode, 200);
+    assert.deepEqual(res.json(), { status: 'disconnected', qr: null, expiresAt: null, phoneNumber: null, connectedAt: null });
+    assert.deepEqual(calls.at(-1), { method: 'status', ref: { tenantId: 'tenant-1', sessionId: 'user-1' } });
+  });
+
+  test('GET /sessions/status without tenantId or userId is 400, not a crash', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: '/sessions/status?tenantId=only-one',
+      headers: { authorization: `Bearer ${SECRET}` },
+    });
+    assert.equal(res.statusCode, 400);
+  });
+
+  test('POST /sessions/pair returns the QR the manager produced', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/sessions/pair',
+      headers: { authorization: `Bearer ${SECRET}` },
+      payload: { tenantId: 'tenant-1', userId: 'user-1' },
+    });
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.json().qr, 'abc123');
+  });
+
+  test('POST /sessions/disconnect', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/sessions/disconnect',
+      headers: { authorization: `Bearer ${SECRET}` },
+      payload: { tenantId: 'tenant-1', userId: 'user-1' },
+    });
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.json().status, 'disconnected');
   });
 });
 

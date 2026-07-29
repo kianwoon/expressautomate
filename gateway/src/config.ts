@@ -21,6 +21,16 @@ export interface GatewayConfig {
   readonly encryptionKey: Buffer;
   /** Retired key that still decrypts un-rewritten rows; absent normally. */
   readonly previousEncryptionKey?: Buffer | undefined;
+  /**
+   * Where this service POSTs `{tenantId, userId, status, ...}` on every
+   * status/QR change (plan §5, §6: "the gateway only, always via the
+   * FastAPI internal callback"). Optional rather than required at boot: a
+   * push failure must degrade to "the settings page falls back to its
+   * polling floor" (plan §5), never to "the gateway will not start" — the
+   * REST surface (`/sessions/pair|status|disconnect`) is the primary
+   * contract and works with no callback configured at all.
+   */
+  readonly apiCallbackUrl?: string | undefined;
 }
 
 export class ConfigError extends Error {}
@@ -69,6 +79,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig 
           decodeKey(rawPrevious, 'WA_GATEWAY_ENCRYPTION_KEY_PREVIOUS'),
         );
 
+  const rawCallback = env.WA_GATEWAY_API_CALLBACK_URL ?? '';
+
   return {
     // 0.0.0.0 so the container is reachable on the Koyeb service mesh; the
     // service itself is deployed with no public route (plan §4).
@@ -78,6 +90,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig 
     databaseUrl,
     encryptionKey,
     previousEncryptionKey,
+    apiCallbackUrl: rawCallback === '' ? undefined : rawCallback,
   };
 }
 

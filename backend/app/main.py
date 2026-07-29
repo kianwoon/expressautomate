@@ -28,6 +28,7 @@ from app.api import (
     opportunities,
     sourcing,
     telegram_webhook,
+    wa_gateway,
     whatsapp_webhook,
 )
 from app.core.config import settings
@@ -146,6 +147,7 @@ api.include_router(notifications.router)
 api.include_router(events.router)
 api.include_router(telegram_webhook.router)
 api.include_router(whatsapp_webhook.router)
+api.include_router(wa_gateway.router)
 
 
 class EarlyAccessRequest(BaseModel):
