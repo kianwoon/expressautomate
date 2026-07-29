@@ -84,6 +84,13 @@ export function buildApp(config: GatewayConfig, sessions?: SessionManager): Fast
         // live socket and WhatsApp refused it — a `failed` row carrying this
         // exact `error` string. A 5xx is reserved for "we do not know what
         // happened", which is neither of these.
+        if ('indeterminate' in outcome) {
+          // The 5xx the comment above reserves for "we do not know what
+          // happened", and the API turns it into an `unknown` row rather than
+          // a failure. 502 rather than 503: the gateway is fine, the thing it
+          // was talking to stopped answering mid-sentence.
+          return reply.code(502).send({ error: outcome.indeterminate, status: 'connected' });
+        }
         if ('refusal' in outcome) {
           return reply.code(422).send({ error: outcome.refusal, status: 'connected' });
         }

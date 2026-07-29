@@ -353,11 +353,28 @@ function WhatsappModal({
     setSending(true);
     setSendError(null);
     try {
-      await sendCandidateWhatsapp(row.id, text, clientRequestId);
+      const result = await sendCandidateWhatsapp(row.id, text, clientRequestId);
       // The server already logged the activity — unlike the popup path,
-      // there is nothing left to POST here. Close and let the timeline
-      // refetch pick up the new "sent" row.
+      // there is nothing left to POST here.
       onLogged();
+
+      if (result.status === "unknown") {
+        // A 200 whose status is `unknown` is not a success. The message was
+        // dispatched and the answer never came back, so closing the modal the
+        // way a send does would tell the recruiter it worked. Leaving it open
+        // with the truth is the only option that does not push them toward
+        // sending it a second time to a candidate who may already have it.
+        setSendError({
+          text:
+            "We sent this but did not hear back, so we cannot say whether it arrived. " +
+            "Check WhatsApp on your phone before sending it again.",
+          pointToSettings: false,
+          offerPopup: false,
+        });
+        return;
+      }
+
+      // Close and let the timeline refetch pick up the new "sent" row.
       onClose();
     } catch (err) {
       // A failed send is not a dead end: the modal stays open, says what the

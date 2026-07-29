@@ -755,7 +755,17 @@ export async function getWaSessionStatus(): Promise<WaSessionStatus> {
 
 /** What a send either returns (200) or throws as (409/429/422, via
  *  `WhatsappSendError`). */
-export type WhatsappSendResult = { activity_id: string; provider_message_id: string };
+/** The 200 body. `status` is load-bearing and was missing here: a send that
+ *  reached WhatsApp and one whose answer never came back are both 200s, and
+ *  only this field tells them apart. `unknown` is not a success — the caller
+ *  must not close the modal on it. `provider_message_id` is null unless
+ *  WhatsApp actually handed one back. */
+export type WhatsappSendResult = {
+  status: "sent" | "unknown" | "failed";
+  activity_id: string;
+  provider_message_id: string | null;
+  client_request_id: string;
+};
 
 /** A 409/429/422 is not a generic failure — it carries the server's own
  *  sentence, so the modal can say something a recruiter can act on. `kind`

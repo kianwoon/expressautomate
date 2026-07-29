@@ -90,7 +90,23 @@ export type SendOutcome =
   // `status` variant above, which means we never got as far as trying, and
   // the distinction is the whole point: only this one is a `failed` row on
   // the API side, and `refusal` is Baileys' own wording, carried verbatim.
-  | { readonly ok: false; readonly status: 'connected'; readonly refusal: string };
+  | { readonly ok: false; readonly status: 'connected'; readonly refusal: string }
+  // The socket died or stopped answering while the message was in flight. The
+  // frame may already have reached WhatsApp — there is no way from here to
+  // tell — so this is deliberately neither `ok` nor a refusal. Reporting it as
+  // a refusal would tell a recruiter the message failed and invite them to
+  // send it again, which is how a candidate receives it twice.
+  | { readonly ok: false; readonly status: 'connected'; readonly indeterminate: string };
+
+/**
+ * Boom codes that mean the connection went away rather than WhatsApp saying no.
+ *
+ * From Baileys' own `DisconnectReason`: 408 covers `timedOut` and
+ * `connectionLost`, 428 is `connectionClosed`, 440 is `connectionReplaced`.
+ * A throw carrying one of these says nothing about whether the message was
+ * accepted — only that we stopped being able to hear the answer.
+ */
+const INDETERMINATE_SEND_CODES = new Set([408, 428, 440]);
 
 /** Pushed to FastAPI on every change; matches `InternalStatusIn` in `wa_gateway.py`. */
 export interface StatusCallback {
@@ -257,14 +273,25 @@ export class SessionManager {
     try {
       receipt = await runtime.socket.sendMessage(toJid(to), { text });
     } catch (error) {
-      // A throw here is WhatsApp (or Baileys) refusing this message on a live
+      const message = error instanceof Error ? error.message : String(error);
+      const statusCode = (error as Boom | undefined)?.output?.statusCode;
+
+      // Not every throw is a refusal. A timed-out or closed connection means
+      // the answer never arrived, not that the message was rejected — and
+      // Baileys throws the same way whether the frame left or not. Calling
+      // that `failed` asserts a thing we cannot know, and the recruiter it
+      // misleads resends: the candidate gets the message twice.
+      if (statusCode !== undefined && INDETERMINATE_SEND_CODES.has(statusCode)) {
+        return { ok: false, status: 'connected', indeterminate: message };
+      }
+
+      // What is left is WhatsApp (or Baileys) refusing this message on a live
       // socket, and it is the only thing that earns a `failed` row upstream.
       // The message is passed on as-is: the API stores it verbatim, so
       // rewording it here would be inventing a reason for someone else's
       // refusal. Nothing in this string is ours — it carries no gateway URL
       // and no shared secret, both of which live in config, not in a send.
-      const refusal = error instanceof Error ? error.message : String(error);
-      return { ok: false, status: 'connected', refusal };
+      return { ok: false, status: 'connected', refusal: message };
     }
     const providerMessageId = receipt?.key?.id ?? null;
     return { ok: true, status: 'connected', providerMessageId };

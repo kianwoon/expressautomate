@@ -10,6 +10,7 @@ import assert from 'node:assert/strict';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { after, before, describe, test } from 'node:test';
 
+import { Boom } from '@hapi/boom';
 import { Pool } from 'pg';
 
 import { ValueCipher } from './crypto.js';
@@ -430,6 +431,37 @@ describe('SessionManager', { skip: SKIP }, () => {
     assert.equal(!outcome.ok && 'refusal' in outcome && outcome.refusal,
       'not-authorized: blocked by recipient');
     assert.equal(outcome.status, 'connected');
+  });
+
+  test('a timed-out send is indeterminate, not a refusal — the message may have gone', async () => {
+    // The failure this guards against is subtle and expensive. Baileys throws
+    // the same way whether the frame left or not, so calling a timeout a
+    // refusal records `failed` for a message that may well have arrived. The
+    // recruiter is told it failed, sends it again, and the candidate gets it
+    // twice — the exact double-message the idempotency key cannot stop,
+    // because a resend of an edited draft is a genuinely new request.
+    const ref = await seedTenantAndUser();
+    const fake = fakeSocketFactory();
+    const manager = new SessionManager(pool, cipher, { socketFactory: fake.factory });
+    await manager.pair(ref);
+    fake.emit('connection.update', { connection: 'open' });
+
+    for (const statusCode of [408, 428, 440]) {
+      (fake.sockets[0] as { sendMessage: () => Promise<never> }).sendMessage = async () => {
+        throw new Boom('Timed Out', { statusCode });
+      };
+
+      const outcome = await manager.send(ref, '+6591234567', 'hi');
+      assert.equal(outcome.ok, false);
+      assert.ok(
+        !outcome.ok && 'indeterminate' in outcome,
+        `Boom ${statusCode} must be indeterminate, not a refusal`,
+      );
+      assert.ok(
+        !outcome.ok && !('refusal' in outcome),
+        `Boom ${statusCode} must not be recorded as a refusal`,
+      );
+    }
   });
 
   test('send wakes a session this process has forgotten, instead of calling it disconnected', async () => {
