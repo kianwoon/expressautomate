@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { randomBytes } from 'node:crypto';
 import { after, before, describe, test } from 'node:test';
 
 import type { FastifyInstance } from 'fastify';
@@ -13,7 +14,14 @@ describe('gateway HTTP surface', () => {
   let app: FastifyInstance;
 
   before(() => {
-    app = buildApp({ host: '127.0.0.1', port: 0, sharedSecret: SECRET });
+    app = buildApp({
+      host: '127.0.0.1',
+      port: 0,
+      sharedSecret: SECRET,
+      // P2 widened the config; the HTTP surface does not use these yet.
+      databaseUrl: 'postgresql://unused:unused@127.0.0.1:1/unused',
+      encryptionKey: randomBytes(32),
+    });
   });
 
   after(async () => {
@@ -87,14 +95,15 @@ describe('config', () => {
   });
 
   test('defaults to the port the plan names, and honours an override', () => {
-    assert.equal(loadConfig({ WA_GATEWAY_SHARED_SECRET: 'x' }).port, 7300);
-    assert.equal(
-      loadConfig({ WA_GATEWAY_SHARED_SECRET: 'x', WA_GATEWAY_PORT: '8080' }).port,
-      8080,
-    );
-    assert.throws(
-      () => loadConfig({ WA_GATEWAY_SHARED_SECRET: 'x', WA_GATEWAY_PORT: 'nope' }),
-      ConfigError,
-    );
+    // The rest of the environment is P2's; see crypto.test.ts for its own
+    // refuse-to-start cases.
+    const env = {
+      WA_GATEWAY_SHARED_SECRET: 'x',
+      WA_GATEWAY_DATABASE_URL: 'postgresql://u:p@localhost:5432/db',
+      WA_GATEWAY_ENCRYPTION_KEY: randomBytes(32).toString('base64'),
+    };
+    assert.equal(loadConfig(env).port, 7300);
+    assert.equal(loadConfig({ ...env, WA_GATEWAY_PORT: '8080' }).port, 8080);
+    assert.throws(() => loadConfig({ ...env, WA_GATEWAY_PORT: 'nope' }), ConfigError);
   });
 });

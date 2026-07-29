@@ -221,6 +221,36 @@ jobs:
   # the Python suite, so it runs as its own job rather than bolted onto `test`.
   gateway_test:
     runs-on: ubuntu-latest
+
+    # The store tests need a real Postgres. `ON CONFLICT`, the bytea round trip
+    # and RLS are database behaviours, and a double would agree with whatever
+    # bug the store has — so the suite that guards auth-state persistence is
+    # worth nothing without this. Losing one key write is the failure that
+    # logs every recruiter out and makes them all re-pair, which is itself a
+    # ban signal.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: wa_gateway_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+        ports:
+          - 5432:5432
+
+    env:
+      # The gateway reads the schema the migrations produce, never a
+      # hand-written CREATE TABLE, so a drift between the two fails here
+      # instead of on Koyeb.
+      WA_GATEWAY_TEST_DATABASE_URL: postgresql://expressautomate_app:ci-app-password@localhost:5432/wa_gateway_test
+      # Turns an absent DSN into a failure. Without it a misconfigured job
+      # skips every store test and still reports green.
+      WA_GATEWAY_REQUIRE_DB_TESTS: '1'
+
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
@@ -228,9 +258,39 @@ jobs:
           node-version: '22'
           cache: npm
           cache-dependency-path: gateway/package-lock.json
-      - name: Install
+      - uses: astral-sh/setup-uv@v9.0.0
+        with:
+          enable-cache: true
+          prune-cache: true
+          cache-dependency-glob: backend/uv.lock
+
+      - name: Install gateway
         working-directory: gateway
         run: npm ci
+
+      # The migrations own the schema, so they are what creates it here. The
+      # app role is created the same way the backend job's does, and must NOT
+      # bypass RLS: the store's tenant scoping is enforced by the database, and
+      # a bypassing role in the tests would prove nothing about production.
+      - name: Install backend
+        working-directory: backend
+        run: uv sync --frozen
+
+      - name: Build the gateway schema from the real migrations
+        working-directory: backend
+        env:
+          DATABASE_APP_ROLE: expressautomate_app
+          DATABASE_APP_PASSWORD: ci-app-password
+          DATABASE_ADMIN_URL: postgresql://postgres:postgres@localhost:5432/wa_gateway_test
+          DATABASE_URL: postgresql://expressautomate_app:ci-app-password@localhost:5432/wa_gateway_test
+          APP_ENV: test
+          APP_SECRET_KEY: ci-not-a-real-secret
+          TOKEN_ENCRYPTION_KEY: ci-not-a-real-key
+          FRONTEND_ORIGIN: http://localhost:3000
+          GRAPH_BASE_URL: https://graph.microsoft.com/v1.0
+          REDIS_URL: redis://localhost:6379
+        run: uv run alembic upgrade head
+
       - name: Test
         working-directory: gateway
         # `npm test` typechecks first, so a build break fails here rather than

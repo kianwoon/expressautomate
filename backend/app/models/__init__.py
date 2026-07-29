@@ -23,6 +23,7 @@ from app.models.signup import EarlyAccessSignup
 from app.models.sourcing import CandidateSubmission, SourcingMatch, SourcingRun
 from app.models.sync_event import SyncEvent
 from app.models.tenant import Tenant, User
+from app.models.wa_session import WaSession, WaSessionKey
 
 __all__ = [
     "Candidate",
@@ -52,5 +53,7 @@ __all__ = [
     "SyncEvent",
     "Tenant",
     "User",
+    "WaSession",
+    "WaSessionKey",
     "WhatsAppSuppression",
 ]
