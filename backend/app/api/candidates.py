@@ -189,20 +189,6 @@ def _serialize(candidate: Candidate) -> dict:
         ),
         "notice_period_raw": candidate.notice_period_raw,
         "employment_type": candidate.employment_type,
-        # Regulatory facts. Shown to the recruiter who has to fill the MOM form
-        # and to nobody else — in particular, `app/services/sourcing/explain.py`
-        # builds its own narrow `MatchCandidate` projection and never reads this
-        # dict, which is what keeps them out of every prompt (`redact.py`).
-        "sex": candidate.sex,
-        "race": candidate.race,
-        "race_detail": candidate.race_detail,
-        "nationality": candidate.nationality,
-        # Serialized as the date it is. No age is derived here or anywhere —
-        # see the column comment.
-        "date_of_birth": (
-            candidate.date_of_birth.isoformat() if candidate.date_of_birth else None
-        ),
-        "education_years": candidate.education_years,
         "notes": candidate.notes,
         "pipeline_stage": candidate.pipeline_stage,
         "record_status": candidate.record_status,
@@ -388,6 +374,27 @@ async def get_candidate(request: Request, candidate_id: uuid.UUID) -> dict:
         documents = await documents_for(session, candidate_id)
 
     payload = _serialize(candidate)
+    # Only on the single-record read, deliberately not on a list row.
+    #
+    # These exist so a recruiter can fill a MOM form for the person they have
+    # opened. Putting them on every row of the table would print race beside
+    # fifty names at once, and a screen like that invites shortlisting by eye —
+    # which is the thing this platform refuses to do in code (`redact.py`), and
+    # refusing it in code while laying it out on a page would be a distinction
+    # without a difference.
+    payload |= {
+        "sex": candidate.sex,
+        "race": candidate.race,
+        "race_detail": candidate.race_detail,
+        "nationality": candidate.nationality,
+        # The date as stored. No age is derived here or anywhere — eligibility
+        # is judged at application, so a computed age would be wrong within the
+        # year and wrong in a direction nobody would notice.
+        "date_of_birth": (
+            candidate.date_of_birth.isoformat() if candidate.date_of_birth else None
+        ),
+        "education_years": candidate.education_years,
+    }
     payload["skills"] = [s.skill for s in skills]
     # Objects, not bare strings as skills are: a language without its fluency
     # is half the fact, and flattening it would lose the half that decides a

@@ -66,7 +66,12 @@ HIDDEN=""
 if [ -e "$ROOT/.env" ]; then
   HIDDEN="$ROOT/.env.hidden-while-testing"
   mv "$ROOT/.env" "$HIDDEN"
-  trap 'mv "$HIDDEN" "$ROOT/.env"' EXIT
+  # INT and TERM as well as EXIT: a bare EXIT trap does not run when the shell
+  # is killed by a signal, and "killed" includes the ordinary case of somebody
+  # pressing Ctrl-C through a slow suite. Leaving `.env` renamed is the failure
+  # this trap exists to prevent, so it has to survive the ways a run really
+  # ends rather than only the tidy one.
+  trap 'mv "$HIDDEN" "$ROOT/.env"' EXIT INT TERM
 fi
 
 # Bring the schema and the application role up to head before every run.
