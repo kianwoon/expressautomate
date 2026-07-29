@@ -105,8 +105,25 @@ reason as the two above:
 shared secret lives once, as the Koyeb secret `ea-wa-gateway-shared-secret`,
 and both services reference it rather than each holding a copy — two copies
 are two things that can drift, which is what this whole section is about. It
-is reached at `http://gateway.expressautomate:7300`, the `<service>.<app>`
-name Koyeb's mesh gives every service.
+is reached at **`http://gateway.expressautomate.internal:7300`**.
+
+**The `.internal` suffix is load-bearing, and Koyeb's own documentation will
+tell you otherwise.** The prose on their service-mesh page gives the format as
+`<service>.<app>`; the table further down the same page gives
+`<service>.<app>.internal`, and the table is the one that resolves. Every web
+search surfaces the prose. Half a day went into this: `gateway.expressautomate`
+and `gateway.expressautomate.koyeb` both fail with a bare `ConnectError`, which
+looks exactly like a firewall or a dead service rather than a name that does
+not exist.
+
+What proves it is a naming problem rather than a connectivity one: a pod IP
+works. If mesh calls are failing, put the target's pod IP in the URL — if that
+succeeds, the network is fine and only the name is wrong. Do not leave it
+there: a pod IP rotates on every deploy, including the deploy your own env
+change triggers, so the address goes stale the moment you set it.
+
+The bare `<service>` form (`http://gateway:7300`) is documented to work across
+regions and is untested here.
 
 Its env vars are set by hand and start empty: `WA_GATEWAY_SHARED_SECRET`
 (required — the process refuses to boot without it) and, from P2, the database
