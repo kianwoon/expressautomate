@@ -51,6 +51,7 @@ def build_tasks() -> list[PeriodicTask]:
         flush_notifications,
         renew_subscriptions,
         rescan_stuck,
+        sweep_stale_wa_sends,
     )
 
     async def _rescan() -> None:
@@ -81,6 +82,12 @@ def build_tasks() -> list[PeriodicTask]:
         # outright before any exception handler could run.
         await flush_notifications()
 
+    async def _sweep_wa_sends() -> None:
+        # Plan §6's liveness sweep, pending-row half: a WA gateway send whose
+        # owning process died before it could resolve the row. See
+        # `sweep_stale_wa_sends` in `app/workers/tasks.py`.
+        await sweep_stale_wa_sends()
+
     return [
         PeriodicTask("rescan_stuck", settings.RESCAN_INTERVAL_SECONDS, _rescan),
         PeriodicTask(
@@ -95,6 +102,11 @@ def build_tasks() -> list[PeriodicTask]:
             "flush_notifications",
             settings.NOTIFY_SWEEP_INTERVAL_SECONDS,
             _flush_notifications,
+        ),
+        PeriodicTask(
+            "sweep_stale_wa_sends",
+            settings.WA_SWEEP_INTERVAL_SECONDS,
+            _sweep_wa_sends,
         ),
     ]
 

@@ -349,7 +349,15 @@ class CandidateActivity(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
     SENT = "sent"
     FAILED = "failed"
     UNKNOWN = "unknown"
-    STATUSES = (OPENED, SENT, FAILED, UNKNOWN)
+    # P5: written *before* dispatch, inside the same transaction that claims
+    # the idempotency key and counts against the daily cap (plan §9 review;
+    # see `20260729_2300_wa_send_pending_and_spacing.py`). A reader who sees
+    # `pending` should conclude exactly this: we are trying, and we do not
+    # yet know. It resolves to `sent`/`failed`/`unknown` once the gateway
+    # answers, or to `unknown` via the liveness sweep if it never does — and
+    # never to `failed`, because we never observed a refusal (§15).
+    PENDING = "pending"
+    STATUSES = (OPENED, SENT, FAILED, UNKNOWN, PENDING)
 
     candidate_id: Mapped[uuid.UUID] = mapped_column(
         PgUUID(as_uuid=True), nullable=False, index=True

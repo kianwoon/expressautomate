@@ -127,6 +127,17 @@ _FLUSHABLE_DELIVERIES = text(
     "SELECT * FROM flush_notification_deliveries(:stale_minutes, :limit)"
 )
 
+# P5 (plan §6, riskiest-thing test aside): a `pending` `candidate_activities`
+# row (`20260729_2300_wa_send_pending_and_spacing.py`) older than the bound is
+# a dispatch whose owning process died before it could resolve the row — see
+# `sweep_stale_wa_sends` (`20260729_2330_sweep_stale_wa_sends.py`) for why
+# this goes through a SECURITY DEFINER function rather than a raw UPDATE.
+_STALE_WA_SENDS = text("SELECT * FROM sweep_stale_wa_sends(:stale_minutes, :limit)")
+
+# allow-hardcode: bound on one sweep call, same reasoning as
+# NOTIFY_FLUSH_LIMIT — the function itself also caps at 500.
+_WA_SWEEP_LIMIT = 200
+
 
 async def rescan_stuck() -> int:
     """Re-enqueue rows no worker is going to pick up on its own.
@@ -449,3 +460,40 @@ async def flush_notifications() -> int:
         # the normal path should have carried and did not.
         log.warning("notifications_flushed", count=queued)
     return queued
+
+
+async def sweep_stale_wa_sends() -> int:
+    """Resolve every WA gateway send whose owning process died mid-flight.
+
+    Plan §6's liveness sweep, the pending-row half. A `pending` row this old
+    was written by `POST /candidates/{id}/whatsapp-send`
+    (`app/api/candidate_whatsapp.py#_claim_send`) before a dispatch that never
+    came back — the request handler that would have resolved it is gone, so
+    nothing else will ever move this row. It becomes `unknown`, and only
+    `unknown` — never `failed`, because nobody observed a refusal (§15).
+
+    `WA_SEND_STALE_PENDING_MINUTES` is set well above the gateway's own
+    per-call timeout on purpose: a send that is merely slow, still genuinely
+    in flight, must not be swept out from under the request that is about to
+    resolve it. `sweep_stale_wa_sends`'s `WHERE status = 'pending'` is the
+    compare-and-set that makes the two paths safe to race — whichever gets
+    there first wins, and the loser touches nothing.
+    """
+    async with SessionLocal() as session:
+        rows = (
+            await session.execute(
+                _STALE_WA_SENDS,
+                {
+                    "stale_minutes": settings.WA_SEND_STALE_PENDING_MINUTES,
+                    "limit": _WA_SWEEP_LIMIT,
+                },
+            )
+        ).all()
+        await session.commit()
+
+    if rows:
+        # Every one of these is a process that died holding a send — worth
+        # seeing in logs even though the recruiter's own `unknown` row is the
+        # user-visible half of this.
+        log.warning("wa_sends_swept_to_unknown", count=len(rows))
+    return len(rows)

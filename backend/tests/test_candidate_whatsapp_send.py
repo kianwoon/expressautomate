@@ -18,6 +18,7 @@ built through the ORM so that a schema change breaks these tests loudly.
 Nothing here matches on phrases.
 """
 
+import asyncio
 import uuid
 from datetime import UTC, datetime, timedelta
 
@@ -572,7 +573,10 @@ async def test_every_refusal_body_is_flat_never_nested_under_detail(
     assert isinstance(body["detail"], str)
     assert set(body) == {"detail"}
 
-    # 429 — the daily cap.
+    # 429 — the daily cap. Flat, like the others, but carries `limit` and
+    # `retry_after_seconds` (P5) — the shared shape both 429s use, agreed
+    # with the frontend so it has one branch instead of two. No
+    # `session_status`: neither 429 is a session problem.
     monkeypatch.setattr(settings, "WA_SEND_DAILY_LIMIT", 1)
     await _seed_sent_today(tid, uid, ids["with_phone"], 1)
     async with await _client_for(tid, uid) as http:
@@ -580,7 +584,9 @@ async def test_every_refusal_body_is_flat_never_nested_under_detail(
     assert capped.status_code == 429
     body = capped.json()
     assert isinstance(body["detail"], str)
-    assert set(body) == {"detail"}
+    assert set(body) == {"detail", "limit", "retry_after_seconds"}
+    assert body["limit"] == "daily"
+    assert isinstance(body["retry_after_seconds"], int)
 
 
 async def test_a_refusal_after_dispatch_carries_its_activity_id_at_the_top_level(
@@ -642,3 +648,99 @@ async def test_agency_b_can_neither_send_to_nor_read_agency_as_candidate(
     # And agency A's own row is untouched by B's attempt.
     rows = await _activities(tid, ids["with_phone"])
     assert [row["status"] for row in rows] == ["sent"]
+
+
+async def _seed_wa_session(tid, uid, *, next_send_allowed_at=None) -> None:
+    """A `wa_sessions` row for this recruiter — P5's pre-dispatch claim locks
+    this row (`SELECT ... FOR UPDATE`), so a spacing or cap-race test needs
+    one to exist, exactly as a real paired recruiter would have."""
+    async with AdminSessionLocal() as s:
+        await s.execute(
+            text(
+                "INSERT INTO wa_sessions (id, tenant_id, user_id, status, "
+                "next_send_allowed_at) VALUES (:i, :t, :u, 'connected', :n)"
+            ),
+            {"i": uuid.uuid4(), "t": tid, "u": uid, "n": next_send_allowed_at},
+        )
+        await s.commit()
+
+
+async def test_two_concurrent_different_messages_the_cap_admits_exactly_one(
+    agency, monkeypatch
+) -> None:
+    """The P4-review race: two *different* messages, not a replay of one key,
+    both racing the daily cap. Only the pre-dispatch row lock on `wa_sessions`
+    (P5) closes this — the unique index on `client_request_id` does nothing
+    here, because the two requests carry different keys."""
+    tid, uid, ids = agency
+    await _seed_wa_session(tid, uid)
+    monkeypatch.setattr(settings, "WA_SEND_DAILY_LIMIT", 1)
+    _fake_client(
+        monkeypatch,
+        outcome=SendOutcome(ok=True, session_status="connected", provider_message_id="RACE"),
+    )
+
+    async def _send():
+        async with await _client_for(tid, uid) as http:
+            return await http.post(SEND.format(cid=ids["with_phone"]), json=_body())
+
+    first, second = await asyncio.gather(_send(), _send())
+    statuses = sorted([first.status_code, second.status_code])
+    assert statuses == [200, 429], "exactly one send got through the cap of 1"
+    rows = await _activities(tid, ids["with_phone"])
+    assert len([r for r in rows if r["status"] == "sent"]) == 1
+
+
+async def test_a_pending_row_counts_toward_the_daily_cap(agency, monkeypatch) -> None:
+    """A send still in flight is a send that happened, for the purpose of the
+    cap — not counting it is exactly the hole `pending` exists to close."""
+    tid, uid, ids = agency
+    await _seed_wa_session(tid, uid)
+    monkeypatch.setattr(settings, "WA_SEND_DAILY_LIMIT", 1)
+    async with AdminSessionLocal() as s:
+        await s.execute(
+            text(
+                "INSERT INTO candidate_activities (id, tenant_id, candidate_id, user_id, "
+                "activity_type, channel, status, client_request_id, created_at, updated_at) "
+                "VALUES (:i, :t, :c, :u, 'whatsapp_sent', 'whatsapp', 'pending', :k, now(), now())"
+            ),
+            {"i": uuid.uuid4(), "t": tid, "c": ids["with_phone"], "u": uid, "k": uuid.uuid4()},
+        )
+        await s.commit()
+
+    _fake_client(
+        monkeypatch,
+        outcome=SendOutcome(ok=True, session_status="connected", provider_message_id="X"),
+    )
+    async with await _client_for(tid, uid) as http:
+        resp = await http.post(SEND.format(cid=ids["with_phone"]), json=_body())
+    assert resp.status_code == 429
+    assert resp.json()["limit"] == "daily"
+
+
+async def test_a_retry_at_exactly_retry_after_seconds_succeeds(agency, monkeypatch) -> None:
+    """The jitter is drawn once, at admission, and never re-rolled on a
+    refusal (P5 review): a caller who waits exactly the quoted
+    `retry_after_seconds` and retries must get through."""
+    tid, uid, ids = agency
+    deadline = datetime.now(UTC) + timedelta(seconds=1)
+    await _seed_wa_session(tid, uid, next_send_allowed_at=deadline)
+    _fake_client(
+        monkeypatch,
+        outcome=SendOutcome(ok=True, session_status="connected", provider_message_id="X"),
+    )
+
+    async with await _client_for(tid, uid) as http:
+        refused = await http.post(SEND.format(cid=ids["with_phone"]), json=_body())
+    assert refused.status_code == 429
+    body = refused.json()
+    assert body["limit"] == "interval"
+    retry_after = body["retry_after_seconds"]
+    assert refused.headers["retry-after"] == str(retry_after)
+
+    await asyncio.sleep(retry_after)
+
+    async with await _client_for(tid, uid) as http:
+        retried = await http.post(SEND.format(cid=ids["with_phone"]), json=_body())
+    assert retried.status_code == 200
+    assert retried.json()["status"] == "sent"

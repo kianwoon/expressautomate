@@ -411,6 +411,82 @@ describe('SessionManager', { skip: SKIP }, () => {
     assert.deepEqual(fake.sent, [{ jid: '6591234567@s.whatsapp.net', text: 'Hi Hui Ling Tan,' }]);
   });
 
+  test('a second send inside the spacing floor is refused with the real remaining wait', async () => {
+    const ref = await seedTenantAndUser();
+    const fake = fakeSocketFactory();
+    let now = 1_000_000;
+    const manager = new SessionManager(pool, cipher, {
+      socketFactory: fake.factory,
+      sendMinIntervalSeconds: 30,
+      now: () => now,
+    });
+    await manager.pair(ref);
+    fake.emit('connection.update', { connection: 'open' });
+
+    const first = await manager.send(ref, '+6591234567', 'one');
+    assert.equal(first.ok, true);
+
+    now += 5_000; // 5s later, well inside the 30s floor
+    const second = await manager.send(ref, '+6591234567', 'two');
+    assert.equal(second.ok, false);
+    assert.ok(!second.ok && 'retryAfterSeconds' in second);
+    if (!second.ok && 'retryAfterSeconds' in second) {
+      // Between 25s (30-5) and 25s + a quarter of 30s of jitter.
+      assert.ok(second.retryAfterSeconds >= 25 && second.retryAfterSeconds <= 33);
+    }
+    // Refused, so nothing new went out.
+    assert.equal(fake.sent.length, 1);
+  });
+
+  test('the jitter is drawn once at admission and never re-rolled on a refusal', async () => {
+    const ref = await seedTenantAndUser();
+    const fake = fakeSocketFactory();
+    let now = 1_000_000;
+    const manager = new SessionManager(pool, cipher, {
+      socketFactory: fake.factory,
+      sendMinIntervalSeconds: 30,
+      now: () => now,
+    });
+    await manager.pair(ref);
+    fake.emit('connection.update', { connection: 'open' });
+
+    await manager.send(ref, '+6591234567', 'one');
+
+    now += 5_000;
+    const first = await manager.send(ref, '+6591234567', 'two');
+    now += 1_000;
+    const second = await manager.send(ref, '+6591234567', 'two');
+    assert.ok(!first.ok && 'retryAfterSeconds' in first);
+    assert.ok(!second.ok && 'retryAfterSeconds' in second);
+    if (!first.ok && 'retryAfterSeconds' in first && !second.ok && 'retryAfterSeconds' in second) {
+      // The deadline itself (now + retryAfterSeconds) must be identical
+      // between the two refusals — only the "now" measured against it moved.
+      assert.equal(now - 1_000 + first.retryAfterSeconds * 1000, now + second.retryAfterSeconds * 1000);
+    }
+  });
+
+  test('a retry at exactly the quoted deadline succeeds', async () => {
+    const ref = await seedTenantAndUser();
+    const fake = fakeSocketFactory();
+    let now = 1_000_000;
+    const manager = new SessionManager(pool, cipher, {
+      socketFactory: fake.factory,
+      sendMinIntervalSeconds: 30,
+      now: () => now,
+    });
+    await manager.pair(ref);
+    fake.emit('connection.update', { connection: 'open' });
+
+    await manager.send(ref, '+6591234567', 'one');
+    const refusal = await manager.send(ref, '+6591234567', 'two');
+    assert.ok(!refusal.ok && 'retryAfterSeconds' in refusal);
+    const retryAfterSeconds = !refusal.ok && 'retryAfterSeconds' in refusal ? refusal.retryAfterSeconds : 0;
+
+    now += retryAfterSeconds * 1000;
+    const retried = await manager.send(ref, '+6591234567', 'two');
+    assert.equal(retried.ok, true);
+  });
+
   test('a throw from sendMessage becomes a refusal carrying WhatsApp\'s own words', async () => {
     // Not an exception out of `send`, and not a status: the socket was live,
     // so this is a real observed refusal of this one message. It is the only
@@ -442,7 +518,14 @@ describe('SessionManager', { skip: SKIP }, () => {
     // guessing "failed" is what sends a candidate a second copy.
     const ref = await seedTenantAndUser();
     const fake = fakeSocketFactory();
-    const manager = new SessionManager(pool, cipher, { socketFactory: fake.factory });
+    // This test sends repeatedly on the same session to exercise every error
+    // shape; the spacing floor (plan §9, P5) is a per-send concern unrelated
+    // to what is under test here, so it is disabled rather than padding the
+    // test with waits.
+    const manager = new SessionManager(pool, cipher, {
+      socketFactory: fake.factory,
+      sendMinIntervalSeconds: 0,
+    });
     await manager.pair(ref);
     fake.emit('connection.update', { connection: 'open' });
 
@@ -473,7 +556,12 @@ describe('SessionManager', { skip: SKIP }, () => {
     // because a resend of an edited draft is a genuinely new request.
     const ref = await seedTenantAndUser();
     const fake = fakeSocketFactory();
-    const manager = new SessionManager(pool, cipher, { socketFactory: fake.factory });
+    // Repeated same-session sends to exercise every timeout code; the
+    // spacing floor (plan §9, P5) is unrelated to what is under test here.
+    const manager = new SessionManager(pool, cipher, {
+      socketFactory: fake.factory,
+      sendMinIntervalSeconds: 0,
+    });
     await manager.pair(ref);
     fake.emit('connection.update', { connection: 'open' });
 

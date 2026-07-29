@@ -165,9 +165,18 @@ existing `opened` rows keep meaning what they meant.
 - **Per-recruiter daily cap**: `WA_GATEWAY_DAILY_LIMIT` (default 50) enforced
   in FastAPI against `wa_sessions.sent_today` (reset when `sent_date` rolls);
   429 with a human message, popup fallback still offered.
-- **Minimum send spacing**: gateway enforces ≥30 s ± jitter (15–45 s random)
-  between sends per session; a second send inside the window queues in-process
-  and the API returns "queued".
+- **Minimum send spacing**: ≥30 s ± jitter between sends per session.
+  **Amended in P5: a send inside the window is refused, not queued.** The API
+  returns 429 with the seconds remaining and the popup stays available.
+  Queueing was the original design and it is wrong here: an in-process queue
+  holds messages across a redeploy, where they are either dropped or sent
+  twice, and a candidate receiving the same message twice is the outcome this
+  whole section exists to avoid. Making a queue safe needs an outbox table and
+  a resume-after-restart dispatcher — a subsystem, not a phase.
+  The jitter is drawn **once, when a send is admitted**, and stored as
+  `wa_sessions.next_send_allowed_at`. Re-rolling it on refusal would mean a
+  recruiter who waits exactly the number we quoted can be refused again, and
+  the UI shows that number verbatim.
 - **No bulk endpoint.** One candidate, one click, one message — the API shape
   itself prevents blast campaigns in v1.
 - **Text only** in v1 (no media): smaller surface, lower spam signature.
@@ -175,6 +184,20 @@ existing `opened` rows keep meaning what they meant.
   server-side from the candidate record, never from the browser).
 - Onboarding screen restates the ban risk and requires an explicit checkbox
   per recruiter before first pairing (recorded on `wa_sessions`).
+
+**Two things P5 did not build, recorded so they are not mistaken for done:**
+
+- **The liveness half of the sweep.** The sweep resolves stale `pending` rows
+  to `unknown`, which was the part that mattered — a send whose outcome nobody
+  will ever learn must not sit as `pending` forever. It does **not** yet
+  re-check session status in the background, so `last_checked_at` means only
+  "when something last asked", which is what the column says and therefore
+  still honest. The consequence is that a session WhatsApp has dropped is
+  noticed when a recruiter next uses it rather than before.
+- **The consent checkbox** above. Nothing yet records that a recruiter was
+  told about the ban risk before pairing. The settings panel explains what
+  linking does, but explaining is not recording, and if this is meant to be
+  evidence that they were warned, it does not exist yet.
 
 ## 10. Phased delivery (each phase shippable, product working throughout)
 

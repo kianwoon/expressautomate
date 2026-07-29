@@ -83,7 +83,14 @@ export function buildApp(config: GatewayConfig, sessions?: SessionManager): Fast
         // was not connected — no activity row at all. 422: attempted on a
         // live socket and WhatsApp refused it — a `failed` row carrying this
         // exact `error` string. A 5xx is reserved for "we do not know what
-        // happened", which is neither of these.
+        // happened", which is neither of these. 429: the spacing floor
+        // (plan §9) has not elapsed — also never attempted.
+        if ('retryAfterSeconds' in outcome) {
+          reply.header('Retry-After', String(outcome.retryAfterSeconds));
+          return reply
+            .code(429)
+            .send({ error: 'send spacing floor not yet elapsed', retryAfterSeconds: outcome.retryAfterSeconds });
+        }
         if ('indeterminate' in outcome) {
           // The 5xx the comment above reserves for "we do not know what
           // happened", and the API turns it into an `unknown` row rather than

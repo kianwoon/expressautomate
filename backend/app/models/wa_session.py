@@ -121,6 +121,15 @@ class WaSession(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
         DateTime(timezone=True)
     )
 
+    # P5: the jittered spacing deadline (plan §9) the *last admitted send*
+    # set. Written once, when a send is admitted; every refusal in between
+    # reads it and never rewrites it — a recruiter who waits exactly the
+    # `retry_after_seconds` a refusal quoted must succeed on retry, and
+    # re-rolling the jitter on each refusal would make that quote a lie.
+    # NULL means no send has ever been admitted, so the first send always
+    # clears this check.
+    next_send_allowed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
     __table_args__ = (
         CheckConstraint(
             "status IN (" + ",".join(f"'{s}'" for s in SESSION_STATUSES) + ")",

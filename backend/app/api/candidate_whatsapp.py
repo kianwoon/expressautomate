@@ -30,14 +30,16 @@ lie the recruiter would act on:
    `client_request_id` returns the original row, unchanged, with 200.
 """
 
+import math
+import random
 import uuid
-from datetime import UTC, datetime, time
+from datetime import UTC, datetime, time, timedelta
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from sqlalchemy import func, insert, select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy import delete, func, select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.api.auth import _require_session
 from app.api.candidates import _load
@@ -46,10 +48,12 @@ from app.core.logging import get_logger
 from app.db.rls import tenant_session
 from app.models.candidate import Candidate, CandidateActivity
 from app.models.tenant import Tenant, User
+from app.models.wa_session import WaSession
 from app.services.user_naming import recruiter_name
 from app.services.wa_gateway import (
     GatewayOutcomeUnknownError,
     GatewayRefusedError,
+    GatewaySpacingError,
     GatewayUnreachableError,
     WaGatewayClient,
 )
@@ -246,67 +250,30 @@ async def _draft_for(
     )
 
 
-async def _record_send_attempt(
-    *,
-    tenant_uuid: uuid.UUID,
-    user_uuid: uuid.UUID,
-    candidate_id: uuid.UUID,
-    client_request_id: uuid.UUID,
-    message: str,
-    status: str,
-    provider_message_id: str | None = None,
-    error: str | None = None,
-) -> CandidateActivity:
-    """Write the outcome of one dispatch, and return the row that now stands.
+class _SpacingNotElapsed(Exception):
+    """The per-session spacing floor (plan §9) has not elapsed. Carries the
+    real remaining wait, computed from `wa_sessions.next_send_allowed_at` —
+    never re-rolled, so a caller who waits exactly this long succeeds."""
 
-    Called only when a message was actually handed to the gateway — see rule 1
-    in the module docstring.
+    def __init__(self, retry_after_seconds: int) -> None:
+        super().__init__(f"spacing floor not yet elapsed, retry in {retry_after_seconds}s")
+        self.retry_after_seconds = retry_after_seconds
 
-    Its own transaction, opened after the gateway call has returned: a failed
-    attempt must be recorded just as durably as a successful one, and the
-    route answers a failure from inside an `except` block, where an insert
-    made in a transaction still open around it could be rolled back.
 
-    The `IntegrityError` branch is the race the unique index exists for. Two
-    simultaneous clicks can both find no prior row and both dispatch — nothing
-    on this side can prevent that — and then both try to insert. The loser
-    returns the winner's row, so the recruiter sees one record with one
-    outcome rather than a constraint violation.
-    """
-    activity_id = uuid.uuid4()
-    try:
-        async with tenant_session(tenant_uuid) as session:
-            await session.execute(
-                insert(CandidateActivity).values(
-                    id=activity_id,
-                    tenant_id=tenant_uuid,
-                    candidate_id=candidate_id,
-                    user_id=user_uuid,
-                    client_request_id=client_request_id,
-                    activity_type=CandidateActivity.WHATSAPP_SENT,
-                    channel=CandidateActivity.WHATSAPP,
-                    message_text=message,
-                    status=status,
-                    provider_message_id=provider_message_id,
-                    error=error,
-                )
-            )
-    except IntegrityError:
-        existing = await _replay_of(tenant_uuid, client_request_id)
-        if existing is None:
-            raise
-        return existing
+class _DailyLimitReached(Exception):
+    """The daily cap (plan §9) is reached. `retry_after_seconds` is the time
+    until UTC midnight, when the count resets."""
 
-    stored = await _replay_of(tenant_uuid, client_request_id)
-    if stored is None:  # pragma: no cover — the insert above just committed
-        raise HTTPException(status_code=500, detail="the send record could not be read back")
-    return stored
+    def __init__(self, retry_after_seconds: int) -> None:
+        super().__init__(f"daily limit reached, resets in {retry_after_seconds}s")
+        self.retry_after_seconds = retry_after_seconds
 
 
 async def _replay_of(
     tenant_uuid: uuid.UUID, client_request_id: uuid.UUID
 ) -> CandidateActivity | None:
-    """The row this idempotency key already wrote, if any.
+    """The row this idempotency key already wrote, if any — `pending`,
+    `sent`, `failed` or `unknown`, whatever it now stands at.
 
     Read through `tenant_session`, so agency A's key can never surface agency
     B's row even though the two could in principle collide (§18) — which is
@@ -323,33 +290,198 @@ async def _replay_of(
         ).scalar_one_or_none()
 
 
-async def _sent_today(tenant_uuid: uuid.UUID, user_uuid: uuid.UUID) -> int:
-    """How many messages this recruiter has actually sent since UTC midnight.
+async def _claim_send(
+    *,
+    tenant_uuid: uuid.UUID,
+    user_uuid: uuid.UUID,
+    candidate_id: uuid.UUID,
+    client_request_id: uuid.UUID,
+    message: str,
+) -> tuple[CandidateActivity, bool]:
+    """One transaction that closes both P4-review races at once.
 
-    Only `SENT` rows count. A `FAILED` one never reached WhatsApp, and an
-    `UNKNOWN` one is precisely the case we refuse to guess about — counting
-    either would spend a recruiter's daily allowance on our uncertainty rather
-    than on their sending.
+    1. **The daily cap can be raced.** Two concurrent sends both reading "49
+       sent today" and both proceeding is only prevented by writing the
+       `pending` row *inside* the same transaction that counts against the
+       cap — the count below includes every `pending` row, because a pending
+       send is a send in flight, and not counting it is exactly the hole a
+       second concurrent request would fall through.
+    2. **The idempotency key has an in-flight gap.** `ON CONFLICT ... DO
+       NOTHING` means a replay racing in behind the first request finds the
+       first request's row (however far it has got) rather than dispatching
+       a second message.
 
-    Per user, not per tenant: WhatsApp bans the *number*, and each recruiter
-    pairs their own, so one recruiter's volume is not another's risk.
+    Both checks, and the insert, run against a `wa_sessions` row locked with
+    `SELECT ... FOR UPDATE`, which is what actually serialises two sends from
+    the *same* recruiter — the unique index alone only prevents two rows for
+    the *same* idempotency key, not two different messages both slipping
+    through the cap or spacing check at once.
 
-    UTC midnight rather than the agency's local midnight. This is a safety
-    rail, not a billing period, and a Singapore agency's day rolling over at
-    08:00 local is a smaller surprise than a per-tenant timezone this codebase
-    does not store being guessed at.
+    Returns `(row, claimed)`. `claimed=True` means this call inserted the
+    `pending` row and dispatch belongs to this request. `claimed=False` means
+    a concurrent request already owns this exact `client_request_id`; the
+    caller treats the returned row exactly like a pre-existing replay.
+
+    Raises `_SpacingNotElapsed` / `_DailyLimitReached` on refusal — in both
+    cases nothing is attempted and nothing is written (rule 1, module
+    docstring).
     """
-    midnight = datetime.combine(datetime.now(UTC).date(), time.min, tzinfo=UTC)
+    now = datetime.now(UTC)
+    midnight = datetime.combine(now.date(), time.min, tzinfo=UTC)
+
     async with tenant_session(tenant_uuid) as session:
-        return (
+        wa_session = (
+            await session.execute(
+                select(WaSession).where(WaSession.user_id == user_uuid).with_for_update()
+            )
+        ).scalar_one_or_none()
+
+        if wa_session is not None and wa_session.next_send_allowed_at is not None:
+            deadline = wa_session.next_send_allowed_at
+            if now < deadline:
+                retry_after_seconds = max(math.ceil((deadline - now).total_seconds()), 1)
+                raise _SpacingNotElapsed(retry_after_seconds)
+
+        # `pending` counts, `sent` counts; `failed` and `unknown` do not — a
+        # refusal we can quote or a dispatch we lost track of never reached
+        # WhatsApp with certainty, and charging a recruiter's allowance for
+        # our own uncertainty is the wrong side of that guess.
+        in_flight_or_sent = (
             await session.execute(
                 select(func.count())
                 .select_from(CandidateActivity)
                 .where(
                     CandidateActivity.user_id == user_uuid,
-                    CandidateActivity.status == CandidateActivity.SENT,
+                    CandidateActivity.status.in_(
+                        (CandidateActivity.SENT, CandidateActivity.PENDING)
+                    ),
                     CandidateActivity.created_at >= midnight,
                 )
+            )
+        ).scalar_one()
+        if in_flight_or_sent >= settings.WA_SEND_DAILY_LIMIT:
+            next_midnight = midnight + timedelta(days=1)
+            retry_after_seconds = max(int((next_midnight - now).total_seconds()), 0)
+            raise _DailyLimitReached(retry_after_seconds)
+
+        activity_id = uuid.uuid4()
+        inserted_id = (
+            await session.execute(
+                pg_insert(CandidateActivity)
+                .values(
+                    id=activity_id,
+                    tenant_id=tenant_uuid,
+                    candidate_id=candidate_id,
+                    user_id=user_uuid,
+                    client_request_id=client_request_id,
+                    activity_type=CandidateActivity.WHATSAPP_SENT,
+                    channel=CandidateActivity.WHATSAPP,
+                    message_text=message,
+                    status=CandidateActivity.PENDING,
+                )
+                .on_conflict_do_nothing(
+                    index_elements=["tenant_id", "client_request_id"]
+                )
+                .returning(CandidateActivity.id)
+            )
+        ).scalar_one_or_none()
+
+        if inserted_id is None:
+            # Lost the idempotency race inside this same transaction: a
+            # concurrent request already claimed this exact key. Whatever it
+            # has written so far is the truth to return.
+            existing = (
+                await session.execute(
+                    select(CandidateActivity).where(
+                        CandidateActivity.client_request_id == client_request_id
+                    )
+                )
+            ).scalar_one()
+            return existing, False
+
+        if wa_session is not None:
+            # Reserved the instant this send is admitted, in the same
+            # transaction — not after dispatch succeeds — so a second send
+            # blocked behind the row lock sees the new deadline the moment it
+            # acquires the lock, and the jitter is drawn exactly once (P5
+            # review): every subsequent refusal reads this value and never
+            # re-rolls it, so a caller who waits `retry_after_seconds` and
+            # retries lands on or after this exact deadline.
+            interval = settings.WA_SEND_MIN_INTERVAL_SECONDS
+            jitter_seconds = random.uniform(0, interval / 4)
+            wa_session.next_send_allowed_at = now + timedelta(
+                seconds=interval + jitter_seconds
+            )
+
+        row = (
+            await session.execute(
+                select(CandidateActivity).where(CandidateActivity.id == activity_id)
+            )
+        ).scalar_one()
+        return row, True
+
+
+async def _discard_claim(tenant_uuid: uuid.UUID, activity_id: uuid.UUID) -> None:
+    """Undo a reserved claim that never became a real attempt.
+
+    Only when still `pending` — if the sweep or a resolver already moved it,
+    there is a real record to keep and this is a no-op, not a race to win.
+    Rule 1 (module docstring) is "no attempt means no row"; a claim that
+    reserved cap and idempotency but never reached the gateway (unreachable,
+    or the gateway's own spacing refusal, or a not-connected session) is
+    exactly that — nothing attempted — so it is removed rather than left to
+    be mistaken for a real send.
+    """
+    async with tenant_session(tenant_uuid) as session:
+        await session.execute(
+            delete(CandidateActivity).where(
+                CandidateActivity.id == activity_id,
+                CandidateActivity.status == CandidateActivity.PENDING,
+            )
+        )
+
+
+async def _resolve_pending(
+    tenant_uuid: uuid.UUID,
+    activity_id: uuid.UUID,
+    *,
+    status: str,
+    provider_message_id: str | None = None,
+    error: str | None = None,
+) -> CandidateActivity:
+    """Settle a `pending` row to what the gateway actually said.
+
+    A compare-and-set, not a plain `UPDATE`: only a row still `pending` or
+    `unknown` moves. `pending` is the ordinary case — the dispatch this
+    request made is answering for itself. `unknown` is the liveness sweep's
+    territory (`app/workers/tasks.py`): if the sweep gave up on this row
+    first, a late gateway answer may still *upgrade* `unknown` to `sent` or
+    `failed` — more honest than leaving it unknown — but nothing here or in
+    the sweep may ever overwrite a `sent` or `failed` row, which is already
+    settled and, per §15, never wrong in the other direction.
+    """
+    async with tenant_session(tenant_uuid) as session:
+        row = (
+            await session.execute(
+                update(CandidateActivity)
+                .where(
+                    CandidateActivity.id == activity_id,
+                    CandidateActivity.status.in_(
+                        (CandidateActivity.PENDING, CandidateActivity.UNKNOWN)
+                    ),
+                )
+                .values(status=status, provider_message_id=provider_message_id, error=error)
+                .returning(CandidateActivity)
+            )
+        ).scalar_one_or_none()
+        if row is not None:
+            return row
+        # Already settled by someone else (most likely the sweep, marking
+        # this same row `unknown` a moment before this answer arrived) —
+        # return what stands now rather than clobbering it.
+        return (
+            await session.execute(
+                select(CandidateActivity).where(CandidateActivity.id == activity_id)
             )
         ).scalar_one()
 
@@ -393,6 +525,34 @@ _DAILY_LIMIT_DETAIL = (
     "own number. The limit resets at midnight UTC. You can open WhatsApp Web "
     "instead if this one cannot wait."
 )
+
+_SPACING_DETAIL = (
+    "You are sending WhatsApp messages too quickly from your own number. "
+    "Wait {seconds}s and try again, or open WhatsApp Web instead."
+)
+
+
+def _rate_limited(*, limit: str, retry_after_seconds: int, detail: str) -> JSONResponse:
+    """The one 429 shape both the daily cap and the send-spacing floor use.
+
+    Same keys either way — `limit` is the only field that tells them apart —
+    so the frontend has one branch instead of two (decided with the frontend
+    agent working P5 in parallel). No `session_status`: neither refusal is a
+    session problem, and naming a state here would send a recruiter to
+    Settings for something Settings cannot fix.
+
+    `Retry-After` is set to the same integer as `retry_after_seconds` — it
+    costs nothing and is what a non-browser client looks for.
+    """
+    return JSONResponse(
+        status_code=429,
+        content={
+            "detail": detail,
+            "limit": limit,
+            "retry_after_seconds": retry_after_seconds,
+        },
+        headers={"Retry-After": str(retry_after_seconds)},
+    )
 
 
 def _unsendable(status: str) -> JSONResponse:
@@ -488,47 +648,73 @@ async def whatsapp_send(
             },
         )
 
-    sent_today = await _sent_today(tenant_uuid, user_uuid)
-    if sent_today >= settings.WA_SEND_DAILY_LIMIT:
-        # 429, with the same body shape as the 409s above so the modal's
-        # existing fallback-to-popup branch handles it without a second code
-        # path. `session_status` is `gateway_unreachable`-adjacent nonsense
-        # here, so it is absent: the session is fine, the allowance is not.
-        # Nothing was attempted, so nothing is recorded.
-        log.info(
-            "wa_send_daily_limit_reached",
-            sent_today=sent_today,
-            limit=settings.WA_SEND_DAILY_LIMIT,
-        )
-        return JSONResponse(
-            status_code=429,
-            content={"detail": _DAILY_LIMIT_DETAIL.format(limit=settings.WA_SEND_DAILY_LIMIT)},
-        )
-
     if not settings.wa_gateway_configured():
         # A `gateway` service that was never given its env vars is a real
         # deployment state, not an exception — CLAUDE.md's GRAPH_BASE_URL and
         # R2_* precedent. Answered as unreachable, which is what it is, and
-        # nothing was dispatched so nothing is recorded.
+        # nothing was dispatched so nothing is recorded — no claim attempted.
         return _unsendable("gateway_unreachable")
+
+    # The pre-dispatch claim (P5 review): locks this recruiter's `wa_sessions`
+    # row, checks spacing and the daily cap against a consistent snapshot, and
+    # writes the `pending` row — all one transaction. See `_claim_send`.
+    try:
+        activity, claimed = await _claim_send(
+            tenant_uuid=tenant_uuid,
+            user_uuid=user_uuid,
+            candidate_id=candidate_id,
+            client_request_id=body.client_request_id,
+            message=message,
+        )
+    except _SpacingNotElapsed as exc:
+        log.info("wa_send_spacing_not_elapsed", retry_after_seconds=exc.retry_after_seconds)
+        return _rate_limited(
+            limit="interval",
+            retry_after_seconds=exc.retry_after_seconds,
+            detail=_SPACING_DETAIL.format(seconds=exc.retry_after_seconds),
+        )
+    except _DailyLimitReached as exc:
+        log.info("wa_send_daily_limit_reached", limit=settings.WA_SEND_DAILY_LIMIT)
+        return _rate_limited(
+            limit="daily",
+            retry_after_seconds=exc.retry_after_seconds,
+            detail=_DAILY_LIMIT_DETAIL.format(limit=settings.WA_SEND_DAILY_LIMIT),
+        )
+
+    if not claimed:
+        # Lost the idempotency race to a concurrent request for this exact
+        # key — the other request owns dispatch. Whatever it has written so
+        # far (possibly still `pending`) is the honest answer.
+        return _send_response(activity)
 
     try:
         outcome = await WaGatewayClient().send(
             str(tenant_uuid), str(user_uuid), to=phone_e164, text=message
         )
     except GatewayUnreachableError:
-        # The connection never came up: the request did not go out.
+        # The connection never came up: the request did not go out. The
+        # `pending` row we reserved never became a real attempt, so it is
+        # removed rather than left to be mistaken for one.
+        await _discard_claim(tenant_uuid, activity.id)
         return _unsendable("gateway_unreachable")
+    except GatewaySpacingError as exc:
+        # The gateway's own independent spacing check (a second line of
+        # defence — see `WA_SEND_MIN_INTERVAL_SECONDS` in config.py) fired
+        # even though ours did not, which should not happen in practice but
+        # is handled the same way: nothing was attempted, discard the claim.
+        await _discard_claim(tenant_uuid, activity.id)
+        return _rate_limited(
+            limit="interval",
+            retry_after_seconds=exc.retry_after_seconds,
+            detail=_SPACING_DETAIL.format(seconds=exc.retry_after_seconds),
+        )
     except GatewayRefusedError as exc:
-        # A real, observed refusal on a live socket. This is the one path that
-        # writes `failed`, and `exc.message` is the gateway's own wording,
-        # stored verbatim.
-        activity = await _record_send_attempt(
-            tenant_uuid=tenant_uuid,
-            user_uuid=user_uuid,
-            candidate_id=candidate_id,
-            client_request_id=body.client_request_id,
-            message=message,
+        # A real, observed refusal on a live socket. This is the one path
+        # that resolves to `failed`, and `exc.message` is the gateway's own
+        # wording, stored verbatim.
+        resolved = await _resolve_pending(
+            tenant_uuid,
+            activity.id,
             status=CandidateActivity.FAILED,
             error=exc.message,
         )
@@ -540,19 +726,16 @@ async def whatsapp_send(
                 # would not take. Named so the modal does not send the
                 # recruiter to Settings to re-pair a working connection.
                 "session_status": "connected",
-                "activity_id": str(activity.id),
+                "activity_id": str(resolved.id),
             },
         )
     except GatewayOutcomeUnknownError:
-        # Dispatched, outcome never learned. Recorded as `unknown` and
+        # Dispatched, outcome never learned. Resolved to `unknown` and
         # answered as `unknown` — a 200, because something did happen and the
         # recruiter needs the record, not an error that reads as "try again".
-        activity = await _record_send_attempt(
-            tenant_uuid=tenant_uuid,
-            user_uuid=user_uuid,
-            candidate_id=candidate_id,
-            client_request_id=body.client_request_id,
-            message=message,
+        resolved = await _resolve_pending(
+            tenant_uuid,
+            activity.id,
             status=CandidateActivity.UNKNOWN,
             # Our own sentence, and allowed to be, because `unknown` is our
             # own conclusion rather than a quotation. `error` is only ever the
@@ -562,40 +745,35 @@ async def whatsapp_send(
                 "back, so we do not know whether it went out."
             ),
         )
-        return _send_response(activity)
+        return _send_response(resolved)
     except Exception as exc:  # noqa: BLE001 — see below
         # Anything else the client can raise (an unexpected error whose
         # *string carries the URL*, e.g. `httpx.HTTPStatusError`) is caught
         # and replaced, never re-raised and never formatted into a response or
-        # a column. We cannot tell whether this dispatched, so it is `unknown`
-        # by the same rule as above, not `failed`.
+        # a column. We cannot tell whether this dispatched, so it resolves to
+        # `unknown` by the same rule as above, not `failed`.
         log.warning("wa_gateway_send_failed", error=type(exc).__name__)
-        activity = await _record_send_attempt(
-            tenant_uuid=tenant_uuid,
-            user_uuid=user_uuid,
-            candidate_id=candidate_id,
-            client_request_id=body.client_request_id,
-            message=message,
+        resolved = await _resolve_pending(
+            tenant_uuid,
+            activity.id,
             status=CandidateActivity.UNKNOWN,
             error=(
                 "The message was sent to WhatsApp but no confirmation came "
                 "back, so we do not know whether it went out."
             ),
         )
-        return _send_response(activity)
+        return _send_response(resolved)
 
     if not outcome.ok:
         # The gateway declined before touching WhatsApp: the session is not
-        # connected. Nothing was attempted, so nothing is recorded.
+        # connected. The reserved `pending` row never became a real attempt.
+        await _discard_claim(tenant_uuid, activity.id)
         return _unsendable(outcome.session_status)
 
-    activity = await _record_send_attempt(
-        tenant_uuid=tenant_uuid,
-        user_uuid=user_uuid,
-        candidate_id=candidate_id,
-        client_request_id=body.client_request_id,
-        message=message,
+    resolved = await _resolve_pending(
+        tenant_uuid,
+        activity.id,
         status=CandidateActivity.SENT,
         provider_message_id=outcome.provider_message_id,
     )
-    return _send_response(activity)
+    return _send_response(resolved)

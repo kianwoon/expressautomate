@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { SETTINGS_ACCOUNT_PATH, SETTINGS_WHATSAPP_PATH } from "../../api";
 import { useAuth } from "../../auth";
@@ -156,8 +156,20 @@ type SendAvailability = "unknown" | WaSessionStatus;
  *   why the button is disabled at the top of this file when `phone_e164` is
  *   null — this modal cannot even have opened in that state normally, but
  *   the copy still has to be correct if a session change races the open.
- * - `kind: "rate_limited"` (429) — the daily cap, not a link problem. Offer
- *   the popup, not Settings.
+ * - `kind: "rate_limited"` (429) — not a link problem, but two genuinely
+ *   different refusals, told apart by `limit`. `"daily"` is done for today:
+ *   the reset is UTC midnight, which is 8am in Singapore, so "tomorrow" would
+ *   be wrong for most of the working day — the copy names the server's own
+ *   `retry_after_seconds` instead of a day-of-week guess, and still argues
+ *   for the popup, since a wait that long is rarely worth it. `"interval"`
+ *   clears itself in seconds — telling them to abandon Send for the popup
+ *   over a wait that short would be worse advice than telling them to wait,
+ *   so the copy leads with the number and treats the popup as optional.
+ *   Either way `Open WhatsApp instead` stays available below; this only
+ *   changes what the text argues for. `serverDetail` is the fallback for a
+ *   429 that reached here without a `limit` (should not happen once the
+ *   backend contract is live, but a response the client cannot classify must
+ *   still show *something*).
  * - `kind: "session"` (409) — branches on `session_status` for the reason
  *   above; `pointToSettings` is true only where a relink or a wait in
  *   Settings is the actual fix. */
@@ -165,11 +177,33 @@ function sendFailureCopy(
   kind: "session" | "rate_limited" | "no_number",
   sessionStatus: string | null,
   serverDetail: string,
+  limit?: "daily" | "interval" | null,
+  retryAfterSeconds?: number | null,
 ): { text: string; pointToSettings: boolean; offerPopup: boolean } {
   if (kind === "no_number") {
     return { text: serverDetail, pointToSettings: false, offerPopup: false };
   }
   if (kind === "rate_limited") {
+    if (limit === "daily") {
+      const wait =
+        typeof retryAfterSeconds === "number"
+          ? ` It resets in about ${describeWait(retryAfterSeconds)}.`
+          : "";
+      return {
+        text: `${serverDetail}${wait} Use Open WhatsApp below if this one can't wait that long.`,
+        pointToSettings: false,
+        offerPopup: true,
+      };
+    }
+    if (limit === "interval" && typeof retryAfterSeconds === "number") {
+      return {
+        text: `${serverDetail} It'll clear on its own in about ${describeWait(
+          retryAfterSeconds,
+        )} — no need to open WhatsApp for that.`,
+        pointToSettings: false,
+        offerPopup: true,
+      };
+    }
     return { text: serverDetail, pointToSettings: false, offerPopup: true };
   }
   switch (sessionStatus) {
@@ -198,6 +232,18 @@ function sendFailureCopy(
     default:
       return { text: serverDetail, pointToSettings: false, offerPopup: true };
   }
+}
+
+/** Turns the server's `retry_after_seconds` into words, for both 429s. Never
+ *  rounds up to a bigger unit that overstates the wait, and never invents a
+ *  number the server didn't give — the caller only reaches here once it has
+ *  a real integer in hand. */
+function describeWait(seconds: number): string {
+  if (seconds < 60) return `${seconds} second${seconds === 1 ? "" : "s"}`;
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes} minute${minutes === 1 ? "" : "s"}`;
+  const hours = Math.round(minutes / 60);
+  return `${hours} hour${hours === 1 ? "" : "s"}`;
 }
 
 /** A fresh id per composed message, not per click — regenerated only when the
@@ -374,13 +420,32 @@ function WhatsappModal({
         return;
       }
 
+      if (result.status === "pending") {
+        // A replay that landed while the first attempt is still in flight.
+        // `pending` is *not yet*, not `unknown`'s *we will never know* — the
+        // timeline will settle this on its own, so the modal must not close
+        // (that would read as sent) and must not offer the popup (a second
+        // send now is exactly the double-message this guard exists to
+        // prevent).
+        setSendError({
+          text:
+            "This message is still being sent — we'll know shortly. Check the " +
+            "activity below in a moment; there's no need to send it again.",
+          pointToSettings: false,
+          offerPopup: false,
+        });
+        return;
+      }
+
       // Close and let the timeline refetch pick up the new "sent" row.
       onClose();
     } catch (err) {
       // A failed send is not a dead end: the modal stays open, says what the
       // server said, and `Open WhatsApp` is still there below when offered.
       if (err instanceof WhatsappSendError) {
-        setSendError(sendFailureCopy(err.kind, err.session_status, err.message));
+        setSendError(
+          sendFailureCopy(err.kind, err.session_status, err.message, err.limit, err.retry_after_seconds),
+        );
         if (err.kind === "session" && err.session_status) {
           setAvailability(err.session_status as WaSessionStatus);
         }
@@ -521,6 +586,11 @@ function WhatsappModal({
  *   read).
  * - `failed` must stay visible rather than being filtered out — a silent
  *   failure is the one outcome a recruiter cannot recover from unnoticed.
+ * - `pending` is recorded before dispatch and resolves by itself once the
+ *   gateway answers — it reads as in-progress, not as something broken or as
+ *   something the recruiter must act on. Distinct from `unknown`: `pending`
+ *   is *not yet*, `unknown` is *we will never know*, and collapsing them into
+ *   one spinner would be as wrong as calling either a failure.
  * - `unknown` is the one that is easiest to get wrong: a dispatch whose
  *   outcome was never learned (a timeout, a lost reply) is neither a success
  *   nor a failure, and rendering it as either is a §15 breach in whichever
@@ -537,16 +607,33 @@ function whatsappActivityLine(item: ActivityItem, fullName: string): string {
   if (item.status === "failed") {
     return `WhatsApp send to ${fullName} failed (by ${item.actor_name})`;
   }
+  if (item.status === "pending") {
+    return `WhatsApp send to ${fullName} by ${item.actor_name} — sending, this will update shortly`;
+  }
   if (item.status === "unknown") {
     return `WhatsApp send to ${fullName} by ${item.actor_name} — outcome unknown, check WhatsApp before resending`;
   }
   return `WhatsApp opened for ${fullName} by ${item.actor_name}`;
 }
 
-/** One row per activity — `opened`, `sent`, `failed`, or `unknown` — reusing
- *  `when` from `format.tsx` for the timestamp rather than writing a second
- *  formatter. A refusal (no linked session, no candidate number) produces no
- *  row at all: nothing was attempted, so there is nothing to log. */
+/** How often the timeline refetches while a `pending` row is on screen —
+ *  slow enough not to hammer the server, fast enough that "this will update
+ *  shortly" in `whatsappActivityLine` stays true. Mirrors the fallback poll
+ *  in `whatsapp-panel.tsx`. */
+const PENDING_POLL_MS = 5_000;
+
+/** Hard cap on how long the poll runs. The server's own sweep resolves a
+ *  stuck `pending` row to `unknown` well inside this window (build note), so
+ *  reaching the cap without the poll having already stopped itself is not
+ *  expected — but a poll must still have a ceiling rather than running for as
+ *  long as the modal happens to stay open. */
+const PENDING_POLL_MAX_MS = 3 * 60 * 1000;
+
+/** One row per activity — `opened`, `sent`, `failed`, `pending`, or
+ *  `unknown` — reusing `when` from `format.tsx` for the timestamp rather than
+ *  writing a second formatter. A refusal (no linked session, no candidate
+ *  number) produces no row at all: nothing was attempted, so there is
+ *  nothing to log. */
 export function WhatsappActivityTimeline({
   row,
   version,
@@ -559,27 +646,51 @@ export function WhatsappActivityTimeline({
 }) {
   const [items, setItems] = useState<ActivityItem[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Guards against a slow refetch (the initial load, or a poll tick)
+  // resolving after a newer one and overwriting fresher state — same
+  // stale-response protection as the disconnect call in `whatsapp-panel.tsx`.
+  const requestId = useRef(0);
+
+  const fetchActivities = useCallback(async () => {
+    const myRequestId = ++requestId.current;
+    try {
+      const list = await getCandidateActivities(row.id);
+      if (requestId.current !== myRequestId) return;
+      setItems(list);
+    } catch (err) {
+      if (requestId.current !== myRequestId) return;
+      setError(err instanceof ApiError ? err.message : "We could not load activity just now.");
+    }
+  }, [row.id]);
 
   useEffect(() => {
-    let cancelled = false;
     setItems(null);
     setError(null);
-    (async () => {
-      try {
-        const list = await getCandidateActivities(row.id);
-        if (!cancelled) setItems(list);
-      } catch (err) {
-        if (!cancelled) {
-          setError(err instanceof ApiError ? err.message : "We could not load activity just now.");
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [row.id, version]);
+    void fetchActivities();
+  }, [version, fetchActivities]);
 
   const whatsappOnly = (items ?? []).filter((item) => item.channel === "whatsapp");
+  const anyPending = whatsappOnly.some((item) => item.status === "pending");
+
+  // Bounded poll: the timeline promises a `pending` row "will update
+  // shortly" (`whatsappActivityLine` below), and only SSE or a poll can make
+  // that true — this file has no SSE subscription, and the backend's own
+  // event stream is still mid-flight, so a poll is the honest choice rather
+  // than adding a new SSE kind that would race it. Stops the moment nothing
+  // is pending, at the hard cap above, and on unmount — the same three stop
+  // conditions as the fallback poll in `whatsapp-panel.tsx`.
+  useEffect(() => {
+    if (!anyPending) return;
+    const deadline = Date.now() + PENDING_POLL_MAX_MS;
+    const timer = setInterval(() => {
+      if (Date.now() >= deadline) {
+        clearInterval(timer);
+        return;
+      }
+      void fetchActivities();
+    }, PENDING_POLL_MS);
+    return () => clearInterval(timer);
+  }, [anyPending, fetchActivities]);
 
   if (items === null && !error) return null;
   if (error) return null;
@@ -598,6 +709,9 @@ export function WhatsappActivityTimeline({
             // recruiter can miss. `unknown` gets its own warning treatment:
             // it must look neither as settled as a plain muted row nor as
             // alarming as a confirmed failure, because it is neither.
+            // `pending` stays plain-muted: it is not a problem to flag, just
+            // a row that has not settled yet — no `role="alert"` either, since
+            // nothing here needs the recruiter's attention.
             className={
               item.status === "failed"
                 ? "body jo-detail-error"

@@ -22,6 +22,7 @@ describe('gateway HTTP surface', () => {
       // P2 widened the config; the HTTP surface does not use these yet.
       databaseUrl: 'postgresql://unused:unused@127.0.0.1:1/unused',
       encryptionKey: randomBytes(32),
+      sendMinIntervalSeconds: 30,
     });
   });
 
@@ -106,6 +107,7 @@ describe('/sessions/* routes (P3)', () => {
         sharedSecret: SECRET,
         databaseUrl: 'postgresql://unused:unused@127.0.0.1:1/unused',
         encryptionKey: randomBytes(32),
+        sendMinIntervalSeconds: 30,
       },
       fakeSessions,
     );
@@ -182,6 +184,7 @@ describe('POST /send (P4)', () => {
         sharedSecret: SECRET,
         databaseUrl: 'postgresql://unused:unused@127.0.0.1:1/unused',
         encryptionKey: randomBytes(32),
+        sendMinIntervalSeconds: 30,
       },
       fakeSessions,
     );

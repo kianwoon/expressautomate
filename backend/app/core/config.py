@@ -533,6 +533,25 @@ class Settings(BaseSettings):
     # than one discovered after a ban. Spacing and jitter between sends are a
     # separate concern (P5); this is only the daily ceiling.
     WA_SEND_DAILY_LIMIT: int = 50
+    # Floor between two sends on the same session (plan §9, P5), with jitter
+    # so a burst does not become a metronome. Enforced here — not only in
+    # `gateway/` — because the pre-dispatch transaction that closes the daily
+    # cap race (see `candidate_whatsapp.py#_claim_send`) is the natural place
+    # to also serialise spacing: both read the same locked `wa_sessions` row.
+    # Default matches `WA_SEND_MIN_INTERVAL_SECONDS` in `.env.example`'s
+    # gateway block, which the gateway itself also enforces as a second,
+    # independent line of defence against a caller that bypasses this API.
+    WA_SEND_MIN_INTERVAL_SECONDS: int = 30
+    # Liveness sweep (P5, plan §6): a `pending` row older than this was left
+    # by a process that died mid-send — nobody will ever learn the outcome,
+    # so it becomes `unknown`, never `failed` (§15: we never observed a
+    # refusal). Comfortably above `WA_GATEWAY_TIMEOUT_SECONDS` (5s default) so
+    # a send merely slow, not dead, is never declared unknown mid-flight.
+    WA_SEND_STALE_PENDING_MINUTES: int = Field(default=10, gt=0)
+    # How often the supervisor sweeps for stale `pending` WA gateway sends.
+    # Independent of NOTIFY_SWEEP_INTERVAL_SECONDS on purpose — a different
+    # concern with a different tolerable latency.
+    WA_SWEEP_INTERVAL_SECONDS: float = Field(default=120.0, gt=0)
     # Telegram echoes this in `X-Telegram-Bot-Api-Secret-Token`. Without it the
     # webhook accepts anything that can reach the URL, and the URL is public.
     TELEGRAM_WEBHOOK_SECRET: str = ""

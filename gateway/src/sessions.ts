@@ -85,6 +85,12 @@ export interface SessionSnapshot {
 export type SendOutcome =
   | { readonly ok: true; readonly status: 'connected'; readonly providerMessageId: string | null }
   | { readonly ok: false; readonly status: SessionStatus }
+  // The per-session spacing floor (plan §9, P5) has not elapsed yet. Never
+  // dispatched — no attempt, no activity row upstream. `retryAfterSeconds`
+  // is the real remaining wait computed against the jittered deadline this
+  // session was actually given, never the configured floor echoed back, so
+  // a caller who waits exactly that long is judged against the same number.
+  | { readonly ok: false; readonly status: 'connected'; readonly retryAfterSeconds: number }
   // WhatsApp itself refused this specific message on a session that *was*
   // connected — a blocked number, a bad JID, a rate limit. Distinct from the
   // `status` variant above, which means we never got as far as trying, and
@@ -203,6 +209,13 @@ export class SessionManager {
   /** Opens that have started but not yet reached `#runtimes` — see `#openOnce`. */
   readonly #opening = new Map<string, Promise<Runtime>>();
   readonly #sleep: (ms: number) => Promise<void>;
+  readonly #sendMinIntervalMs: number;
+  readonly #now: () => number;
+  /** Per-session: the earliest time (epoch ms) the next send may go out.
+   *  In-memory only, like `#runtimes` — a redeploy resets it, which is
+   *  correct: the floor exists to space sends within one running process,
+   *  not to survive across one. */
+  readonly #nextSendAllowedAt = new Map<string, number>();
 
   constructor(
     pool: Pool,
@@ -212,6 +225,10 @@ export class SessionManager {
       onStatusChange?: StatusCallback;
       /** Injectable so a test can prove the backoff without waiting for it. */
       sleep?: (ms: number) => Promise<void>;
+      /** Plan §9 / P5; defaults to 30s, matching `WA_SEND_MIN_INTERVAL_SECONDS`'s default. */
+      sendMinIntervalSeconds?: number;
+      /** Injectable clock so spacing tests do not need real wall-clock waits. */
+      now?: () => number;
     } = {},
   ) {
     this.#pool = pool;
@@ -220,6 +237,20 @@ export class SessionManager {
     this.#onStatusChange = opts.onStatusChange;
     this.#sleep =
       opts.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+    this.#sendMinIntervalMs = (opts.sendMinIntervalSeconds ?? 30) * 1000;
+    this.#now = opts.now ?? (() => Date.now());
+  }
+
+  /**
+   * The next allowed-send deadline, jittered so a burst of sends across many
+   * sessions does not settle into a metronome (same reasoning as
+   * `backoffMs`). Jitter adds up to a quarter of the floor, chosen once per
+   * send and never re-rolled, so the `retryAfterSeconds` a refusal quotes is
+   * the exact number a follow-up attempt will be judged against.
+   */
+  #scheduleNextSend(key: string): void {
+    const jitterMs = Math.floor(Math.random() * (this.#sendMinIntervalMs / 4));
+    this.#nextSendAllowedAt.set(key, this.#now() + this.#sendMinIntervalMs + jitterMs);
   }
 
   /** `GET /sessions/status` — never opens a socket for a session that isn't
@@ -274,13 +305,34 @@ export class SessionManager {
     if (snapshot.status !== 'connected') {
       return { ok: false, status: snapshot.status };
     }
-    const runtime = this.#runtimes.get(keyFor(ref));
+    const key = keyFor(ref);
+    const runtime = this.#runtimes.get(key);
     if (!runtime?.socket) {
       // `status()` said connected, so the runtime was there a moment ago; a
       // close event between then and now is the only way to land here. Honest
       // answer is the same one the recruiter needs: not connected right now.
       return { ok: false, status: 'reconnecting' };
     }
+
+    // Spacing floor (plan §9, P5), checked before dispatch and enforced as a
+    // refusal rather than a queue — see the `sendMinIntervalSeconds` doc on
+    // `GatewayConfig` for why a queue is the wrong shape here. Nothing was
+    // attempted, so the caller gets no activity row upstream, only a wait.
+    const allowedAt = this.#nextSendAllowedAt.get(key);
+    const now = this.#now();
+    if (allowedAt !== undefined && now < allowedAt) {
+      return {
+        ok: false,
+        status: 'connected',
+        retryAfterSeconds: Math.ceil((allowedAt - now) / 1000),
+      };
+    }
+    // Reserve the window now, before the socket call: two sends racing in
+    // the same tick must not both pass, and Baileys' own send is the only
+    // await between here and the write, so this closes that race the same
+    // way the FastAPI pre-dispatch row closes the cap/idempotency race.
+    this.#scheduleNextSend(key);
+
     let receipt;
     try {
       receipt = await runtime.socket.sendMessage(toJid(to), { text });

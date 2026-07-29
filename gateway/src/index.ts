@@ -43,6 +43,7 @@ async function main(): Promise<void> {
     onStatusChange: makeStatusPusher(config.apiCallbackUrl, config.sharedSecret, {
       warn: (obj, msg) => console.warn(msg, obj),
     }),
+    sendMinIntervalSeconds: config.sendMinIntervalSeconds,
   });
 
   const app = buildApp(config, sessions);

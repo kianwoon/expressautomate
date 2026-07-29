@@ -31,6 +31,15 @@ export interface GatewayConfig {
    * contract and works with no callback configured at all.
    */
   readonly apiCallbackUrl?: string | undefined;
+  /**
+   * Floor on how often one session may send (plan §9, P5). Enforced as a
+   * refusal in `sessions.ts#send`, not a queue: a queued message would have
+   * to survive a redeploy, and Baileys sockets do not (plan §2) — a message
+   * held across one would either be lost or sent twice, and neither is
+   * acceptable for something a candidate receives. Refusing and letting the
+   * caller retry (or use the popup) is the only option that cannot double-send.
+   */
+  readonly sendMinIntervalSeconds: number;
 }
 
 export class ConfigError extends Error {}
@@ -81,6 +90,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig 
 
   const rawCallback = env.WA_GATEWAY_API_CALLBACK_URL ?? '';
 
+  const rawInterval = env.WA_SEND_MIN_INTERVAL_SECONDS ?? '30';
+  const sendMinIntervalSeconds = Number.parseInt(rawInterval, 10);
+  if (!Number.isInteger(sendMinIntervalSeconds) || sendMinIntervalSeconds < 0) {
+    throw new ConfigError(
+      `WA_SEND_MIN_INTERVAL_SECONDS is not a valid non-negative integer: ${rawInterval}`,
+    );
+  }
+
   return {
     // 0.0.0.0 so the container is reachable on the Koyeb service mesh; the
     // service itself is deployed with no public route (plan §4).
@@ -91,6 +108,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig 
     encryptionKey,
     previousEncryptionKey,
     apiCallbackUrl: rawCallback === '' ? undefined : rawCallback,
+    sendMinIntervalSeconds,
   };
 }
 

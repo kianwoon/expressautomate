@@ -761,7 +761,7 @@ export async function getWaSessionStatus(): Promise<WaSessionStatus> {
  *  must not close the modal on it. `provider_message_id` is null unless
  *  WhatsApp actually handed one back. */
 export type WhatsappSendResult = {
-  status: "sent" | "unknown" | "failed";
+  status: "sent" | "unknown" | "failed" | "pending";
   activity_id: string;
   provider_message_id: string | null;
   client_request_id: string;
@@ -770,21 +770,34 @@ export type WhatsappSendResult = {
 /** A 409/429/422 is not a generic failure — it carries the server's own
  *  sentence, so the modal can say something a recruiter can act on. `kind`
  *  distinguishes the three because each has a different fix: `session` (409,
- *  `session_status` set) means link or wait; `rate_limited` (429) means the
- *  daily cap is hit — the popup is still open to them; `no_number` (422)
- *  means the fix is on the candidate record, not in Settings → WhatsApp, so
- *  the modal must not point there. */
+ *  `session_status` set) means link or wait; `rate_limited` (429) means a
+ *  send was refused before dispatch — the popup is still open to them;
+ *  `no_number` (422) means the fix is on the candidate record, not in
+ *  Settings → WhatsApp, so the modal must not point there.
+ *
+ *  There are two distinct 429s, told apart by `limit` rather than by
+ *  guessing from the sentence: `"daily"` is the day's cap, spent until UTC
+ *  midnight; `"interval"` is the minimum gap between sends, which clears
+ *  itself in seconds. `retry_after_seconds` is always the server's own
+ *  number — never recomputed here, since a rounded or drifted value just
+ *  produces a second 429 on retry. */
 export class WhatsappSendError extends ApiError {
   kind: "session" | "rate_limited" | "no_number";
   session_status: string | null;
+  limit: "daily" | "interval" | null;
+  retry_after_seconds: number | null;
   constructor(
     message: string,
     kind: "session" | "rate_limited" | "no_number",
     session_status: string | null,
+    limit: "daily" | "interval" | null = null,
+    retry_after_seconds: number | null = null,
   ) {
     super(message);
     this.kind = kind;
     this.session_status = session_status;
+    this.limit = limit;
+    this.retry_after_seconds = retry_after_seconds;
   }
 }
 
@@ -813,15 +826,24 @@ export async function sendCandidateWhatsapp(
   if (res.status === 409 || res.status === 429 || res.status === 422) {
     let detail = "We could not send that just now.";
     let session_status: string | null = null;
+    let limit: "daily" | "interval" | null = null;
+    let retry_after_seconds: number | null = null;
     try {
-      const body = (await res.json()) as { detail?: string; session_status?: string };
+      const body = (await res.json()) as {
+        detail?: string;
+        session_status?: string;
+        limit?: "daily" | "interval";
+        retry_after_seconds?: number;
+      };
       if (body.detail) detail = body.detail;
       if (body.session_status) session_status = body.session_status;
+      if (body.limit) limit = body.limit;
+      if (typeof body.retry_after_seconds === "number") retry_after_seconds = body.retry_after_seconds;
     } catch {
       /* not JSON, or empty */
     }
     const kind = res.status === 429 ? "rate_limited" : res.status === 422 ? "no_number" : "session";
-    throw new WhatsappSendError(detail, kind, session_status);
+    throw new WhatsappSendError(detail, kind, session_status, limit, retry_after_seconds);
   }
   if (!res.ok) throw new ApiError(await readError(res));
   return (await res.json()) as WhatsappSendResult;

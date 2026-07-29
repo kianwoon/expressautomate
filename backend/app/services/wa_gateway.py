@@ -62,6 +62,18 @@ class GatewayRefusedError(Exception):
         self.message = message
 
 
+class GatewaySpacingError(Exception):
+    """The gateway refused: this session's minimum send interval (plan §9)
+    has not elapsed yet. Never dispatched — the caller writes no row, only a
+    429 naming `retry_after_seconds`, the exact number the gateway computed
+    against its own jittered deadline (never the configured floor echoed
+    back — see `sessions.ts#scheduleNextSend`)."""
+
+    def __init__(self, retry_after_seconds: int) -> None:
+        super().__init__(f"send spacing floor not yet elapsed, retry in {retry_after_seconds}s")
+        self.retry_after_seconds = retry_after_seconds
+
+
 @dataclass(frozen=True)
 class SessionSnapshot:
     """Mirrors the gateway's response shape exactly (plan §5, §6)."""
@@ -148,6 +160,11 @@ class WaGatewayClient:
         if response.status_code == 409:
             body = response.json()
             return SendOutcome(ok=False, session_status=str(body.get("status", "disconnected")))
+        if response.status_code == 429:
+            body = response.json()
+            raw = body.get("retryAfterSeconds")
+            retry_after = int(raw) if isinstance(raw, (int, float)) else 1
+            raise GatewaySpacingError(max(retry_after, 0))
         if response.status_code == 422:
             raise GatewayRefusedError(_refusal_text(response))
         if response.status_code >= 400:
