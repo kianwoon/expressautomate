@@ -251,23 +251,28 @@
    each — the floor is set by what the widest cell in each column actually
    measures, in the note above COLUMNS. */
 .jo-table-card { padding: 0; overflow-x: auto; }
+/* No `min-width` here: the floor is per table, below. A shared one was wrong
+   in both directions — these tables have eight, five and four columns, and at
+   the eight-column table's floor the four-column one was forced 350px wider
+   than the column holding it, putting its last two columns off the edge. That
+   is what "the last column is chopped off" turned out to mean, on clients and
+   then on candidates. Each floor is the sum of what that table's own widest
+   cells measure, so a new table needs its own rather than inheriting a number
+   that was never about it. */
 .jo-table {
-  width: 100%; min-width: 960px; border-collapse: collapse;
+  width: 100%; border-collapse: collapse;
   table-layout: fixed; font-size: 0.875rem;
 }
-/* The floor is per table, not shared. These three tables have eight, five and
-   four columns, and one number for all of them is wrong in both directions:
-   at the eight-column table's floor the four-column one is forced 350px wider
-   than its own column and its last two columns fall off the edge, which is
-   what "the last column is chopped off" turned out to mean on clients. Each
-   floor is the sum of what that table's own widest cells measure. */
 .jo-table-jobs { min-width: 1040px; }
 .jo-table-clients { min-width: 600px; }
-/* Candidates has no modifier and keeps the 960 above, deliberately. Its five
-   columns would fit their card at around 620px too, but only by wrapping the
-   name, title and employer harder: measured, the rows go from 47px to 70px.
-   Scrolling sideways is the better trade there, where clients had no such
-   cost. Give it a modifier if that judgement changes. */
+.jo-table-candidates { min-width: 660px; }
+/* Only the job-orders table is wider than its column and scrolls. Eight
+   columns of a vacancy do not fit 683px legibly; five candidate fields do.
+   Measured against the master column at its full width: fitting candidates
+   costs 115px of table height over ten rows, and takes the rows that wrap
+   from four to eight — against a Stage and an Updated column that were
+   simply not on screen. Height you can scroll past; a column you cannot see
+   you do not know is there. */
 .jo-th {
   text-align: left; padding: 12px 14px; background: var(--surface-alt);
   border-bottom: 1px solid var(--line); font-weight: 650;

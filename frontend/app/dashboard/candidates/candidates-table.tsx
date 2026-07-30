@@ -34,12 +34,21 @@ export function CandidatesTable({
 }) {
   return (
     <div className="card jo-table-card">
-      <table className="jo-table">
+      <table className="jo-table jo-table-candidates">
+        {/* Five columns, and they fit the master column — so this table does
+            not scroll sideways, and Stage and Updated are on screen rather
+            than off the right edge, which is where the shared floor used to
+            put them.
+
+            Updated is 18% because the date does not wrap: it needs 116px and
+            gets 119 at the floor. Stage is 16% for the same reason at a
+            smaller size — "Contacted" is the longest of the five. Name, Title
+            and Employer wrap, so the room comes from them. */}
         <colgroup>
-          <col style={{ width: "24%" }} />
+          <col style={{ width: "25%" }} />
+          <col style={{ width: "21%" }} />
           <col style={{ width: "20%" }} />
-          <col style={{ width: "20%" }} />
-          <col style={{ width: "18%" }} />
+          <col style={{ width: "16%" }} />
           <col style={{ width: "18%" }} />
         </colgroup>
         <thead>
