@@ -61,9 +61,17 @@ type LogoState =
 
 export function ClientLogo({
   client,
+  onChanged,
   readOnly = false,
 }: {
   client: Client;
+  /** Called after an upload or removal succeeds, so the caller can refetch
+   *  the client record (`logo_key` changed). Detail-only on the caller's
+   *  side — see `onDetailChanged` in `client-panel.tsx` — because the logo
+   *  is never drawn in the table, so there is nothing there for a list
+   *  refetch to learn. Omitted in `readOnly` contexts, where there is
+   *  nothing to change. */
+  onChanged?: () => void;
   /** The panel is the only place this mark is an upload control — the mark
    *  IS the file input there. Everywhere else a client is only being read,
    *  not managed, so `readOnly` drops the file input, the camera overlay,
@@ -111,6 +119,9 @@ export function ClientLogo({
     };
   }, [client.id, client.logo_key, client.logo_updated_at]);
 
+  /** The new logo is fetched here rather than waited for from the parent:
+   *  `onChanged` only re-reads the client record, and the recruiter should
+   *  see what they just uploaded the moment it lands, not a frame later. */
   async function upload(file: File) {
     if (busy) return;
     setBusy(true);
@@ -119,17 +130,7 @@ export function ClientLogo({
       await uploadClientLogo(client.id, file);
       const url = await getClientLogo(client.id);
       if (url) setLogo({ status: "ready", url: url.url });
-      // No parent notification here on purpose: this component owns its own
-      // display state end-to-end, and nothing else on the page reads
-      // `logo_key` / `logo_updated_at` (the clients table deliberately does
-      // not show logos). Notifying the parent used to trigger a refetch of
-      // the whole client list AND the detail record, which handed back a new
-      // `logo_updated_at` and re-fired this component's own effect — a
-      // redundant third presign and a visible flash for zero benefit. The
-      // client record the parent holds goes stale on these two fields until
-      // some other action (suspend, edit, unmerge) refetches it anyway, and
-      // that refetch's single re-presign is harmless because it happens once,
-      // not as part of this cascade.
+      onChanged?.();
     } catch (err) {
       setError(err instanceof Error ? err.message : "We could not upload that logo just now.");
     } finally {
@@ -150,9 +151,11 @@ export function ClientLogo({
     try {
       await deleteClientLogo(client.id);
       setLogo({ status: "none" });
-      // No parent notification — see the comment in `upload` above.
-      // The button that was just pressed no longer exists — hand focus to
-      // the control that is still there.
+      onChanged?.();
+      // The button that was just pressed no longer exists — removal is the
+      // only reason it renders. Left alone, focus falls to the body and a
+      // keyboard lands back at the top of the document. Hand it to the
+      // control that is still there, which is the one they would want next.
       fileRef.current?.focus();
     } catch (err) {
       setError(err instanceof Error ? err.message : "We could not remove that logo just now.");

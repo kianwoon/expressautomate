@@ -54,6 +54,7 @@ export function ClientPanel({
   onArchive,
   onRestore,
   onChanged,
+  onDetailChanged,
   onSelectClient,
 }: {
   row: Client | null;
@@ -65,6 +66,10 @@ export function ClientPanel({
   /** Called after a confirm, archive, restore, merge or unmerge succeeds, so
    *  the caller can refetch the list and the detail record. */
   onChanged: () => void;
+  /** Refetch this client alone; do not reload the list. Serves the logo —
+   *  it changes nothing the table draws, and re-reading the list for it is
+   *  what used to blank the screen mid-upload. */
+  onDetailChanged: () => void;
   /** Selects another client by id in the parent's detail pane — the panel's
    *  only navigation hook, used to jump to a merge survivor. */
   onSelectClient: (id: string) => void;
@@ -89,6 +94,7 @@ export function ClientPanel({
       onArchive={onArchive}
       onRestore={onRestore}
       onChanged={onChanged}
+      onDetailChanged={onDetailChanged}
       onSelectClient={onSelectClient}
     />
   );
@@ -100,6 +106,7 @@ function Detail({
   onArchive,
   onRestore,
   onChanged,
+  onDetailChanged,
   onSelectClient,
 }: {
   row: Client;
@@ -107,6 +114,7 @@ function Detail({
   onArchive: () => Promise<void>;
   onRestore: () => Promise<void>;
   onChanged: () => void;
+  onDetailChanged: () => void;
   onSelectClient: (id: string) => void;
 }) {
   const [busy, setBusy] = useState(false);
@@ -162,7 +170,7 @@ function Detail({
       </div>
 
       <div className="jo-detail-avatar">
-        <ClientLogo client={row} />
+        <ClientLogo client={row} onChanged={onDetailChanged} />
         <h3 className="jo-detail-title">{row.name}</h3>
       </div>
 

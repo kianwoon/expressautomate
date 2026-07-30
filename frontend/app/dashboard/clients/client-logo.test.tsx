@@ -77,7 +77,7 @@ describe("ClientLogo", () => {
     expect(fetchMock.mock.calls[0][0]).toBe("/api/clients/cl-1/logo");
   });
 
-  it("uploads the chosen file, shows the new logo, and makes no further request or list-reload call", async () => {
+  it("uploads the chosen file, shows the new logo, and calls onChanged exactly once", async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(
@@ -86,10 +86,14 @@ describe("ClientLogo", () => {
       .mockResolvedValueOnce(jsonResponse({ url: "https://r2.example/new.png", expires_in: 300 }));
     vi.stubGlobal("fetch", fetchMock);
 
-    // Stands in for `reload()` from `useClients` — the regression this test
-    // pins is that uploading a logo must never trigger a full list refetch.
-    const reload = vi.fn();
-    render(<ClientLogo client={client()} />);
+    // `onChanged` here stands in for the detail-only refetch the caller
+    // wires it to (`onDetailChanged` in `client-panel.tsx`) — not a list
+    // reload. This component has no way to reach the list itself; whether
+    // the caller wires `onChanged` to a detail-only refetch or a combined
+    // list+detail refresh is exercised in `client-panel.test.tsx`, at the
+    // level the original bug actually lived.
+    const onChanged = vi.fn();
+    render(<ClientLogo client={client()} onChanged={onChanged} />);
 
     await screen.findByText("MP");
 
@@ -101,11 +105,10 @@ describe("ClientLogo", () => {
     expect(img.getAttribute("src")).toBe("https://r2.example/new.png");
 
     // Upload (POST) + one re-presign to show the result — exactly two calls,
-    // nothing more. A third call would be the redundant re-presign this fix
-    // removes; a list reload would show up here too since both would have to
-    // go through the same `fetch`.
+    // nothing more. A third call would be the redundant re-presign the P2
+    // fix removed.
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(reload).not.toHaveBeenCalled();
+    expect(onChanged).toHaveBeenCalledTimes(1);
 
     const uploadCall = fetchMock.mock.calls[0];
     expect(uploadCall[0]).toBe("/api/clients/cl-1/logo");
@@ -113,15 +116,15 @@ describe("ClientLogo", () => {
     expect(uploadCall[1].body).toBeInstanceOf(FormData);
   });
 
-  it("deletes the logo, returns to initials, and makes no further request or list-reload call", async () => {
+  it("deletes the logo, returns to initials, and calls onChanged exactly once", async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(jsonResponse({ url: "https://r2.example/logo.png", expires_in: 300 }))
       .mockResolvedValueOnce(jsonResponse(null, { ok: true, status: 204 }));
     vi.stubGlobal("fetch", fetchMock);
 
-    const reload = vi.fn();
-    render(<ClientLogo client={client({ logo_key: "tenant/cl-1/logo.png" })} />);
+    const onChanged = vi.fn();
+    render(<ClientLogo client={client({ logo_key: "tenant/cl-1/logo.png" })} onChanged={onChanged} />);
 
     await screen.findByAltText("Logo of Meridian Partners");
 
@@ -129,10 +132,9 @@ describe("ClientLogo", () => {
 
     await screen.findByText("MP");
 
-    // Initial presign (GET) + the DELETE — exactly two calls. No third call
-    // to re-presign an image that no longer exists, and no list reload.
+    // Initial presign (GET) + the DELETE — exactly two calls.
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(fetchMock.mock.calls[1][1].method).toBe("DELETE");
-    expect(reload).not.toHaveBeenCalled();
+    expect(onChanged).toHaveBeenCalledTimes(1);
   });
 });

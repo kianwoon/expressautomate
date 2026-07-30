@@ -137,14 +137,23 @@ function Workspace() {
     };
   }, [selectedId]);
 
+  // Re-reads the one open record and nothing else. The logo is deliberately
+  // not drawn in the table, so a changed `logo_key` cannot alter a visible
+  // row and there is nothing for the list to learn from refetching it.
+  const refetchDetail = useCallback(() => {
+    if (!selectedId) return;
+    getClient(selectedId)
+      .then(setDetail)
+      .catch(() => setDetailError("We could not load that client just now."));
+  }, [selectedId]);
+
+  // Confirm, archive, restore, suspend, merge and edit all move a row between
+  // filters or change what the list shows, so those genuinely do need the
+  // list re-read as well.
   const refreshDetail = useCallback(() => {
     reload();
-    if (selectedId) {
-      getClient(selectedId)
-        .then(setDetail)
-        .catch(() => setDetailError("We could not load that client just now."));
-    }
-  }, [reload, selectedId]);
+    refetchDetail();
+  }, [reload, refetchDetail]);
 
   async function doConfirm() {
     if (!detail) return;
@@ -256,6 +265,7 @@ function Workspace() {
               onArchive={doArchive}
               onRestore={doRestore}
               onChanged={refreshDetail}
+              onDetailChanged={refetchDetail}
               onSelectClient={setSelectedId}
             />
           </div>
