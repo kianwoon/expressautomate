@@ -16,6 +16,43 @@ branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
 
+# Backfill the client from the evidence already recorded per message, but only
+# where that evidence points one way.
+#
+# `client_mentions` is an evidence trail, not a key: it records EVERY client a
+# message referred to, and its unique constraint is
+# (tenant_id, client_id, email_message_id), so one email legitimately names
+# many clients. Production bears this out -- most matched messages mention six
+# distinct clients, and narrowing to matched_by = 'email_domain' does not
+# resolve it. A plain UPDATE ... FROM would silently pick one of them at
+# random, and `client_id` decides who the job order is assigned to, so an
+# arbitrary pick routes work to the wrong recruiter.
+#
+# So: assign only when exactly one distinct client is mentioned. Otherwise
+# leave NULL, which means "no client recorded" -- a recruiter can set it. A
+# confidently wrong client is worse than none (cf. CLAUDE.md sec 15: never
+# fabricate a missing value).
+#
+# Exposed as a constant so the behaviour can be pinned by a test.
+# allow-hardcode: a hand-written one-off data backfill, not a matching oracle.
+CLIENT_BACKFILL_SQL = """
+    WITH sole_client AS (
+        SELECT m.tenant_id,
+               m.email_message_id,
+               (array_agg(DISTINCT m.client_id))[1] AS client_id
+          FROM client_mentions m
+         WHERE m.email_message_id IS NOT NULL
+         GROUP BY m.tenant_id, m.email_message_id
+        HAVING count(DISTINCT m.client_id) = 1
+    )
+    UPDATE opportunities o
+       SET client_id = s.client_id
+      FROM sole_client s
+     WHERE s.email_message_id = o.email_message_id
+       AND s.tenant_id = o.tenant_id
+"""
+
+
 def upgrade() -> None:
     # First, so `opportunity_shares` can declare a composite FK against it in
     # the next migration. Postgres refuses a composite FK without a matching
@@ -58,18 +95,7 @@ def upgrade() -> None:
         ondelete="SET NULL (assigned_user_id)",
     )
 
-    # Backfill the client from the evidence already recorded per message.
-    # Rows whose mention is gone stay NULL, which is honest: the link existed
-    # and the record of it does not.
-    op.execute(
-        """
-        UPDATE opportunities o
-           SET client_id = m.client_id
-          FROM client_mentions m
-         WHERE m.email_message_id = o.email_message_id
-           AND m.tenant_id = o.tenant_id
-        """
-    )
+    op.execute(CLIENT_BACKFILL_SQL)
 
     # email_message_id: NOT NULL -> nullable, CASCADE -> SET NULL.
     op.alter_column("opportunities", "email_message_id", nullable=True)
