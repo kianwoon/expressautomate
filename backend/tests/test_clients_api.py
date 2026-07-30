@@ -567,6 +567,47 @@ async def test_archive_from_suspended_clears_the_suspension(agency_with_clients)
     assert detail["suspended_at"] is None
 
 
+async def test_merging_a_suspended_client_clears_its_suspension(agency_with_clients) -> None:
+    """A stale reason can never outlive the state it describes — merge is
+    another exit from `suspended`, same as archive."""
+    tid, uid, ids = agency_with_clients
+    loser = ids["live"]
+    target = ids["merged"]
+    async with AdminSessionLocal() as s:
+        # Free up "merged" to act as the live merge target.
+        await s.execute(
+            text(
+                "UPDATE clients SET status = 'unconfirmed', merged_into_client_id = NULL, "
+                "email_domain = NULL WHERE id = :i"
+            ),
+            {"i": target},
+        )
+        await s.commit()
+
+    async with await _client_for(tid, uid) as http:
+        assert (await http.post(f"/api/clients/{loser}/confirm")).status_code == 200
+        assert (
+            await http.post(f"/api/clients/{loser}/suspend", json={"reason": "Dispute"})
+        ).status_code == 200
+
+        merged = await http.post(
+            f"/api/clients/{loser}/merge", json={"target_id": str(target)}
+        )
+        assert merged.status_code == 200
+
+        detail = (await http.get(f"/api/clients/{loser}")).json()
+        assert detail["suspended_reason"] is None
+        assert detail["suspended_at"] is None
+
+        restored = await http.post(f"/api/clients/{loser}/unmerge")
+        assert restored.status_code == 200
+
+        detail = (await http.get(f"/api/clients/{loser}")).json()
+    assert detail["status"] == "unconfirmed"
+    assert detail["suspended_reason"] is None
+    assert detail["suspended_at"] is None
+
+
 async def test_confirm_on_suspended_names_unsuspend(agency_with_clients) -> None:
     """Not "restore it before marking it confirmed" — that names an endpoint
     which would refuse this row."""

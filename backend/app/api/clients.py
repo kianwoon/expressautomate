@@ -531,7 +531,11 @@ async def merge_client(request: Request, client_id: uuid.UUID, body: MergeReques
         await session.execute(
             update(Client)
             .where(Client.id == client_id)
-            .values(status=Client.MERGED, merged_into_client_id=body.target_id)
+            .values(
+                status=Client.MERGED,
+                merged_into_client_id=body.target_id,
+                **_CLEAR_SUSPENSION,
+            )
         )
         await session.commit()
     return {"status": "merged", "merged_into_client_id": str(body.target_id)}
