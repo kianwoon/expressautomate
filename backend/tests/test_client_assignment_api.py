@@ -328,3 +328,139 @@ async def test_an_anonymous_caller_cannot_add_a_collaborator(agency) -> None:
             f"/api/clients/{acme}/collaborators", json={"user_id": str(incoming)}
         )
     assert response.status_code == 401
+
+
+@pytest.fixture
+async def third_parties(agency):
+    """A bystanding recruiter and an owner, in the same agency.
+
+    The bystander is deliberately `recruiter`: proving a refusal with an
+    owner-role user proves nothing, since the owner is allowed anyway.
+    """
+    tid, *_ = agency
+    bystander, boss = uuid.uuid4(), uuid.uuid4()
+    async with AdminSessionLocal() as s:
+        for uid, role in ((bystander, "recruiter"), (boss, "owner")):
+            await s.execute(
+                text(
+                    "INSERT INTO users (id, tenant_id, email, role) "
+                    "VALUES (:i, :t, :e, :r)"
+                ),
+                {"i": uid, "t": tid, "e": f"u{uid.hex[:8]}@agency.sg", "r": role},
+            )
+        await s.commit()
+    yield bystander, boss
+
+
+async def _assignee_of_client(client_id: uuid.UUID) -> uuid.UUID | None:
+    async with AdminSessionLocal() as s:
+        return (
+            await s.execute(
+                text("SELECT assigned_user_id FROM clients WHERE id = :i"), {"i": client_id}
+            )
+        ).scalar_one()
+
+
+async def test_the_owner_may_reassign_somebody_elses_client(agency, third_parties) -> None:
+    tid, _outgoing, incoming, acme, _other = agency
+    _bystander, boss = third_parties
+    async with await _http(tid, boss) as http:
+        response = await http.put(
+            f"/api/clients/{acme}/assignee", json={"user_id": str(incoming)}
+        )
+    assert response.status_code == 200
+    assert await _assignee_of_client(acme) == incoming
+
+
+async def test_the_current_assignee_may_hand_on_their_own_client(agency) -> None:
+    tid, outgoing, incoming, acme, _other = agency
+    async with await _http(tid, outgoing) as http:
+        response = await http.put(
+            f"/api/clients/{acme}/assignee", json={"user_id": str(incoming)}
+        )
+    assert response.status_code == 200
+    assert await _assignee_of_client(acme) == incoming
+
+
+async def test_a_bystander_cannot_reassign_and_moves_nothing(agency, third_parties) -> None:
+    """403, and the damage must not already be done.
+
+    The job order is checked in the database because a permission check placed
+    after the update would return 403 and still have moved the work.
+    """
+    tid, outgoing, incoming, acme, _other = agency
+    bystander, _boss = third_parties
+    job_order = await _job_order(tid, acme, outgoing)
+
+    async with await _http(tid, bystander) as http:
+        response = await http.put(
+            f"/api/clients/{acme}/assignee", json={"user_id": str(incoming)}
+        )
+
+    assert response.status_code == 403
+    assert await _assignee_of_client(acme) == outgoing
+    assert await _assignee_of(job_order) == outgoing
+
+
+async def test_any_recruiter_may_claim_an_unassigned_client(agency, third_parties) -> None:
+    tid, _outgoing, _incoming, acme, _other = agency
+    bystander, _boss = third_parties
+    async with AdminSessionLocal() as s:
+        await s.execute(
+            text("UPDATE clients SET assigned_user_id = NULL WHERE id = :i"), {"i": acme}
+        )
+        await s.commit()
+
+    async with await _http(tid, bystander) as http:
+        response = await http.put(
+            f"/api/clients/{acme}/assignee", json={"user_id": str(bystander)}
+        )
+
+    assert response.status_code == 200
+    assert await _assignee_of_client(acme) == bystander
+
+
+async def test_a_bystander_cannot_add_or_remove_a_collaborator(agency, third_parties) -> None:
+    tid, outgoing, incoming, acme, _other = agency
+    bystander, _boss = third_parties
+    async with await _http(tid, outgoing) as http:
+        await http.post(f"/api/clients/{acme}/collaborators", json={"user_id": str(incoming)})
+
+    async with await _http(tid, bystander) as http:
+        added = await http.post(
+            f"/api/clients/{acme}/collaborators", json={"user_id": str(bystander)}
+        )
+        removed = await http.delete(f"/api/clients/{acme}/collaborators/{incoming}")
+
+    assert added.status_code == 403
+    assert removed.status_code == 403
+    assert await _collaborators_of(acme) == [incoming]
+
+
+async def test_the_owner_may_manage_collaborators_on_any_client(agency, third_parties) -> None:
+    tid, _outgoing, incoming, acme, _other = agency
+    _bystander, boss = third_parties
+    async with await _http(tid, boss) as http:
+        added = await http.post(
+            f"/api/clients/{acme}/collaborators", json={"user_id": str(incoming)}
+        )
+        removed = await http.delete(f"/api/clients/{acme}/collaborators/{incoming}")
+    assert (added.status_code, removed.status_code) == (201, 204)
+    assert await _collaborators_of(acme) == []
+
+
+async def test_anyone_may_manage_collaborators_on_an_unassigned_client(
+    agency, third_parties
+) -> None:
+    tid, _outgoing, incoming, acme, _other = agency
+    bystander, _boss = third_parties
+    async with AdminSessionLocal() as s:
+        await s.execute(
+            text("UPDATE clients SET assigned_user_id = NULL WHERE id = :i"), {"i": acme}
+        )
+        await s.commit()
+    async with await _http(tid, bystander) as http:
+        added = await http.post(
+            f"/api/clients/{acme}/collaborators", json={"user_id": str(incoming)}
+        )
+    assert added.status_code == 201

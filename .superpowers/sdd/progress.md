@@ -517,3 +517,8 @@ Task 10: complete (ff2666b..4e8c0c9, review clean, 1553 passed). ALL TASKS DONE.
   Idempotency mutation-proven: making the insert an upsert fails the replay test.
   MINOR for final review: merge-chain assignee (survivor's recruiter wins) is disclosed
   behaviour with no direct assertion in tests/test_client_matching.py.
+FINAL REVIEW round 2: READY WITH FIXES - guard test still missed route->module-level-helper
+  delegation (the original sourcing.py bug shape), proven by probe. Hardened transitively in
+  5003c4e; probe now caught, no true positives, no exemptions added. 1564 passed.
+FEATURE COMPLETE, NOT MERGED. Open: (1) should client reassignment be owner-only? (2) migrations
+  not yet applied to live Koyeb DB - user chose live, deferred to one deliberate pass.

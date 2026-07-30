@@ -21,13 +21,14 @@ from sqlalchemy import delete, func, insert, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 
-from app.api.auth import _require_session
+from app.api.auth import _require_session, _require_session_with_role
 from app.api.integrity import is_duplicate
 from app.core.config import settings
 from app.db.rls import tenant_session
 from app.models.client import Client, ClientCollaborator, ClientContact, ClientMention
 from app.models.opportunity import Opportunity
 from app.services.client_naming import normalize_company_name
+from app.services.visibility import OWNER_ROLE
 
 router = APIRouter(tags=["clients"])
 
@@ -869,6 +870,26 @@ async def delete_contact(request: Request, client_id: uuid.UUID, contact_id: uui
         await session.execute(delete(ClientContact).where(ClientContact.id == contact_id))
 
 
+def _require_may_reassign(
+    user_uuid: uuid.UUID, role: str, current_assignee: uuid.UUID | None
+) -> None:
+    """Who may hand an account on, or say who else covers it.
+
+    The owner, or whoever holds it now — handing on your own account is
+    ordinary work, taking someone else's is not. A client nobody holds is
+    claimable by anyone in the agency, like the unassigned job-order queue:
+    conspicuous and available rather than locked away.
+
+    403 and not 404: clients are visible agency-wide (only job orders are
+    private), so hiding the row here would conceal nothing.
+    """
+    if role == OWNER_ROLE or current_assignee is None or current_assignee == user_uuid:
+        return
+    raise HTTPException(
+        status_code=403, detail="Only the owner or the current assignee may do this."
+    )
+
+
 class AssigneeRequest(BaseModel):
     user_id: uuid.UUID | None
     # Defaults to true: a client changing hands normally means the work
@@ -886,24 +907,26 @@ async def set_client_assignee(
     The count comes back so the interface can say "12 job orders moved to
     Sarah" rather than reassigning them quietly.
     """
-    _user_uuid, tenant_uuid = _require_session(request)
+    user_uuid, tenant_uuid, role = await _require_session_with_role(request)
 
     async with tenant_session(tenant_uuid) as session:
-        previous = (
+        # One read serves both jobs: it is the permission check's subject and
+        # the `previous` assignee whose job orders travel with the account.
+        row = (
             await session.execute(
-                select(Client.assigned_user_id).where(Client.id == client_id)
+                select(Client.id, Client.assigned_user_id).where(Client.id == client_id)
             )
-        ).scalar_one_or_none()
-        updated = (
-            await session.execute(
-                update(Client)
-                .where(Client.id == client_id)
-                .values(assigned_user_id=body.user_id)
-                .returning(Client.id)
-            )
-        ).scalar_one_or_none()
-        if updated is None:
+        ).one_or_none()
+        if row is None:
             raise HTTPException(status_code=404, detail="Client not found")
+        previous = row.assigned_user_id
+        _require_may_reassign(user_uuid, role, previous)
+
+        await session.execute(
+            update(Client)
+            .where(Client.id == client_id)
+            .values(assigned_user_id=body.user_id)
+        )
 
         moved = 0
         if body.move_open_opportunities:
@@ -949,9 +972,10 @@ async def add_collaborator(
     This grants nothing — see `ClientCollaborator`. Cover that needs sight of
     the work is an explicit share or a reassignment.
     """
-    _user_uuid, tenant_uuid = _require_session(request)
+    user_uuid, tenant_uuid, role = await _require_session_with_role(request)
     async with tenant_session(tenant_uuid) as session:
-        await _load(session, client_id)
+        client = await _load(session, client_id)
+        _require_may_reassign(user_uuid, role, client.assigned_user_id)
         await session.execute(
             pg_insert(ClientCollaborator)
             .values(tenant_id=tenant_uuid, client_id=client_id, user_id=body.user_id)
@@ -965,9 +989,10 @@ async def remove_collaborator(
     client_id: uuid.UUID, user_id: uuid.UUID, request: Request
 ) -> None:
     """Removing cover that is already gone is a no-op, for the same reason."""
-    _user_uuid, tenant_uuid = _require_session(request)
+    caller_uuid, tenant_uuid, role = await _require_session_with_role(request)
     async with tenant_session(tenant_uuid) as session:
-        await _load(session, client_id)
+        client = await _load(session, client_id)
+        _require_may_reassign(caller_uuid, role, client.assigned_user_id)
         await session.execute(
             delete(ClientCollaborator)
             .where(ClientCollaborator.client_id == client_id)
