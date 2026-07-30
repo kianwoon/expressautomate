@@ -27,7 +27,7 @@ here, and a test asserts that it never starts to.
 """
 
 import uuid
-from datetime import date
+from datetime import UTC, date, datetime
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -38,8 +38,14 @@ from sqlalchemy.orm import aliased
 from app.api.auth import _require_session_with_role
 from app.core.config import settings
 from app.db.rls import tenant_session
-from app.models import Candidate, EmailMessage, Opportunity, OpportunityCode
+from app.models import Candidate, EmailMessage, Opportunity, OpportunityCode, User
 from app.models.extraction import ExtractionEvidence
+from app.services.notify.dispatch import emit_and_enqueue
+from app.services.notify.events import (
+    EVENT_OPPORTUNITY_ASSIGNED,
+    EVENT_OPPORTUNITY_NEW,
+    OpportunityEvent,
+)
 from app.services.sourcing import eligibility
 from app.services.visibility import (
     load_editable_opportunity,
@@ -200,7 +206,12 @@ async def list_opportunities(
         email = aliased(EmailMessage)
         base = (
             select(Opportunity, email.internet_message_id, email.graph_message_id)
-            .join(email, email.id == Opportunity.email_message_id)
+            # OUTER, and that matters: `email_message_id` is nullable — a job
+            # order typed in by hand has no email at all, and a retention purge
+            # sets the column NULL on one that did. An inner join drops both
+            # from the list while the chip counts above (which do not join)
+            # still count them, so the page would say twelve and show eleven.
+            .join(email, email.id == Opportunity.email_message_id, isouter=True)
             .where(visible)
         )
         if status is not None:
@@ -704,4 +715,238 @@ def _payload(
         # pipeline invents later passes through unrenamed rather than being
         # forced into a bucket it does not belong in.
         "review_status": _STORED_TO_FILTER.get(row.review_status, row.review_status),
+    }
+
+
+class AssignRequest(BaseModel):
+    """`null` is a value here, not an omission — it releases the job order back
+    to the queue, which is a different act from "leave it where it is"."""
+
+    user_id: uuid.UUID | None = None
+
+
+class ManualOpportunityRequest(BaseModel):
+    """A vacancy taken over the phone or on WhatsApp and typed in.
+
+    Every field is optional and every one is a `_raw` string, deliberately: the
+    recruiter is transcribing what they were told, and forcing a structured
+    salary out of "6k neg." would be the fabrication §15 forbids. Normalisation
+    is the extraction pipeline's job and is simply absent here.
+    """
+
+    client_id: uuid.UUID | None = None
+    company_name_raw: str | None = None
+    job_title_raw: str | None = None
+    location_raw: str | None = None
+    salary_raw: str | None = None
+    working_hours_raw: str | None = None
+    duration_raw: str | None = None
+    employment_type: str | None = None
+    job_description: str | None = None
+    requirements: str | None = None
+
+
+@router.post("/opportunities/{opportunity_id}/claim")
+async def claim_opportunity(opportunity_id: uuid.UUID, request: Request) -> dict:
+    """Take an unassigned job order.
+
+    The `WHERE assigned_user_id IS NULL` is the whole concurrency story: two
+    recruiters pressing this at the same moment both run the same UPDATE, and
+    exactly one of them matches a row. A SELECT to check first and an UPDATE
+    to act would reintroduce precisely the gap this clause closes — the second
+    reader would see NULL too, and both would be told they had won.
+
+    Deliberately not behind `load_editable_opportunity`, and
+    `tests/test_opportunity_routes_guarded.py` exempts it for that reason:
+    `can_edit` refuses an unassigned job order on purpose, and an unassigned
+    job order is the only kind this route acts on. Claiming is the act that
+    makes it editable.
+    """
+    user_uuid, tenant_uuid, role = await _require_session_with_role(request)
+
+    async with tenant_session(tenant_uuid) as session:
+        # Visible, so an invisible id is 404 rather than 409 — a 409 would
+        # confirm the row exists to someone with no business knowing it does.
+        await load_visible_opportunity(session, opportunity_id, user_uuid, role)
+        claimed = (
+            await session.execute(
+                update(Opportunity)
+                .where(Opportunity.id == opportunity_id)
+                .where(Opportunity.assigned_user_id.is_(None))
+                .values(assigned_user_id=user_uuid)
+                .returning(Opportunity.id)
+            )
+        ).scalar_one_or_none()
+
+    if claimed is None:
+        raise HTTPException(
+            status_code=409, detail="Someone else has taken this job order."
+        )
+
+    # Nothing is emitted. You pressed the button; being told what you just did
+    # is noise, and the colleagues who lost the race learn it from their 409.
+    return {"id": str(opportunity_id), "assigned_user_id": str(user_uuid)}
+
+
+@router.post("/opportunities/{opportunity_id}/assign")
+async def assign_opportunity(
+    opportunity_id: uuid.UUID, body: AssignRequest, request: Request
+) -> dict:
+    """Hand a job order to a colleague, or put it back on the queue.
+
+    Guarded by its own rule rather than by `load_editable_opportunity` alone:
+    it needs edit rights (so an ordinary recruiter cannot pass on someone
+    else's work), and it must also refuse a target from outside the agency
+    before the composite FK turns that into a 500.
+    """
+    user_uuid, tenant_uuid, role = await _require_session_with_role(request)
+
+    async with tenant_session(tenant_uuid) as session:
+        opportunity = await load_editable_opportunity(
+            session, opportunity_id, user_uuid, role
+        )
+        # Read off the row while the session is open: the notification is sent
+        # after commit, by which point a committed instance's attributes are
+        # expired. Same ordering argument as `opportunity_shares.py`.
+        subject = (
+            opportunity.job_title_raw,
+            opportunity.company_name_raw,
+            opportunity.location_raw,
+            opportunity.salary_raw,
+        )
+
+        if body.user_id is not None:
+            # RLS scopes this to the agency, so a colleague of another agency
+            # is simply not found.
+            colleague = (
+                await session.execute(
+                    select(User.id).where(User.id == body.user_id)
+                )
+            ).scalar_one_or_none()
+            if colleague is None:
+                raise HTTPException(
+                    status_code=422, detail="That colleague is not in this agency."
+                )
+
+        assigned = (
+            await session.execute(
+                update(Opportunity)
+                .where(Opportunity.id == opportunity_id)
+                .values(assigned_user_id=body.user_id)
+                .returning(Opportunity.id)
+            )
+        ).scalar_one_or_none()
+
+        actor = (
+            await session.execute(
+                select(User.display_name).where(User.id == user_uuid)
+            )
+        ).scalar_one_or_none()
+
+    if assigned is None:
+        raise HTTPException(status_code=404, detail="No such job order.")
+
+    job_title, company_name, location, salary = subject
+    if body.user_id is None:
+        # Released. `EVENT_OPPORTUNITY_NEW` with `recipient_user_ids=None` —
+        # None means everybody, and this is queue work again that nobody would
+        # otherwise learn is available. An empty tuple would mean the tenant's
+        # shared destinations and no individual at all, which is the opposite.
+        event = OpportunityEvent(
+            kind=EVENT_OPPORTUNITY_NEW,
+            tenant_id=tenant_uuid,
+            opportunity_id=opportunity_id,
+            recipient_user_ids=None,
+            job_title=job_title,
+            company_name=company_name,
+            location=location,
+            salary=salary,
+            actor_name=actor,
+        )
+    elif body.user_id == user_uuid:
+        # Assigning it to yourself is the claim case: you know.
+        event = None
+    else:
+        event = OpportunityEvent(
+            kind=EVENT_OPPORTUNITY_ASSIGNED,
+            tenant_id=tenant_uuid,
+            opportunity_id=opportunity_id,
+            # Only them. This concerns one person, and telling the agency who
+            # got which job order is a stream nobody asked for.
+            recipient_user_ids=(body.user_id,),
+            job_title=job_title,
+            company_name=company_name,
+            location=location,
+            salary=salary,
+            actor_name=actor,
+        )
+
+    # After commit, like `opportunity_shares.py`: the row must be assigned
+    # before anyone is told it was. The same non-atomicity is accepted for the
+    # same reason — a missed notification beats a notification about an
+    # assignment that was rolled back.
+    if event is not None:
+        await emit_and_enqueue(event)
+
+    return {
+        "id": str(opportunity_id),
+        "assigned_user_id": str(body.user_id) if body.user_id else None,
+    }
+
+
+@router.post("/opportunities", status_code=201)
+async def create_opportunity(body: ManualOpportunityRequest, request: Request) -> dict:
+    """A vacancy that never arrived as an email.
+
+    `assigned_user_id` is the creator, not the client's assignee: a recruiter
+    who takes a job order over the phone is the one working it, and silently
+    handing it to whoever happens to own the client would lose it from the
+    list of the person who just typed it.
+
+    `source` is `manual` and `email_message_id` is NULL — the pair is not
+    redundant. `email_message_id` is ON DELETE SET NULL, so a retention purge
+    would otherwise reclassify an extracted job order as hand-typed.
+    """
+    user_uuid, tenant_uuid, _role = await _require_session_with_role(request)
+
+    opportunity_id = uuid.uuid4()
+    async with tenant_session(tenant_uuid) as session:
+        session.add(
+            Opportunity(
+                id=opportunity_id,
+                tenant_id=tenant_uuid,
+                email_message_id=None,
+                # When it was taken down, which is the closest honest answer to
+                # "when did this arrive" and keeps it sorting beside the
+                # extracted rows instead of sinking under every NULL.
+                received_datetime=datetime.now(UTC),
+                client_id=body.client_id,
+                assigned_user_id=user_uuid,
+                source=Opportunity.MANUAL,
+                company_name_raw=body.company_name_raw,
+                job_title_raw=body.job_title_raw,
+                location_raw=body.location_raw,
+                salary_raw=body.salary_raw,
+                working_hours_raw=body.working_hours_raw,
+                duration_raw=body.duration_raw,
+                employment_type=body.employment_type,
+                job_description=body.job_description,
+                requirements=body.requirements,
+                # A person typed this; there is no extraction to doubt and no
+                # evidence to verify, so it is neither `needs_review` nor
+                # `verified`.
+                review_status=_READY,
+                quality_state="likely",
+            )
+        )
+
+    # No notification: it is already assigned to whoever created it, and they
+    # are the only person it concerns.
+    return {
+        "id": str(opportunity_id),
+        "source": Opportunity.MANUAL,
+        "assigned_user_id": str(user_uuid),
+        "client_id": str(body.client_id) if body.client_id else None,
+        "company_name_raw": body.company_name_raw,
+        "job_title_raw": body.job_title_raw,
     }
