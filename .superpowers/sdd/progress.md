@@ -452,3 +452,28 @@ Security fix reviewed independently (fable, 8/10 SHIP WITH FIXES). Both closed i
  CONCURRENCY IS ONLY SOFTLY BOUNDED - the cap is per request, not per process. A human should
    check the api instance's RAM against two concurrent worst-case decodes.
  1466 passed, 1 skipped.
+
+## Gateway flake fix (93dfbf1) - reviewed, SHIP 9/10
+ROOT CAUSE was the TEST, not production. The test emitted the QR on a setTimeout(20ms) that
+  raced two DB round trips: pair() -> #openOnce awaits ensureWaSessionRow (sessions.ts:496)
+  and usePostgresAuthState (:497, decrypts creds) BEFORE the socket exists (:532) and the
+  connection.update handler attaches (:547-549). The fake drops events with no handler and
+  never replays, so under CI load the QR vanished, firstSettled never resolved, and pair()
+  waited its full 2000ms -> qr null. CI took 2249ms = 2000 + overhead. Exact signature.
+PRODUCTION IS NOT AFFECTED and sessions.ts is byte-identical to origin/main (verified): the
+  socket does not exist during those DB awaits so nothing can emit into that window, and
+  there is no await between socketFactory() returning and ev.on() attaching.
+FIX: fake.subscribed(event) resolves when the handler attaches (and immediately if it already
+  has), then a setImmediate yield, then the emit. No wall clock anywhere.
+  The setImmediate is NOT decoration: subscribed() resolves one promise-hop earlier than
+  pair()'s own continuation, so without it a BROKEN pair() passed on microtask-ordering luck.
+  Fable traced it independently: after :547 the path to the Promise.race is pure sync +
+  microtasks with no timers or I/O, and Node drains microtasks to exhaustion before any
+  setImmediate - so the emit ALWAYS lands with pair() already waiting. Guaranteed, not usually.
+MUTATION-TESTED: bypassing the wait in pair() fails both dependent tests; restoring it passes
+  82/82. 20 consecutive runs, 82/82 each, zero failures.
+KNOWN, ACCEPTED: subscribed() for an event that never gets a handler dangles until the test
+  timeout; the sibling test's <1000ms upper bound includes the two DB round trips (pre-existing,
+  theoretical); the two setTimeout(50) waits at sessions.test.ts:322 and :680 race a
+  fire-and-forget saveCreds() write - the file's remaining timing dependency, and the next
+  thing here that will flake. A saveCreds hook or poll would fix them.
