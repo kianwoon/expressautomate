@@ -17,9 +17,10 @@ from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import delete, func, insert, select, update
+from sqlalchemy import and_, delete, func, insert, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import aliased
 
 from app.api.auth import _require_session, _require_session_with_role
 from app.api.integrity import is_duplicate
@@ -27,6 +28,7 @@ from app.core.config import settings
 from app.db.rls import tenant_session
 from app.models.client import Client, ClientCollaborator, ClientContact, ClientMention
 from app.models.opportunity import Opportunity
+from app.models.tenant import User
 from app.services.client_naming import normalize_company_name
 from app.services.visibility import OWNER_ROLE
 
@@ -105,9 +107,61 @@ class ClientUpdate(_ClientFieldRules, BaseModel):
     notes: str | None = None
 
 
-def _serialize(client: Client) -> dict:
+def _assignee_name_expr(assignee):
+    """`preferred_name` → `display_name` → the email's local part.
+
+    The same order `GET /api/members` and the opportunity payload use, because
+    `models/tenant.py` says `preferred_name` wins wherever a name is shown. The
+    local part rather than the whole address: a select full of addresses reads
+    as a mail client, not as a list of colleagues.
+
+    NULLIF over each candidate rather than a bare COALESCE, because
+    `GET /api/members` treats a blank as absent (`(preferred_name or
+    "").strip() or ...`) and COALESCE would not: a user whose
+    `preferred_name` is a single space would render blank here and by their
+    display name there, for the same person on two screens.
+    """
+
+    def said(column):
+        return func.nullif(func.btrim(column), "")
+
+    return func.coalesce(
+        said(assignee.preferred_name),
+        said(assignee.display_name),
+        func.split_part(assignee.email, "@", 1),
+    ).label("assignee_name")
+
+
+def _assignee_join(stmt, assignee):
+    """LEFT, and composite on `(id, tenant_id)`.
+
+    LEFT because an inner join drops every unassigned client — which is most of
+    a fresh list, and the count chips (which do not join) would still count
+    them, so the page would disagree with itself. Composite because every user
+    reference here carries the tenant predicate alongside the id, so tenant
+    safety never rests on RLS alone; this mirrors `opportunities.py`.
+    """
+    return stmt.join(
+        assignee,
+        and_(
+            assignee.id == Client.assigned_user_id,
+            assignee.tenant_id == Client.tenant_id,
+        ),
+        isouter=True,
+    )
+
+
+def _serialize(client: Client, assignee_name: str | None = None) -> dict:
     return {
         "id": str(client.id),
+        "assigned_user_id": (
+            str(client.assigned_user_id) if client.assigned_user_id else None
+        ),
+        # Resolved in the query, not per row: an extra round trip per client
+        # would be an N+1 across a whole page. Denormalised into the payload
+        # rather than looked up in the browser against the members list, so a
+        # row's name does not depend on a second request having landed.
+        "assignee_name": assignee_name,
         "name": client.name,
         "name_normalized": client.name_normalized,
         "email_domain": client.email_domain,
@@ -161,7 +215,10 @@ async def list_clients(
                 counts["all"] += n
             counts[stored] = counts.get(stored, 0) + n
 
-        base = select(Client)
+        assignee = aliased(User)
+        base = _assignee_join(
+            select(Client, _assignee_name_expr(assignee)), assignee
+        )
         if status is not None:
             base = base.where(Client.status == status)
         else:
@@ -173,21 +230,17 @@ async def list_clients(
             await session.execute(select(func.count()).select_from(base.subquery()))
         ).scalar_one()
         rows = (
-            (
-                await session.execute(
-                    base.order_by(
-                        Client.last_seen_at.desc().nullslast(), Client.created_at.desc()
-                    )
-                    .limit(page_limit)
-                    .offset(offset)
+            await session.execute(
+                base.order_by(
+                    Client.last_seen_at.desc().nullslast(), Client.created_at.desc()
                 )
+                .limit(page_limit)
+                .offset(offset)
             )
-            .scalars()
-            .all()
-        )
+        ).all()
 
     return {
-        "items": [_serialize(c) for c in rows],
+        "items": [_serialize(c, assignee_name) for c, assignee_name in rows],
         "total": total,
         "limit": page_limit,
         "offset": offset,
@@ -199,7 +252,44 @@ async def list_clients(
 async def get_client(request: Request, client_id: uuid.UUID) -> dict:
     _user_uuid, tenant_uuid = _require_session(request)
     async with tenant_session(tenant_uuid) as session:
-        client = await _load(session, client_id)
+        assignee = aliased(User)
+        row = (
+            await session.execute(
+                _assignee_join(
+                    select(Client, _assignee_name_expr(assignee)), assignee
+                ).where(Client.id == client_id)
+            )
+        ).one_or_none()
+        # Same 404-not-403 reasoning as `_load`: naming an id as another
+        # agency's is itself a cross-tenant disclosure.
+        if row is None:
+            raise HTTPException(status_code=404, detail="Client not found")
+        client, assignee_name = row
+
+        # Embedded here rather than given a `GET /clients/{id}/collaborators`
+        # of its own. Two reasons, and the list endpoint is both of them: a
+        # page of clients must not carry a collaborator list per row (that is
+        # the N+1 this commit exists to avoid), and this panel is only ever
+        # opened for one client at a time, where a second round trip would
+        # only add a state in which the client is drawn and its cover is not.
+        # A separate endpoint would also need its own tenant and 404 handling
+        # for no gain.
+        collaborators = (
+            await session.execute(
+                select(ClientCollaborator.user_id, _assignee_name_expr(User))
+                .join(
+                    User,
+                    and_(
+                        User.id == ClientCollaborator.user_id,
+                        User.tenant_id == ClientCollaborator.tenant_id,
+                    ),
+                    isouter=True,
+                )
+                .where(ClientCollaborator.client_id == client_id)
+                .order_by(ClientCollaborator.created_at)
+            )
+        ).all()
+
         mentions = (
             (
                 await session.execute(
@@ -226,7 +316,10 @@ async def get_client(request: Request, client_id: uuid.UUID) -> dict:
             .all()
         )
 
-    payload = _serialize(client)
+    payload = _serialize(client, assignee_name)
+    payload["collaborators"] = [
+        {"user_id": str(user_id), "name": name} for user_id, name in collaborators
+    ]
     payload["mentions"] = [
         {
             "id": str(m.id),
