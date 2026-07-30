@@ -477,3 +477,29 @@ KNOWN, ACCEPTED: subscribed() for an event that never gets a handler dangles unt
   theoretical); the two setTimeout(50) waits at sessions.test.ts:322 and :680 race a
   fire-and-forget saveCreds() write - the file's remaining timing dependency, and the next
   thing here that will flake. A saveCreds hook or poll would fix them.
+
+## Client logo reload bug (user-reported from the live app) - 74f991b, then 0f192c6
+THE LESSON, and it is the important part: the spec and plan BOTH said "mirror
+  candidate-avatar.tsx", and the implementation did not. candidates/page.tsx already had the
+  answer - a refetchDetail/refreshDetail SPLIT - and three separate reviews passed over the
+  client logo work without noticing the wiring diverged from the reference it named.
+  When a plan says "mirror X", a reviewer must diff against X, not just read the new code.
+THE BUG: ClientLogo's onChange was wired to the panel's generic onChanged -> refreshDetail,
+  which did reload() (the WHOLE clients list, which does not even draw logos) AND getClient().
+  The refetched detail carried a new logo_updated_at, re-firing ClientLogo's effect, blanking
+  the image and issuing a THIRD presign. Three redundant requests and a full list re-render,
+  which the user reasonably read as a page reload.
+FIRST FIX 74f991b WAS WRONG-SHAPED: it dropped the notification entirely. Fable called it
+  "exactly the third variant you said you didn't want" (6/10) and also caught that its test
+  was theater - a `reload = vi.fn()` never passed to anything, so the assertion COULD NOT FAIL.
+CORRECT FIX 0f192c6, now verified at parity (fable 9/10, SHIP): clients/page.tsx:143-156
+  reproduces candidates/page.tsx:218-230 - refetchDetail is detail-only and is what the logo
+  calls; refreshDetail is reload() + refetchDetail() and stays with confirm/archive/restore/
+  suspend/edit/merge, the actions that change what the LIST draws.
+  No flash: the shownFor guard (client-logo.tsx:94-99) resets to "loading" only on an ID
+  change, so a same-id re-read swaps src silently - the same mechanism candidates uses.
+  ONE JUSTIFIED DIVERGENCE: ClientLogo.onChanged is optional where CandidateAvatar's is
+  required, because ClientLogo is also used readOnly on job-orders-sourcing.tsx:320.
+  MUTATION-CHECKED: rewiring the logo back to onChanged makes the new panel test fail.
+MINOR left: client-panel.test.tsx:315-340 is near-tautological - onArchive is a mock that
+  itself calls onChanged, so only the onDetailChanged.not.toHaveBeenCalled() half carries.
