@@ -43,7 +43,7 @@ because the UI is untestable without them.
 | `assignee_name` | denormalised, so a row renders from one response rather than a join in the browser |
 | `client_id` | lets the list link a job order to its client |
 | `source` | `pipeline` or `manual` — a hand-typed job order should be identifiable as one |
-| `shared_with_me` | true when the caller can see this row only through a share; lets the UI mark it without fetching every share row per line |
+| `shared_with_me` | true when a share row grants the caller sight of this job order |
 
 `assignee_name` is denormalised deliberately. The alternative — return only the
 id and have the browser resolve it against the members list — makes every row's
@@ -54,6 +54,16 @@ list does not otherwise have.
 against `opportunity_shares` for this caller, alongside the visibility clause
 rather than after it. Not a second round trip, and not a post-hoc loop in
 Python over the page.
+
+It means **"a share is one of the reasons you can see this"**, not "the only
+reason". A job order that is both assigned to you and broadcast to the agency
+returns `true`, and that is correct: the two facts are independent, and a flag
+that flipped to false the moment you also owned the row would be describing
+something else. A `scope='tenant'` broadcast counts, the same as a share naming
+you — the UI marks the row as reaching you through sharing either way.
+
+The `?scope=shared_with_me` filter uses this same expression, so the chip and
+the row badge can never disagree.
 
 ### `?scope=` on the opportunity list
 
@@ -80,9 +90,12 @@ Returns every user in the caller's tenant:
 Not paginated — the vertical is agencies of 3–50 recruiters, and a picker that
 pages is a picker that hides the person you want.
 
-`name` falls back to the email local-part when `display_name` is NULL, so the
-picker never renders a blank row. That fallback lives in the API, not the
-browser, so every consumer gets the same answer.
+`name` resolves `preferred_name` → `display_name` → the email local-part.
+`preferred_name` first because `app/models/tenant.py` says it is the user's own
+choice of name and takes priority wherever a name is shown, and a picker that
+ignored it would call someone by a name they had explicitly replaced. The
+local-part fallback means the picker never renders a blank row. The whole chain
+lives in the API, not the browser, so every consumer gets the same answer.
 
 `email` is included because it disambiguates. Two people called Sarah is not a
 hypothetical in a small office, and sharing a client's job order with the wrong
@@ -102,6 +115,7 @@ tokens in `globals.css`. This spec adds nothing to `package.json`.
 | File | Responsibility |
 |---|---|
 | `dashboard/members.ts` | `useMembers()` — fetches once and caches in module scope |
+| — | **caller identity: nothing new.** `GET /api/auth/me` already returns `id`, `email`, `display_name`, `preferred_name` and `role`, and `app/auth.ts` already exposes it as `useAuth()`. Every "is this me?" and "am I an owner?" decision below reads that, not a new endpoint |
 | `dashboard/person.tsx` | `<Initials user>` — the avatar primitive |
 | `dashboard/member-picker.tsx` | Chips plus a filtered list of colleagues |
 | `dashboard/share-dialog.tsx` | The share dialog, on the existing `Dialog` |
@@ -159,6 +173,34 @@ A **New job order** button opens the manual form: company, title, description,
 salary, location, and an optional client. It posts `source: "manual"` and lands
 assigned to its creator.
 
+The client field is a **type-to-search box over the existing
+`GET /api/clients?q=`**, not a preloaded dropdown. Clients are paginated and an
+agency accumulates hundreds; members are 3–50 and load once. The two pickers
+look similar and are not the same component, and conflating them would either
+page the member list or preload every client. Leaving the field empty is
+normal — a job order taken over the phone from a company you have not recorded
+yet has no client, and `client_id` is nullable precisely for that.
+
+### When a job order disappears under you
+
+The detail panel can be showing a job order that stops being visible: a share is
+withdrawn, or an owner reassigns it away. Any request the panel makes then
+returns 404.
+
+The panel treats that 404 as **"this closed"** rather than an error — it clears
+the selection, shows a single line ("This job order is no longer available"),
+and refreshes the list. It does not sit there displaying stale fields with a red
+message beside them, which is what a generic error handler would produce, and it
+does not silently blank, which reads as a bug.
+
+**Cross-user live updates are out of scope.** `useLive` currently reacts to
+`extraction` and `open` nudges only; there is no nudge for an assignment or a
+share, so a colleague claiming a queue item will not move under your cursor. The
+list refetches after any mutation you yourself make, and the 409 on a lost claim
+refetches that row. Adding notification kinds for assign and share is a
+worthwhile follow-up and is deliberately not in this round — it needs a
+publisher change in the backend, and the feature is usable without it.
+
 ### Sharing
 
 The dialog collects recipients through `member-picker`, an optional note, and an
@@ -172,6 +214,13 @@ silently skips, and offering it invites the confusion.
 colleague but not throw someone else's client work open to the office. The
 checkbox is disabled for them with that reason shown, rather than hidden: a
 control that vanishes teaches nothing, and the rule is one worth understanding.
+
+**On an unassigned job order there is no assignee, so only an owner may
+broadcast.** This is the shipped API behaviour, not a new rule — the endpoint
+gates on `can_edit`, which deliberately refuses unassigned rows, falling back to
+the owner role. For everyone else the checkbox is disabled and says to claim it
+first. That is the right answer as well as the true one: broadcasting work
+nobody has taken responsibility for is a decision without an owner.
 
 Below the picker, the people it is already shared with, each with **Remove**.
 Removing revokes sight only — the API deletes a share row and nothing else, and
@@ -205,7 +254,8 @@ discard the reasoning the whole feature rests on.
 | Status | What the screen says |
 |---|---|
 | 404 | "This job order is no longer available." It may never have been visible, or a share may have been withdrawn — and the message must not reveal which |
-| 403 | "This job order is shared with you, not assigned to you." |
+| 403 on an **assigned** job order | "This job order is shared with you, not assigned to you." |
+| 403 on an **unassigned** one | "Claim this job order before editing it." The first message would be a lie here — nobody was assigned it |
 | 409 on claim | "Someone else has taken this one." Then refresh the row |
 | 401 | Existing behaviour — back to the landing page |
 
@@ -223,6 +273,14 @@ renders.
 - A queue row renders the dashed circle; an assigned row renders initials.
 - The scope chips combine with the status chips rather than replacing them.
 - `useMembers` fetches once across two mounts.
+- The detail panel clears itself on a 404 rather than showing stale fields.
+- The tab counts change with the scope chip, not only with the status chip.
+- `/api/members` prefers `preferred_name` over `display_name`, and falls back to
+  the email local-part when both are null.
+- Broadcast is refused on an unassigned job order for a non-owner, and the
+  message says to claim it first.
+- A job order both assigned to you and broadcast returns `shared_with_me: true`
+  — the flag means "a share reaches you", not "only a share reaches you".
 
 ## Deliberately not in this round
 
