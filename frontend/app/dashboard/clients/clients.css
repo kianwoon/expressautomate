@@ -244,3 +244,33 @@
   outline: 2px solid var(--blue-500);
   outline-offset: 2px;
 }
+
+/* ── Client badge (job-orders-sourcing.tsx) ───────────────────────────────
+   Read-only identification of the client a shortlist's already-submitted
+   exclusion was applied against — name beside a small, non-interactive mark.
+   Scoped to `.src-client` so it does not touch the 56px panel sizing above:
+   a name and a mark inline with body text calls for something smaller. */
+.src-client {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 2px 0 8px;
+}
+.src-client .jo-detail-logo {
+  margin: 0;
+}
+.src-client .cl-logo-shell,
+.src-client .cl-logo-photo,
+.src-client .cl-logo-initials {
+  width: 24px;
+  height: 24px;
+  flex: 0 0 24px;
+  border-radius: 6px;
+}
+.src-client .cl-logo-initials {
+  font-size: 11px;
+}
+.src-client-name {
+  font-weight: 600;
+  color: var(--ink-900, inherit);
+}

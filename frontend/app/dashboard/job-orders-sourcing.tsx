@@ -3,6 +3,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { SOURCING_POLL_MS } from "../api";
+import { getClient, type Client } from "./clients";
+import { ClientLogo } from "./clients/client-logo";
+// Only `clients/page.tsx` imported this before — `ClientLogo`'s own classes
+// (`cl-logo-*`) live here, and this screen is the first place outside the
+// clients panel to render that component.
+import "./clients/clients.css";
 import { flagged } from "./codes";
 import { eligibilityFor, type Eligibility, type EligibilityFinding } from "./eligibility";
 import type { Opportunity } from "./opportunities";
@@ -94,6 +100,13 @@ export function Shortlist({ row }: { row: Opportunity }) {
   const [reclaimFocus, setReclaimFocus] = useState(false);
   const startRef = useRef<HTMLButtonElement | null>(null);
 
+  // The run carries only `client_id` — a bare UUID is not an identification,
+  // so the client record is fetched here to put a name and a logo beside it.
+  // `null` when the run has no resolved client (never fetched, see below) or
+  // when the fetch itself failed — either way §15 applies: no name and no
+  // logo are shown rather than a fabricated one.
+  const [client, setClient] = useState<Client | null>(null);
+
   // The names are joined here rather than expected from the sourcing routes,
   // which carry candidate ids and nothing else. Held in a ref so the fetch
   // below can skip ids it already has without naming `names` as a dependency
@@ -136,6 +149,31 @@ export function Shortlist({ row }: { row: Opportunity }) {
 
   const run = view.status === "ready" ? view.data.run : null;
   const waiting = inFlight(run);
+  const clientId = run?.client_id ?? null;
+
+  // Guarded on `clientId` being non-null: an unresolved run (§ the
+  // already-submitted notice below) fires no request at all, rather than
+  // asking the client route for `null` and rendering whatever it throws.
+  useEffect(() => {
+    if (!clientId) {
+      setClient(null);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const fetched = await getClient(clientId);
+        if (!cancelled) setClient(fetched);
+      } catch {
+        // Left out on purpose, same as `namesFor`: an unreadable client
+        // record must not block or fake the rest of the shortlist.
+        if (!cancelled) setClient(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [clientId]);
 
   // Only while the run is `pending` or `running`. A `done` or `failed` run is
   // a finished record, and asking again is a request whose answer cannot
@@ -236,6 +274,7 @@ export function Shortlist({ row }: { row: Opportunity }) {
         </p>
       ) : (
         <>
+          {client && <ClientBadge client={client} />}
           <RunState run={run} />
           <Safeguards row={row} run={run} />
           {run.state === "done" && matches.length === 0 && (
@@ -266,6 +305,21 @@ export function Shortlist({ row }: { row: Opportunity }) {
         </>
       )}
     </section>
+  );
+}
+
+/** Which client this shortlist's already-submitted exclusion was applied
+ *  against — a name and a mark, not the bare id `run.client_id` carries.
+ *  Read-only: the recruiter here is reading a run, not managing the client,
+ *  so `ClientLogo` renders with no upload affordance (see its `readOnly`
+ *  prop). Only rendered once the client record has actually been fetched —
+ *  never for an unresolved run, which has nothing to fetch. */
+function ClientBadge({ client }: { client: Client }) {
+  return (
+    <div className="body src-client">
+      <ClientLogo client={client} readOnly />
+      <span className="src-client-name">{client.name}</span>
+    </div>
   );
 }
 

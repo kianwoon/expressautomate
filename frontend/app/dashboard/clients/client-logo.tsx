@@ -62,11 +62,17 @@ type LogoState =
 export function ClientLogo({
   client,
   onChange,
+  readOnly = false,
 }: {
   client: Client;
   /** Called after an upload or removal succeeds, so the caller can refetch
-   *  the client record (`logo_key` changed). */
-  onChange: () => void;
+   *  the client record (`logo_key` changed). Ignored when `readOnly`. */
+  onChange?: () => void;
+  /** The panel is the only place this mark is an upload control — the mark
+   *  IS the file input there. Everywhere else a client is only being read,
+   *  not managed, so `readOnly` drops the file input, the camera overlay,
+   *  and the remove button and renders the image or initials plainly. */
+  readOnly?: boolean;
 }) {
   const [logo, setLogo] = useState<LogoState>({ status: "loading" });
   const [busy, setBusy] = useState(false);
@@ -117,7 +123,7 @@ export function ClientLogo({
       await uploadClientLogo(client.id, file);
       const url = await getClientLogo(client.id);
       if (url) setLogo({ status: "ready", url: url.url });
-      onChange();
+      onChange?.();
     } catch (err) {
       setError(err instanceof Error ? err.message : "We could not upload that logo just now.");
     } finally {
@@ -138,7 +144,7 @@ export function ClientLogo({
     try {
       await deleteClientLogo(client.id);
       setLogo({ status: "none" });
-      onChange();
+      onChange?.();
       // The button that was just pressed no longer exists — hand focus to
       // the control that is still there.
       fileRef.current?.focus();
@@ -154,25 +160,42 @@ export function ClientLogo({
   const alt = `Logo of ${client.name}`;
   const hasLogo = logo.status === "ready";
 
+  const mark = hasLogo ? (
+    // A short-lived presigned URL, not an asset `next/image` can optimise or
+    // cache — same tradeoff as `candidate-avatar.tsx`.
+    // eslint-disable-next-line @next/next/no-img-element
+    <img className="cl-logo-photo" src={logo.url} alt={alt} width={56} height={56} />
+  ) : (
+    <span
+      className="cl-logo-initials"
+      role="img"
+      aria-label={client.logo_key ? `${alt} (loading)` : `${client.name} has no logo`}
+      style={{ background }}
+    >
+      {initials}
+    </span>
+  );
+
+  // Read-only: no label, no file input, no camera overlay, no remove
+  // button. Elsewhere this mark IS the upload control; here the caller is
+  // reading a record, not managing one, so an upload affordance would be a
+  // control that does nothing the recruiter is allowed to press.
+  if (readOnly) {
+    return (
+      <div className="jo-detail-logo" data-readonly="yes">
+        <div className="cl-logo-shell">{mark}</div>
+        {logo.status === "unreadable" && (
+          <span className="body muted">Could not load the logo just now.</span>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div className="jo-detail-logo">
       <div className="cl-logo-shell" data-busy={busy ? "yes" : undefined}>
         <label className="cl-logo-trigger">
-          {hasLogo ? (
-            // A short-lived presigned URL, not an asset `next/image` can
-            // optimise or cache — same tradeoff as `candidate-avatar.tsx`.
-            // eslint-disable-next-line @next/next/no-img-element
-            <img className="cl-logo-photo" src={logo.url} alt={alt} width={56} height={56} />
-          ) : (
-            <span
-              className="cl-logo-initials"
-              role="img"
-              aria-label={client.logo_key ? `${alt} (loading)` : `${client.name} has no logo`}
-              style={{ background }}
-            >
-              {initials}
-            </span>
-          )}
+          {mark}
           <span className="cl-logo-overlay" aria-hidden="true">
             <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.8">
               <path d="M4 8h3l1.4-2h7.2L17 8h3v11H4z" strokeLinejoin="round" />
