@@ -33,9 +33,9 @@ async def agency():
 
 async def _match_once(tenant_id: uuid.UUID, sender: str) -> uuid.UUID | None:
     async with tenant_session(tenant_id) as session:
-        cid = await match_client(session, tenant_id, None, sender, "Acme Pte Ltd")
+        matched = await match_client(session, tenant_id, None, sender, "Acme Pte Ltd")
         await session.commit()
-        return cid
+        return matched.client_id if matched else None
 
 
 async def test_two_concurrent_matches_produce_one_client(agency) -> None:

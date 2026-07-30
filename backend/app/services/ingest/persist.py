@@ -100,11 +100,11 @@ _INSERT_OPPORTUNITY = text(
         (id, tenant_id, email_message_id, received_datetime,
          {", ".join(_SIMPLE.values())},
          salary_min, salary_max, salary_currency, salary_period, salary_raw,
-         skills, quality_state, review_status)
+         skills, quality_state, review_status, client_id, assigned_user_id)
     SELECT :id, :tenant_id, :email_message_id, em.received_datetime,
            {", ".join(f":{name}" for name in _SIMPLE)},
            :salary_min, :salary_max, :salary_currency, :salary_period, :salary_raw,
-           :skills, :quality_state, :review_status
+           :skills, :quality_state, :review_status, :client_id, :assigned_user_id
     FROM email_messages em WHERE em.id = :email_message_id
     ON CONFLICT (id) DO NOTHING
     """
@@ -299,7 +299,9 @@ async def persist(
             (_value(job.company) for job in response.jobs if _value(job.company)),
             None,
         )
-        await match_client(session, tenant_id, email_message_id, sender_email, first_company)
+        matched = await match_client(
+            session, tenant_id, email_message_id, sender_email, first_company
+        )
 
         # An email describing three vacancies becomes three rows. They share
         # one extraction, because they came from one model call — that is what
@@ -308,7 +310,14 @@ async def persist(
             opportunity_id = _opportunity_id(email_message_id, index)
             opportunity_ids.append(opportunity_id)
             await _insert_opportunity(
-                session, tenant_id, email_message_id, opportunity_id, job, source
+                session,
+                tenant_id,
+                email_message_id,
+                opportunity_id,
+                job,
+                source,
+                client_id=matched.client_id if matched else None,
+                assigned_user_id=matched.assigned_user_id if matched else None,
             )
             await _insert_evidence(
                 session, tenant_id, extraction_id, opportunity_id, job, source
@@ -355,6 +364,15 @@ async def persist(
                                 company_name=_value(job.company),
                                 location=_value(job.location),
                                 salary=_value(job.salary),
+                                # An assigned job order is one person's work;
+                                # an unassigned one is the queue's, and the
+                                # queue is everybody (`None`). An empty tuple
+                                # would mean nobody at all.
+                                recipient_user_ids=(
+                                    (matched.assigned_user_id,)
+                                    if matched and matched.assigned_user_id
+                                    else None
+                                ),
                             ),
                             session,
                         )
@@ -473,7 +491,17 @@ async def _insert_opportunity(
     opportunity_id: uuid.UUID,
     job: ExtractedJob,
     source: str,
+    client_id: uuid.UUID | None = None,
+    assigned_user_id: uuid.UUID | None = None,
 ) -> None:
+    """Write one vacancy. `ON CONFLICT (id) DO NOTHING` — there is no update
+    path, and that is what makes the assignment safe under replay.
+
+    `extract_email` re-runs after a crash, and a replay that recomputed
+    `assigned_user_id` would take a job order back off a recruiter who had
+    claimed it in the meantime. The claim is a person's decision; the match is
+    a guess about a starting point. Only the first insert gets to set it.
+    """
     salary_min = salary_max = currency = None
     if job.salary is not None and not job.salary.is_missing:
         salary_min, salary_max, currency = parse_salary(job.salary.value)
@@ -495,6 +523,8 @@ async def _insert_opportunity(
         # every span checked out and something softer is missing, which is a
         # usable row, and queueing those would bury the ones that are wrong.
         "review_status": "needs_review" if state == "needs_review" else "ready",
+        "client_id": client_id,
+        "assigned_user_id": assigned_user_id,
     }
     params.update({name: _value(getattr(job, name)) for name in _SIMPLE})
     await session.execute(_INSERT_OPPORTUNITY, params)

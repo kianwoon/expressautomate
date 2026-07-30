@@ -12,6 +12,7 @@ extraction roll back while the client it proposed survived.
 """
 
 import uuid
+from dataclasses import dataclass
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -35,7 +36,7 @@ from app.services.client_naming import domain_of, normalize_company_name
 # insert path and into a unique violation.
 _BY_DOMAIN = text(
     """
-    SELECT id, status, merged_into_client_id FROM clients
+    SELECT id, status, merged_into_client_id, assigned_user_id FROM clients
     WHERE tenant_id = :tenant_id AND email_domain = :domain
     ORDER BY (status = 'merged') ASC, last_seen_at DESC NULLS LAST, created_at DESC
     LIMIT 1
@@ -46,7 +47,7 @@ _BY_DOMAIN = text(
 # its target — and prefers the most recently seen of any remaining ties.
 _BY_NAME = text(
     """
-    SELECT id, status, merged_into_client_id FROM clients
+    SELECT id, status, merged_into_client_id, assigned_user_id FROM clients
     WHERE tenant_id = :tenant_id AND name_normalized = :name AND status <> 'merged'
     ORDER BY last_seen_at DESC NULLS LAST, created_at DESC
     LIMIT 1
@@ -63,14 +64,14 @@ _INSERT_CLIENT = text(
     ON CONFLICT (tenant_id, email_domain)
         WHERE email_domain IS NOT NULL AND status <> 'merged'
     DO UPDATE SET last_seen_at = now()
-    RETURNING id
+    RETURNING id, assigned_user_id
     """
 )
 
 _TOUCH = text("UPDATE clients SET last_seen_at = now() WHERE id = :id")
 
 _STATUS_OF = text(
-    "SELECT status, merged_into_client_id FROM clients WHERE id = :id"
+    "SELECT status, merged_into_client_id, assigned_user_id FROM clients WHERE id = :id"
 )
 
 # Bound on merge-chain hops. Each hop is a manual merge action a person took;
@@ -91,14 +92,29 @@ _INSERT_MENTION = text(
 )
 
 
+@dataclass(frozen=True)
+class MatchedClient:
+    """The client this email is about, and who at the agency looks after it.
+
+    The assignee travels with the id because ingestion needs both and the
+    matcher has already got the row in hand — asking for it again would be a
+    second query for something we just read. `assigned_user_id` is None when
+    the client is real but nobody owns it yet: that is queue work, not an
+    error.
+    """
+
+    client_id: uuid.UUID
+    assigned_user_id: uuid.UUID | None
+
+
 async def match_client(
     session: AsyncSession,
     tenant_id: uuid.UUID,
     email_message_id: uuid.UUID | None,
     sender_email: str | None,
     company_name: str | None,
-) -> uuid.UUID | None:
-    """Resolve this email to a client, recording how. Returns the client id.
+) -> MatchedClient | None:
+    """Resolve this email to a client, recording how.
 
     Returns None when the email offers neither a usable domain nor a company
     name. That is a real outcome, not an error: a message can legitimately
@@ -111,7 +127,7 @@ async def match_client(
     if domain is None and not normalized:
         return None
 
-    client_id, matched_by = await _resolve(
+    client_id, assigned_user_id, matched_by = await _resolve(
         session, tenant_id, domain, normalized, company_name, email_message_id
     )
     if client_id is None:
@@ -127,7 +143,7 @@ async def match_client(
             "matched_by": matched_by,
         },
     )
-    return client_id
+    return MatchedClient(client_id=client_id, assigned_user_id=assigned_user_id)
 
 
 async def _resolve(
@@ -137,7 +153,7 @@ async def _resolve(
     normalized: str,
     company_name: str | None,
     email_message_id: uuid.UUID | None,
-) -> tuple[uuid.UUID | None, str]:
+) -> tuple[uuid.UUID | None, uuid.UUID | None, str]:
     if domain is not None:
         row = (
             await session.execute(
@@ -145,21 +161,23 @@ async def _resolve(
             )
         ).first()
         if row is not None:
-            return await _surviving(session, row), "email_domain"
+            client_id, assignee = await _surviving(session, row)
+            return client_id, assignee, "email_domain"
 
     if normalized:
         row = (
             await session.execute(_BY_NAME, {"tenant_id": tenant_id, "name": normalized})
         ).first()
         if row is not None:
-            return await _surviving(session, row), "name"
+            client_id, assignee = await _surviving(session, row)
+            return client_id, assignee, "name"
 
     if not normalized:
         # A domain with no name still deserves a row; the domain is the name
         # we have, and labelling it anything else would be a guess.
         normalized = domain or ""
 
-    new_id = (
+    inserted = (
         await session.execute(
             _INSERT_CLIENT,
             {
@@ -171,11 +189,15 @@ async def _resolve(
                 "message_id": email_message_id,
             },
         )
-    ).scalar_one()
-    return new_id, "email_domain" if domain else "name"
+    ).one()
+    return (
+        inserted.id,
+        inserted.assigned_user_id,
+        "email_domain" if domain else "name",
+    )
 
 
-async def _surviving(session: AsyncSession, row) -> uuid.UUID:
+async def _surviving(session: AsyncSession, row) -> tuple[uuid.UUID, uuid.UUID | None]:
     """The row a match should attach to, following the merge chain to its end.
 
     A match never changes status. Re-seeing an archived client records that it
@@ -183,13 +205,18 @@ async def _surviving(session: AsyncSession, row) -> uuid.UUID:
     the agency still works with that company, which is a person's to make.
     """
     status, client_id, target = row.status, row.id, row.merged_into_client_id
+    assignee = row.assigned_user_id
     hops = 0
     while status == Client.MERGED and target is not None and hops < _MAX_MERGE_HOPS:
         client_id = target
         next_row = (await session.execute(_STATUS_OF, {"id": client_id})).first()
         if next_row is None:
             break
+        # The assignee travels with the surviving row, not the merged one: a
+        # merged client's identity — including who looks after it — now
+        # belongs to its target.
         status, target = next_row.status, next_row.merged_into_client_id
+        assignee = next_row.assigned_user_id
         hops += 1
     await session.execute(_TOUCH, {"id": client_id})
-    return client_id
+    return client_id, assignee

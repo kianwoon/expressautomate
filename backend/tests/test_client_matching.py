@@ -12,7 +12,7 @@ import pytest
 from sqlalchemy import text
 
 from app.db.rls import tenant_session
-from app.services.client_matching import match_client
+from app.services.client_matching import MatchedClient, match_client
 from tests.conftest import AdminSessionLocal, cleanup_tenant
 
 
@@ -47,9 +47,19 @@ async def _mention_count(tenant_id: uuid.UUID, client_id: uuid.UUID) -> int:
         ).scalar_one()
 
 
+async def _match_id(*args) -> uuid.UUID | None:
+    """`match_client` returns a `MatchedClient`; these tests are about which
+    client row it lands on, so they unwrap the id. The dataclass itself is
+    exercised in `tests/test_ingest_assignment.py` and in
+    `test_the_match_carries_the_clients_recruiter` below.
+    """
+    matched = await match_client(*args)
+    return matched.client_id if matched else None
+
+
 async def test_an_unknown_domain_becomes_an_unconfirmed_proposal(agency) -> None:
     async with tenant_session(agency) as s:
-        cid = await match_client(s, agency, None, "hr@acme.com.sg", "Acme Pte Ltd")
+        cid = await _match_id(s, agency, None, "hr@acme.com.sg", "Acme Pte Ltd")
         await s.commit()
     assert cid is not None
     assert await _status_of(agency, cid) == "unconfirmed"
@@ -57,16 +67,16 @@ async def test_an_unknown_domain_becomes_an_unconfirmed_proposal(agency) -> None
 
 async def test_the_same_domain_twice_is_one_client(agency) -> None:
     async with tenant_session(agency) as s:
-        first = await match_client(s, agency, None, "hr@acme.com.sg", "Acme Pte Ltd")
-        second = await match_client(s, agency, None, "jobs@acme.com.sg", "ACME")
+        first = await _match_id(s, agency, None, "hr@acme.com.sg", "Acme Pte Ltd")
+        second = await _match_id(s, agency, None, "jobs@acme.com.sg", "ACME")
         await s.commit()
     assert first == second
 
 
 async def test_a_free_provider_never_keys_a_client(agency) -> None:
     async with tenant_session(agency) as s:
-        a = await match_client(s, agency, None, "alice@gmail.com", "Acme Pte Ltd")
-        b = await match_client(s, agency, None, "bob@gmail.com", "Globex Ltd")
+        a = await _match_id(s, agency, None, "alice@gmail.com", "Acme Pte Ltd")
+        b = await _match_id(s, agency, None, "bob@gmail.com", "Globex Ltd")
         await s.commit()
     assert a != b
     async with tenant_session(agency) as s:
@@ -76,8 +86,8 @@ async def test_a_free_provider_never_keys_a_client(agency) -> None:
 
 async def test_a_name_match_attaches_but_does_not_confirm(agency) -> None:
     async with tenant_session(agency) as s:
-        first = await match_client(s, agency, None, "alice@gmail.com", "Acme Pte Ltd")
-        second = await match_client(s, agency, None, "bob@gmail.com", "ACME PTE. LTD.")
+        first = await _match_id(s, agency, None, "alice@gmail.com", "Acme Pte Ltd")
+        second = await _match_id(s, agency, None, "bob@gmail.com", "ACME PTE. LTD.")
         await s.commit()
     assert first == second
     assert await _status_of(agency, first) == "unconfirmed"
@@ -85,7 +95,7 @@ async def test_a_name_match_attaches_but_does_not_confirm(agency) -> None:
 
 async def test_a_null_sender_falls_through_to_the_name(agency) -> None:
     async with tenant_session(agency) as s:
-        cid = await match_client(s, agency, None, None, "Acme Pte Ltd")
+        cid = await _match_id(s, agency, None, None, "Acme Pte Ltd")
         await s.commit()
     assert cid is not None
     async with tenant_session(agency) as s:
@@ -97,8 +107,8 @@ async def test_a_null_sender_falls_through_to_the_name(agency) -> None:
 
 async def test_nothing_to_match_on_produces_nothing(agency) -> None:
     async with tenant_session(agency) as s:
-        assert await match_client(s, agency, None, None, None) is None
-        assert await match_client(s, agency, None, None, "   ") is None
+        assert await _match_id(s, agency, None, None, None) is None
+        assert await _match_id(s, agency, None, None, "   ") is None
         await s.commit()
 
 
@@ -133,10 +143,10 @@ async def test_reprocessing_the_same_message_adds_no_second_mention(agency) -> N
     message_id = await _seeded_message(agency)
 
     async with tenant_session(agency) as s:
-        cid = await match_client(s, agency, message_id, "hr@acme.com.sg", "Acme Pte Ltd")
+        cid = await _match_id(s, agency, message_id, "hr@acme.com.sg", "Acme Pte Ltd")
         await s.commit()
     async with tenant_session(agency) as s:
-        again = await match_client(s, agency, message_id, "hr@acme.com.sg", "Acme Pte Ltd")
+        again = await _match_id(s, agency, message_id, "hr@acme.com.sg", "Acme Pte Ltd")
         await s.commit()
 
     assert cid == again
@@ -145,7 +155,7 @@ async def test_reprocessing_the_same_message_adds_no_second_mention(agency) -> N
 
 async def test_re_seeing_an_archived_client_does_not_resurrect_it(agency) -> None:
     async with tenant_session(agency) as s:
-        cid = await match_client(s, agency, None, "hr@acme.com.sg", "Acme Pte Ltd")
+        cid = await _match_id(s, agency, None, "hr@acme.com.sg", "Acme Pte Ltd")
         await s.commit()
     async with tenant_session(agency) as s:
         await s.execute(
@@ -154,7 +164,7 @@ async def test_re_seeing_an_archived_client_does_not_resurrect_it(agency) -> Non
         await s.commit()
 
     async with tenant_session(agency) as s:
-        again = await match_client(s, agency, None, "hr@acme.com.sg", "Acme Pte Ltd")
+        again = await _match_id(s, agency, None, "hr@acme.com.sg", "Acme Pte Ltd")
         await s.commit()
 
     # Same row — the archived client still holds the domain index slot, so an
@@ -171,7 +181,7 @@ async def test_matcher_leaves_a_suspended_client_suspended(agency) -> None:
     else. The same reasoning as the archived-row comment above.
     """
     async with tenant_session(agency) as s:
-        cid = await match_client(s, agency, None, "hr@acme.com.sg", "Acme Pte Ltd")
+        cid = await _match_id(s, agency, None, "hr@acme.com.sg", "Acme Pte Ltd")
         await s.commit()
     async with tenant_session(agency) as s:
         await s.execute(
@@ -180,7 +190,7 @@ async def test_matcher_leaves_a_suspended_client_suspended(agency) -> None:
         await s.commit()
 
     async with tenant_session(agency) as s:
-        matched = await match_client(s, agency, None, "hr@acme.com.sg", "Acme Pte Ltd")
+        matched = await _match_id(s, agency, None, "hr@acme.com.sg", "Acme Pte Ltd")
         await s.commit()
 
     async with tenant_session(agency) as s:
@@ -197,10 +207,10 @@ async def test_matcher_leaves_a_suspended_client_suspended(agency) -> None:
 
 async def test_reprocessing_with_no_message_id_adds_no_second_mention(agency) -> None:
     async with tenant_session(agency) as s:
-        cid = await match_client(s, agency, None, "hr@acme.com.sg", "Acme Pte Ltd")
+        cid = await _match_id(s, agency, None, "hr@acme.com.sg", "Acme Pte Ltd")
         await s.commit()
     async with tenant_session(agency) as s:
-        again = await match_client(s, agency, None, "hr@acme.com.sg", "Acme Pte Ltd")
+        again = await _match_id(s, agency, None, "hr@acme.com.sg", "Acme Pte Ltd")
         await s.commit()
 
     assert cid == again
@@ -209,9 +219,9 @@ async def test_reprocessing_with_no_message_id_adds_no_second_mention(agency) ->
 
 async def test_a_two_hop_merge_chain_lands_on_the_final_survivor(agency) -> None:
     async with tenant_session(agency) as s:
-        a = await match_client(s, agency, None, "hr@acme.com.sg", "Acme Pte Ltd")
-        b = await match_client(s, agency, None, "hr@acme-group.com", "Acme Group")
-        c = await match_client(s, agency, None, "hr@acme-holdings.com", "Acme Holdings")
+        a = await _match_id(s, agency, None, "hr@acme.com.sg", "Acme Pte Ltd")
+        b = await _match_id(s, agency, None, "hr@acme-group.com", "Acme Group")
+        c = await _match_id(s, agency, None, "hr@acme-holdings.com", "Acme Holdings")
         await s.commit()
     async with tenant_session(agency) as s:
         await s.execute(
@@ -229,15 +239,15 @@ async def test_a_two_hop_merge_chain_lands_on_the_final_survivor(agency) -> None
         await s.commit()
 
     async with tenant_session(agency) as s:
-        landed = await match_client(s, agency, None, "hr@acme.com.sg", "Acme Pte Ltd")
+        landed = await _match_id(s, agency, None, "hr@acme.com.sg", "Acme Pte Ltd")
         await s.commit()
     assert landed == c
 
 
 async def test_re_seeing_a_merged_client_lands_on_the_survivor(agency) -> None:
     async with tenant_session(agency) as s:
-        loser = await match_client(s, agency, None, "hr@acme.com.sg", "Acme Pte Ltd")
-        winner = await match_client(s, agency, None, "hr@acme-group.com", "Acme Group")
+        loser = await _match_id(s, agency, None, "hr@acme.com.sg", "Acme Pte Ltd")
+        winner = await _match_id(s, agency, None, "hr@acme-group.com", "Acme Group")
         await s.commit()
     async with tenant_session(agency) as s:
         await s.execute(
@@ -249,7 +259,7 @@ async def test_re_seeing_a_merged_client_lands_on_the_survivor(agency) -> None:
         await s.commit()
 
     async with tenant_session(agency) as s:
-        landed = await match_client(s, agency, None, "hr@acme.com.sg", "Acme Pte Ltd")
+        landed = await _match_id(s, agency, None, "hr@acme.com.sg", "Acme Pte Ltd")
         await s.commit()
     assert landed == winner
 
@@ -284,7 +294,7 @@ async def test_the_matcher_carries_its_own_tenant_predicate(agency) -> None:
 
     try:
         async with AdminSessionLocal() as s:
-            matched = await match_client(s, agency, None, "hr@acme.com.sg", "Acme Pte Ltd")
+            matched = await _match_id(s, agency, None, "hr@acme.com.sg", "Acme Pte Ltd")
             await s.commit()
             owner = (
                 await s.execute(
@@ -294,3 +304,39 @@ async def test_the_matcher_carries_its_own_tenant_predicate(agency) -> None:
         assert owner == agency
     finally:
         await cleanup_tenant(other)
+
+
+async def test_the_match_carries_the_clients_recruiter(agency) -> None:
+    """The assignee comes back with the id, so ingestion needs no second query."""
+    async with tenant_session(agency) as s:
+        cid = await _match_id(s, agency, None, "hr@acme.com.sg", "Acme Pte Ltd")
+        await s.commit()
+
+    user_id = uuid.uuid4()
+    async with AdminSessionLocal() as s:
+        await s.execute(
+            text(
+                "INSERT INTO users (id, tenant_id, email, role)"
+                " VALUES (:i, :t, :e, 'recruiter')"
+            ),
+            {"i": user_id, "t": agency, "e": f"{user_id.hex[:8]}@example.test"},
+        )
+        await s.execute(
+            text("UPDATE clients SET assigned_user_id = :u WHERE id = :i"),
+            {"u": user_id, "i": cid},
+        )
+        await s.commit()
+
+    async with tenant_session(agency) as s:
+        matched = await match_client(s, agency, None, "hr@acme.com.sg", "Acme Pte Ltd")
+        await s.commit()
+
+    assert matched == MatchedClient(client_id=cid, assigned_user_id=user_id)
+
+
+async def test_an_unowned_client_comes_back_with_no_recruiter(agency) -> None:
+    async with tenant_session(agency) as s:
+        matched = await match_client(s, agency, None, "hr@acme.com.sg", "Acme Pte Ltd")
+        await s.commit()
+    assert matched is not None
+    assert matched.assigned_user_id is None
