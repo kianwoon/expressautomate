@@ -106,6 +106,83 @@ async def test_writing_to_a_colleagues_job_order_is_a_404(
     response = await client.post(f"/api/opportunities/{opportunity_id}/{path}", json=payload)
 
     assert response.status_code == 404, response.text
+    assert response.json()["detail"] == "No such job order."
+
+
+async def test_setting_placement_type_on_your_own_job_order_succeeds(client, seeded) -> None:
+    """The positive case for the guard: an ordinary recruiter (not owner)
+    who IS the assignee can write `placement_type`, and the audit column
+    records them, not a stand-in owner. `test_eligibility_api.py` and
+    `test_candidates_eligible_filter.py` only ever exercise this route
+    through an owner fixture, which never reaches `can_edit`'s non-owner
+    branch."""
+    make_tenant, make_opportunity, _make_evidence = seeded
+    tenant_id, user_id, mailbox_id = await make_tenant("agency-a")
+    opportunity_id = await make_opportunity(
+        tenant_id, mailbox_id, company_name_raw="Acme Pte Ltd", assigned_user_id=user_id
+    )
+
+    sign_in(client, user_id, tenant_id)
+    response = await client.post(
+        f"/api/opportunities/{opportunity_id}/placement-type",
+        json={"placement_type": "local_hire"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {"id": str(opportunity_id), "placement_type": "local_hire"}
+
+    async with AdminSessionLocal() as s:
+        row = (
+            await s.execute(
+                text(
+                    "SELECT placement_type, placement_type_set_by"
+                    " FROM opportunities WHERE id = :i"
+                ),
+                {"i": opportunity_id},
+            )
+        ).one()
+    assert row.placement_type == "local_hire"
+    assert row.placement_type_set_by == user_id
+
+
+async def test_setting_occupational_requirement_on_your_own_job_order_succeeds(
+    client, seeded
+) -> None:
+    """Same positive case, for the other regulatory route. The requirement
+    and its reason must be supplied together (the CHECK constraint enforces
+    the pairing), and both persist along with the acting user."""
+    make_tenant, make_opportunity, _make_evidence = seeded
+    tenant_id, user_id, mailbox_id = await make_tenant("agency-a")
+    opportunity_id = await make_opportunity(
+        tenant_id, mailbox_id, company_name_raw="Acme Pte Ltd", assigned_user_id=user_id
+    )
+
+    sign_in(client, user_id, tenant_id)
+    response = await client.post(
+        f"/api/opportunities/{opportunity_id}/occupational-requirement",
+        json={"sex_requirement": "female", "sex_requirement_reason": "live-in care"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {
+        "id": str(opportunity_id),
+        "sex_requirement": "female",
+        "sex_requirement_reason": "live-in care",
+    }
+
+    async with AdminSessionLocal() as s:
+        row = (
+            await s.execute(
+                text(
+                    "SELECT sex_requirement, sex_requirement_reason, sex_requirement_set_by"
+                    " FROM opportunities WHERE id = :i"
+                ),
+                {"i": opportunity_id},
+            )
+        ).one()
+    assert row.sex_requirement == "female"
+    assert row.sex_requirement_reason == "live-in care"
+    assert row.sex_requirement_set_by == user_id
 
 
 @pytest.mark.parametrize(
