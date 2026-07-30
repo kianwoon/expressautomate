@@ -71,8 +71,24 @@ jobs:
           set -euo pipefail
           # git object ids already hash content, so hashing the tree listing is
           # enough — no need to read the files.
+          #
+          # Tests are dropped because the image does not contain them, and the
+          # tag is meant to identify image content: the Dockerfile copies only
+          # `backend/app`, `backend/alembic` and the frontend's built `out/`,
+          # so `backend/tests/` is never shipped and a `*.test.tsx` is compiled
+          # by no build that survives into the export. Hashing them meant a
+          # commit that touched only tests produced a new tag for a
+          # byte-identical image, and restarted both services to deploy it.
+          #
+          # The direction of the risk decides how this list is written. Hashing
+          # something the image ignores costs a needless rebuild; *missing*
+          # something the image contains reuses a stale tag and silently ships
+          # the old code — which has happened here, and is why these patterns
+          # name test files exactly rather than reaching for a broader glob.
           TAG=img-$(git ls-tree -r HEAD --format='%(objectname) %(path)' \
-                     -- backend frontend Dockerfile | sha256sum | cut -c1-16)
+                     -- backend frontend Dockerfile \
+                     | grep -vE '(^[0-9a-f]+ backend/tests/|\.test\.tsx?$|^[0-9a-f]+ frontend/vitest\.config\.ts$)' \
+                     | sha256sum | cut -c1-16)
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
           BEARER=$(printf '%s' "$GHCR_PAT" | base64 -w0)
