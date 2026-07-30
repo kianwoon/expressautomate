@@ -13,6 +13,7 @@ import {
   SWITCH_ACCOUNT_PATH,
 } from "./api";
 import { displayNameOf, useAuth, useSignInHref } from "./auth";
+import { resetMembers } from "./dashboard/members";
 import { Logo } from "./logo";
 
 /** The product's own screens, for someone signed in.
@@ -61,6 +62,10 @@ export function SiteNav() {
       // Even if the call failed, leave for the landing page: staying on a
       // signed-in view after the user asked to leave is the worse outcome.
     }
+    // The staff list is cached at module scope and names real colleagues, so
+    // it is dropped here rather than left for the navigation below to discard
+    // — the navigation is best-effort, and this is one agency's people.
+    resetMembers();
     // A full navigation, not a client route: it discards all in-memory auth
     // state along with the page. It carries the choose-account marker, because
     // our cookie is the only thing that just got cleared — Microsoft still has

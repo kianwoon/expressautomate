@@ -4,6 +4,10 @@ import { useEffect, useRef, useState } from "react";
 
 import type { Client } from "../clients";
 import { deleteClientLogo, getClientLogo, uploadClientLogo } from "../clients";
+// Shared with the person primitive. The seed passed below stays the client's
+// NAME, which is what it has always been — seeding on the id instead would
+// silently recolour every client logo in the product.
+import { colorFor, initialsFor } from "../person";
 
 /**
  * The client's logo, or the initials that stand in for one.
@@ -25,33 +29,6 @@ import { deleteClientLogo, getClientLogo, uploadClientLogo } from "../clients";
  * overlay over a real, focusable `<input type="file">`, so the whole thing
  * stays operable from the keyboard with no separate "Upload" button.
  */
-
-const LOGO_COLORS = [
-  "#5b6ee1",
-  "#e15b8f",
-  "#2fa88a",
-  "#c77f2f",
-  "#8a5be1",
-  "#2f8fc7",
-  "#c74f4f",
-  "#4f9e4f",
-];
-
-/** Deterministic, not random: the same name always lands on the same colour. */
-function colorFor(name: string): string {
-  let hash = 0;
-  for (let i = 0; i < name.length; i += 1) {
-    hash = (hash * 31 + name.charCodeAt(i)) | 0;
-  }
-  return LOGO_COLORS[Math.abs(hash) % LOGO_COLORS.length];
-}
-
-function initialsFor(name: string): string {
-  const parts = name.trim().split(/\s+/).filter(Boolean);
-  if (parts.length === 0) return "?";
-  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
-  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
-}
 
 type LogoState =
   | { status: "loading" }

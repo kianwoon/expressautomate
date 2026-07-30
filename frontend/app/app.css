@@ -660,6 +660,20 @@ select.gl-input:focus-visible { outline: 2px solid var(--blue-500); outline-offs
   object-fit: cover;
   display: block;
 }
+/* The person primitive (`dashboard/person.tsx`). Sized inline rather than
+   here, because the same disc appears at several sizes — a row avatar, a
+   picker option, a stack of sharers. Only what is the same at every size
+   lives in the class. */
+.person-initials {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  color: #fff;
+  font-weight: 600;
+  line-height: 1;
+  vertical-align: middle;
+}
 .ca-initials {
   width: 56px;
   height: 56px;

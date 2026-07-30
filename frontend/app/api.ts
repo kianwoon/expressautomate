@@ -497,6 +497,16 @@ export function clientLogoPath(id: string): string {
   return `${clientPath(id)}/logo`;
 }
 
+/**
+ * Everyone who works at this agency — who a job order can be assigned to, and
+ * who it can be shared with.
+ *
+ * Names are resolved server-side (preferred name, then display name, then the
+ * email's local part) so the browser never re-derives one; a whole list rather
+ * than a search endpoint, because an agency here is 3–50 recruiters.
+ */
+export const MEMBERS_PATH = `${API_BASE}/api/members`;
+
 /** Where a visitor reaches a person. Used by the footer and every stub page,
  *  so it lives here rather than being retyped in nine files. */
 export const CONTACT_EMAIL = "support@expressautomate.app";
