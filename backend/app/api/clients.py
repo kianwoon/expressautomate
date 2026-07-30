@@ -740,7 +740,13 @@ class ContactIn(BaseModel):
     is_primary: bool = False
 
 
-class ContactUpdate(BaseModel):
+class ContactUpdate(_ClientFieldRules, BaseModel):
+    """`name` reuses `_ClientFieldRules._name_is_not_blank`: a contact's name is
+
+    a NOT NULL column exactly like a client's, so an explicit `{"name": null}`
+    must be a 422 naming the field rather than reach the UPDATE and 500.
+    """
+
     name: str | None = None
     email: str | None = None
     phone: str | None = None

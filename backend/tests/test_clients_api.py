@@ -862,3 +862,52 @@ async def test_contacts_of_another_agency_are_404(
                 f"/api/clients/{other_agency_client_id}/contacts/{contact_id}"
             )
         ).status_code == 404
+
+
+async def test_contact_patch_with_explicit_null_name_is_rejected(agency_with_clients) -> None:
+    """`name` is NOT NULL. An explicit `{"name": null}` must 422 naming the
+    field, not reach the UPDATE and 500 — the same rule `_name_is_not_blank`
+    already enforces for a client's own name."""
+    tid, uid, ids = agency_with_clients
+    target = ids["live"]
+    async with await _client_for(tid, uid) as http:
+        created = (
+            await http.post(f"/api/clients/{target}/contacts", json={"name": "Temp"})
+        ).json()
+
+        response = await http.patch(
+            f"/api/clients/{target}/contacts/{created['id']}",
+            json={"name": None},
+        )
+        assert response.status_code == 422
+
+        blank = await http.patch(
+            f"/api/clients/{target}/contacts/{created['id']}",
+            json={"name": "   "},
+        )
+        assert blank.status_code == 422
+
+
+async def test_a_contact_is_not_reachable_through_another_clients_url(
+    agency_with_clients,
+) -> None:
+    """`_load_contact`'s own `client_id` filter — not just the cross-tenant
+    check `_load` provides — must stop client A's contact being reached
+    through client B's URL, even within the same tenant."""
+    tid, uid, ids = agency_with_clients
+    client_a = ids["live"]
+    client_b = ids["merged"]
+    async with await _client_for(tid, uid) as http:
+        created = (
+            await http.post(f"/api/clients/{client_a}/contacts", json={"name": "A Contact"})
+        ).json()
+        contact_id = created["id"]
+
+        assert (
+            await http.patch(
+                f"/api/clients/{client_b}/contacts/{contact_id}", json={"name": "Hijacked"}
+            )
+        ).status_code == 404
+        assert (
+            await http.delete(f"/api/clients/{client_b}/contacts/{contact_id}")
+        ).status_code == 404
