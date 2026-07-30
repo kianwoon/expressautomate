@@ -21,6 +21,7 @@
 - Sentence case in all UI copy. No "successfully", no "please", no exclamation marks.
 - Frontend path helpers follow `{entity}{Action}Path(id)` and live in `frontend/app/api.ts`.
 - Tests colocate with the component as `*.test.tsx`.
+- **Frontend tests use only what is installed.** There is no `@testing-library/jest-dom` and no `@testing-library/user-event`, and `vitest.config.ts` has no `setupFiles`. So `toBeInTheDocument`, `toHaveTextContent`, `toBeDisabled`, `toBeChecked` and `userEvent.*` **do not exist** — using them fails to compile. Assert in the house style of `app/dashboard/clients/client-form.test.tsx`: `expect(el).toBeNull()` / `not.toBeNull()`, `expect(el.textContent).toContain(…)`, `expect((el as HTMLInputElement).checked).toBe(true)`, and drive inputs with `fireEvent.change`. Adding those devDependencies instead is a change to this constraint and needs the user's agreement, not a unilateral `npm install`.
 
 ---
 
@@ -113,6 +114,14 @@ In `list_opportunities`, resolve both in the page query rather than per row:
 - `shared_with_me` — an `EXISTS` correlated on `Opportunity.id` against `opportunity_shares`, matching `scope='tenant'` OR (`scope='user'` AND `shared_with_user_id = :caller`), added as a labelled column.
 
 Both go in the existing page SELECT. Do not add a second round trip and do not loop in Python over the page.
+
+**Three consequential edits the additions force, all in `list_opportunities`:**
+
+1. The page rows are currently unpacked as `for opportunity, internet_id, graph_id in rows` (around line 285). Two more selected columns makes each row a 5-tuple — update the unpack to `for opportunity, internet_id, graph_id, assignee_name, shared_with_me in rows`, or it raises "too many values to unpack".
+2. `row[0].id` (around line 272) still refers to the opportunity and stays correct, but re-read it in context before assuming so.
+3. The single `_payload(...)` call (around line 278) passes the two new arguments. `_payload` has exactly one call site — verify that with `grep -n "_payload(" app/api/opportunities.py` before you start, and if a second has appeared, update it too.
+
+The counts query at ~line 260 uses `base.subquery()` and needs **no** change: it counts rows, not columns.
 
 - [ ] **Step 4: Run the tests**
 
@@ -313,7 +322,11 @@ Add to the signature, beside the existing `status: StatusFilter | None = None`:
     scope: ScopeFilter = "all",
 ```
 
-with `ScopeFilter = Literal["mine", "queue", "shared_with_me", "all"]` declared beside `StatusFilter`. Then build the clause:
+with `ScopeFilter = Literal["mine", "queue", "shared_with_me", "all"]` declared beside `StatusFilter`, which is already a `Literal` in this file (~line 73) — so the new alias sits next to it and needs no new import for `Literal`.
+
+`true_` **is not currently imported.** Add it: `from sqlalchemy import true as true_`, matching how `app/services/visibility.py` imports it.
+
+Then build the clause:
 
 ```python
 def _scope_clause(scope: str, user_id: uuid.UUID):
@@ -408,7 +421,7 @@ describe("colorFor", () => {
 describe("Initials", () => {
   it("renders the initials with an accessible name", () => {
     render(<Initials name="Priya Nair" seed="user-1" />);
-    expect(screen.getByRole("img", { name: "Priya Nair" })).toHaveTextContent("PN");
+    expect(screen.getByRole("img", { name: "Priya Nair" }).textContent).toBe("PN");
   });
 });
 ```
@@ -519,15 +532,39 @@ npx vitest run app/dashboard/person.test.tsx app/dashboard/members.test.ts
 
 Expected: all pass.
 
-- [ ] **Step 6: Confirm the extraction broke nothing**
+- [ ] **Step 6: Pin the client-logo colours BEFORE trusting the extraction**
+
+No existing test asserts a client logo's colour — `client-logo.test.tsx` never calls `colorFor` — so "the suite is green" proves nothing about whether the extraction changed them. Write the check that makes it mean something.
+
+**Do this before the refactor, against the current code**, recording the actual output:
+
+```bash
+node -e "const c=(n)=>{let h=0;for(let i=0;i<n.length;i+=1)h=(h*31+n.charCodeAt(i))|0;return Math.abs(h)%8};['Acme Pte Ltd','Sunrise Care','Kim Eng Ltd'].forEach(n=>console.log(n,c(n)))"
+```
+
+Then add to `person.test.tsx` a test asserting `colorFor` returns those same palette indices for those same three strings. If the extraction changes a client's colour, that test fails and names the string that moved.
+
+```tsx
+it("keeps the colours client logos already have", () => {
+  // Client logos seed on the client's NAME and always have. Re-seeding them
+  // on an id would silently recolour every logo in the product.
+  expect(colorFor("Acme Pte Ltd")).toBe(LOGO_COLORS[/* index printed above */]);
+});
+```
+
+- [ ] **Step 7: Note the third copy, do not fix it here**
+
+`frontend/app/dashboard/candidate-avatar.tsx` carries its own copy of these two helpers. Folding it in is the same refactor and would be worth doing — but it touches a screen this feature does not, so record it in your report as follow-up rather than widening this task.
+
+- [ ] **Step 8: Whole suite**
 
 ```bash
 npm test
 ```
 
-Expected: green, including the existing client-logo tests. If a client-logo test asserts a specific colour, it must still pass — that is the check that the seed change did not alter existing logos.
+Expected: green.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 9: Commit**
 
 ```bash
 git add frontend/app/dashboard/person.tsx frontend/app/dashboard/person.test.tsx \
@@ -573,7 +610,7 @@ it("excludes the signed-in user", async () => {
   // Sharing with yourself is a no-op the API silently skips; offering it
   // invites the confusion.
   ...
-  expect(screen.queryByText("Mei Wong")).not.toBeInTheDocument();
+  expect(screen.queryByText("Mei Wong")).toBeNull();
 });
 
 it("filters the list as you type", async () => { ... });
@@ -603,6 +640,8 @@ Expected: FAIL — module does not exist.
 - [ ] **Step 3: Implement**
 
 A text input filtering `useMembers()`, chips for the selected, keyboard-navigable list. Exclude the caller by reading `useAuth()` — do not accept the caller's id as a prop, as every call site would then have to remember to pass it.
+
+`useAuth()` returns a **state union**, not a bare `Me`: it has a `status` and the user is only present once it is ready. Unwrap it. While it is still loading, render the picker disabled rather than briefly listing yourself and then removing yourself, which flickers.
 
 - [ ] **Step 4: Tests, full suite, commit**
 
@@ -636,8 +675,23 @@ git commit -m "Let a recruiter name a colleague"
 
 ```tsx
 it("puts the scope in the query string", async () => {
-  // listUrl already carries limit/offset/sort/descending/status/q.
-  expect(fetchMock.mock.calls[0][0]).toContain("scope=queue");
+  // Drive it explicitly. Asserting against the default would pass whether or
+  // not the parameter is ever wired, because `all` is deliberately omitted
+  // from the query string.
+  const { result } = renderHook(() => useOpportunities());
+  await waitFor(() => expect(result.current.state.status).toBe("ready"));
+  act(() => result.current.setScope("queue"));
+  await waitFor(() => expect(lastUrl(fetchMock)).toContain("scope=queue"));
+});
+
+it("omits the parameter entirely for the default scope", async () => {
+  expect(lastUrl(fetchMock)).not.toContain("scope=");
+});
+
+it("returns to the first page when the scope changes", async () => {
+  // Switching to a short list while deep in a long one would otherwise land
+  // on an empty page.
+  ...
 });
 
 it("reports a 409 claim as a conflict, not a generic failure", async () => {
@@ -664,6 +718,8 @@ Extend `listUrl` (currently at `opportunities.ts:130-140`) with one line, keepin
 ```tsx
   if (scope !== "all") params.set("scope", scope);
 ```
+
+`listUrl` has exactly one caller, inside the hook's load effect (~line 264) — thread `scope` through it there; the signature change is not picked up automatically.
 
 Add `scope`/`setScope` to the hook's state beside `filter`/`setFilter`, and include `scope` in the effect's dependency list so changing it refetches. Reset `offset` to 0 when the scope changes — otherwise switching to a short list lands on an empty page.
 
@@ -827,7 +883,7 @@ it("says Unassigned for a queue item", async () => { ... });
 it("offers Claim only when unassigned", async () => { ... });
 
 it("shows the 409 sentence when someone else claims first", async () => {
-  expect(await screen.findByRole("alert")).toHaveTextContent("Someone else has taken this one.");
+  expect((await screen.findByRole("alert")).textContent).toContain("Someone else has taken this one.");
 });
 
 it("clears itself and reports upward on a 404", async () => {
@@ -835,13 +891,13 @@ it("clears itself and reports upward on a 404", async () => {
   // fields with a red message beside them is what a generic error handler
   // does; blanking silently reads as a bug.
   expect(onVanished).toHaveBeenCalled();
-  expect(screen.queryByText("Care assistant")).not.toBeInTheDocument();
+  expect(screen.queryByText("Care assistant")).toBeNull();
 });
 
 it("says to claim it first when a 403 comes back on an unassigned job order", async () => {
   // "Shared with you, not assigned to you" would be a lie here — nobody was
   // assigned it.
-  expect(await screen.findByRole("alert")).toHaveTextContent("Claim this job order before editing it.");
+  expect((await screen.findByRole("alert")).textContent).toContain("Claim this job order before editing it.");
 });
 
 it("says shared-not-assigned on a 403 for an assigned one", async () => { ... });
@@ -906,14 +962,14 @@ it("posts a tenant broadcast when the checkbox is ticked", async () => {
 it("disables broadcast for a share recipient and says why", async () => {
   // A recipient may pass a job order to a named colleague but not throw
   // someone else's client work open to the office.
-  expect(screen.getByLabelText(/whole agency/i)).toBeDisabled();
-  expect(screen.getByText(/only the assigned recruiter/i)).toBeInTheDocument();
+  expect((screen.getByLabelText(/whole agency/i) as HTMLInputElement).disabled).toBe(true);
+  expect(screen.queryByText(/only the assigned recruiter/i)).not.toBeNull();
 });
 
 it("disables broadcast on an unassigned job order for a non-owner", async () => {
   // The API gates on can_edit, which refuses unassigned rows, falling back to
   // the owner role.
-  expect(screen.getByText(/claim it first/i)).toBeInTheDocument();
+  expect(screen.queryByText(/claim it first/i)).not.toBeNull();
 });
 
 it("allows an owner-role user to broadcast an unassigned job order", async () => { ... });
@@ -974,13 +1030,13 @@ git commit -m "Let a job order travel to whoever can fill it"
 ```tsx
 it("defaults the move checkbox to on", async () => {
   // A client changing hands normally means the work changes hands.
-  expect(screen.getByLabelText(/move this client's job orders/i)).toBeChecked();
+  expect((screen.getByLabelText(/move this client's job orders/i) as HTMLInputElement).checked).toBe(true);
 });
 
 it("reports how many job orders moved", async () => {
   // A reassignment that moves a dozen job orders silently is what the count
   // exists to prevent.
-  expect(await screen.findByText(/12 job orders moved to Sarah/i)).toBeInTheDocument();
+  expect(await screen.findByText(/12 job orders moved to Sarah/i)).not.toBeNull();
 });
 
 it("sends move_open_opportunities false when unticked", async () => { ... });
@@ -1051,7 +1107,7 @@ it("allows an empty client", async () => {
 it("searches clients as you type rather than preloading them", async () => {
   // Clients are paginated and an agency accumulates hundreds; members are
   // 3-50 and load once. The two pickers are not the same component.
-  await userEvent.type(screen.getByLabelText("Client"), "sun");
+  fireEvent.change(screen.getByLabelText("Client"), { target: { value: "sun" } });
   await waitFor(() => expect(lastUrl(fetchMock)).toContain("q=sun"));
 });
 
