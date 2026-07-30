@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { OPPORTUNITIES_PAGE_SIZE, OPPORTUNITIES_PAGE_SIZES } from "../api";
 import type { Me } from "../auth";
 import { DetailPanel } from "./detail-panel";
+import { JobOrderForm } from "./job-order-form";
 import "./job-orders.css";
 import { LiveLight } from "./live-light";
 import { JobOrdersTable } from "./job-orders-table";
@@ -85,7 +86,9 @@ export function JobOrders({ me, heading = "h2" }: { me: Me; heading?: "h1" | "h2
     setSort,
     review,
     patchRow,
+    addRow,
   } = useOpportunities();
+  const [creating, setCreating] = useState(false);
   // The whole row, not the id. Marking something reviewed under a "Needs
   // review" filter can take it out of the page it was selected from, and the
   // panel someone is mid-way through reading should not empty itself as a
@@ -116,6 +119,24 @@ export function JobOrders({ me, heading = "h2" }: { me: Me; heading?: "h1" | "h2
       /* the next poll will bring it */
     }
     return result;
+  }
+
+  /** Puts a just-typed job order in front of the person who typed it.
+   *
+   * Read back rather than built from the create response, which echoes six
+   * fields: the row the table draws has a quality state, a review status and a
+   * resolved assignee name, all decided server-side, and inventing them here
+   * would be a second place deciding them. If the read-back fails the create
+   * still succeeded — the next poll brings the row round, so nothing is said
+   * about a problem the recruiter does not have. */
+  async function showCreated(id: string): Promise<void> {
+    try {
+      const fresh = await getOpportunity(id);
+      addRow(fresh);
+      setSelected(fresh);
+    } catch {
+      /* the next poll will bring it */
+    }
   }
 
   const items = state.status === "ready" ? state.page.items : EMPTY;
@@ -173,6 +194,9 @@ export function JobOrders({ me, heading = "h2" }: { me: Me; heading?: "h1" | "h2
 
   return (
     <section className="jo-workspace" data-lead={heading === "h1" ? "yes" : undefined}>
+      {creating && (
+        <JobOrderForm onClose={() => setCreating(false)} onCreated={showCreated} />
+      )}
       <StatCards me={me} counts={counts} />
 
       <div className="jo-head">
@@ -190,6 +214,12 @@ export function JobOrders({ me, heading = "h2" }: { me: Me; heading?: "h1" | "h2
             belongs here rather than in a corner of the page. */}
         <LiveLight />
         <ReviewBell count={counts.needs_review} onOpen={() => setFilter("needs_review")} />
+        {/* Beside the list it adds to, not in a settings page. A job order
+            taken over the phone is typed in while the client is still on it,
+            and the button for that belongs where the job orders are. */}
+        <button type="button" className="btn btn-secondary" onClick={() => setCreating(true)}>
+          New job order
+        </button>
       </div>
 
       <p className="body jo-head-body">

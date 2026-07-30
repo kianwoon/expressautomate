@@ -513,3 +513,103 @@
 }
 .shr-row-note { font-size: 0.75rem; }
 .shr-x { margin-left: auto; font-size: 0.75rem; padding: 2px 8px; }
+
+/* ── Typing a job order in ────────────────────────────────────────────────
+   The form for a vacancy taken over the phone. Its inputs borrow `.jo-search`
+   rather than restyling a text box for the third time; only the layout, the
+   client picker's dropdown and the two message lines are new here.
+   `dashboard/job-order-form.tsx`. */
+
+/* Wider than the 460px default. Eight short fields plus two text areas at
+   that width is a single very tall column, and the Save button ends up below
+   a fold the recruiter has to go looking for. */
+.jo-form-dialog {
+  max-width: 720px;
+}
+.jo-form-intro {
+  margin: 0;
+  color: var(--ink-500);
+}
+/* `auto-fit` with a floor rather than a fixed two columns, for the same
+   reason `.cand-form` uses one: the card is `width: 100%` until it hits its
+   max, and on a narrow viewport two 200px columns wrap their own labels. */
+.jo-form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px 16px;
+  align-items: start;
+}
+.jo-form-field {
+  display: grid;
+  gap: 4px;
+  /* The field is the positioning context for the client picker's dropdown,
+     which is absolutely positioned against it. */
+  position: relative;
+}
+.jo-form-field > label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-700);
+}
+/* `.jo-search` caps itself at 30rem, which is right for a lone search box on
+   a wide page and wrong inside a form column — the same release
+   `.cand-form-full > .jo-search` makes, for the same reason. */
+.jo-form-field > .jo-search {
+  max-width: none;
+  width: 100%;
+}
+.jo-form-hint {
+  margin: 0;
+  font-size: 12px;
+  color: var(--ink-500);
+}
+.jo-form-error {
+  margin: 0;
+  font-size: 13px;
+  color: var(--amber-700);
+  background: var(--amber-050);
+  border: 1px solid var(--amber-200);
+  border-radius: var(--radius);
+  padding: 8px 12px;
+}
+.jo-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* The matches, over the field rather than pushing it down. A list that
+   reflows the form on every keystroke moves the field being typed into. */
+.jo-client-matches {
+  position: absolute;
+  /* Under the input, clear of the label above it. */
+  top: calc(100% - 34px);
+  left: 0;
+  right: 0;
+  z-index: 1;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  max-height: 200px;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 20px rgba(var(--shadow-rgb), 0.12);
+}
+.jo-client-matches button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--ink-900);
+  font: inherit;
+  cursor: pointer;
+}
+.jo-client-matches button:hover,
+.jo-client-matches button:focus-visible {
+  background: var(--surface-alt);
+}

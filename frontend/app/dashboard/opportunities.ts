@@ -5,14 +5,25 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   OPPORTUNITIES_PAGE_SIZE,
   OPPORTUNITIES_PATH,
-  opportunityAssignPath,
-  opportunityClaimPath,
   opportunityPath,
   opportunityReviewPath,
 } from "../api";
 import { useLive } from "../events";
 import { DEFAULT_SORT, type Sort } from "./job-orders-table";
 import { ApiError, readError } from "./candidates";
+
+// The writes live next door. Re-exported here because this module has been
+// the one door to the opportunities endpoint since it was written, and moving
+// the door would have made a file split into an edit of every caller.
+export {
+  assignOpportunity,
+  claimOpportunity,
+  createOpportunity,
+  type CreatedOpportunity,
+  type ManualOpportunity,
+  type MutationFailure,
+  type MutationResult,
+} from "./opportunity-actions";
 
 /**
  * One page of job orders, and the one place that talks to the opportunities
@@ -217,6 +228,10 @@ export type Opportunities = {
    *  caller that has just written to it and read it back. Does nothing if the
    *  row is not on the page in front of the user. */
   patchRow: (row: Opportunity) => void;
+  /** Puts a job order that did not exist a moment ago at the top of the page
+   *  in front of the user. Distinct from `patchRow`, which deliberately does
+   *  nothing for a row it cannot already find. */
+  addRow: (row: Opportunity) => void;
 };
 
 /** How long to wait after the last keystroke before the search actually
@@ -409,6 +424,35 @@ export function useOpportunities(): Opportunities {
     );
   }, []);
 
+  /** Shows a just-created job order without waiting for the poll.
+   *
+   * Not `patchRow`: that one replaces a row already on the page and does
+   * nothing otherwise, which is right for an ownership move and exactly wrong
+   * here — the row is new, so there is nothing to replace and the recruiter
+   * would watch their typing vanish for up to fifteen seconds.
+   *
+   * Prepended, and `total` incremented with it, because the list is newest
+   * first and a manual job order is stamped with the moment it was typed. The
+   * count has to move too, or the pager promises one fewer row than the page
+   * is showing. Only ever on the first page: inserting at the top of page four
+   * would show a row that does not belong to the window being viewed, and the
+   * next fetch would silently drop it again.
+   */
+  const addRow = useCallback((row: Opportunity) => {
+    setState((current) =>
+      current.status === "ready" && current.page.offset === 0
+        ? {
+            status: "ready",
+            page: {
+              ...current.page,
+              items: [row, ...current.page.items],
+              total: current.page.total + 1,
+            },
+          }
+        : current,
+    );
+  }, []);
+
   // Kept in a ref rather than a dependency so `review` does not change
   // identity on every fetch and re-render every row that takes it as a prop.
   const stateRef = useRef(state);
@@ -481,6 +525,7 @@ export function useOpportunities(): Opportunities {
     setSort,
     review,
     patchRow,
+    addRow,
   };
 }
 
@@ -527,95 +572,6 @@ export async function updateOpportunityPlacement(
   return (await res.json()) as Opportunity;
 }
 
-/**
- * What a claim or an assignment did.
- *
- * A result rather than a thrown error, because none of these are exceptional:
- * two recruiters reaching for the same job order in the same second is an
- * ordinary Tuesday, and the caller's job is to render a sentence, not to
- * recover. `kind` is carried separately from the message so a screen can
- * recognise an outcome without parsing copy: re-wording a sentence, or
- * translating one, must never change what a panel does.
- *
- * A `kind` rather than the HTTP status, because two of the five outcomes have
- * no status at all — an unreachable server and an unrecognised code are both
- * `failed`, and inventing a 0 or a 500 for them would be a number nothing sent.
- */
-export type MutationFailure = "conflict" | "gone" | "forbidden" | "denied" | "failed";
-
-export type MutationResult =
-  | { ok: true }
-  | { ok: false; kind: MutationFailure; message: string };
-
-/**
- * One sentence per status, and the statuses are the whole design.
- *
- * 409 is "someone else has taken this one" — the losing side of a real race,
- * which is a fact about the world rather than a fault. 404 is "no longer
- * available", worded so it says nothing about whether the row exists: the
- * server refuses to distinguish "gone" from "never yours", and repeating that
- * refusal here is what keeps one agency from probing another's ids. 403 is the
- * one case where the row is admittedly visible and still not yours to move.
- * Collapsing any of these into "something went wrong" throws away the only
- * thing the backend went to the trouble of telling us.
- *
- * allow-hardcode: user-facing copy keyed by HTTP status — the statuses are the
- * logic, these strings are only what the recruiter reads. Nothing is matched
- * against them.
- */
-/** Status in, `kind` and sentence out. The `kind` is what a screen branches
- *  on — a 404 under an open panel is a closed state rather than an error, and
- *  a 403 is the one message a screen may replace with something truer about
- *  the row in front of it. The sentence beside it is only what the recruiter
- *  reads; nothing is ever compared against it. */
-const MUTATION_OUTCOMES: Record<number, { kind: MutationFailure; message: string }> = {
-  409: { kind: "conflict", message: "Someone else has taken this one." },
-  404: { kind: "gone", message: "This job order is no longer available." },
-  403: { kind: "forbidden", message: "This job order is not yours to reassign." },
-  401: {
-    kind: "denied",
-    message: "Your session has expired. Sign in again, then try that once more.",
-  },
-};
-
-const MUTATION_FALLBACK: { kind: MutationFailure; message: string } = {
-  kind: "failed",
-  message: "We could not save that just now. Nothing has changed.",
-};
-
-async function mutate(url: string, body?: unknown): Promise<MutationResult> {
-  try {
-    const res = await fetch(url, {
-      method: "POST",
-      credentials: "include",
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-    });
-    if (res.ok) return { ok: true };
-    // Only a 409 is a race. A dropped connection is not one, and reporting it
-    // as one would tell a recruiter a colleague took the job order when nobody
-    // did — so anything unrecognised is plainly `failed`.
-    return { ok: false, ...(MUTATION_OUTCOMES[res.status] ?? MUTATION_FALLBACK) };
-  } catch {
-    return {
-      ok: false,
-      kind: "failed",
-      message: "We could not reach the server. Nothing has changed.",
-    };
-  }
-}
-
-/** Takes an unassigned job order for yourself. */
-export function claimOpportunity(id: string): Promise<MutationResult> {
-  return mutate(opportunityClaimPath(id));
-}
-
-/** Hands a job order to a colleague, or — with `null` — releases it back to
- *  the unassigned queue, which is a state a recruiter chooses rather than a
- *  missing value. */
-export function assignOpportunity(id: string, userId: string | null): Promise<MutationResult> {
-  return mutate(opportunityAssignPath(id), { user_id: userId });
-}
 
 /**
  * The chip counts, on their own.

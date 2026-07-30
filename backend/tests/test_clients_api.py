@@ -93,6 +93,25 @@ async def test_the_all_count_excludes_merged_rows_like_the_default_list(
     assert [row["id"] for row in merged_body["items"]] == [str(ids["merged"])]
 
 
+async def test_the_list_can_be_searched_by_name(agency_with_clients) -> None:
+    """Type-to-search, for the client picker on the manual job order form.
+
+    An agency accumulates hundreds of clients, so that picker cannot preload
+    the list the way the 3-50 member picker does. A miss returns an empty
+    page rather than the whole tenant — a picker that silently ignores the
+    query would offer every client under a name that matches none of them.
+    """
+    tid, uid, ids = agency_with_clients
+    async with await _client_for(tid, uid) as http:
+        hit = (await http.get("/api/clients?q=cm")).json()
+        miss = (await http.get("/api/clients?q=zzz")).json()
+        # A LIKE metacharacter is matched as itself, not as a wildcard.
+        literal = (await http.get("/api/clients?q=%25")).json()
+    assert [row["id"] for row in hit["items"]] == [str(ids["live"])]
+    assert miss["items"] == []
+    assert literal["items"] == []
+
+
 async def test_the_status_filter_is_the_review_queue(agency_with_clients) -> None:
     tid, uid, ids = agency_with_clients
     async with await _client_for(tid, uid) as http:

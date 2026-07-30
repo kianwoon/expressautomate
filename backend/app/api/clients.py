@@ -17,7 +17,7 @@ from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import and_, delete, func, insert, select, update
+from sqlalchemy import and_, delete, func, insert, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import aliased
@@ -195,6 +195,7 @@ async def list_clients(
     limit: int | None = Query(default=None, ge=1),
     offset: int = Query(default=0, ge=0),
     status: StatusFilter | None = None,
+    q: str | None = None,
 ) -> dict:
     _user_uuid, tenant_uuid = _require_session(request)
     ceiling = settings.CLIENTS_PAGE_LIMIT
@@ -225,6 +226,31 @@ async def list_clients(
             # A merged row is no longer a client. It stays reachable by id and
             # by explicit filter so an unmerge is still possible.
             base = base.where(Client.status != Client.MERGED)
+
+        if q:
+            # Same escaping as `opportunities.py::list_opportunities`: the value
+            # is parameterized, so this is not an injection concern, but an
+            # unescaped "%" or "_" typed by a recruiter would match as a
+            # wildcard instead of as itself.
+            #
+            # Matched against `name_normalized` as well as `name` so that
+            # "acme" finds "Acme Pte. Ltd." — the normalized column is what the
+            # matcher already uses to decide two spellings are one company, and
+            # searching only the display name would disagree with it.
+            escaped = (
+                q.strip()
+                .lower()
+                .replace("\\", "\\\\")
+                .replace("%", "\\%")
+                .replace("_", "\\_")
+            )
+            like = f"%{escaped}%"
+            base = base.where(
+                or_(
+                    func.lower(Client.name).like(like, escape="\\"),
+                    func.lower(Client.name_normalized).like(like, escape="\\"),
+                )
+            )
 
         total = (
             await session.execute(select(func.count()).select_from(base.subquery()))
