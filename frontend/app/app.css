@@ -1411,10 +1411,11 @@ select.gl-input:focus-visible { outline: 2px solid var(--blue-500); outline-offs
   padding: 16px;
   margin: 4px 0 0;
 }
-/* The legend and the sentence under it describe every field in the group, so
-   both run the full width rather than sitting in the first column with the
-   fields wrapping around them. */
-.cand-group > legend,
+/* The sentence under the legend describes every field in the group, so it
+   runs the full width rather than sitting in the first column with the fields
+   wrapping around it. The legend needs no such rule and never did: a rendered
+   `<legend>` is not a grid item — it sits on the fieldset's border box — so
+   `grid-column` on it does nothing either way. */
 .cand-group-note {
   grid-column: 1 / -1;
   margin: 0;
@@ -1431,7 +1432,14 @@ select.gl-input:focus-visible { outline: 2px solid var(--blue-500); outline-offs
 .cand-group-record {
   grid-column: span 1;
 }
-@media (max-width: 800px) {
+/* 832px, not 800: that is where the grid itself drops from three columns to
+   two, and the two rules have to turn over together. Eight hundred left a
+   32px band where the grid had two tracks and the permit group still asked
+   for both of them, so it took the whole row and the record group fell to a
+   half-width row of its own — lopsided, though never overflowing. The number
+   is the padding arithmetic, not a guess: the overlay takes 16px a side and
+   the card 24px, so a 240px minimum third column needs 832px of viewport. */
+@media (max-width: 832px) {
   .cand-group-permit,
   .cand-group-record {
     grid-column: 1 / -1;
