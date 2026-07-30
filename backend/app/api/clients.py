@@ -18,13 +18,15 @@ from typing import Literal
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import delete, func, insert, select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 
 from app.api.auth import _require_session
 from app.api.integrity import is_duplicate
 from app.core.config import settings
 from app.db.rls import tenant_session
-from app.models.client import Client, ClientContact, ClientMention
+from app.models.client import Client, ClientCollaborator, ClientContact, ClientMention
+from app.models.opportunity import Opportunity
 from app.services.client_naming import normalize_company_name
 
 router = APIRouter(tags=["clients"])
@@ -865,3 +867,109 @@ async def delete_contact(request: Request, client_id: uuid.UUID, contact_id: uui
         await _load(session, client_id)
         await _load_contact(session, client_id, contact_id)
         await session.execute(delete(ClientContact).where(ClientContact.id == contact_id))
+
+
+class AssigneeRequest(BaseModel):
+    user_id: uuid.UUID | None
+    # Defaults to true: a client changing hands normally means the work
+    # changes hands. It stays a choice rather than an automatic cascade,
+    # because the outgoing recruiter may be mid-placement on one of them.
+    move_open_opportunities: bool = True
+
+
+@router.put("/clients/{client_id}/assignee")
+async def set_client_assignee(
+    client_id: uuid.UUID, body: AssigneeRequest, request: Request
+) -> dict:
+    """Hand an account to a recruiter, and its work with it.
+
+    The count comes back so the interface can say "12 job orders moved to
+    Sarah" rather than reassigning them quietly.
+    """
+    _user_uuid, tenant_uuid = _require_session(request)
+
+    async with tenant_session(tenant_uuid) as session:
+        previous = (
+            await session.execute(
+                select(Client.assigned_user_id).where(Client.id == client_id)
+            )
+        ).scalar_one_or_none()
+        updated = (
+            await session.execute(
+                update(Client)
+                .where(Client.id == client_id)
+                .values(assigned_user_id=body.user_id)
+                .returning(Client.id)
+            )
+        ).scalar_one_or_none()
+        if updated is None:
+            raise HTTPException(status_code=404, detail="Client not found")
+
+        moved = 0
+        if body.move_open_opportunities:
+            # "Open" has no schema meaning: `Opportunity` carries only
+            # `review_status` and `quality_state`, neither of which expresses
+            # filled, closed or lost. So every job order currently assigned to
+            # the outgoing recruiter moves, and the word "open" is avoided in
+            # the API. When a lifecycle state lands, this predicate narrows.
+            #
+            # `IS NOT DISTINCT FROM`, not `==`: `previous` is null for a client
+            # nobody was looking after, and `= NULL` is never true — an
+            # equality here would silently move nothing in exactly that case.
+            result = await session.execute(
+                update(Opportunity)
+                .where(Opportunity.client_id == client_id)
+                .where(Opportunity.assigned_user_id.is_not_distinct_from(previous))
+                .values(assigned_user_id=body.user_id)
+                .returning(Opportunity.id)
+            )
+            moved = len(result.scalars().all())
+
+    return {
+        "client_id": str(client_id),
+        "assigned_user_id": str(body.user_id) if body.user_id else None,
+        "opportunities_moved": moved,
+    }
+
+
+class CollaboratorRequest(BaseModel):
+    user_id: uuid.UUID
+
+
+@router.post("/clients/{client_id}/collaborators", status_code=201)
+async def add_collaborator(
+    client_id: uuid.UUID, body: CollaboratorRequest, request: Request
+) -> dict:
+    """Record that a colleague also covers this account.
+
+    Idempotent by `ON CONFLICT DO NOTHING` rather than by a pre-flight SELECT:
+    two recruiters naming the same colleague at once would both pass the
+    check and one would then get a 500 off `uq_client_collaborators_once`.
+
+    This grants nothing — see `ClientCollaborator`. Cover that needs sight of
+    the work is an explicit share or a reassignment.
+    """
+    _user_uuid, tenant_uuid = _require_session(request)
+    async with tenant_session(tenant_uuid) as session:
+        await _load(session, client_id)
+        await session.execute(
+            pg_insert(ClientCollaborator)
+            .values(tenant_id=tenant_uuid, client_id=client_id, user_id=body.user_id)
+            .on_conflict_do_nothing(constraint="uq_client_collaborators_once")
+        )
+    return {"client_id": str(client_id), "user_id": str(body.user_id)}
+
+
+@router.delete("/clients/{client_id}/collaborators/{user_id}", status_code=204)
+async def remove_collaborator(
+    client_id: uuid.UUID, user_id: uuid.UUID, request: Request
+) -> None:
+    """Removing cover that is already gone is a no-op, for the same reason."""
+    _user_uuid, tenant_uuid = _require_session(request)
+    async with tenant_session(tenant_uuid) as session:
+        await _load(session, client_id)
+        await session.execute(
+            delete(ClientCollaborator)
+            .where(ClientCollaborator.client_id == client_id)
+            .where(ClientCollaborator.user_id == user_id)
+        )
