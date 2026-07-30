@@ -35,14 +35,20 @@ export type Sort = { key: SortKey; descending: boolean };
  *  user somewhere they cannot get back from by clicking Received again. */
 export const DEFAULT_SORT: Sort = { key: "received", descending: true };
 
+/** Hours and Duration are the two raw paragraphs left in the table, and they
+ *  are clamped to two lines (see `.jo-clamp`) — so they are also the two that
+ *  need enough width for two lines to say something. At 10% they held about
+ *  seven characters a line, which is how "Not mentioned" came out as "Not
+ *  mention / ed": too narrow to break between words, so it broke inside one.
+ *  The room comes from Position and Salary, which are short by nature. */
 const COLUMNS: { key: SortKey; label: string; width: string }[] = [
   { key: "received", label: "Received", width: "11%" },
-  { key: "company", label: "Company", width: "16%" },
-  { key: "position", label: "Position", width: "18%" },
-  { key: "salary", label: "Salary", width: "15%" },
-  { key: "hours", label: "Hours", width: "10%" },
-  { key: "duration", label: "Duration", width: "10%" },
-  { key: "location", label: "Location", width: "10%" },
+  { key: "company", label: "Company", width: "15%" },
+  { key: "position", label: "Position", width: "15%" },
+  { key: "salary", label: "Salary", width: "12%" },
+  { key: "hours", label: "Hours", width: "16%" },
+  { key: "duration", label: "Duration", width: "12%" },
+  { key: "location", label: "Location", width: "9%" },
   { key: "quality", label: "Quality", width: "10%" },
 ];
 
@@ -116,8 +122,8 @@ export function JobOrdersTable({
                 <td className="jo-td">
                   <Salary row={row} />
                 </td>
-                <Td>{row.working_hours_raw}</Td>
-                <Td>{row.duration_raw}</Td>
+                <Td clamp>{row.working_hours_raw}</Td>
+                <Td clamp>{row.duration_raw}</Td>
                 <Td>{row.location_raw}</Td>
                 <td className="jo-td">
                   <QualityBadge row={row} />
@@ -180,10 +186,33 @@ function Th({
   );
 }
 
-function Td({ children, nowrap = false }: { children: string | null; nowrap?: boolean }) {
+/** `clamp` holds a cell to two lines. Only for the fields that are prose an
+ *  email wrote rather than a value it stated: one shift schedule ran to forty
+ *  words, and a table row is as tall as its tallest cell, so a single row was
+ *  five times the height of its neighbours.
+ *
+ *  Nothing is lost. The row opens the panel, which shows the field whole —
+ *  the same reason Requirements and Description stopped being columns. `title`
+ *  is a convenience on top of that, not the way to read it: a tooltip is
+ *  unreachable on touch and by keyboard. */
+function Td({
+  children,
+  nowrap = false,
+  clamp = false,
+}: {
+  children: string | null;
+  nowrap?: boolean;
+  clamp?: boolean;
+}) {
   return (
     <td className="jo-td" data-nowrap={nowrap ? "yes" : undefined}>
-      <Value text={children} />
+      {clamp ? (
+        <div className="jo-clamp" title={children ?? undefined}>
+          <Value text={children} />
+        </div>
+      ) : (
+        <Value text={children} />
+      )}
     </td>
   );
 }

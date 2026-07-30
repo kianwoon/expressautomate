@@ -127,9 +127,9 @@ export type ListState =
 
 const ZERO_COUNTS: Counts = { all: 0, new: 0, needs_review: 0, reviewed: 0 };
 
-function listUrl(filter: Filter, offset: number, q: string, sort: Sort): string {
+function listUrl(filter: Filter, offset: number, q: string, sort: Sort, limit: number): string {
   const params = new URLSearchParams({
-    limit: String(OPPORTUNITIES_PAGE_SIZE),
+    limit: String(limit),
     offset: String(offset),
     sort: sort.key,
     descending: String(sort.descending),
@@ -152,6 +152,10 @@ export type Opportunities = {
   state: ListState;
   filter: Filter;
   offset: number;
+  /** How many rows a page asks for. What the server actually used is
+   *  `state.page.limit` — it clamps — so the two are read for different
+   *  things: this one drives the control, that one drives "Showing 1–20 of". */
+  limit: number;
   /** The box's own value, updated on every keystroke so typing never feels
    *  laggy. What actually reaches the server is `debouncedQ`, below. */
   q: string;
@@ -166,6 +170,7 @@ export type Opportunities = {
   refreshing: boolean;
   setFilter: (filter: Filter) => void;
   setOffset: (offset: number) => void;
+  setLimit: (limit: number) => void;
   setQ: (q: string) => void;
   setSort: (sort: Sort) => void;
   /** Marks one row reviewed or not, and reports whether it worked. */
@@ -181,6 +186,7 @@ export function useOpportunities(): Opportunities {
   const [state, setState] = useState<ListState>({ status: "loading" });
   const [filter, setFilterRaw] = useState<Filter>(null);
   const [offset, setOffset] = useState(0);
+  const [limit, setLimitRaw] = useState(OPPORTUNITIES_PAGE_SIZE);
   const [q, setQRaw] = useState("");
   const [debouncedQ, setDebouncedQ] = useState("");
   const [sort, setSortRaw] = useState<Sort>(DEFAULT_SORT);
@@ -198,8 +204,8 @@ export function useOpportunities(): Opportunities {
   // What the current request is for, readable from a callback that must not
   // change identity when the filter does. Assigned during render so a poll
   // firing between renders can never ask for the page we have just left.
-  const asked = useRef({ filter, offset, q: debouncedQ, sort });
-  asked.current = { filter, offset, q: debouncedQ, sort };
+  const asked = useRef({ filter, offset, q: debouncedQ, sort, limit });
+  asked.current = { filter, offset, q: debouncedQ, sort, limit };
 
   // Every load takes a ticket, and only the newest one is allowed to write.
   // Three things race here — a filter change, a page change, and the poll — and
@@ -248,8 +254,14 @@ export function useOpportunities(): Opportunities {
     if (!quiet) setState((prev) => (prev.status === "ready" ? prev : { status: "loading" }));
 
     try {
-      const { filter: forFilter, offset: forOffset, q: forQ, sort: forSort } = asked.current;
-      const res = await fetch(listUrl(forFilter, forOffset, forQ, forSort), {
+      const {
+        filter: forFilter,
+        offset: forOffset,
+        q: forQ,
+        sort: forSort,
+        limit: forLimit,
+      } = asked.current;
+      const res = await fetch(listUrl(forFilter, forOffset, forQ, forSort, forLimit), {
         credentials: "include",
         headers: { Accept: "application/json" },
       });
@@ -286,7 +298,7 @@ export function useOpportunities(): Opportunities {
     return () => {
       generation.current += 1;
     };
-  }, [filter, offset, debouncedQ, sort, load]);
+  }, [filter, offset, debouncedQ, sort, limit, load]);
 
   // The table keeps up because the server says when to look, not because a timer
   // fired. `extraction` is the only kind that can add a row here — `mail` means
@@ -310,6 +322,14 @@ export function useOpportunities(): Opportunities {
   }, []);
   const setSort = useCallback((next: Sort) => {
     setSortRaw(next);
+    setOffset(0);
+  }, []);
+  // Back to the first page for the same reason, and more sharply: offset 40 of
+  // a 10-row page is page five, and of a 30-row page it is past the end of a
+  // 60-row list. Growing the page while standing deep in the list would land
+  // on nothing.
+  const setLimit = useCallback((next: number) => {
+    setLimitRaw(next);
     setOffset(0);
   }, []);
 
@@ -367,7 +387,22 @@ export function useOpportunities(): Opportunities {
     }
   }, []);
 
-  return { state, filter, offset, q, sort, counts, refreshing, setFilter, setOffset, setQ, setSort, review };
+  return {
+    state,
+    filter,
+    offset,
+    limit,
+    q,
+    sort,
+    counts,
+    refreshing,
+    setFilter,
+    setOffset,
+    setLimit,
+    setQ,
+    setSort,
+    review,
+  };
 }
 
 /** What the placement form sends. `sex_requirement_reason` travels with

@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 
-import { OPPORTUNITIES_PAGE_SIZE } from "../api";
+import { OPPORTUNITIES_PAGE_SIZE, OPPORTUNITIES_PAGE_SIZES } from "../api";
 import type { Me } from "../auth";
 import { DetailPanel } from "./detail-panel";
 import { LiveLight } from "./live-light";
@@ -36,8 +36,22 @@ const CHIPS: { key: Filter; label: string; countKey: "all" | "new" | "needs_revi
 export function JobOrders({ me, heading = "h2" }: { me: Me; heading?: "h1" | "h2" }) {
   const Heading = heading;
 
-  const { state, filter, offset, q, sort, counts, refreshing, setFilter, setOffset, setQ, setSort, review } =
-    useOpportunities();
+  const {
+    state,
+    filter,
+    offset,
+    limit: pageSize,
+    q,
+    sort,
+    counts,
+    refreshing,
+    setFilter,
+    setOffset,
+    setLimit,
+    setQ,
+    setSort,
+    review,
+  } = useOpportunities();
   // The whole row, not the id. Marking something reviewed under a "Needs
   // review" filter can take it out of the page it was selected from, and the
   // panel someone is mid-way through reading should not empty itself as a
@@ -190,9 +204,16 @@ export function JobOrders({ me, heading = "h2" }: { me: Me; heading?: "h1" | "h2
             total={total}
             limit={limit}
             offset={offset}
+            pageSize={pageSize}
             onOffset={(next) => {
               setOffset(next);
               // The panel is showing a row from the page being left behind.
+              setSelected(null);
+            }}
+            onPageSize={(next) => {
+              setLimit(next);
+              // Same reason as paging: resizing the page goes back to the
+              // first one, so the open row is very likely not on it.
               setSelected(null);
             }}
           />
@@ -219,45 +240,75 @@ function emptyLine(filter: Filter): string {
   return "No job orders yet. They appear here as emails are read and understood.";
 }
 
+/** `limit` is what the server used and is what the arithmetic must run on — it
+ *  clamps, so it is not always what was asked for. `pageSize` is what was
+ *  asked for, and is the only thing the control may show: a select whose value
+ *  disagrees with its options renders blank.
+ *
+ *  The size control stays even when everything fits on one page — that is
+ *  exactly when someone might want a smaller one — so only Previous/Next and
+ *  the page count are conditional. */
 function Pager({
   total,
   limit,
   offset,
+  pageSize,
   onOffset,
+  onPageSize,
 }: {
   total: number;
   limit: number;
   offset: number;
+  pageSize: number;
   onOffset: (offset: number) => void;
+  onPageSize: (limit: number) => void;
 }) {
-  if (total <= limit) return null;
+  const paged = total > limit;
   const page = Math.floor(offset / limit) + 1;
   const pages = Math.max(1, Math.ceil(total / limit));
 
   return (
-    <nav className="jo-pager" aria-label="Job order pages">
-      <button
-        type="button"
-        className="btn btn-secondary"
-        disabled={offset === 0}
-        onClick={() => onOffset(Math.max(0, offset - limit))}
-      >
-        Previous
-      </button>
-      {/* Said in words, not only implied by which button is disabled: a
-          disabled button is not an announcement, and "page 3 of 9" is what
-          someone actually wants to know. */}
-      <span className="body jo-sub" aria-live="polite">
-        Page {page} of {pages}
-      </span>
-      <button
-        type="button"
-        className="btn btn-secondary"
-        disabled={offset + limit >= total}
-        onClick={() => onOffset(offset + limit)}
-      >
-        Next
-      </button>
+    <nav className="jo-pager" aria-label="Job order pages and page size">
+      {paged && (
+        <>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            disabled={offset === 0}
+            onClick={() => onOffset(Math.max(0, offset - limit))}
+          >
+            Previous
+          </button>
+          {/* Said in words, not only implied by which button is disabled: a
+              disabled button is not an announcement, and "page 3 of 9" is what
+              someone actually wants to know. */}
+          <span className="body jo-sub" aria-live="polite">
+            Page {page} of {pages}
+          </span>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            disabled={offset + limit >= total}
+            onClick={() => onOffset(offset + limit)}
+          >
+            Next
+          </button>
+        </>
+      )}
+      <label className="jo-perpage">
+        Rows per page
+        <select
+          className="jo-perpage-select"
+          value={pageSize}
+          onChange={(event) => onPageSize(Number(event.target.value))}
+        >
+          {OPPORTUNITIES_PAGE_SIZES.map((n) => (
+            <option key={n} value={n}>
+              {n}
+            </option>
+          ))}
+        </select>
+      </label>
     </nav>
   );
 }

@@ -244,7 +244,7 @@
    each. */
 .jo-table-card { padding: 0; overflow-x: auto; }
 .jo-table {
-  width: 100%; min-width: 860px; border-collapse: collapse;
+  width: 100%; min-width: 960px; border-collapse: collapse;
   table-layout: fixed; font-size: 0.875rem;
 }
 .jo-th {
@@ -257,6 +257,17 @@
   /* The same backstop `.row` uses: a fixed-layout column cannot widen, so an
      unbreakable token would otherwise print straight over its neighbour. */
   overflow-wrap: anywhere;
+}
+/* Two lines, then stop. `-webkit-line-clamp` needs the -webkit-box display to
+   do anything, and both are still the only way to clamp to a line count — the
+   standard `line-clamp` is not shipped widely enough to rely on alone.
+   `break-word` rather than the `anywhere` its cell carries: `anywhere` breaks
+   inside a word, which at a narrow column turned "Not mentioned" into "Not
+   mention / ed". Between words is the only break worth having here; a genuinely
+   unbreakable token is now the cell's problem, and the cell still handles it. */
+.jo-clamp {
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+  overflow: hidden; overflow-wrap: break-word;
 }
 .jo-td-strong { font-weight: 600; }
 /* The date must not wrap: broken over two lines it stops reading as a date at
@@ -285,6 +296,22 @@
   margin-top: 20px; display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
 }
 .jo-pager .btn:disabled { opacity: 0.5; cursor: default; }
+/* Pushed to the far end of the pager row: it is a setting for the list, not a
+   step through it, and sitting beside Next it would read as a third way to
+   move. `margin-left: auto` rather than a spacer so it falls back to sitting
+   under the buttons when the row wraps. */
+.jo-perpage {
+  margin-left: auto; display: flex; align-items: center; gap: 8px;
+  font-size: 0.875rem; color: var(--ink-500);
+}
+/* Its own rule rather than `.gl-input`, which is full-width by design — a
+   two-digit select does not want the row. */
+.jo-perpage-select {
+  font: inherit; padding: 7px 10px; color: var(--ink-900);
+  background: var(--surface); border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+.jo-perpage-select:focus-visible { outline: 2px solid var(--blue-500); outline-offset: 2px; }
 
 /* ---- sync activity and mailbox overview ---- */
 .jo-panels {

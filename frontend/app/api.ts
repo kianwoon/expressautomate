@@ -62,6 +62,17 @@ export const OPPORTUNITIES_PATH = `${API_BASE}/api/opportunities`;
 export const OPPORTUNITIES_PAGE_SIZE =
   Number(process.env.NEXT_PUBLIC_OPPORTUNITIES_PAGE_SIZE) || 10;
 
+/** What the page-size control offers. The configured default is folded in and
+ *  the result deduped, so an operator who sets the env var to something not on
+ *  this list still gets a control whose value is one of its own options — a
+ *  select whose value matches nothing renders blank and looks broken.
+ *
+ *  The server clamps `limit` to `OPPORTUNITIES_PAGE_LIMIT` (200) rather than
+ *  rejecting it, so nothing here can ask for a page it will not get. */
+export const OPPORTUNITIES_PAGE_SIZES: readonly number[] = [
+  ...new Set([10, 20, 30, OPPORTUNITIES_PAGE_SIZE]),
+].sort((a, b) => a - b);
+
 /**
  * Marks one job order as checked by a human, or un-marks it.
  *
