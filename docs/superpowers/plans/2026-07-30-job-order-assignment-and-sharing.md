@@ -23,17 +23,14 @@
 
 ---
 
-### Task 0: Resolve the divergent Alembic history
+### Task 0: Establish the baseline
 
-`alembic heads` currently reports **two** heads: `1519048c9751` (`20260728_1700_candidate_avatar.py`) and `8c7e0f3c5305` (`20260730_1006_client_logo.py`). Every later task adds a migration, and adding one on top of a branched history produces a third head that will not apply.
-
-**Files:**
-- Create (only if two heads are confirmed): `backend/alembic/versions/<generated>_merge_heads.py`
+**Files:** none — this task changes nothing.
 
 **Interfaces:**
-- Produces: a single Alembic head revision id, used as `down_revision` by Task 1.
+- Produces: the confirmed Alembic head revision id, used as `down_revision` by Task 1.
 
-- [ ] **Step 1: Confirm the head count**
+- [ ] **Step 1: Confirm the head**
 
 `alembic` needs `DATABASE_URL`, so load the repo-root `.env` first:
 
@@ -41,36 +38,17 @@
 set -a && . ../.env && set +a && uv run alembic heads
 ```
 
-Expected: either one line (no branch — skip to Step 4) or two lines.
+Expected: exactly one line — **`8c7e0f3c5305`** (`20260730_1006_client_logo.py`). That is Task 1's `down_revision`.
 
-- [ ] **Step 2: If two heads, merge them**
+If two or more lines appear, the history has branched since this plan was written: run `uv run alembic merge -m "merge heads" <rev1> <rev2>`, re-run `alembic heads`, and use the resulting single revision instead. Do not add a migration on top of a branched history — it produces a further head that will not apply.
 
-```bash
-set -a && . ../.env && set +a && uv run alembic merge -m "merge heads" 1519048c9751 8c7e0f3c5305
-```
-
-- [ ] **Step 3: Verify a single head**
-
-```bash
-set -a && . ../.env && set +a && uv run alembic heads
-```
-
-Expected: exactly one revision id. **Record it — every later task's first migration uses it as `down_revision`.**
-
-- [ ] **Step 4: Confirm the suite still passes before any change**
+- [ ] **Step 2: Confirm the suite passes before any change**
 
 ```bash
 uv run pytest -q
 ```
 
 Expected: all pass. This is the baseline; a failure here is pre-existing and must be understood before continuing.
-
-- [ ] **Step 5: Commit (skip if no merge file was created)**
-
-```bash
-git add alembic/versions/
-git commit -m "Rejoin the two migration heads before building on them"
-```
 
 ---
 
@@ -100,7 +78,7 @@ application code.
 
 from sqlalchemy import text
 
-from app.db.session import AdminSessionLocal
+from tests.conftest import AdminSessionLocal
 
 
 async def test_users_has_tenant_id_id_unique_constraint() -> None:
@@ -542,7 +520,7 @@ from sqlalchemy import insert, select, text
 from sqlalchemy.exc import IntegrityError
 
 from app.db.rls import tenant_session
-from app.db.session import AdminSessionLocal
+from tests.conftest import AdminSessionLocal
 from app.models.opportunity import Opportunity
 from tests.conftest import cleanup_tenant, seed_tenant_with_user
 
@@ -682,9 +660,13 @@ Add after the `received_datetime` column:
     source: Mapped[str] = mapped_column(String(16), nullable=False, default=PIPELINE)
 ```
 
-Add three entries to `__table_args__`:
+Add four entries to `__table_args__`. The first is easy to miss and Task 4's migration fails without it — `opportunity_shares` declares a composite foreign key to `opportunities(tenant_id, id)`, and Postgres refuses one unless a matching unique constraint exists:
 
 ```python
+        # Children reference (tenant_id, id) so their FK cannot cross
+        # agencies — the same idiom as `uq_clients_tenant_id_id`.
+        # `opportunity_shares` depends on this existing.
+        UniqueConstraint("tenant_id", "id", name="uq_opportunities_tenant_id_id"),
         CheckConstraint(
             "source IN ('pipeline', 'manual')",
             name="ck_opportunities_source_known",
@@ -715,6 +697,12 @@ Body:
 
 ```python
 def upgrade() -> None:
+    # First, so `opportunity_shares` can declare a composite FK against it in
+    # the next migration. Postgres refuses a composite FK without a matching
+    # unique constraint on the referenced columns.
+    op.create_unique_constraint(
+        "uq_opportunities_tenant_id_id", "opportunities", ["tenant_id", "id"]
+    )
     op.add_column("opportunities", sa.Column("client_id", sa.UUID(), nullable=True))
     op.add_column("opportunities", sa.Column("assigned_user_id", sa.UUID(), nullable=True))
     # NOT NULL on a table with existing rows, so it needs a server default at
@@ -797,6 +785,7 @@ def downgrade() -> None:
     op.drop_column("opportunities", "source")
     op.drop_column("opportunities", "assigned_user_id")
     op.drop_column("opportunities", "client_id")
+    op.drop_constraint("uq_opportunities_tenant_id_id", "opportunities", type_="unique")
 ```
 
 **Before running this, verify the real FK constraint name** — `opportunities_email_message_id_fkey` is Postgres's default and is probably right, but the migration drops it by name and will fail loudly if it differs:
@@ -804,7 +793,7 @@ def downgrade() -> None:
 ```bash
 set -a && . ../.env && set +a && uv run python -c "
 import asyncio, sqlalchemy as sa
-from app.db.session import AdminSessionLocal
+from tests.conftest import AdminSessionLocal
 async def main():
     async with AdminSessionLocal() as s:
         print((await s.execute(sa.text(
@@ -866,7 +855,7 @@ from sqlalchemy import insert, select, text
 from sqlalchemy.exc import IntegrityError
 
 from app.db.rls import tenant_session
-from app.db.session import AdminSessionLocal
+from tests.conftest import AdminSessionLocal
 from app.models.opportunity import Opportunity
 from app.models.opportunity_share import OpportunityShare
 from tests.conftest import cleanup_tenant, seed_tenant_with_user
@@ -1174,7 +1163,7 @@ from fastapi import HTTPException
 from sqlalchemy import insert, select, text
 
 from app.db.rls import tenant_session
-from app.db.session import AdminSessionLocal
+from tests.conftest import AdminSessionLocal
 from app.models.opportunity import Opportunity
 from app.models.opportunity_share import OpportunityShare
 from app.services.visibility import (
@@ -1380,7 +1369,8 @@ asserts structurally that no route escapes it.
 import uuid
 
 from fastapi import HTTPException
-from sqlalchemy import ColumnElement, select
+from sqlalchemy import ColumnElement, and_, or_, select
+from sqlalchemy import true as true_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.email_message import EmailMessage
@@ -1479,8 +1469,6 @@ async def load_editable_opportunity(
         )
     return row
 ```
-
-Add the missing imports at the top: `from sqlalchemy import and_, or_, true as true_`.
 
 - [ ] **Step 4: Run the tests**
 
@@ -1730,6 +1718,129 @@ git commit -m "Stop showing every recruiter every job order"
 
 ---
 
+### Task 6b: Give an event a recipient list
+
+Task 7 emits a share event, so the event must be able to carry recipients before Task 7 is written. Splitting this out of the notification work is what stops Task 7 from referencing a constant that does not exist yet.
+
+**Files:**
+- Modify: `backend/app/services/notify/events.py`
+- Modify: `backend/app/services/notify/dispatch.py`
+- Create: `backend/tests/test_notify_recipients.py`
+
+**Interfaces:**
+- Produces: `EVENT_OPPORTUNITY_SHARED = "opportunity.shared"`, `EVENT_OPPORTUNITY_ASSIGNED = "opportunity.assigned"`, and `OpportunityEvent.recipient_user_ids: tuple[uuid.UUID, ...] | None = None`. Tasks 7, 8 and 10 all emit with it.
+
+- [ ] **Step 1: Write the failing test**
+
+Create `backend/tests/test_notify_recipients.py`. Three cases:
+
+1. An event with `recipient_user_ids=(b,)` produces deliveries only for destinations whose `user_id` is `b`.
+2. An event with `recipient_user_ids=None` keeps the current tenant-wide behaviour — every verified destination gets one.
+3. A tenant-level destination (`user_id IS NULL` — the "one shared destination" case in the notification design) receives the event even when `recipient_user_ids` names specific users.
+
+Case 3 is the one that breaks if the SQL filter is written naively.
+
+- [ ] **Step 2: Run and watch it fail**
+
+```bash
+uv run pytest tests/test_notify_recipients.py -v
+```
+
+Expected: FAIL — `TypeError: OpportunityEvent.__init__() got an unexpected keyword argument 'recipient_user_ids'`.
+
+- [ ] **Step 3: Extend the event**
+
+In `backend/app/services/notify/events.py`:
+
+```python
+EVENT_OPPORTUNITY_NEW = "opportunity.new"
+EVENT_OPPORTUNITY_NEEDS_REVIEW = "opportunity.needs_review"
+EVENT_OPPORTUNITY_SHARED = "opportunity.shared"
+EVENT_OPPORTUNITY_ASSIGNED = "opportunity.assigned"
+
+ALL_EVENT_KINDS: tuple[str, ...] = (
+    EVENT_OPPORTUNITY_NEW,
+    EVENT_OPPORTUNITY_NEEDS_REVIEW,
+    EVENT_OPPORTUNITY_SHARED,
+    EVENT_OPPORTUNITY_ASSIGNED,
+)
+
+
+@dataclass(frozen=True)
+class OpportunityEvent:
+    """One vacancy, denormalised at emit time."""
+
+    kind: str
+    tenant_id: uuid.UUID
+    opportunity_id: uuid.UUID
+    job_title: str | None
+    company_name: str | None
+    location: str | None
+    salary: str | None
+    # Who should hear about this. `None` keeps the original tenant-wide
+    # meaning, so nothing already in the catalogue changes: a broadcast share
+    # and an unassigned job order both legitimately concern everybody.
+    recipient_user_ids: tuple[uuid.UUID, ...] | None = None
+    # Set on opportunity.shared and opportunity.assigned.
+    actor_name: str | None = None
+    note: str | None = None
+```
+
+- [ ] **Step 4: Intersect in `dispatch.py`**
+
+`notification_destinations` already carries a nullable `user_id`. Extend the `_SUBSCRIBERS` query (l.38) with a recipient filter, binding the parameter as a typed array so asyncpg accepts a Python list:
+
+```python
+from sqlalchemy import bindparam, text
+from sqlalchemy.dialects.postgresql import UUID as PgUUID, ARRAY
+
+_SUBSCRIBERS = text(
+    """
+    SELECT d.id AS destination_id, d.channel
+    FROM notification_destinations d
+    JOIN notification_subscriptions s ON s.destination_id = d.id
+    WHERE s.event_kind = :event_kind
+      AND s.active
+      AND d.verified_at IS NOT NULL
+      AND d.disabled_at IS NULL
+      AND (
+        :recipients IS NULL
+        -- A tenant-level shared destination belongs to nobody in particular
+        -- and must keep receiving everything.
+        OR d.user_id IS NULL
+        OR d.user_id = ANY(:recipients)
+      )
+    """
+).bindparams(bindparam("recipients", type_=ARRAY(PgUUID(as_uuid=True))))
+```
+
+In the function that executes it, pass `list(event.recipient_user_ids)` when the tuple is set and `None` when it is not — `None` is what makes the first branch of the filter true and preserves the existing tenant-wide behaviour.
+
+- [ ] **Step 5: Run the tests**
+
+```bash
+uv run pytest tests/test_notify_recipients.py -v
+```
+
+Expected: 3 passed.
+
+- [ ] **Step 6: Run the existing notification suite — this changes a shared query**
+
+```bash
+uv run pytest tests/ -k notif -v
+```
+
+Expected: all pass. Every existing emit passes no recipients, so every existing test should be unaffected; a failure here means the `None` branch is wrong.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add app/services/notify/ tests/test_notify_recipients.py
+git commit -m "Let an event say who it concerns"
+```
+
+---
+
 ### Task 7: Sharing endpoints
 
 **Files:**
@@ -1738,7 +1849,7 @@ git commit -m "Stop showing every recruiter every job order"
 - Create: `backend/tests/test_opportunity_shares_api.py`
 
 **Interfaces:**
-- Consumes: `OpportunityShare` (Task 4), `load_visible_opportunity`, `can_edit`, `OWNER_ROLE` (Task 5).
+- Consumes: `OpportunityShare` (Task 4); `load_visible_opportunity`, `can_edit`, `OWNER_ROLE` (Task 5); `EVENT_OPPORTUNITY_SHARED` and `recipient_user_ids` (Task 6b).
 - Produces: `POST/GET /api/opportunities/{id}/shares`, `DELETE /api/opportunities/{id}/shares/{share_id}`.
 
 - [ ] **Step 1: Write the failing tests**
@@ -1845,16 +1956,35 @@ async def share_opportunity(
                 )
             )
             await session.execute(statement)
-            created = [None]
+            # None, not an empty tuple. `None` is the "everybody" meaning the
+            # event carries; `()` would match no destination at all and the
+            # broadcast would notify nobody.
+            recipients: tuple[uuid.UUID, ...] | None = None
+            shared_count = 0
         else:
             if not body.user_ids:
                 raise HTTPException(
                     status_code=422, detail="Name at least one colleague to share with."
                 )
-            created = []
+            # Only genuinely new recipients are notified. Re-sharing to
+            # someone who already has it updates the note silently — they were
+            # told the first time, and a second message says nothing new.
+            existing = set(
+                (
+                    await session.execute(
+                        select(OpportunityShare.shared_with_user_id).where(
+                            OpportunityShare.opportunity_id == opportunity_id,
+                            OpportunityShare.scope == OpportunityShare.SCOPE_USER,
+                        )
+                    )
+                ).scalars()
+            )
+            fresh: list[uuid.UUID] = []
             for target in body.user_ids:
                 if target == user_uuid:
                     continue  # sharing with yourself is a no-op, not an error
+                if target not in existing:
+                    fresh.append(target)
                 await session.execute(
                     pg_insert(OpportunityShare)
                     .values(
@@ -1874,9 +2004,10 @@ async def share_opportunity(
                         set_={"note": body.note, "shared_by_user_id": user_uuid},
                     )
                 )
-                created.append(target)
+            recipients = tuple(fresh)
+            shared_count = len(fresh)
 
-    return {"opportunity_id": str(opportunity_id), "shared_with": len(created)}
+    return {"opportunity_id": str(opportunity_id), "newly_shared_with": shared_count}
 ```
 
 Plus `GET .../shares` (visible-only, returns scope, recipient, sharer, note, created_at) and `DELETE .../shares/{share_id}` permitting the assignee, the original sharer, the owner, and a recipient removing themselves.
@@ -1885,7 +2016,7 @@ Register the router in `backend/app/main.py` beside the existing ones, under the
 
 - [ ] **Step 4: Emit the share event**
 
-After the shares are written, emit one event carrying the new recipients. Task 10 defines `EVENT_OPPORTUNITY_SHARED` and `recipient_user_ids`; until then, leave a call that Task 10 fills in — **no**, that is a placeholder. Instead, **do Task 10 before this step** if executing out of order; when executing in order, this step is the one line:
+Task 6b already added `EVENT_OPPORTUNITY_SHARED` and `recipient_user_ids`, so this is one call, placed after the `tenant_session` block closes:
 
 ```python
     await emit(
@@ -1893,16 +2024,19 @@ After the shares are written, emit one event carrying the new recipients. Task 1
             kind=EVENT_OPPORTUNITY_SHARED,
             tenant_id=tenant_uuid,
             opportunity_id=opportunity_id,
-            recipient_user_ids=tuple(t for t in created if t is not None),
+            # None for a tenant broadcast — everybody; a tuple of the newly
+            # added recipients for a named share.
+            recipient_user_ids=recipients,
             job_title=opportunity.job_title_raw,
             company_name=opportunity.company_name_raw,
             location=opportunity.location_raw,
             salary=opportunity.salary_raw,
+            note=body.note,
         )
     )
 ```
 
-For a tenant broadcast, `recipient_user_ids` is `None` — which is exactly the "everyone" meaning Task 10 gives it.
+Skip the emit entirely when `recipients == ()` — every named target already had the job order, so there is nothing to announce.
 
 - [ ] **Step 5: Run the tests**
 
@@ -2154,14 +2288,11 @@ git commit -m "Move a client's work when the client changes hands"
 **Files:**
 - Modify: `backend/app/services/client_matching.py` (return the assignee alongside the id)
 - Modify: `backend/app/services/ingest/persist.py:302-318`
-- Modify: `backend/app/services/notify/events.py`
-- Modify: `backend/app/services/notify/dispatch.py`
 - Create: `backend/tests/test_ingest_assignment.py`
-- Create: `backend/tests/test_notify_recipients.py`
 
 **Interfaces:**
-- Consumes: Task 3's columns, Task 2's `Client.assigned_user_id`.
-- Produces: `EVENT_OPPORTUNITY_SHARED = "opportunity.shared"`, `EVENT_OPPORTUNITY_ASSIGNED = "opportunity.assigned"`, and `OpportunityEvent.recipient_user_ids: tuple[uuid.UUID, ...] | None`.
+- Consumes: Task 3's columns, Task 2's `Client.assigned_user_id`, Task 6b's `recipient_user_ids`.
+- Produces: `MatchedClient(client_id, assigned_user_id)` from `match_client` — every existing caller changes.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -2176,12 +2307,10 @@ Seed a tenant with two users; give recruiter B the client; ingest a message into
 
 Also: an unmatched client leaves both NULL (the queue); re-running extraction on the same message does **not** overwrite an `assigned_user_id` a recruiter has since claimed.
 
-`tests/test_notify_recipients.py`: an event with `recipient_user_ids=(b,)` produces deliveries only for B's destinations; `recipient_user_ids=None` keeps the current tenant-wide behaviour; a tenant-scoped destination receives events regardless.
-
 - [ ] **Step 2: Run and watch them fail**
 
 ```bash
-uv run pytest tests/test_ingest_assignment.py tests/test_notify_recipients.py -v
+uv run pytest tests/test_ingest_assignment.py -v
 ```
 
 - [ ] **Step 3: Return the assignee from `match_client`**
@@ -2223,59 +2352,7 @@ The call order already holds: `match_client` runs at l.302 and the opportunity i
 
 Inside `_insert_opportunity`, write `client_id` and `assigned_user_id` **on the insert path only**. `extract_email` re-runs after a crash and replay appends — which is why `client_mentions` carries its once-per-message unique constraint — so if the update path recomputed the assignee, a recruiter who had claimed a queued job order would silently lose it to a re-run.
 
-- [ ] **Step 5: Add recipients to the event**
-
-`backend/app/services/notify/events.py`:
-
-```python
-EVENT_OPPORTUNITY_NEW = "opportunity.new"
-EVENT_OPPORTUNITY_NEEDS_REVIEW = "opportunity.needs_review"
-EVENT_OPPORTUNITY_SHARED = "opportunity.shared"
-EVENT_OPPORTUNITY_ASSIGNED = "opportunity.assigned"
-
-ALL_EVENT_KINDS: tuple[str, ...] = (
-    EVENT_OPPORTUNITY_NEW,
-    EVENT_OPPORTUNITY_NEEDS_REVIEW,
-    EVENT_OPPORTUNITY_SHARED,
-    EVENT_OPPORTUNITY_ASSIGNED,
-)
-
-
-@dataclass(frozen=True)
-class OpportunityEvent:
-    """One vacancy, denormalised at emit time."""
-
-    kind: str
-    tenant_id: uuid.UUID
-    opportunity_id: uuid.UUID
-    job_title: str | None
-    company_name: str | None
-    location: str | None
-    salary: str | None
-    # Who should hear about this. `None` keeps the original tenant-wide
-    # meaning, so nothing else in the catalogue changes: a broadcast share and
-    # an unassigned job order both legitimately concern everybody.
-    recipient_user_ids: tuple[uuid.UUID, ...] | None = None
-    # Set on opportunity.shared and opportunity.assigned.
-    actor_name: str | None = None
-    note: str | None = None
-```
-
-- [ ] **Step 6: Intersect in `dispatch.py`**
-
-Extend the `_SUBSCRIBERS` query with an optional recipient filter. A tenant-level destination (the "one shared destination" case in the notification design) has no `user_id` and must keep receiving everything:
-
-```sql
-      AND (
-        :recipients::uuid[] IS NULL
-        OR d.user_id IS NULL
-        OR d.user_id = ANY(:recipients)
-      )
-```
-
-Pass `None` when `recipient_user_ids` is `None`. A tenant broadcast is one event with N recipients, not N events, so the existing per-event hourly cap still applies per subscriber.
-
-- [ ] **Step 7: Set recipients at the ingestion emit site**
+- [ ] **Step 5: Set recipients at the ingestion emit site**
 
 In `persist.py`, the existing `emit(OpportunityEvent(...))` gains:
 
@@ -2287,15 +2364,15 @@ In `persist.py`, the existing `emit(OpportunityEvent(...))` gains:
                         ),
 ```
 
-- [ ] **Step 8: Run the tests, then the whole suite**
+- [ ] **Step 6: Run the tests, then the whole suite**
 
 ```bash
-uv run pytest tests/test_ingest_assignment.py tests/test_notify_recipients.py -v && uv run pytest -q
+uv run pytest tests/test_ingest_assignment.py -v && uv run pytest -q
 ```
 
 Expected: all pass.
 
-- [ ] **Step 9: Lint everything**
+- [ ] **Step 7: Lint everything**
 
 ```bash
 uv run ruff check .
@@ -2303,7 +2380,7 @@ uv run ruff check .
 
 Expected: no output.
 
-- [ ] **Step 10: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
 git add app/services/ tests/
@@ -2331,6 +2408,11 @@ already returned a role (it returns a 2-tuple, so Task 6 changes that signature
 and every call site), and no task existed for registering the new tables in
 `_CLEANUP_STATEMENTS` (folded into Task 2, Step 2).
 
-**One ordering hazard:** Task 7 Step 4 emits an event whose kind Task 10
-defines. Executed in order this is fine; executed out of order, do Task 10
-first.
+**Third gap, found in review:** Task 7 emitted an event whose kind was defined
+two tasks later, so following the plan in order would have failed on a
+NameError. The event plumbing is now Task 6b and runs before the code that
+uses it.
+
+**Fourth:** `opportunities` has no `UniqueConstraint(tenant_id, id)`, which
+Task 4's composite foreign key requires — Postgres refuses a composite FK
+without one. Task 3 now adds it, in both the model and the migration.
