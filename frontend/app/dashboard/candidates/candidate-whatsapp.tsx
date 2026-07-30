@@ -16,6 +16,7 @@ import {
   type ActivityItem,
   type WaSessionStatus,
 } from "../candidates";
+import { Dialog } from "../dialog";
 import { when } from "../format";
 
 /**
@@ -293,8 +294,6 @@ function WhatsappModal({
     offerPopup: boolean;
   } | null>(null);
   const [clientRequestId, setClientRequestId] = useState(() => newClientRequestId());
-  const dialogRef = useRef<HTMLDivElement | null>(null);
-  const headingRef = useRef<HTMLHeadingElement | null>(null);
   // Not a blocker: the backend already rewrites the message to omit the name
   // entirely rather than fall back to an email (see settings/account.tsx),
   // so a signed-in user with neither name is fine to send, just less
@@ -340,39 +339,6 @@ function WhatsappModal({
     return () => {
       cancelled = true;
     };
-  }, []);
-
-  // Focus trap + Escape-to-close + return focus on unmount, since this is a
-  // hand-built dialog rather than a native <dialog> — see the file header for
-  // why there was no existing primitive to reuse.
-  useEffect(() => {
-    headingRef.current?.focus();
-    function onKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        onClose();
-        return;
-      }
-      if (event.key !== "Tab") return;
-      const node = dialogRef.current;
-      if (!node) return;
-      const focusable = node.querySelectorAll<HTMLElement>(
-        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
-      );
-      if (focusable.length === 0) return;
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first.focus();
-      }
-    }
-    document.addEventListener("keydown", onKeyDown);
-    return () => document.removeEventListener("keydown", onKeyDown);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   function openWhatsapp() {
@@ -478,18 +444,16 @@ function WhatsappModal({
   }
 
   return (
-    <div className="wa-overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div
-        ref={dialogRef}
-        className="card wa-modal"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="wa-modal-title"
-      >
-        <h3 id="wa-modal-title" ref={headingRef} tabIndex={-1} className="jo-detail-title wa-title">
+    <Dialog
+      titleId="wa-modal-title"
+      onClose={onClose}
+      title={
+        <>
           <WhatsappGlyph size={24} />
           WhatsApp {row.full_name}
-        </h3>
+        </>
+      }
+    >
 
         {draft.status === "loading" && <p className="body muted">Loading the draft…</p>}
 
@@ -589,8 +553,7 @@ function WhatsappModal({
             </div>
           </>
         )}
-      </div>
-    </div>
+    </Dialog>
   );
 }
 

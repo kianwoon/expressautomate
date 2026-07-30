@@ -1324,10 +1324,10 @@ select.gl-input:focus-visible { outline: 2px solid var(--blue-500); outline-offs
 .src-act:focus-visible { opacity: 1; outline: 2px solid var(--blue-500); outline-offset: 2px; }
 .src-act-off { font-size: 0.75rem; color: var(--ink-500); }
 .src-done { font-size: 0.75rem; font-weight: 650; color: #2f7d54; }
-/* WhatsApp draft modal — no dialog primitive existed elsewhere in this
-   codebase, so this is the whole of it: a dimmed backdrop, a centered card
-   reusing the existing `.card` surface, and nothing else. */
-.wa-overlay {
+/* The shared dialog — a dimmed backdrop and a centered card reusing the
+   existing `.card` surface. Was `.wa-*`, private to the WhatsApp draft, until
+   the candidate form needed the same thing; see `dashboard/dialog.tsx`. */
+.dlg-overlay {
   position: fixed;
   inset: 0;
   background: rgba(15, 23, 42, 0.45);
@@ -1337,19 +1337,47 @@ select.gl-input:focus-visible { outline: 2px solid var(--blue-500); outline-offs
   padding: 16px;
   z-index: 60;
 }
-.wa-modal {
+.dlg-modal {
   width: 100%;
   max-width: 460px;
   padding: 24px;
   display: grid;
   gap: 12px;
+  /* The candidate form is twenty-odd fields and does not fit a laptop screen.
+     Bounding the card and scrolling *inside* it keeps the submit button
+     reachable; letting the overlay scroll instead puts the buttons below a
+     fold that has no scrollbar of its own. `align-self` because the flex
+     centring above would otherwise stretch it back to full height. */
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
+  align-self: center;
+}
+/* Wider than the default: the form's date, number and select controls sit
+   badly at 460px, where the date picker's own chrome starts wrapping. */
+.dlg-modal-wide {
+  max-width: 620px;
 }
 /* The mark sits on the heading's text baseline rather than its line box, so a
    long candidate name wrapping to a second line does not drag it downwards. */
-.wa-title {
+.dlg-title {
   display: flex;
   align-items: center;
   gap: 10px;
+}
+
+/* A field group inside the form. The border is doing real work: it is what
+   separates the facts a Work Permit turns on from race, which decides
+   nothing, and the two must not read as one list of demographics. */
+.cand-group {
+  display: grid;
+  gap: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 16px;
+  margin: 4px 0 0;
+}
+.cand-group-note {
+  margin: 0;
 }
 /* No width or height here: the mark renders at 16px in the action row and
    24px in the modal heading, and the size comes from the attributes each

@@ -3,6 +3,7 @@
 import { useState, type FormEvent, type ReactNode } from "react";
 
 import { ApiError, createCandidate, updateCandidate, type Candidate, type Stage } from "../candidates";
+import { Dialog } from "../dialog";
 
 /**
  * Create and edit, in one form.
@@ -20,6 +21,56 @@ import { ApiError, createCandidate, updateCandidate, type Candidate, type Stage 
  * allow-hardcode: the field labels and placeholders below are user-facing
  * form copy rendered to the page, not a list anything is matched against.
  */
+
+/** The blank option is the point of these lists, not an artefact of building a
+ *  `<select>`. "Not recorded" has to stay reachable *after* a value has been
+ *  chosen: a recruiter who picks the wrong one, or who learns they were told
+ *  wrong, must be able to get back to knowing nothing. Without it the only way
+ *  out of a mistake is another guess, and a guess entered here is what the
+ *  Work Permit check then treats as fact. */
+const NOT_RECORDED = "";
+
+const SEXES: { value: string; label: string }[] = [
+  { value: NOT_RECORDED, label: "Not recorded" },
+  { value: "female", label: "Female" },
+  { value: "male", label: "Male" },
+];
+
+const RACES: { value: string; label: string }[] = [
+  { value: NOT_RECORDED, label: "Not recorded" },
+  { value: "chinese", label: "Chinese" },
+  { value: "malay", label: "Malay" },
+  { value: "indian", label: "Indian" },
+  { value: "others", label: "Others" },
+];
+
+/** A `<datalist>`, not a `<select>`: the backend takes any ISO 3166-1 alpha-2
+ *  code, so the field must stay open, but a recruiter typing "Philippines"
+ *  into a bare text box earns a 422 and no idea why. These are the MDW
+ *  approved source countries plus Singapore, which is where the codes a
+ *  recruiter here actually types come from — a hint at the common cases, not
+ *  a restriction, and not a list anything is matched against.
+ *
+ *  allow-hardcode: user-facing datalist suggestions rendered to the page. The
+ *  rule these mirror lives in `MDW_APPROVED_SOURCE_COUNTRIES` on the server,
+ *  which is what eligibility is actually evaluated against; nothing here is
+ *  read back or compared. */
+const NATIONALITY_HINTS: { code: string; name: string }[] = [
+  { code: "SG", name: "Singapore" },
+  { code: "PH", name: "Philippines" },
+  { code: "ID", name: "Indonesia" },
+  { code: "MM", name: "Myanmar" },
+  { code: "IN", name: "India" },
+  { code: "LK", name: "Sri Lanka" },
+  { code: "TH", name: "Thailand" },
+  { code: "MY", name: "Malaysia" },
+  { code: "KH", name: "Cambodia" },
+  { code: "BD", name: "Bangladesh" },
+  { code: "HK", name: "Hong Kong" },
+  { code: "MO", name: "Macau" },
+  { code: "TW", name: "Taiwan" },
+  { code: "KR", name: "South Korea" },
+];
 
 const STAGES: { value: Stage; label: string }[] = [
   { value: "new", label: "New" },
@@ -46,6 +97,12 @@ type FormState = {
   notes: string;
   pipeline_stage: Stage;
   skills: string;
+  sex: string;
+  race: string;
+  race_detail: string;
+  nationality: string;
+  date_of_birth: string;
+  education_years: string;
 };
 
 function toFormState(row: Candidate | null): FormState {
@@ -66,6 +123,12 @@ function toFormState(row: Candidate | null): FormState {
     notes: row?.notes ?? "",
     pipeline_stage: row?.pipeline_stage ?? "new",
     skills: row?.skills ? row.skills.join(", ") : "",
+    sex: row?.sex ?? "",
+    race: row?.race ?? "",
+    race_detail: row?.race_detail ?? "",
+    nationality: row?.nationality ?? "",
+    date_of_birth: row?.date_of_birth ?? "",
+    education_years: row?.education_years != null ? String(row.education_years) : "",
   };
 }
 
@@ -100,6 +163,21 @@ function toSubmitBody(form: FormState) {
       .split(",")
       .map((s) => s.trim())
       .filter(Boolean),
+    // `orNull` throughout, so clearing a field back to blank sends an explicit
+    // `null` and the record returns to "not recorded". A form that could only
+    // ever set these would make the first guess permanent.
+    // Cast rather than parse: the only values these can hold come from the
+    // `<option>` lists above, which are the same literals the API accepts, and
+    // the server rejects anything else regardless.
+    sex: orNull(form.sex) as Candidate["sex"],
+    race: orNull(form.race) as Candidate["race"],
+    // Tied to `race`, because a detail left behind after the race it described
+    // was changed is a stale claim about a person, and the pair would disagree
+    // with each other on the record.
+    race_detail: form.race === "others" ? orNull(form.race_detail) : null,
+    nationality: orNull(form.nationality),
+    date_of_birth: orNull(form.date_of_birth),
+    education_years: form.education_years.trim() === "" ? null : Number(form.education_years),
   };
 }
 
@@ -173,9 +251,12 @@ export function CandidateForm({
   }
 
   return (
-    <div className="card" style={{ padding: 24, maxWidth: 560 }}>
-      <span className="eyebrow">{row ? "Edit candidate" : "Add candidate"}</span>
-
+    <Dialog
+      titleId="cand-form-title"
+      className="dlg-modal-wide"
+      onClose={saving ? () => {} : onCancel}
+      title={row ? `Edit ${row.full_name}` : "Add candidate"}
+    >
       {error && (
         <p className="body jo-detail-error" role="alert" style={{ marginTop: 12 }}>
           {error}
@@ -302,6 +383,103 @@ export function CandidateForm({
             onChange={(e) => set("skills", e.target.value)}
           />
         </Field>
+        {/* Two groups, kept apart on purpose. The four above the divider are
+            what a Work Permit is decided on; race below it decides nothing.
+            Putting them in one block would imply race is another eligibility
+            input, which is exactly the reading `redact.py` exists to prevent. */}
+        <fieldset className="cand-group">
+          <legend className="row-k">Work Permit details</legend>
+          <p className="body jo-sub cand-group-note">
+            A Work Permit is granted on these four facts, so the eligibility filter on the
+            candidates list can only use what is recorded here. Leave anything you have not been
+            told as <em>Not recorded</em> — an unknown is treated as unknown, and keeps someone in
+            the list rather than ruling them out.
+          </p>
+          <Field label="Sex">
+            <select
+              className="jo-search"
+              value={form.sex}
+              onChange={(e) => set("sex", e.target.value)}
+            >
+              {SEXES.map((s) => (
+                <option key={s.label} value={s.value}>
+                  {s.label}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Date of birth">
+            <input
+              className="jo-search"
+              type="date"
+              value={form.date_of_birth}
+              onChange={(e) => set("date_of_birth", e.target.value)}
+            />
+          </Field>
+          <Field label="Years of formal education">
+            {/* No `min`/`max` here: the range is a configured rule on the
+                server, and a copy in this file is a second place for it to be
+                wrong. The server names the field and the bound when it
+                refuses, and that message renders above the form. */}
+            <input
+              className="jo-search"
+              type="number"
+              value={form.education_years}
+              onChange={(e) => set("education_years", e.target.value)}
+            />
+          </Field>
+          <Field label="Nationality">
+            <input
+              className="jo-search"
+              list="cand-nationality-hints"
+              value={form.nationality}
+              onChange={(e) => set("nationality", e.target.value)}
+              placeholder="Two-letter country code, e.g. PH"
+            />
+            <datalist id="cand-nationality-hints">
+              {NATIONALITY_HINTS.map((c) => (
+                <option key={c.code} value={c.code}>
+                  {c.name}
+                </option>
+              ))}
+            </datalist>
+          </Field>
+        </fieldset>
+
+        <fieldset className="cand-group">
+          {/* Not "Race": a legend repeating the field label below it gives the
+              control an accessible name of "Race Race", and a screen reader
+              user hears the ambiguity a sighted user does not. */}
+          <legend className="row-k">For your records only</legend>
+          <p className="body jo-sub cand-group-note">
+            Kept for your own records only. It is never used to rank, match or shortlist anyone, it
+            is never sent to the AI that explains why a candidate fits, and it has no part in the
+            Work Permit check above.
+          </p>
+          <Field label="Race">
+            <select
+              className="jo-search"
+              value={form.race}
+              onChange={(e) => set("race", e.target.value)}
+            >
+              {RACES.map((r) => (
+                <option key={r.label} value={r.value}>
+                  {r.label}
+                </option>
+              ))}
+            </select>
+          </Field>
+          {form.race === "others" && (
+            <Field label="Race detail">
+              <input
+                className="jo-search"
+                value={form.race_detail}
+                onChange={(e) => set("race_detail", e.target.value)}
+              />
+            </Field>
+          )}
+        </fieldset>
+
         <Field label="Notes">
           <textarea
             className="jo-search"
@@ -320,7 +498,7 @@ export function CandidateForm({
           </button>
         </div>
       </form>
-    </div>
+    </Dialog>
   );
 }
 

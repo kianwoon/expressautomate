@@ -166,6 +166,22 @@ export type Candidate = {
   documents?: CandidateDocument[];
   /** Only present on the single-record GET, not on a list row. */
   overridden_fields?: string[];
+  /** The four facts a Singapore MDW Work Permit turns on, and the two that
+   *  describe race. All single-record-only, and deliberately so: the server
+   *  keeps them off list rows because a screen showing everyone's sex and
+   *  race side by side is a screen that invites shortlisting by eye.
+   *
+   *  `null` is a first-class value here, not a gap to be filled in. An
+   *  unrecorded date of birth makes the age check `unknown`, which *keeps* a
+   *  candidate in the eligible list — only a fact that is known and fails
+   *  removes anyone. So nothing in the UI may treat absent as a defect, and
+   *  nothing may guess. */
+  sex?: "female" | "male" | null;
+  race?: "chinese" | "malay" | "indian" | "others" | null;
+  race_detail?: string | null;
+  nationality?: string | null;
+  date_of_birth?: string | null;
+  education_years?: number | null;
   /** Set once a photo has been uploaded; `null` means "show the initials
    *  fallback" rather than "loading". Never used to build a URL directly —
    *  the URL itself is a separate, short-lived fetch (see `getCandidateAvatar`). */

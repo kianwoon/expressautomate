@@ -271,8 +271,12 @@ function Workspace({ role }: { role: string }) {
     reload();
   }
 
-  if (view.mode !== "list") {
-    return (
+  // Rendered *over* the list rather than instead of it. The early return this
+  // replaced sent the recruiter to a bare page: the row they were editing, the
+  // filters they had set and the letter they had picked all vanished, and
+  // cancelling had to rebuild the screen from state rather than just closing.
+  const formDialog =
+    view.mode === "list" ? null : (
       <CandidateForm
         row={view.mode === "edit" ? view.row : null}
         onCancel={() => setView({ mode: "list" })}
@@ -290,10 +294,10 @@ function Workspace({ role }: { role: string }) {
         }}
       />
     );
-  }
 
   return (
     <>
+      {formDialog}
       {/* No eyebrow above the heading: "CANDIDATES" over "The people you
           place." labelled the page twice, and the nav already says which page
           this is. The heading starts the page. */}
