@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { Client } from "../clients";
@@ -57,7 +57,7 @@ describe("ClientLogo", () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
 
-    render(<ClientLogo client={client()} onChange={() => {}} />);
+    render(<ClientLogo client={client()} />);
 
     await screen.findByText("MP");
     expect(fetchMock).not.toHaveBeenCalled();
@@ -69,7 +69,7 @@ describe("ClientLogo", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    render(<ClientLogo client={client({ logo_key: "tenant/cl-1/logo.png" })} onChange={() => {}} />);
+    render(<ClientLogo client={client({ logo_key: "tenant/cl-1/logo.png" })} />);
 
     const img = await screen.findByAltText("Logo of Meridian Partners");
     expect(img.getAttribute("src")).toBe("https://r2.example/logo.png?sig=abc");
@@ -77,7 +77,7 @@ describe("ClientLogo", () => {
     expect(fetchMock.mock.calls[0][0]).toBe("/api/clients/cl-1/logo");
   });
 
-  it("uploads the chosen file as multipart and calls onChange", async () => {
+  it("uploads the chosen file, shows the new logo, and makes no further request or list-reload call", async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(
@@ -86,8 +86,10 @@ describe("ClientLogo", () => {
       .mockResolvedValueOnce(jsonResponse({ url: "https://r2.example/new.png", expires_in: 300 }));
     vi.stubGlobal("fetch", fetchMock);
 
-    const onChange = vi.fn();
-    render(<ClientLogo client={client()} onChange={onChange} />);
+    // Stands in for `reload()` from `useClients` — the regression this test
+    // pins is that uploading a logo must never trigger a full list refetch.
+    const reload = vi.fn();
+    render(<ClientLogo client={client()} />);
 
     await screen.findByText("MP");
 
@@ -95,7 +97,15 @@ describe("ClientLogo", () => {
     const input = screen.getByLabelText("Add a logo of Meridian Partners") as HTMLInputElement;
     fireEvent.change(input, { target: { files: [file] } });
 
-    await waitFor(() => expect(onChange).toHaveBeenCalled());
+    const img = await screen.findByAltText("Logo of Meridian Partners");
+    expect(img.getAttribute("src")).toBe("https://r2.example/new.png");
+
+    // Upload (POST) + one re-presign to show the result — exactly two calls,
+    // nothing more. A third call would be the redundant re-presign this fix
+    // removes; a list reload would show up here too since both would have to
+    // go through the same `fetch`.
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(reload).not.toHaveBeenCalled();
 
     const uploadCall = fetchMock.mock.calls[0];
     expect(uploadCall[0]).toBe("/api/clients/cl-1/logo");
@@ -103,24 +113,26 @@ describe("ClientLogo", () => {
     expect(uploadCall[1].body).toBeInstanceOf(FormData);
   });
 
-  it("deletes the logo and returns to the initials state", async () => {
+  it("deletes the logo, returns to initials, and makes no further request or list-reload call", async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(jsonResponse({ url: "https://r2.example/logo.png", expires_in: 300 }))
       .mockResolvedValueOnce(jsonResponse(null, { ok: true, status: 204 }));
     vi.stubGlobal("fetch", fetchMock);
 
-    const onChange = vi.fn();
-    render(
-      <ClientLogo client={client({ logo_key: "tenant/cl-1/logo.png" })} onChange={onChange} />,
-    );
+    const reload = vi.fn();
+    render(<ClientLogo client={client({ logo_key: "tenant/cl-1/logo.png" })} />);
 
     await screen.findByAltText("Logo of Meridian Partners");
 
     fireEvent.click(screen.getByRole("button", { name: "Remove the logo of Meridian Partners" }));
 
     await screen.findByText("MP");
+
+    // Initial presign (GET) + the DELETE — exactly two calls. No third call
+    // to re-presign an image that no longer exists, and no list reload.
+    expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(fetchMock.mock.calls[1][1].method).toBe("DELETE");
-    expect(onChange).toHaveBeenCalled();
+    expect(reload).not.toHaveBeenCalled();
   });
 });

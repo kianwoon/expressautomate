@@ -162,7 +162,7 @@ function Detail({
       </div>
 
       <div className="jo-detail-avatar">
-        <ClientLogo client={row} onChange={onChanged} />
+        <ClientLogo client={row} />
         <h3 className="jo-detail-title">{row.name}</h3>
       </div>
 

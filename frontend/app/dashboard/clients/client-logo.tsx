@@ -61,13 +61,9 @@ type LogoState =
 
 export function ClientLogo({
   client,
-  onChange,
   readOnly = false,
 }: {
   client: Client;
-  /** Called after an upload or removal succeeds, so the caller can refetch
-   *  the client record (`logo_key` changed). Ignored when `readOnly`. */
-  onChange?: () => void;
   /** The panel is the only place this mark is an upload control — the mark
    *  IS the file input there. Everywhere else a client is only being read,
    *  not managed, so `readOnly` drops the file input, the camera overlay,
@@ -123,7 +119,17 @@ export function ClientLogo({
       await uploadClientLogo(client.id, file);
       const url = await getClientLogo(client.id);
       if (url) setLogo({ status: "ready", url: url.url });
-      onChange?.();
+      // No parent notification here on purpose: this component owns its own
+      // display state end-to-end, and nothing else on the page reads
+      // `logo_key` / `logo_updated_at` (the clients table deliberately does
+      // not show logos). Notifying the parent used to trigger a refetch of
+      // the whole client list AND the detail record, which handed back a new
+      // `logo_updated_at` and re-fired this component's own effect — a
+      // redundant third presign and a visible flash for zero benefit. The
+      // client record the parent holds goes stale on these two fields until
+      // some other action (suspend, edit, unmerge) refetches it anyway, and
+      // that refetch's single re-presign is harmless because it happens once,
+      // not as part of this cascade.
     } catch (err) {
       setError(err instanceof Error ? err.message : "We could not upload that logo just now.");
     } finally {
@@ -144,7 +150,7 @@ export function ClientLogo({
     try {
       await deleteClientLogo(client.id);
       setLogo({ status: "none" });
-      onChange?.();
+      // No parent notification — see the comment in `upload` above.
       // The button that was just pressed no longer exists — hand focus to
       // the control that is still there.
       fileRef.current?.focus();
