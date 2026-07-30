@@ -112,11 +112,15 @@ class Client(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
             name="fk_clients_merged_into_same_tenant",
             ondelete="SET NULL",
         ),
+        # Column-qualified SET NULL (PG15+): a plain SET NULL on a composite FK
+        # nulls every referencing column, including `tenant_id`, which is
+        # NOT NULL and would fail the delete. Only `assigned_user_id` clears —
+        # same reasoning as `fk_opportunities_assignee_same_tenant`.
         ForeignKeyConstraint(
             ["tenant_id", "assigned_user_id"],
             ["users.tenant_id", "users.id"],
             name="fk_clients_assignee_same_tenant",
-            ondelete="SET NULL",
+            ondelete="SET NULL (assigned_user_id)",
         ),
         # The identity key, declared here as well as in the migration so
         # autogenerate does not propose dropping it. `merged` is excluded so a
