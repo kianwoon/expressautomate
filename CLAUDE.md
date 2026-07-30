@@ -154,8 +154,14 @@ Live: https://expressautomate.app · repo: `kianwoon/expressautomate` (private)
 **Stage 1 (Foundation) done and deployed:** env, database, tenant/user model,
 migrations, RLS, logging, health endpoints, worker skeleton, CI/CD.
 
-**Blocked** on credentials only you can create — Entra ID app registration and
-Google OAuth client. See [docs/setup.md](docs/setup.md).
+**Shipped since:** OAuth sign-in, mailbox ingestion, AI extraction, clients,
+candidates, sourcing, the WhatsApp gateway, and job order assignment and
+sharing (2026-07-31 — see
+[the design](docs/superpowers/specs/2026-07-30-job-order-assignment-and-sharing-design.md)).
 
-Not started: frontend (`frontend/` is empty), Microsoft OAuth flow, ingestion,
-AI extraction.
+**`frontend/` is not empty** — Next.js static export with `/dashboard` (job
+orders), `/dashboard/clients`, `/dashboard/candidates` and `/settings`. Plain
+React hooks, no state library, no component library, hand-rolled CSS with tokens
+in `app/globals.css`. Tests are Vitest + Testing Library, colocated. Its only
+runtime dependencies are `next`, `react` and `qrcode`; keep it that way unless
+there is a reason not to.
