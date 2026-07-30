@@ -213,6 +213,10 @@ export type Opportunities = {
   setSort: (sort: Sort) => void;
   /** Marks one row reviewed or not, and reports whether it worked. */
   review: (id: string, reviewed: boolean) => Promise<string | null>;
+  /** Replaces one row on the current page with a freshly-read copy, for a
+   *  caller that has just written to it and read it back. Does nothing if the
+   *  row is not on the page in front of the user. */
+  patchRow: (row: Opportunity) => void;
 };
 
 /** How long to wait after the last keystroke before the search actually
@@ -380,6 +384,31 @@ export function useOpportunities(): Opportunities {
     setOffset(0);
   }, []);
 
+  /** Puts a freshly-read row back into the page it came from.
+   *
+   * An ownership move reads the row back from the server, and without this the
+   * list would keep the version it last polled — for up to fifteen seconds the
+   * avatar in the row would disagree with the owner named in the panel beside
+   * it. Worse, the panel syncs itself *from* this list, so the stale row would
+   * be pushed straight back over the fresh one and the claim would visibly
+   * snap back to "Unassigned".
+   *
+   * Only ever replaces a row already on the page: a row that has scrolled out
+   * of the current page is not this page's business to add. */
+  const patchRow = useCallback((row: Opportunity) => {
+    setState((current) =>
+      current.status === "ready"
+        ? {
+            status: "ready",
+            page: {
+              ...current.page,
+              items: current.page.items.map((item) => (item.id === row.id ? row : item)),
+            },
+          }
+        : current,
+    );
+  }, []);
+
   // Kept in a ref rather than a dependency so `review` does not change
   // identity on every fetch and re-render every row that takes it as a prop.
   const stateRef = useRef(state);
@@ -451,6 +480,7 @@ export function useOpportunities(): Opportunities {
     setQ,
     setSort,
     review,
+    patchRow,
   };
 }
 
@@ -503,10 +533,19 @@ export async function updateOpportunityPlacement(
  * A result rather than a thrown error, because none of these are exceptional:
  * two recruiters reaching for the same job order in the same second is an
  * ordinary Tuesday, and the caller's job is to render a sentence, not to
- * recover. `conflict` is carried separately from the message so a screen can
- * refresh the row on a race without parsing copy.
+ * recover. `kind` is carried separately from the message so a screen can
+ * recognise an outcome without parsing copy: re-wording a sentence, or
+ * translating one, must never change what a panel does.
+ *
+ * A `kind` rather than the HTTP status, because two of the five outcomes have
+ * no status at all — an unreachable server and an unrecognised code are both
+ * `failed`, and inventing a 0 or a 500 for them would be a number nothing sent.
  */
-export type MutationResult = { ok: true } | { ok: false; conflict: boolean; message: string };
+export type MutationFailure = "conflict" | "gone" | "forbidden" | "denied" | "failed";
+
+export type MutationResult =
+  | { ok: true }
+  | { ok: false; kind: MutationFailure; message: string };
 
 /**
  * One sentence per status, and the statuses are the whole design.
@@ -524,22 +563,25 @@ export type MutationResult = { ok: true } | { ok: false; conflict: boolean; mess
  * logic, these strings are only what the recruiter reads. Nothing is matched
  * against them.
  */
-/** Two of the four are named because a screen has to *recognise* them, not
- *  only print them. A 404 under an open panel is a closed state rather than an
- *  error, and a 403 is the one message a screen may replace with something
- *  truer about the row in front of it. Comparing against the exported constant
- *  keeps that recognition on one string rather than a second copy of the copy. */
-export const GONE_MESSAGE = "This job order is no longer available.";
-export const FORBIDDEN_MESSAGE = "This job order is not yours to reassign.";
-
-const MUTATION_MESSAGES: Record<number, string> = {
-  409: "Someone else has taken this one.",
-  404: GONE_MESSAGE,
-  403: FORBIDDEN_MESSAGE,
-  401: "Your session has expired. Sign in again, then try that once more.",
+/** Status in, `kind` and sentence out. The `kind` is what a screen branches
+ *  on — a 404 under an open panel is a closed state rather than an error, and
+ *  a 403 is the one message a screen may replace with something truer about
+ *  the row in front of it. The sentence beside it is only what the recruiter
+ *  reads; nothing is ever compared against it. */
+const MUTATION_OUTCOMES: Record<number, { kind: MutationFailure; message: string }> = {
+  409: { kind: "conflict", message: "Someone else has taken this one." },
+  404: { kind: "gone", message: "This job order is no longer available." },
+  403: { kind: "forbidden", message: "This job order is not yours to reassign." },
+  401: {
+    kind: "denied",
+    message: "Your session has expired. Sign in again, then try that once more.",
+  },
 };
 
-const MUTATION_FALLBACK = "We could not save that just now. Nothing has changed.";
+const MUTATION_FALLBACK: { kind: MutationFailure; message: string } = {
+  kind: "failed",
+  message: "We could not save that just now. Nothing has changed.",
+};
 
 async function mutate(url: string, body?: unknown): Promise<MutationResult> {
   try {
@@ -550,18 +592,14 @@ async function mutate(url: string, body?: unknown): Promise<MutationResult> {
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
     if (res.ok) return { ok: true };
-    return {
-      ok: false,
-      // Only a 409 is a race. A dropped connection is not one, and reporting
-      // it as one would tell a recruiter a colleague took the job order when
-      // nobody did.
-      conflict: res.status === 409,
-      message: MUTATION_MESSAGES[res.status] ?? MUTATION_FALLBACK,
-    };
+    // Only a 409 is a race. A dropped connection is not one, and reporting it
+    // as one would tell a recruiter a colleague took the job order when nobody
+    // did — so anything unrecognised is plainly `failed`.
+    return { ok: false, ...(MUTATION_OUTCOMES[res.status] ?? MUTATION_FALLBACK) };
   } catch {
     return {
       ok: false,
-      conflict: false,
+      kind: "failed",
       message: "We could not reach the server. Nothing has changed.",
     };
   }

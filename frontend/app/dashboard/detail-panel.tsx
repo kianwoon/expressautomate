@@ -9,12 +9,7 @@ import { Salary, Value, day } from "./format";
 import { PlacementForm } from "./job-order-placement";
 import { Shortlist } from "./job-orders-sourcing";
 import { MemberSelect } from "./member-picker";
-import {
-  FORBIDDEN_MESSAGE,
-  GONE_MESSAGE,
-  type MutationResult,
-  type Opportunity,
-} from "./opportunities";
+import { type MutationResult, type Opportunity } from "./opportunities";
 import { Initials } from "./person";
 import { QualityNote, ReviewBadge } from "./quality";
 
@@ -118,7 +113,9 @@ function Detail({
   // and would put a claim failure under the sentence about review state.
   const [moving, setMoving] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
-  const [gone, setGone] = useState(false);
+  // The closed state carries the server's own sentence rather than a second
+  // copy of it kept here, so the wording lives in exactly one place.
+  const [gone, setGone] = useState<string | null>(null);
 
   // The panel's own copy of the placement fields, so a save is reflected
   // immediately without waiting for the next page fetch to bring `row` back
@@ -139,32 +136,37 @@ function Detail({
    * Three outcomes, not two. A 404 is not an error to display beside the
    * fields — the fields are stale the moment it arrives — so the panel closes
    * and reports upward. A 403 is re-worded against the row. Everything else is
-   * the sentence the API already chose; nothing here re-derives copy. */
+   * the sentence the API already chose; nothing here re-derives copy.
+   *
+   * The branch is on `result.kind`, never on the sentence. Comparing copy made
+   * the wording load-bearing: re-phrasing or translating one string would
+   * silently turn "close the panel" into "show a red line", with no type error
+   * and no failing test. */
   async function move(run: () => Promise<MutationResult>) {
     if (moving) return;
     setMoving(true);
     setNotice(null);
     const result = await run();
-    if (result.ok) {
-      setMoving(false);
-      return;
-    }
-    if (result.message === GONE_MESSAGE) {
-      setGone(true);
+    // Released on every path, including the one that closes the panel. It is
+    // only invisible there because the body unmounts, and a pending flag left
+    // true is a trap for whatever renders next.
+    setMoving(false);
+    if (result.ok) return;
+    if (result.kind === "gone") {
+      setGone(result.message);
       onVanished(row.id);
       return;
     }
-    setNotice(result.message === FORBIDDEN_MESSAGE ? forbiddenMessage(row) : result.message);
-    setMoving(false);
+    setNotice(result.kind === "forbidden" ? forbiddenMessage(row) : result.message);
   }
 
-  if (gone) {
+  if (gone !== null) {
     // One plain line. Stale fields under a red banner invite acting on a job
     // order that is no longer there; a blank panel reads as a crash.
     return (
       <aside className="card jo-detail" aria-label="Job order details">
         <span className="eyebrow">Details</span>
-        <p className="body jo-detail-empty">{GONE_MESSAGE}</p>
+        <p className="body jo-detail-empty">{gone}</p>
       </aside>
     );
   }
@@ -172,7 +174,10 @@ function Detail({
   // Who may hand this on: the agency owner, and whoever is holding it. A
   // colleague it was merely shared with sees the owner's name and no control —
   // an offer that always fails is worse than no offer.
-  const signedIn = auth.status === "signed-in" ? auth.me?.user : null;
+  // `signed-in` carries a `Me`, and a `Me` has a user. No `?.` here: a
+  // defensive one only ever hid a bad test fixture, and hiding it invited the
+  // next reader of `useAuth()` in this tree to copy the same shrug.
+  const signedIn = auth.status === "signed-in" ? auth.me.user : null;
   const canAssign =
     signedIn != null && (signedIn.role === "owner" || signedIn.id === row.assigned_user_id);
 

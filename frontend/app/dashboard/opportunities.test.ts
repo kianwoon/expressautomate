@@ -107,7 +107,7 @@ describe("claiming a job order", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({}, { status: 409 })));
     expect(await claimOpportunity("abc")).toEqual({
       ok: false,
-      conflict: true,
+      kind: "conflict",
       message: "Someone else has taken this one.",
     });
   });
@@ -116,7 +116,7 @@ describe("claiming a job order", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({}, { status: 404 })));
     expect(await claimOpportunity("abc")).toEqual({
       ok: false,
-      conflict: false,
+      kind: "gone",
       message: "This job order is no longer available.",
     });
   });
@@ -152,7 +152,7 @@ describe("assigning a job order", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({}, { status: 403 })));
     expect(await assignOpportunity("abc", null)).toEqual({
       ok: false,
-      conflict: false,
+      kind: "forbidden",
       message: "This job order is not yours to reassign.",
     });
   });
@@ -161,7 +161,7 @@ describe("assigning a job order", () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("offline")));
     expect(await assignOpportunity("abc", "user-1")).toEqual({
       ok: false,
-      conflict: false,
+      kind: "failed",
       message: "We could not reach the server. Nothing has changed.",
     });
   });

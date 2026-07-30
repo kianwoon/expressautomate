@@ -182,7 +182,7 @@ describe("who holds a job order", () => {
   it("shows the 409 sentence when someone else claims first", async () => {
     const onClaim = vi.fn().mockResolvedValue({
       ok: false,
-      conflict: true,
+      kind: "conflict",
       message: "Someone else has taken this one.",
     });
     render(panel(opportunity(), { onClaim }));
@@ -201,7 +201,7 @@ describe("who holds a job order", () => {
     const onVanished = vi.fn();
     const onClaim = vi.fn().mockResolvedValue({
       ok: false,
-      conflict: false,
+      kind: "gone",
       message: "This job order is no longer available.",
     });
     render(panel(opportunity(), { onClaim, onVanished }));
@@ -220,7 +220,7 @@ describe("who holds a job order", () => {
     // assigned it.
     const onClaim = vi.fn().mockResolvedValue({
       ok: false,
-      conflict: false,
+      kind: "forbidden",
       message: "This job order is not yours to reassign.",
     });
     render(panel(opportunity(), { onClaim }));
@@ -236,7 +236,7 @@ describe("who holds a job order", () => {
     authState = me("u-3", "owner");
     const onAssign = vi.fn().mockResolvedValue({
       ok: false,
-      conflict: false,
+      kind: "forbidden",
       message: "This job order is not yours to reassign.",
     });
     render(

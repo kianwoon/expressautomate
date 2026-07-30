@@ -144,12 +144,17 @@ describe("scope chips", () => {
   it("renders a second chip row that combines with the status chips", async () => {
     // Ownership and review state are independent axes. A recruiter wanting
     // "mine, needing review" should not have to choose which question to ask.
+    // Answers `/auth/me` with a `Me` rather than with a page of job orders.
+    // A blanket stub let `useAuth()` report signed-in while handing back an
+    // object with no `.user`, a shape the app cannot produce — and the panel
+    // had grown a defensive `?.` to survive it. A fixture that lies is worse
+    // than no fixture: it buys hardening against nothing.
     const fetchMock = vi.fn().mockImplementation(
-      async () =>
+      async (url: string) =>
         ({
           ok: true,
           status: 200,
-          json: async () => page([opportunity()]),
+          json: async () => (String(url).includes("/auth/me") ? me() : page([opportunity()])),
         }) as Response,
     );
     vi.stubGlobal("fetch", fetchMock);

@@ -84,6 +84,7 @@ export function JobOrders({ me, heading = "h2" }: { me: Me; heading?: "h1" | "h2
     setQ,
     setSort,
     review,
+    patchRow,
   } = useOpportunities();
   // The whole row, not the id. Marking something reviewed under a "Needs
   // review" filter can take it out of the page it was selected from, and the
@@ -96,12 +97,21 @@ export function JobOrders({ me, heading = "h2" }: { me: Me; heading?: "h1" | "h2
    * Read back rather than patched in place: the new assignee's *name* is
    * resolved server-side, and inventing one here would be a second place
    * deciding what a colleague is called. A failed read-back is swallowed —
-   * the move itself succeeded, and the next poll brings the row round. */
+   * the move itself succeeded, and the next poll brings the row round.
+   *
+   * The row goes into the *list* as well as into the panel, and both halves
+   * are needed. The panel alone would be undone within the same tick: the sync
+   * effect below finds the pre-claim object still sitting in `items` and pins
+   * the selection back to it, so the new owner appears and vanishes again.
+   * The list alone would leave the panel a poll behind. Written to both, the
+   * effect finds the row it already has and re-pinning is a no-op. */
   async function own(id: string, run: () => Promise<MutationResult>): Promise<MutationResult> {
     const result = await run();
     if (!result.ok) return result;
     try {
-      setSelected(await getOpportunity(id));
+      const fresh = await getOpportunity(id);
+      patchRow(fresh);
+      setSelected(fresh);
     } catch {
       /* the next poll will bring it */
     }
