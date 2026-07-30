@@ -641,3 +641,11 @@ FINAL REVIEW: READY WITH FIXES. 3 findings raised; controller REJECTED 2 as wron
   literal; no debounce test; unreachable null clause; candidate-avatar.tsx third helper copy.
 FINAL: backend 1606 passed + ruff clean; frontend 97 passed / 17 files; build passed.
   All files under 1500. FEATURE COMPLETE, NOT MERGED.
+FABLE INDEPENDENT REVIEW: READY TO MERGE. Confirmed BOTH controller rejections were correct.
+  3 low findings, none blocking, all pre-existing at base:
+  (1) create_opportunity inserts body.client_id unchecked -> a stale/cross-tenant id gives a 500
+      from the composite FK (no leak; assign_opportunity pre-checks its target, this does not).
+      Same class in the named-share POST loop. The UI now exposes both paths.
+  (2) test_opportunity_routes_guarded.py:76 exemption comment calls client reassignment an
+      "undecided product question" - it was decided and shipped in 2d94732. False comment.
+  (3) no cross-tenant-target test for the share POST.
