@@ -90,6 +90,13 @@ class Client(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
 
     source: Mapped[str] = mapped_column(String(16), nullable=False, default=PIPELINE)
 
+    # The logo lives in R2; this names it. Nullable because most clients are
+    # proposed by the pipeline and will never have one.
+    logo_key: Mapped[str | None] = mapped_column(Text)
+    # Lets the browser bust its own image cache without re-reading the object,
+    # the same reason `candidates.avatar_updated_at` exists.
+    logo_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
     __table_args__ = (
         # Children reference (tenant_id, id) so their FK cannot cross agencies.
         UniqueConstraint("tenant_id", "id", name="uq_clients_tenant_id_id"),

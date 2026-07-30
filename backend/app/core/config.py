@@ -189,6 +189,14 @@ class Settings(BaseSettings):
     # PNG by default because it is lossless and keeps transparency.
     AVATAR_STORED_FORMAT: str = "PNG"
 
+    # --- Client company logos (shown in the clients panel and sourcing) ---
+    # A company logo, not a passport photo: its own limits, because the two
+    # have no reason to move together and a shared constant would only reveal
+    # the coupling when changing one broke the other.
+    CLIENT_LOGO_MAX_UPLOAD_BYTES: int = Field(default=5 * 1024 * 1024, gt=0)
+    CLIENT_LOGO_MAX_PIXEL_DIMENSION: int = Field(default=1024, gt=0)
+    CLIENT_LOGO_PRESIGNED_URL_TTL_SECONDS: int = Field(default=300, gt=0)
+
     # --- CV documents ---
     # How much text one CV may contribute. This is the decompression-bomb
     # bound `app.services.cv.text` enforces on our behalf, and it is also the

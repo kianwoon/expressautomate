@@ -80,6 +80,19 @@ def avatar_key(tenant_id: uuid.UUID, candidate_id: uuid.UUID) -> str:
     return f"{tenant_id}/candidates/{candidate_id}/avatar"
 
 
+def client_logo_key(tenant_id: uuid.UUID, client_id: uuid.UUID) -> str:
+    """Deterministic object key for a client's logo.
+
+    Same shape and the same reason as `avatar_key`: the leading `{tenant_id}/`
+    segment is what a tenant erasure purges by, so an object stored without it
+    would survive the request that was supposed to remove it.
+
+    Deterministic, so re-uploading replaces the bytes in place rather than
+    accumulating one object per upload with nothing pointing at the old ones.
+    """
+    return f"{tenant_id}/clients/{client_id}/logo"
+
+
 def document_key(
     tenant_id: uuid.UUID, candidate_id: uuid.UUID, document_id: uuid.UUID, kind: str
 ) -> str:

@@ -123,6 +123,10 @@ def _serialize(client: Client) -> dict:
         "source": client.source,
         "suspended_reason": client.suspended_reason,
         "suspended_at": client.suspended_at.isoformat() if client.suspended_at else None,
+        "logo_key": client.logo_key,
+        "logo_updated_at": (
+            client.logo_updated_at.isoformat() if client.logo_updated_at else None
+        ),
     }
 
 
