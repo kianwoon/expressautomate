@@ -503,3 +503,17 @@ CORRECT FIX 0f192c6, now verified at parity (fable 9/10, SHIP): clients/page.tsx
   MUTATION-CHECKED: rewiring the logo back to onChanged makes the new panel test fail.
 MINOR left: client-panel.test.tsx:315-340 is near-tautological - onArchive is a mock that
   itself calls onChanged, so only the onDetailChanged.not.toHaveBeenCalled() half carries.
+Task 8: complete (b77ffc0..3542e96, review clean after 1 fix round, 1533 passed). opportunities.py 952 LOC.
+  OUT-OF-BRIEF FIX (justified): list_opportunities had an INNER join on email_messages, so a
+  hand-typed job order (email_message_id IS NULL) would never have appeared in the list - and
+  nor would any row whose source email retention had purged. Now isouter=True + regression test.
+  Both the race test and the join fix are mutation-proven by the reviewer.
+  Cross-tenant assign returns 422 (RLS scopes the user lookup, so the target is simply not found).
+Task 9: complete (3542e96..ff2666b, review clean, 1547 passed). clients.py 975 LOC (no split needed).
+  OPEN PRODUCT QUESTION for the user: /clients/{id}/assignee and the collaborator routes use
+  plain _require_session - ANY recruiter in the agency can reassign any client. Spec never said.
+  Reviewer flagged as informational, not a defect. Decide before merge.
+Task 10: complete (ff2666b..4e8c0c9, review clean, 1553 passed). ALL TASKS DONE.
+  Idempotency mutation-proven: making the insert an upsert fails the replay test.
+  MINOR for final review: merge-chain assignee (survivor's recruiter wins) is disclosed
+  behaviour with no direct assertion in tests/test_client_matching.py.

@@ -32,6 +32,15 @@ here for a reason that only holds on this side of the queue:
 Another agency's job order, run, candidate or submission is a **404, never a
 403**: every read goes through the tenant session, so a foreign id is simply
 not there.
+
+The tenant session is no longer the whole answer for a job order. RLS draws
+the line between agencies; inside one agency a job order belongs to a
+recruiter, and `app/services/visibility.py` owns that rule. Every route here
+that names an `opportunity_id` therefore loads it through
+`load_visible_opportunity` — reading it under RLS alone would hand a colleague
+another recruiter's shortlist, names and scores, and let them spend that
+recruiter's daily run quota. Still a 404, for the same reason as above: a 403
+would confirm the row exists.
 """
 
 import uuid
@@ -41,16 +50,16 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy import func, select
 
-from app.api.auth import _require_session
+from app.api.auth import _require_session, _require_session_with_role
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.db.rls import tenant_session
 from app.models.candidate import Candidate
 from app.models.client import Client
-from app.models.opportunity import Opportunity
 from app.models.sourcing import CandidateSubmission, SourcingRun
 from app.services.sourcing.client_resolution import resolve_client
 from app.services.sourcing.persist import read_matches
+from app.services.visibility import load_visible_opportunity
 from app.workers.queue import enqueue
 
 log = get_logger(__name__)
@@ -105,16 +114,6 @@ class SubmissionRequest(BaseModel):
     opportunity_id: uuid.UUID | None = None
 
 
-async def _opportunity_or_404(session, opportunity_id: uuid.UUID) -> Opportunity:
-    """One job order, read under the tenant policy so a foreign id is a 404."""
-    record = (
-        await session.execute(select(Opportunity).where(Opportunity.id == opportunity_id))
-    ).scalar_one_or_none()
-    if record is None:
-        raise HTTPException(status_code=404, detail="Job order not found")
-    return record
-
-
 def _midnight_utc() -> datetime:
     """The start of the quota window.
 
@@ -133,10 +132,10 @@ async def start_sourcing(request: Request, opportunity_id: uuid.UUID) -> dict:
     here — an agency's whole candidate database plus a model call has no
     business inside a request.
     """
-    user_uuid, tenant_uuid = _require_session(request)
+    user_uuid, tenant_uuid, role = await _require_session_with_role(request)
 
     async with tenant_session(tenant_uuid) as session:
-        await _opportunity_or_404(session, opportunity_id)
+        await load_visible_opportunity(session, opportunity_id, user_uuid, role)
 
         # Counted, and refused, before anything is written. A run created and
         # then rejected would be a `pending` row no worker will ever claim.
@@ -213,10 +212,10 @@ async def latest_sourcing(request: Request, opportunity_id: uuid.UUID) -> dict:
     "there is no shortlist" is a state of a job order that exists, and a 404
     here would be indistinguishable from another agency's id.
     """
-    _user_uuid, tenant_uuid = _require_session(request)
+    user_uuid, tenant_uuid, role = await _require_session_with_role(request)
 
     async with tenant_session(tenant_uuid) as session:
-        await _opportunity_or_404(session, opportunity_id)
+        await load_visible_opportunity(session, opportunity_id, user_uuid, role)
         run = (
             await session.execute(
                 select(SourcingRun)
@@ -243,10 +242,10 @@ async def one_sourcing_run(
     stores its matches instead of recomputing them — and a record nobody can
     address by id is not much of one.
     """
-    _user_uuid, tenant_uuid = _require_session(request)
+    user_uuid, tenant_uuid, role = await _require_session_with_role(request)
 
     async with tenant_session(tenant_uuid) as session:
-        await _opportunity_or_404(session, opportunity_id)
+        await load_visible_opportunity(session, opportunity_id, user_uuid, role)
         run = (
             await session.execute(
                 select(SourcingRun).where(
@@ -287,7 +286,7 @@ async def record_submission(
     a person is either in front of a client or not, and a double-click must
     not turn that into a workflow.
     """
-    user_uuid, tenant_uuid = _require_session(request)
+    user_uuid, tenant_uuid, role = await _require_session_with_role(request)
 
     async with tenant_session(tenant_uuid) as session:
         candidate = (
@@ -317,7 +316,11 @@ async def record_submission(
             raise HTTPException(status_code=409, detail=detail)
 
         if body.opportunity_id is not None:
-            await _opportunity_or_404(session, body.opportunity_id)
+            # Optional, and still guarded: naming a job order you cannot see
+            # is how you find out it exists.
+            await load_visible_opportunity(
+                session, body.opportunity_id, user_uuid, role
+            )
 
         existing = (
             await session.execute(

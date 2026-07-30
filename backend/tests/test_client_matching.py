@@ -217,12 +217,45 @@ async def test_reprocessing_with_no_message_id_adds_no_second_mention(agency) ->
     assert await _mention_count(agency, cid) == 1
 
 
+async def _a_recruiter(tenant_id: uuid.UUID) -> uuid.UUID:
+    user_id = uuid.uuid4()
+    async with AdminSessionLocal() as s:
+        await s.execute(
+            text(
+                "INSERT INTO users (id, tenant_id, email, role)"
+                " VALUES (:i, :t, :e, 'recruiter')"
+            ),
+            {"i": user_id, "t": tenant_id, "e": f"{user_id.hex[:8]}@example.test"},
+        )
+        await s.commit()
+    return user_id
+
+
 async def test_a_two_hop_merge_chain_lands_on_the_final_survivor(agency) -> None:
     async with tenant_session(agency) as s:
         a = await _match_id(s, agency, None, "hr@acme.com.sg", "Acme Pte Ltd")
         b = await _match_id(s, agency, None, "hr@acme-group.com", "Acme Group")
         c = await _match_id(s, agency, None, "hr@acme-holdings.com", "Acme Holdings")
         await s.commit()
+
+    # Two different recruiters, one at each end of the chain. Asserting only
+    # the id would let `_surviving` return the *loser's* assignee and still
+    # pass — and since the job order created from this match is assigned to
+    # whoever comes back, that would hand the work to somebody who no longer
+    # looks after the company.
+    loser_recruiter = await _a_recruiter(agency)
+    survivor_recruiter = await _a_recruiter(agency)
+    async with AdminSessionLocal() as s:
+        await s.execute(
+            text("UPDATE clients SET assigned_user_id = :u WHERE id = :i"),
+            {"u": loser_recruiter, "i": a},
+        )
+        await s.execute(
+            text("UPDATE clients SET assigned_user_id = :u WHERE id = :i"),
+            {"u": survivor_recruiter, "i": c},
+        )
+        await s.commit()
+
     async with tenant_session(agency) as s:
         await s.execute(
             text(
@@ -239,9 +272,9 @@ async def test_a_two_hop_merge_chain_lands_on_the_final_survivor(agency) -> None
         await s.commit()
 
     async with tenant_session(agency) as s:
-        landed = await _match_id(s, agency, None, "hr@acme.com.sg", "Acme Pte Ltd")
+        matched = await match_client(s, agency, None, "hr@acme.com.sg", "Acme Pte Ltd")
         await s.commit()
-    assert landed == c
+    assert matched == MatchedClient(client_id=c, assigned_user_id=survivor_recruiter)
 
 
 async def test_re_seeing_a_merged_client_lands_on_the_survivor(agency) -> None:

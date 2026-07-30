@@ -72,7 +72,11 @@ async def test_deleting_the_recipient_deletes_the_share() -> None:
     outright rather than merely doing the wrong thing.
     """
     tenant_id, owner_id = await seed_tenant_with_user()
-    _t, recipient_id = await seed_tenant_with_user()
+    # `seed_tenant_with_user` always makes a tenant of its own, so the second
+    # call leaves one behind once the recipient is moved across. Kept and
+    # dropped in the `finally` below — an orphan tenant per run is the kind of
+    # residue that eventually makes a "why is this row here" afternoon.
+    spare_tenant_id, recipient_id = await seed_tenant_with_user()
     # Put the recipient in the same tenant as the owner.
     async with AdminSessionLocal() as session:
         await session.execute(
@@ -106,7 +110,7 @@ async def test_deleting_the_recipient_deletes_the_share() -> None:
             ).scalars().all()
         assert remaining == []
     finally:
-        await cleanup_tenant(tenant_id)
+        await cleanup_tenant(tenant_id, spare_tenant_id)
 
 
 async def test_resharing_to_the_same_user_is_refused_by_the_index() -> None:

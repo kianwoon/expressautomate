@@ -19,7 +19,7 @@ from sqlalchemy import case, delete, func, insert, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 
-from app.api.auth import _require_session
+from app.api.auth import _require_session, _require_session_with_role
 from app.api.integrity import is_duplicate as _is_duplicate
 from app.core.config import settings
 from app.core.logging import get_logger
@@ -31,7 +31,6 @@ from app.models.candidate import (
     CandidateLanguage,
     CandidateSkill,
 )
-from app.models.opportunity import Opportunity
 from app.models.tenant import User
 from app.services.candidate_matching import find_candidate
 from app.services.candidate_naming import (
@@ -45,6 +44,7 @@ from app.services.candidate_overrides import overridden_fields
 from app.services.candidate_tenure import derive
 from app.services.sourcing import eligibility
 from app.services.user_naming import actor_name
+from app.services.visibility import load_visible_opportunity
 
 log = get_logger(__name__)
 router = APIRouter(tags=["candidates"])
@@ -265,7 +265,12 @@ async def list_candidates(
     # under 50, eight years of education, an approved source country) is a
     # job-order concern and belongs behind a job order that states the rule,
     # not behind a free-text filter on the whole candidate list.
-    _user_uuid, tenant_uuid = _require_session(request)
+    #
+    # The role is read here, unlike every other route in this module, because
+    # `?eligible_for=` reads a job order by id and who may see a job order is
+    # a per-recruiter rule (`app/services/visibility.py`), not a per-agency
+    # one. Every other branch reads only candidates, which RLS alone scopes.
+    user_uuid, tenant_uuid, role = await _require_session_with_role(request)
     ceiling = settings.CANDIDATES_PAGE_LIMIT
     page_limit = ceiling if limit is None else min(limit, ceiling)
 
@@ -362,18 +367,24 @@ async def list_candidates(
         scan_truncated: bool | None = None
         scanned: int | None = None
         if eligible_for is not None:
+            # Two boundaries, not one, and RLS only draws the first.
+            #
             # §18: another agency's opportunity id must read as 404, not 403 —
             # `_load` in this module gives that answer for a candidate for the
-            # same reason, and `tenant_session` scopes this SELECT under RLS
+            # same reason, and `tenant_session` scopes every SELECT under RLS
             # exactly as it does everywhere else, so a foreign id matches no
             # row here rather than leaking whether it exists.
-            opportunity = (
-                await session.execute(
-                    select(Opportunity).where(Opportunity.id == eligible_for)
-                )
-            ).scalar_one_or_none()
-            if opportunity is None:
-                raise HTTPException(status_code=404, detail="No such job order.")
+            #
+            # The second boundary runs inside one agency, and RLS says nothing
+            # about it: a job order belongs to the recruiter it is assigned to.
+            # Reading it under the tenant policy alone would let any colleague
+            # holding the id — from a share since revoked, say — learn its
+            # `placement_type` and pull the shortlist it filters.
+            # `load_visible_opportunity` applies that rule and raises the same
+            # 404, never a 403, for exactly the same reason as above.
+            opportunity = await load_visible_opportunity(
+                session, eligible_for, user_uuid, role
+            )
             if opportunity.placement_type is None:
                 return _placement_type_not_set()
 
