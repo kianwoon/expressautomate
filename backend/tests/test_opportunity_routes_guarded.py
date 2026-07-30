@@ -109,12 +109,60 @@ def _routes(tree: ast.AST) -> list[ast.AsyncFunctionDef]:
     ]
 
 
-def _calls(node: ast.AsyncFunctionDef) -> set[str]:
+FunctionDef = ast.AsyncFunctionDef | ast.FunctionDef
+
+
+def _own_calls(node: FunctionDef) -> set[str]:
     return {
         c.func.id
         for c in ast.walk(node)
         if isinstance(c, ast.Call) and isinstance(c.func, ast.Name)
     }
+
+
+def _module_functions(tree: ast.AST) -> dict[str, FunctionDef]:
+    """Every function defined at module level, by name.
+
+    Only module level: a nested closure is already inside the body being
+    walked, and a method on a class is not what a route calls by bare name.
+    """
+    return {
+        n.name: n
+        for n in tree.body
+        if isinstance(n, (ast.AsyncFunctionDef, ast.FunctionDef))
+    }
+
+
+def _reachable(node: FunctionDef, defined: dict[str, FunctionDef]) -> list[FunctionDef]:
+    """The route plus every same-module helper it can reach, transitively.
+
+    One level would have closed the hole that was found, but not the next one:
+    a route calling `_load_context` calling `_fetch` would hide the read again,
+    and nothing about a two-hop chain is unusual. The walk is a fixed point
+    with a `seen` set, so a recursive or mutually recursive helper terminates.
+    """
+    seen: set[str] = set()
+    closure = [node]
+    queue = list(_own_calls(node))
+    while queue:
+        name = queue.pop()
+        if name in seen or name not in defined:
+            continue
+        seen.add(name)
+        helper = defined[name]
+        closure.append(helper)
+        queue.extend(_own_calls(helper))
+    return closure
+
+
+def _calls(node: FunctionDef, defined: dict[str, FunctionDef]) -> set[str]:
+    """Calls made by the route *or* by a helper it delegates to.
+
+    A helper that loads through the guard and hands back the row satisfies the
+    rule as squarely as an inline call does — that is how `sourcing.py`'s
+    submission routes are written.
+    """
+    return set().union(*(_own_calls(f) for f in _reachable(node, defined)))
 
 
 # The verbs that read or change rows that already exist. `Opportunity(...)`
@@ -123,57 +171,79 @@ def _calls(node: ast.AsyncFunctionDef) -> set[str]:
 QUERY_VERBS = {"select", "update", "delete", "get"}
 
 
-def _queries_the_model(node: ast.AsyncFunctionDef) -> bool:
-    for call in ast.walk(node):
-        if not isinstance(call, ast.Call):
-            continue
-        target = call.func
-        name = (
-            target.id
-            if isinstance(target, ast.Name)
-            else target.attr
-            if isinstance(target, ast.Attribute)
-            else None
-        )
-        if name not in QUERY_VERBS:
-            continue
-        if any(isinstance(a, ast.Name) and a.id == "Opportunity" for a in call.args):
+def _queries_the_model(node: FunctionDef, defined: dict[str, FunctionDef]) -> bool:
+    """A query anywhere in the route's reach, not just in its own body.
+
+    Inspecting the route body alone was a hole, and a proven one: a route that
+    passed the id to a module-level helper and let the helper run
+    `select(Opportunity)` read a job order while this test saw nothing —
+    exactly the shape of the original `sourcing.py` leak.
+    """
+    for function in _reachable(node, defined):
+        for call in ast.walk(function):
+            if not isinstance(call, ast.Call):
+                continue
+            target = call.func
+            name = (
+                target.id
+                if isinstance(target, ast.Name)
+                else target.attr
+                if isinstance(target, ast.Attribute)
+                else None
+            )
+            if name not in QUERY_VERBS:
+                continue
+            if any(isinstance(a, ast.Name) and a.id == "Opportunity" for a in call.args):
+                return True
+    return False
+
+
+# A job order id does not have to be called `opportunity_id`, and pinning the
+# check to that one spelling made a route invisible by renaming a parameter.
+JOB_ORDER_PARAM_HINTS = ("opportunity", "job_order", "joborder", "joa")
+
+
+def _takes_a_job_order_param(node: FunctionDef) -> bool:
+    args = node.args
+    for arg in [*args.posonlyargs, *args.args, *args.kwonlyargs]:
+        lowered = arg.arg.lower()
+        if any(hint in lowered for hint in JOB_ORDER_PARAM_HINTS):
             return True
     return False
 
 
-def _reads_a_job_order_by_id(node: ast.AsyncFunctionDef) -> bool:
+def _reads_a_job_order_by_id(node: FunctionDef, defined: dict[str, FunctionDef]) -> bool:
     """Two ways in, and the second is the one that was missed.
 
-    A path parameter called `opportunity_id` is the obvious way. The leak in
+    A parameter naming a job order is the obvious way. The leak in
     `candidates.py` arrived by the other: a *query* parameter
     (`?eligible_for=`) that fetched an `Opportunity` under RLS alone. So a
-    query against the model counts too, whatever the parameter is called.
+    query against the model counts too, whatever the parameter is called —
+    and it counts whether the route runs it or delegates it.
     """
-    if any(a.arg == "opportunity_id" for a in node.args.args):
-        return True
-    return _queries_the_model(node)
+    return _takes_a_job_order_param(node) or _queries_the_model(node, defined)
 
 
 def _exempt(module: pathlib.Path, node: ast.AsyncFunctionDef) -> bool:
     return node.name in EXEMPT.get(module.name, {})
 
 
-def _in_scope_routes() -> list[tuple[pathlib.Path, ast.AsyncFunctionDef]]:
-    pairs = []
+def _in_scope_routes() -> list[tuple[pathlib.Path, ast.AsyncFunctionDef, dict[str, FunctionDef]]]:
+    triples = []
     for module in _modules():
         tree = ast.parse(module.read_text())
+        defined = _module_functions(tree)
         for node in _routes(tree):
-            if _reads_a_job_order_by_id(node) and not _exempt(module, node):
-                pairs.append((module, node))
-    return pairs
+            if _reads_a_job_order_by_id(node, defined) and not _exempt(module, node):
+                triples.append((module, node, defined))
+    return triples
 
 
 def test_every_by_id_route_loads_through_the_guard() -> None:
     offenders = [
         f"{module.name}::{node.name}"
-        for module, node in _in_scope_routes()
-        if not ({READ_GUARD, EDIT_GUARD} & _calls(node))
+        for module, node, defined in _in_scope_routes()
+        if not ({READ_GUARD, EDIT_GUARD} & _calls(node, defined))
     ]
     assert offenders == [], (
         f"These routes read an opportunity by id without the visibility guard: {offenders}"
@@ -183,13 +253,13 @@ def test_every_by_id_route_loads_through_the_guard() -> None:
 def test_every_mutating_by_id_route_uses_the_edit_guard() -> None:
     offenders = [
         f"{module.name}::{node.name}"
-        for module, node in _in_scope_routes()
+        for module, node, defined in _in_scope_routes()
         if MUTATING_METHODS & _decorator_methods(node)
         # `can_edit` counts: `opportunity_shares.py` loads through the read
         # guard and then applies `can_edit` itself, because who may withdraw a
         # share is wider than who may edit the job order (the recipient may
         # leave). That is a deliberate, checked decision, not a missing one.
-        and not ({EDIT_GUARD, EDIT_CHECK} & _calls(node))
+        and not ({EDIT_GUARD, EDIT_CHECK} & _calls(node, defined))
     ]
     assert offenders == [], (
         f"These routes change an opportunity without checking edit rights: {offenders}"
@@ -205,7 +275,7 @@ def test_the_guard_covers_more_than_one_module() -> None:
     """
     modules = {m.name for m in _modules()}
     assert {"opportunities.py", "sourcing.py", "candidates.py"} <= modules, modules
-    assert len({m.name for m, _ in _in_scope_routes()}) > 1
+    assert len({m.name for m, _, _ in _in_scope_routes()}) > 1
 
 
 def test_list_filters_by_the_predicate() -> None:
