@@ -123,25 +123,11 @@ h3 { font-size: 1.125rem; letter-spacing: -0.01em; font-weight: 650; }
   gap: 28px;
 }
 /* The workspace links, at the left beside the wordmark. `margin-right: auto`
-   is what divides the bar: everything after this group — the section links and
-   the auth corner — is pushed to the right edge by the gap it opens. */
+   is what divides the bar: the auth corner after this group is pushed to the
+   right edge by the gap it opens. */
 .nav-work { display: flex; gap: 24px; align-items: center; margin-right: auto; }
-
-.nav-links { display: flex; gap: 24px; margin-left: auto; align-items: center; }
-/* Two auto margins would split the free space between them and leave the
-   section links stranded mid-bar. The workspace group already opens the gap,
-   so where both are present — a signed-in visitor on the landing page — the
-   section links give theirs up and stay hugging the auth corner. */
-.nav-work ~ .nav-links { margin-left: 0; }
-.nav-links a {
-  font-size: 0.9375rem; color: var(--ink-700);
-  /* A nav link is a finger target, not just text: pad it to the 44px minimum
-     rather than leaving a 22px-tall strip to aim at. */
-  display: inline-flex; align-items: center; min-height: 44px;
-}
-.nav-links a:hover { color: var(--ink-900); }
-/* Without a section-link row the auth corner has nothing pushing it right. */
-.nav-links + .nav-auth { margin-left: 24px; }
+/* Signed out there is no workspace group, so nothing opens that gap and the
+   corner would sit against the wordmark. Then it is the second child. */
 .nav-inner > .nav-auth:nth-child(2) { margin-left: auto; }
 
 /* The auth-dependent corner. min-height/min-width keep the nav the same size
@@ -236,7 +222,7 @@ h3 { font-size: 1.125rem; letter-spacing: -0.01em; font-weight: 650; }
 .nav-menu-item {
   display: flex;
   align-items: center;
-  /* 44px, the same finger target the section links keep. A menu is the last
+  /* 44px, the same finger target every nav link keeps. A menu is the last
      place to shrink one: the items either side are "switch account" and
      "sign out". */
   min-height: 44px;
@@ -729,40 +715,28 @@ footer { border-top: 1px solid var(--line); padding: 48px 0 40px; color: var(--i
   .nav-who { max-width: 9ch; }
   .trust-sep { display: none; }
 
-  /* The section links used to be display:none here, which left a phone with
-     no way to reach any section but the top — the one device where scrolling
-     past four screens to find "Security" is most expensive. Instead the nav
-     wraps: wordmark and sign-in stay on the first row, and the links become a
-     full-width strip below that scrolls sideways if they do not fit.
-     Horizontal scroll inside a bounded strip is fine; horizontal scroll of
-     the page is what we avoid, and this cannot cause it. */
+  /* The nav wraps rather than hiding a row: wordmark and the auth corner stay
+     on the first row, and any group below becomes a full-width strip that
+     scrolls sideways if it does not fit. Horizontal scroll inside a bounded
+     strip is fine; horizontal scroll of the page is what we avoid, and this
+     cannot cause it. (This used to be about the landing page's section links,
+     which were display:none here and left a phone unable to reach any section
+     but the top. Those links now live only in the footer.) */
   /* Two sticky rows would otherwise hold ~130px of a 844px screen for the
      whole scroll. Everything here is bought back from padding, not from tap
      targets, which stay at 44px. */
   .nav-inner { flex-wrap: wrap; gap: 0 12px; padding: 6px 16px; }
-  /* Out-specifies the desktop `.nav-links + .nav-auth` gap rule, whose 24px
-     is what pushed the button onto a third row at 320px. */
-  .nav-inner .nav-links + .nav-auth { margin-left: auto; }
   .nav-auth { margin-left: auto; min-height: 0; }
   .nav-auth .btn { padding: 9px 16px; }
   /* Two rows of nav eat a real share of an 844px-tall screen, so the mark
      gives back a little — but only a little: it is the one thing identifying
      the site on a screen with no room for anything else. */
   .brand svg { width: 64px; height: 64px; }
-  .nav-links {
-    order: 3; flex-basis: 100%; margin-left: 0; gap: 20px;
-    overflow-x: auto; overscroll-behavior-x: contain;
-    scrollbar-width: none; -webkit-overflow-scrolling: touch;
-    border-top: 1px solid var(--line); margin-top: 2px;
-  }
-  .nav-links::-webkit-scrollbar { display: none; }
-  .nav-links a { min-height: 44px; white-space: nowrap; font-size: 0.875rem; }
-
-  /* Same strip treatment, one row above the section links. Beside the wordmark
-     these three would push the account trigger off a phone; on their own row
-     they scroll instead, and `order` keeps the corner up on the first row
-     where it has always been. The auto margin goes: a full-width row has no
-     free space to open a gap with. */
+  /* Its own row under the wordmark. Beside it these three would push the
+     account trigger off a phone; on their own row they scroll instead, and
+     `order` keeps the corner up on the first row where it has always been.
+     The auto margin goes: a full-width row has no free space to open a gap
+     with. */
   .nav-work {
     order: 2; flex-basis: 100%; margin-right: 0; gap: 20px;
     overflow-x: auto; overscroll-behavior-x: contain;
@@ -839,9 +813,9 @@ footer { border-top: 1px solid var(--line); padding: 48px 0 40px; color: var(--i
   .jo-detail { position: static; max-height: none; }
 }
 
-/* Tablet and small-laptop widths, signed in. The section links still show
-   here, and the identity text is what tips the row over: measured at 880px it
-   squeezed to 70px and pushed the links onto a second line. It used to be
+/* Tablet and small-laptop widths, signed in. The identity text is what tips
+   the row over: measured at 880px it squeezed to 70px and pushed the links
+   (then the landing page's section links) onto a second line. It used to be
    dropped entirely, which it can no longer be — the name is the account
    menu's trigger, and the two buttons that used to sit beside it are inside
    the menu now, so a truncated name fits where the trio never did. */

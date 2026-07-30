@@ -174,7 +174,7 @@ const SECURITY_STRIP = [
 export default function Home() {
   return (
     <>
-      <SiteNav sectionLinks />
+      <SiteNav />
 
       <main id="top">
         <section className="hero">

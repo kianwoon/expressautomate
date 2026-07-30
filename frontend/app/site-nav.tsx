@@ -15,13 +15,6 @@ import {
 import { displayNameOf, useAuth, useSignInHref } from "./auth";
 import { Logo } from "./logo";
 
-/** Landing-page section links; the dashboard has no sections to jump to.
- *
- *  Down to the one link that leads somewhere a visitor decides from. The
- *  others were browsing, which is what the footer is for: it already carries
- *  every one of them, so removing a link here loses no destination. */
-const SECTION_LINKS = [{ href: "/pricing", label: "Pricing" }] as const;
-
 /** The product's own screens, for someone signed in.
  *
  *  They sit at the left beside the wordmark rather than in the auth corner,
@@ -56,7 +49,7 @@ const WORKSPACE_LINKS = [
  * default for a nav (it only offers an action, it asserts nothing), and the
  * dashboard handles the unreachable case properly on its own.
  */
-export function SiteNav({ sectionLinks = false }: { sectionLinks?: boolean }) {
+export function SiteNav() {
   const auth = useAuth();
   const [signingOut, setSigningOut] = useState(false);
 
@@ -107,19 +100,6 @@ export function SiteNav({ sectionLinks = false }: { sectionLinks?: boolean }) {
           <div className="nav-work">
             {WORKSPACE_LINKS.filter((l) => l.href !== path).map((l) => (
               <a className="nav-dash" href={l.href} key={l.href}>
-                {l.label}
-              </a>
-            ))}
-          </div>
-        )}
-        {/* Section links and the auth corner are siblings rather than nested,
-            so a phone can put them on separate rows: the auth button stays
-            beside the wordmark and the links become their own scrollable
-            strip underneath. Nested, the links could only be hidden. */}
-        {sectionLinks && (
-          <div className="nav-links">
-            {SECTION_LINKS.map((l) => (
-              <a href={l.href} key={l.href}>
                 {l.label}
               </a>
             ))}
