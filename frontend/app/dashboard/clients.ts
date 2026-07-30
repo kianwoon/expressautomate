@@ -115,11 +115,11 @@ export type Client = {
   /**
    * The recruiter answerable for this account, and their resolved name.
    *
-   * Optional rather than required: `_serialize` in `app/api/clients.py` does
-   * not yet emit either field, so a shipped response has neither. Everything
-   * reading them must treat absent and null alike — an assignment control that
-   * mistook `undefined` for "nobody" would offer to reassign a client that is
-   * already held.
+   * Optional rather than required: older cached responses (and any client
+   * built from a partial payload) may predate these fields, so a value may be
+   * absent rather than merely null. Everything reading them must treat absent
+   * and null alike — an assignment control that mistook `undefined` for
+   * "nobody" would offer to reassign a client that is already held.
    */
   assigned_user_id?: string | null;
   assignee_name?: string | null;

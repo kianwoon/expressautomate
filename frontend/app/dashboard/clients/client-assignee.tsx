@@ -60,9 +60,9 @@ export function ClientAssignee({
   const auth = useAuth();
   const staff = useMembers();
 
-  // Absent and null mean the same thing: `_serialize` does not emit the field
-  // yet, and treating `undefined` as "nobody" would offer to reassign a client
-  // that is in fact already held.
+  // Absent and null mean the same thing: some cached or partial payloads may
+  // still lack the field, and treating `undefined` as "nobody" would offer to
+  // reassign a client that is in fact already held.
   const held = client.assigned_user_id ?? null;
 
   const [pending, setPending] = useState<string | null>(held);
@@ -218,6 +218,11 @@ export function ClientAssignee({
           <MemberSelect
             value={pick}
             onChange={setPick}
+            // The caller is already the assignee or an owner looking at this
+            // panel — naming themselves as someone who "also knows this
+            // account" says nothing. The assignee picker above still offers
+            // them: assigning to yourself is the common case there.
+            exclude={me ? [me.id] : undefined}
             label="Add a colleague who also knows this account"
           />
           <button

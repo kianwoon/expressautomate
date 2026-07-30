@@ -138,6 +138,29 @@ async def test_unassigned_detail_is_null_on_both_fields(agency):
     assert body["assignee_name"] is None
 
 
+async def test_whitespace_preferred_name_falls_through_to_display_name(agency):
+    """A `preferred_name` of only whitespace must not win over `display_name`.
+
+    `_assignee_name_expr` wraps each candidate in `NULLIF(btrim(...), '')` so
+    a blank-but-not-null `preferred_name` is treated as absent, the same way
+    `GET /api/members` treats it in Python. A bare `COALESCE` of the raw
+    columns would let the whitespace win instead and render an empty name.
+    """
+    tid, caller, _holder, _held, _free = agency
+    blank = await _user(
+        tid,
+        f"blank{tid.hex[:6]}@agency.sg",
+        preferred_name="   ",
+        display_name="Wren Ong",
+    )
+    client_id = await _client(tid, "Crest", blank)
+    async with await _http(tid, caller) as c:
+        body = (await c.get(f"/api/clients/{client_id}")).json()
+
+    assert body["assigned_user_id"] == str(blank)
+    assert body["assignee_name"] == "Wren Ong"
+
+
 async def test_display_name_then_the_email_local_part(agency):
     """The two fallbacks, in the order `GET /api/members` uses."""
     tid, caller, _holder, _held, _free = agency

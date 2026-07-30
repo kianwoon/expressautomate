@@ -245,14 +245,16 @@ export function MemberSelect({
   value,
   onChange,
   allowNone,
+  exclude,
   label,
 }: {
   value: string | null;
   onChange: (id: string | null) => void;
   allowNone?: boolean;
+  exclude?: string[];
   label: string;
 }) {
-  const { members, message, me } = useOfferable({ includeSelf: true });
+  const { members, message, me } = useOfferable({ includeSelf: true, exclude });
   const baseId = useId();
   const selectId = `${baseId}-select`;
 

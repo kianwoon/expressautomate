@@ -256,4 +256,24 @@ describe("the client's recruiter", () => {
       fetchMock.mock.calls.filter((call) => String(call[0]).includes("/collaborators")).length,
     ).toBe(2);
   });
+
+  it("offers the caller in the assignee picker but not the collaborator picker", async () => {
+    // Naming yourself as assignee is the common case (taking on a client);
+    // naming yourself as a collaborator says nothing — you are already the
+    // assignee or an owner looking at this panel.
+    mockFetch();
+    render(<ClientAssignee client={client({ assigned_user_id: "u1" })} onChanged={() => {}} />);
+
+    const assignee = await assigneeSelect();
+    const collaboratorPicker = screen.getByLabelText(
+      "Add a colleague who also knows this account",
+    ) as HTMLSelectElement;
+    await waitFor(() => expect(collaboratorPicker.disabled).toBe(false));
+
+    const assigneeOptionValues = [...assignee.options].map((o) => o.value);
+    const collaboratorOptionValues = [...collaboratorPicker.options].map((o) => o.value);
+
+    expect(assigneeOptionValues).toContain("u1");
+    expect(collaboratorOptionValues).not.toContain("u1");
+  });
 });
