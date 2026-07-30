@@ -401,3 +401,32 @@ Logo Task 4: complete (feb8a4b..82b9588, spec OK, quality approved, no findings)
   The client fetch is keyed on clientId in its own effect, separate from the poll effect, so
     it does NOT re-fire per poll tick while a run is pending/running.
 ALL 4 LOGO TASKS COMPLETE. Backend 1458 passed, 1 skipped; frontend 22 passed (controller-run).
+FINAL REVIEW (fable): SHIP WITH FIXES 8/10. Tenant isolation judged solid. TWO SECURITY
+  findings, both INHERITED by candidates_avatar.py (already live in production) - fixed in
+  BOTH files in a94053c:
+   - REACHABLE OOM: Pillow's DecompressionBombError only fires above ~179Mpx, so a tiny PNG
+     declaring 120Mpx passed Image.open with a warning and image.load() then allocated
+     hundreds of MB - enough to OOM-kill api on a small Koyeb instance, from any recruiter
+     session, repeatedly. Now image.size is checked against settings.IMAGE_DECODE_MAX_PIXELS
+     (default 30Mpx) BETWEEN open and load, where the header is read but no buffer allocated.
+   - NO FORMAT ALLOWLIST: Image.open tried every Pillow plugin including EPS, which shells out
+     to ghostscript when installed - a historical RCE surface. Now pinned to
+     _ALLOWED_FORMATS = PNG/JPEG/GIF/WEBP/BMP/ICO, a module constant not a setting, so it can
+     never be widened from .env.
+  1464 passed, 1 skipped.
+  CACHE-BUSTING CORRECTION: the spec says logo_updated_at busts the browser cache. It does not,
+    quite - it re-triggers a fresh presign, and the bust is that each presigned URL carries a
+    new X-Amz-Date and signature so the browser never reuses one. Correct in practice.
+  ACCEPTED AS-IS (all three inherited, fable triaged all as fine to ship): orphan object when
+    the R2 put succeeds and the DB UPDATE fails (deterministic key self-heals on re-upload);
+    deleting a client leaves its R2 object (covered by the documented tenant-prefix purge
+    convention); Starlette spools the multipart body to disk before the size check.
+  MINOR accepted: the upload path presigns twice (the component fetches a URL, then onChange
+    refetches and moves logo_updated_at, refiring the effect). Harmless waste.
+  TABLE EXCLUSION: reasoning judged sound as a deferral. The cheap option it missed, for
+    whoever designs the table view: a 302-redirect endpoint with Cache-Control: private.
+NOT PUSHED. Migration 8c7e0f3c5305 NOT applied to Koyeb.
+HUMAN MUST CHECK ONCE SIGNED IN: (1) upload, replace and remove a logo - focus ring and camera
+  overlay included; (2) a real WIDE wordmark renders letterboxed, not cropped, on both the
+  panel and the sourcing screen; (3) the sourcing screen names the client instead of a UUID,
+  and an unresolved run still shows its notice with no logo.
