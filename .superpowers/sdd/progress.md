@@ -649,3 +649,9 @@ FABLE INDEPENDENT REVIEW: READY TO MERGE. Confirmed BOTH controller rejections w
   (2) test_opportunity_routes_guarded.py:76 exemption comment calls client reassignment an
       "undecided product question" - it was decided and shipped in 2d94732. False comment.
   (3) no cross-tenant-target test for the share POST.
+MERGED + DEPLOYED 2026-07-31: main 23dafdf -> b864f6e (21 commits, fast-forward).
+  First deploy attempt FAILED at "Deploy api": Koyeb timed out contacting ghcr.io while validating
+  the image. Transient infra, not code - build+push had succeeded and the tag existed in ghcr.
+  No migration was pending, so production stayed on the old build throughout (health 200 the whole time).
+  `gh run rerun <id> --failed` succeeded. Verified live: /api/members, ?scope=, ?q= all 401
+  (present + authenticating) vs 404 for a nonexistent route.
