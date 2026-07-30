@@ -23,6 +23,7 @@ describe('gateway HTTP surface', () => {
       databaseUrl: 'postgresql://unused:unused@127.0.0.1:1/unused',
       encryptionKey: randomBytes(32),
       sendMinIntervalSeconds: 30,
+      pairQrWaitMs: 0,
     });
   });
 
@@ -108,6 +109,7 @@ describe('/sessions/* routes (P3)', () => {
         databaseUrl: 'postgresql://unused:unused@127.0.0.1:1/unused',
         encryptionKey: randomBytes(32),
         sendMinIntervalSeconds: 30,
+        pairQrWaitMs: 0,
       },
       fakeSessions,
     );
@@ -185,6 +187,7 @@ describe('POST /send (P4)', () => {
         databaseUrl: 'postgresql://unused:unused@127.0.0.1:1/unused',
         encryptionKey: randomBytes(32),
         sendMinIntervalSeconds: 30,
+        pairQrWaitMs: 0,
       },
       fakeSessions,
     );

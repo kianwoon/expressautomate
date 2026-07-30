@@ -172,6 +172,16 @@ interface Runtime {
   /** Baileys fires `connection.update` more than once per logical change;
    *  this dedupes the callback so the push (and its SSE nudge) don't spam. */
   lastPushed: string;
+  /** Resolved the first time this socket reaches something worth showing — a
+   *  QR, or a connection that needed no QR at all. `pair()` waits on it
+   *  briefly so the caller usually gets the QR in its own response instead of
+   *  a `pairing` with nothing in it. Resolved at most once, and never
+   *  rejected: a timeout is the caller's business, not this runtime's. */
+  firstSettled: Promise<void>;
+  /** Kept beside the promise so `#handleUpdate` can settle it. Set to null
+   *  once called, which is what makes the resolve idempotent — Baileys sends
+   *  several QRs and every reconnect brings another `open`. */
+  settle: (() => void) | null;
 }
 
 function keyFor(ref: SessionRef): string {
@@ -210,6 +220,7 @@ export class SessionManager {
   readonly #opening = new Map<string, Promise<Runtime>>();
   readonly #sleep: (ms: number) => Promise<void>;
   readonly #sendMinIntervalMs: number;
+  readonly #pairQrWaitMs: number;
   readonly #now: () => number;
   /** Per-session: the earliest time (epoch ms) the next send may go out.
    *  In-memory only, like `#runtimes` — a redeploy resets it, which is
@@ -229,6 +240,12 @@ export class SessionManager {
       sendMinIntervalSeconds?: number;
       /** Injectable clock so spacing tests do not need real wall-clock waits. */
       now?: () => number;
+      /** How long `pair()` holds its response waiting for the first QR.
+       *  Defaults to 3s: Baileys usually produces one inside a second, and
+       *  the ceiling is set by what a person will sit through with a button
+       *  already pressed, not by what the socket needs. Zero restores the old
+       *  return-immediately behaviour, which is what the tests use. */
+      pairQrWaitMs?: number;
     } = {},
   ) {
     this.#pool = pool;
@@ -239,6 +256,7 @@ export class SessionManager {
       opts.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
     this.#sendMinIntervalMs = (opts.sendMinIntervalSeconds ?? 30) * 1000;
     this.#now = opts.now ?? (() => Date.now());
+    this.#pairQrWaitMs = opts.pairQrWaitMs ?? 3_000;
   }
 
   /**
@@ -279,6 +297,34 @@ export class SessionManager {
       return snapshotOf(existing);
     }
     const runtime = await this.#openOnce(ref);
+
+    // Hold the response until there is something to show.
+    //
+    // Opening a socket and returning `pairing` with `qr: null` is true, and
+    // useless: the browser has nothing to draw, so it waits for the API's SSE
+    // nudge, and if that nudge does not arrive it waits out the settings
+    // panel's fallback poll instead — fifteen seconds of blank panel for a
+    // QR that existed after one. Baileys produces the first QR about a second
+    // after the socket opens, so waiting here usually collapses that whole
+    // round trip into the response the caller already made.
+    //
+    // It is a race against a timer, never a block: on timeout the old
+    // behaviour is exactly what happens, `pairing` with no QR and the nudge
+    // and the poll still behind it. So this makes the good case fast without
+    // making the bad case worse — and nothing downstream needs to know which
+    // one it got.
+    if (!runtime.qr && runtime.status !== 'connected') {
+      let timer: NodeJS.Timeout | undefined;
+      await Promise.race([
+        runtime.firstSettled,
+        new Promise<void>((resolve) => {
+          timer = setTimeout(resolve, this.#pairQrWaitMs);
+        }),
+      ]);
+      // Or the timer outlives the request and holds the process open — a
+      // gateway pinned to one instance cannot afford a leak per pair click.
+      if (timer) clearTimeout(timer);
+    }
     return snapshotOf(runtime);
   }
 
@@ -469,7 +515,16 @@ export class SessionManager {
         // was already sleeping can tell it has been superseded.
         generation: 0,
         lastPushed: '',
+        // Assigned together, immediately below — the fields exist here only
+        // because the object literal has to be complete.
+        firstSettled: undefined as unknown as Promise<void>,
+        settle: null,
       };
+    if (!reuse) {
+      runtime.firstSettled = new Promise<void>((resolve) => {
+        runtime.settle = resolve;
+      });
+    }
     if (!reuse) this.#runtimes.set(key, runtime);
 
     let socket;
@@ -512,6 +567,11 @@ export class SessionManager {
       runtime.qr = update.qr;
       runtime.qrExpiresAt = new Date(Date.now() + QR_TTL_MS);
       runtime.statusDetail = null;
+      // Before the push, not after: a caller waiting inside `pair()` should be
+      // released by the QR itself, not by a callback to the API that may be
+      // slow or failing. The whole point is to stop depending on that hop.
+      runtime.settle?.();
+      runtime.settle = null;
       await this.#push(ref, snapshotOf(runtime), null);
       return;
     }
@@ -524,6 +584,12 @@ export class SessionManager {
       runtime.reconnectAttempts = 0;
       runtime.connectedAt = new Date();
       runtime.phoneNumber = runtime.socket?.user?.id ? jidToE164(runtime.socket.user.id) : runtime.phoneNumber;
+      // A session restored from stored credentials never shows a QR, so this
+      // is the other way a waiting `pair()` gets its answer. Without it that
+      // caller would sit out the whole timeout to be told something already
+      // true.
+      runtime.settle?.();
+      runtime.settle = null;
       await this.#push(ref, snapshotOf(runtime), null);
       return;
     }

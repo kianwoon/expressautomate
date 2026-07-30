@@ -40,6 +40,11 @@ export interface GatewayConfig {
    * caller retry (or use the popup) is the only option that cannot double-send.
    */
   readonly sendMinIntervalSeconds: number;
+  /** How long `pair()` holds its response waiting for WhatsApp's first QR,
+   *  so the browser gets it in that response instead of waiting on a nudge
+   *  it may never receive. Configurable because the right ceiling is a
+   *  patience question, not a protocol one. */
+  readonly pairQrWaitMs: number;
 }
 
 export class ConfigError extends Error {}
@@ -98,6 +103,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig 
     );
   }
 
+  const rawPairWait = env.WA_PAIR_QR_WAIT_MS ?? '3000';
+  const pairQrWaitMs = Number.parseInt(rawPairWait, 10);
+  if (!Number.isInteger(pairQrWaitMs) || pairQrWaitMs < 0) {
+    throw new ConfigError(`WA_PAIR_QR_WAIT_MS is not a valid non-negative integer: ${rawPairWait}`);
+  }
+
   return {
     // 0.0.0.0 so the container is reachable on the Koyeb service mesh; the
     // service itself is deployed with no public route (plan §4).
@@ -109,6 +120,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig 
     previousEncryptionKey,
     apiCallbackUrl: rawCallback === '' ? undefined : rawCallback,
     sendMinIntervalSeconds,
+    pairQrWaitMs,
   };
 }
 

@@ -44,6 +44,7 @@ async function main(): Promise<void> {
       warn: (obj, msg) => console.warn(msg, obj),
     }),
     sendMinIntervalSeconds: config.sendMinIntervalSeconds,
+    pairQrWaitMs: config.pairQrWaitMs,
   });
 
   const app = buildApp(config, sessions);

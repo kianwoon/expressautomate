@@ -174,12 +174,57 @@ describe('SessionManager', { skip: SKIP }, () => {
     assert.equal(snapshot.qr, null);
   });
 
+  test('pair waits for the first QR and returns it, instead of an empty pairing', async () => {
+    // The reason this exists: `pair()` used to answer the moment the socket
+    // object existed, so the browser got `pairing` with nothing to draw and
+    // had to wait for the API's SSE nudge — and when that nudge did not
+    // arrive, for the settings panel's 15s fallback poll. A QR that existed
+    // after one second took fifteen to appear.
+    const ref = await seedTenantAndUser();
+    const fake = fakeSocketFactory();
+    const manager = new SessionManager(pool, cipher, {
+      socketFactory: fake.factory,
+      pairQrWaitMs: 2_000,
+    });
+
+    // Emitted after `pair()` is already waiting, which is the real ordering:
+    // Baileys produces the QR a beat after the socket opens.
+    setTimeout(() => fake.emit('connection.update', { qr: 'qr-in-first-response' }), 20);
+
+    const snapshot = await manager.pair(ref);
+    assert.equal(snapshot.status, 'pairing');
+    assert.equal(snapshot.qr, 'qr-in-first-response');
+  });
+
+  test('pair gives up waiting and answers anyway, rather than hanging on a socket that never speaks', async () => {
+    // The timeout is what keeps this safe to add: a WhatsApp that never sends
+    // a QR must degrade to exactly the old behaviour, not to a request that
+    // never returns. A held connection per click would be a worse failure
+    // than the blank panel this replaces.
+    const ref = await seedTenantAndUser();
+    const fake = fakeSocketFactory();
+    const manager = new SessionManager(pool, cipher, {
+      socketFactory: fake.factory,
+      pairQrWaitMs: 30,
+    });
+
+    const started = Date.now();
+    const snapshot = await manager.pair(ref);
+    assert.equal(snapshot.status, 'pairing');
+    assert.equal(snapshot.qr, null);
+    assert.ok(Date.now() - started < 1_000, 'must not wait longer than it was told to');
+  });
+
   test('pair → QR → open drives pairing through connected, and the QR is never written to the database', async () => {
     const ref = await seedTenantAndUser();
     const pushed: { status: string; qr: string | null }[] = [];
     const fake = fakeSocketFactory();
     const manager = new SessionManager(pool, cipher, {
       socketFactory: fake.factory,
+      // Zero, so this test still describes what it always described: `pair()`
+      // returning before any QR exists, and the QR arriving by push after.
+      // The waiting behaviour has its own test below.
+      pairQrWaitMs: 0,
       onStatusChange: (_ref, snapshot) => {
         pushed.push({ status: snapshot.status, qr: snapshot.qr });
       },
