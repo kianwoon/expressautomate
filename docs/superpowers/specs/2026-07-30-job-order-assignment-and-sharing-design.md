@@ -82,7 +82,7 @@ One row per grant. Tenant-scoped, RLS-covered.
 |---|---|
 | `opportunity_id` | composite FK `(tenant_id, opportunity_id)`, `ON DELETE CASCADE` |
 | `scope` | `user` or `tenant`, pinned by CHECK |
-| `shared_with_user_id` | composite FK, `SET NULL`. NULL if and only if `scope='tenant'` — enforced by `ck_opportunity_shares_scope_target`, the same paired-nullability idiom as `sex_requirement`/`sex_requirement_reason` |
+| `shared_with_user_id` | composite FK, **`ON DELETE CASCADE`**. NULL if and only if `scope='tenant'` — enforced by `ck_opportunity_shares_scope_target`, the same paired-nullability idiom as `sex_requirement`/`sex_requirement_reason` |
 | `shared_by_user_id` | composite FK, `SET NULL`. Who shared it must outlive the account that did |
 | `note` | free text — "this one's yours, I'm on leave" |
 | `created_at` | from `Timestamps` |
@@ -93,6 +93,32 @@ Two partial unique indexes, so re-sharing updates rather than duplicating:
 - `(tenant_id, opportunity_id)` where `scope = 'tenant'`
 
 There is no `access` column. Every share is read.
+
+**The two `ON DELETE` rules differ deliberately.** `shared_with_user_id` is
+CASCADE: a share to a deleted user is meaningless, and `SET NULL` would silently
+convert a `scope='user'` row into a `scope='tenant'` broadcast — worse, it would
+violate `ck_opportunity_shares_scope_target` and make deleting the user fail
+outright. `shared_by_user_id` is `SET NULL` for the opposite reason: the fact
+that someone shared this must outlive the account that did.
+
+**A share survives reassignment.** Moving a job order from one recruiter to
+another does not clear its shares — the colleagues who were asked to look at it
+still have reason to. The **outgoing assignee keeps nothing**: they hold no
+share row, so unless they own the source mailbox they lose sight of it. If they
+should keep it, the reassigning user shares it to them explicitly, which leaves
+a record of the decision.
+
+**A tenant share and user shares coexist on the same row without conflict.**
+The predicate ORs them, so a later broadcast simply subsumes the earlier
+individual grants; the user rows are not deleted, because they carry who asked
+whom and why, and removing the broadcast should not silently revoke them. The
+share list shows both.
+
+**Only the assignee or the owner may broadcast.** A read-only recipient may
+share onward to specific users — that is how a job order finds the right person
+through a chain — but `scope='tenant'` is restricted, because a recipient
+throwing someone else's client work open to the whole office is not theirs to
+decide.
 
 ### Migration
 
@@ -133,14 +159,20 @@ Term 6 uses the only elevated role that exists
 ([tenant.py](../../../backend/app/models/tenant.py), where a unique index already
 guarantees at most one owner per tenant). No new role vocabulary is introduced.
 
-Write access is separate and narrower:
+Write access is separate and much narrower:
 
 ```
-can_edit = assigned_user_id IN (:user_id, NULL) OR role = 'owner'
+can_edit = assigned_user_id = :user_id OR role = 'owner'
 ```
 
-Unassigned is editable because it must be claimable. Claiming is the only way
-work leaves the queue besides an owner assigning it.
+An unassigned job order is **visible and claimable but not editable**. Claiming
+it is the act that makes it editable, and it is the only way work leaves the
+queue besides an owner assigning it. Allowing edits on unassigned rows would let
+any recruiter change a job order nobody has taken responsibility for, which is
+the state where a wrong edit is least likely to be noticed.
+
+A share grants visibility only. A recipient can read a job order and can share
+it onward, and can do nothing else to it.
 
 ### Why not RLS
 
@@ -157,19 +189,40 @@ read goes through one `load_visible_opportunity(...)` helper, and a test asserts
 that no route in `opportunities.py` selects an `Opportunity` by id without it.
 
 `load_visible_opportunity` raises **404, not 403**, when the predicate fails. A
-403 confirms the row exists.
+403 would confirm the row exists.
 
-### The call sites that would leak
+`can_edit` failing is the opposite case and raises **403**: the caller can
+already see the job order, so concealing its existence would be theatre, and a
+404 there would tell a recruiter their colleague's shared job order had vanished.
 
-Four existing reads in `app/api/opportunities.py` fetch an opportunity by id and
-would each expose a job order the caller cannot see:
+### The call sites that need changing
 
-| Function | What leaks |
+Two different problems, and conflating them was an error in an earlier draft of
+this spec. `list_opportunities` (l.131) is not a by-id read — it needs the
+predicate added to its `WHERE`. `_evidence_counts` (l.343) and `_decoded_codes`
+(l.371) are fed page ids from that already-filtered list and are **not**
+independent leaks; they need nothing.
+
+The by-id routes are where the work is, and the mutating ones need `can_edit`
+rather than mere visibility — otherwise a read-only recipient could edit a job
+order they were only shown:
+
+| Route | Check |
 |---|---|
-| `list_opportunities` | the list itself |
-| `_evidence_counts` | evidence for an invisible job order |
-| `_decoded_codes` | decoded client codes — the sensitive ones |
-| `get_eligibility` | eligibility for an invisible vacancy |
+| `list_opportunities` (l.131) | predicate in the query |
+| `get_eligibility` (l.525) | visibility |
+| `/review` (l.400) | **`can_edit`** |
+| `/placement-type` (l.442) | **`can_edit`** |
+| `/occupational-requirement` (l.480) | **`can_edit`** |
+
+The last two matter most: both write an audited human judgement
+(`placement_type_set_by`, `sex_requirement_set_by`) that unlocks a lawful sex
+filter. Letting someone edit those on a job order merely shared with them puts a
+name against a regulatory decision that person was never given.
+
+The structural test therefore asserts two things, not one: no by-id route reads
+an `Opportunity` without `load_visible_opportunity`, **and** no mutating by-id
+route writes one without `can_edit`.
 
 `opportunities.py` is 691 LOC. Sharing endpoints go in a new
 `app/api/opportunity_shares.py` rather than growing it toward the 1500-line
@@ -192,10 +245,13 @@ The chain, in order:
 The mailbox owner is never consulted for assignment. They keep read access
 through term 5 of the predicate, and nothing more.
 
-**`match_client` must complete before the opportunity rows are written**, so
-`client_id` is available on INSERT. If the current call order in `persist.py`
-writes opportunities first, that is a real code move rather than a field
-addition.
+**The call order already holds** — `match_client` runs at l.302, the opportunity
+inserts follow at l.308 — so no reordering is needed. One wrinkle:
+`match_client` returns only the client id
+([client_matching.py](../../../backend/app/services/client_matching.py)) and
+`persist.py` currently discards it, so getting `client.assigned_user_id` costs
+one extra fetch. Returning the assignee alongside the id from `match_client` is
+the cheaper shape and is the intended change.
 
 **Assignment is written on INSERT only, never on re-extract.** `extract_email`
 re-runs after a crash and replay appends — which is why `client_mentions`
@@ -217,9 +273,21 @@ normally means the work changes hands. It stays a choice rather than an
 automatic cascade, because the outgoing recruiter may be mid-placement on one of
 them and a silent bulk reassignment is invisible to everyone it affects.
 
-Job orders already closed or filled never move. The response reports how many
-rows changed, so the interface can say "12 job orders moved to Sarah" instead of
-reassigning them quietly.
+**"Open" has no schema meaning yet, and this spec does not invent one.** The
+only status columns an opportunity carries are `review_status` (defaulting to
+`ready`) and `quality_state` — neither expresses filled, closed or lost. So
+reassignment moves **every** job order for that client that is currently
+assigned to the outgoing recruiter, and the phrase "open job orders" is avoided
+in the API and the interface.
+
+Adding a lifecycle state to `Opportunity` is real work with its own design, and
+bolting a half-defined `closed` flag onto this change would leave the system
+with two competing notions of done. When that state lands, this predicate
+narrows to exclude it — a one-line change, and the reason it is recorded here is
+so the next person knows the omission was deliberate.
+
+The response reports how many rows changed, so the interface can say "12 job
+orders moved to Sarah" instead of reassigning them quietly.
 
 ## API
 
@@ -231,7 +299,7 @@ permission server-side and none trusts a client-supplied `assigned_user_id`.
 
 | Route | Behaviour |
 |---|---|
-| `POST /api/opportunities/{id}/shares` | Body `{scope, user_ids?, note?}`. The caller must be able to see the job order — a recipient may re-share. Upserts against the partial unique indexes, so re-sharing updates the note rather than returning 409. |
+| `POST /api/opportunities/{id}/shares` | Body `{scope, user_ids?, note?}`. The caller must be able to see the job order — a recipient may re-share to specific users. `scope='tenant'` is restricted to the assignee and the owner. Upserts against the partial unique indexes, so re-sharing updates the note rather than returning 409. |
 | `DELETE /api/opportunities/{id}/shares/{share_id}` | Permitted to the assignee, the original sharer, the owner, and to a recipient removing themselves. |
 | `GET /api/opportunities/{id}/shares` | Who this is shared with. Visible-only. |
 
@@ -244,7 +312,7 @@ happened — the same argument `client_mentions` makes for `SET NULL` over delet
 | Route | Behaviour |
 |---|---|
 | `POST /api/opportunities/{id}/claim` | Only when `assigned_user_id IS NULL`. An atomic `UPDATE ... WHERE assigned_user_id IS NULL` resolves the race two recruiters will genuinely hit in a 9pm rush; the loser gets 409. |
-| `POST /api/opportunities/{id}/assign` | Body `{user_id \| null}`. Assignee or owner. `null` releases it to the queue. |
+| `POST /api/opportunities/{id}/assign` | Body `{user_id \| null}`. Assignee or owner. `null` releases it to the queue and emits `opportunity.new` to everyone, because a released job order is queue work again and nobody would otherwise learn it is available. |
 | `POST /api/opportunities` | Manual create. |
 | `GET /api/opportunities?scope=` | `mine`, `queue`, `shared_with_me`, `all`. Default `all`. These filter **within** visibility and can never widen it. |
 
@@ -311,3 +379,17 @@ no limit of its own.
   them.
 - A shared job order notifies only its recipients, and a tenant broadcast
   produces one event, not N.
+- Deleting a share recipient deletes their share rows and does not raise
+  `ck_opportunity_shares_scope_target` — the CASCADE/`SET NULL` split, which is
+  the one place a wrong `ON DELETE` makes user deletion fail outright.
+- A share recipient is refused by `/review`, `/placement-type` and
+  `/occupational-requirement`, and gets 403 there rather than 404 — they can see
+  the row, so hiding its existence would be theatre.
+- An unassigned job order is readable by everyone and editable by nobody until
+  claimed.
+- `scope=mine|queue|shared_with_me|all` cannot widen visibility: each returns a
+  subset of `all`.
+- The `client_id` migration backfill maps existing opportunities through
+  `client_mentions`, and leaves NULL where the mention is gone.
+- A recipient may share onward to a user and is refused `scope='tenant'`.
+- Reassigning a job order leaves its existing shares intact.
