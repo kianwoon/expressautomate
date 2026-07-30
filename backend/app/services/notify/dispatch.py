@@ -13,7 +13,9 @@ be retried.
 
 import uuid
 
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
+from sqlalchemy.dialects.postgresql import ARRAY
+from sqlalchemy.dialects.postgresql import UUID as PgUUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -44,8 +46,15 @@ _SUBSCRIBERS = text(
       AND s.active
       AND d.verified_at IS NOT NULL
       AND d.disabled_at IS NULL
+      AND (
+        :recipients IS NULL
+        -- A tenant-level shared destination belongs to nobody in particular
+        -- and must keep receiving everything.
+        OR d.user_id IS NULL
+        OR d.user_id = ANY(:recipients)
+      )
     """
-)
+).bindparams(bindparam("recipients", type_=ARRAY(PgUUID(as_uuid=True))))
 
 # `status = ANY(:statuses)` against ('pending', 'sending', 'sent') rather
 # than `status <> 'suppressed'`. The cap exists to bound how many messages a
@@ -143,8 +152,15 @@ async def _write_rows(
     needs to tell "wrote nothing" (dedupe hit) apart from "wrote it, but
     suppressed" (rate cap hit).
     """
+    recipients = (
+        list(event.recipient_user_ids)
+        if event.recipient_user_ids is not None
+        else None
+    )
     subscribers = (
-        await session.execute(_SUBSCRIBERS, {"event_kind": event.kind})
+        await session.execute(
+            _SUBSCRIBERS, {"event_kind": event.kind, "recipients": recipients}
+        )
     ).all()
 
     written: list[tuple[uuid.UUID, bool]] = []
