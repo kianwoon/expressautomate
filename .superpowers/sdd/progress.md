@@ -533,3 +533,12 @@ PRODUCTION MIGRATED 2026-07-31: 8c7e0f3c5305 -> 314cc3da9ced (5 revisions). Veri
   client_id 3/11 (matches prediction), assigned_user_id 0/11, 11 opportunities intact,
   RLS enabled+forced on both new tables, all 3 composite FKs column-qualified.
   Local .env still points at the docker container; prod URL was passed per-command only.
+FABLE ② REVIEW of the post-migration tail (2d94732, 8322180): SHIP, 8/10, no Criticals.
+  IMPORTANT fixed in d35d594: TOCTOU - permission check read the client's assignee without a row
+  lock, so a just-deposed assignee's in-flight PUT could still move the outgoing recruiter's whole
+  book. Now one FOR UPDATE read serves both the check and `previous`; deterministic lock test in
+  tests/test_client_concurrency.py (fails without the lock: 200 != 403).
+  MINOR fixed: merged clients now refused (400 "Unmerge the client first"), matching update_client.
+  Archived still allowed, matching update_client. 1578 passed.
+FINAL STATE: 28 commits, 1578 passed, ruff clean, single head 314cc3da9ced. Production migrated.
+  Branch NOT merged, code NOT deployed.
