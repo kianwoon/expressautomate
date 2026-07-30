@@ -143,7 +143,36 @@ async def test_scope_all_is_the_default_and_matches_the_predicate(client, tenant
 
 async def test_no_scope_can_widen_visibility(client, tenant) -> None:
     """Each scope is a filter WITHIN what the predicate allows. A colleague's
-    private job order appears under none of the four."""
+    private job order appears under none of the four.
+
+    Only the `all` leg is load-bearing against a dropped predicate. Mutating
+    `app/api/opportunities.py` to read `.where(scope_clause)` instead of
+    `.where(visible).where(scope_clause)` (both call sites) makes only the
+    `all` iteration fail here; `mine`, `queue` and `shared_with_me` still
+    pass, and not by coincidence of this fixture — by construction of
+    `_scope_clause` (app/api/opportunities.py) against `visible_opportunities`
+    (app/services/visibility.py):
+
+    - `mine`'s clause is `assigned_user_id == user_id`, which is verbatim one
+      of the `or_(...)` branches in `visible_opportunities`. Any row the
+      clause admits, the predicate admits too — there is no row that can
+      satisfy `mine` and be hidden by the predicate, so this leg cannot
+      discriminate a dropped predicate from an intact one.
+    - `queue`'s clause is `assigned_user_id.is_(None)`, also verbatim one of
+      the predicate's `or_(...)` branches. Same reasoning, same conclusion.
+    - `shared_with_me`'s clause is `_shared_with_me_exists(user_id)`, the
+      exact function `visible_opportunities` uses for its own
+      `shared_with_me` branch — not merely similar, the identical query. A
+      row satisfying the clause always satisfies the predicate.
+
+    So `private_id` here (assigned to a colleague, never shared) is excluded
+    from `mine`/`queue`/`shared_with_me` by the scope clause alone, before
+    the predicate ever gets a say — those three legs read as coverage against
+    a dropped predicate but carry none. `all`'s clause is `true_()`, which is
+    NOT a predicate sub-branch, so it is the only leg where dropping the
+    predicate can be observed: `true_()` alone would admit `private_id`,
+    which is exactly what the mutation above demonstrates.
+    """
     tenant_id, mine = tenant
     owner = await _colleague(tenant_id)
     private_id = await _opportunity(tenant_id, assigned_user_id=owner)
