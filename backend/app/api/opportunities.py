@@ -32,7 +32,7 @@ from typing import Annotated, Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, model_validator
-from sqlalchemy import String, case, cast, func, or_, select, update
+from sqlalchemy import String, and_, case, cast, func, or_, select, update
 from sqlalchemy.orm import aliased
 
 from app.api.auth import _require_session_with_role
@@ -40,6 +40,7 @@ from app.core.config import settings
 from app.db.rls import tenant_session
 from app.models import Candidate, EmailMessage, Opportunity, OpportunityCode, User
 from app.models.extraction import ExtractionEvidence
+from app.models.opportunity_share import OpportunityShare
 from app.services.notify.dispatch import emit_and_enqueue
 from app.services.notify.events import (
     EVENT_OPPORTUNITY_ASSIGNED,
@@ -204,14 +205,38 @@ async def list_opportunities(
         # let a recruiter open the original mail, and a copy that drifts from
         # the source is worse than a join.
         email = aliased(EmailMessage)
+        assignee = aliased(User)
+        shared_with_me_expr = (
+            select(OpportunityShare.id)
+            .where(OpportunityShare.opportunity_id == Opportunity.id)
+            .where(
+                or_(
+                    OpportunityShare.scope == OpportunityShare.SCOPE_TENANT,
+                    and_(
+                        OpportunityShare.scope == OpportunityShare.SCOPE_USER,
+                        OpportunityShare.shared_with_user_id == user_uuid,
+                    ),
+                )
+            )
+            .exists()
+        )
         base = (
-            select(Opportunity, email.internet_message_id, email.graph_message_id)
+            select(
+                Opportunity,
+                email.internet_message_id,
+                email.graph_message_id,
+                func.coalesce(
+                    assignee.preferred_name, assignee.display_name, assignee.email
+                ).label("assignee_name"),
+                shared_with_me_expr.label("shared_with_me"),
+            )
             # OUTER, and that matters: `email_message_id` is nullable — a job
             # order typed in by hand has no email at all, and a retention purge
             # sets the column NULL on one that did. An inner join drops both
             # from the list while the chip counts above (which do not join)
             # still count them, so the page would say twelve and show eleven.
             .join(email, email.id == Opportunity.email_message_id, isouter=True)
+            .join(assignee, assignee.id == Opportunity.assigned_user_id, isouter=True)
             .where(visible)
         )
         if status is not None:
@@ -281,8 +306,10 @@ async def list_opportunities(
                 graph_id,
                 evidence.get(opportunity.id, (0, 0)),
                 codes.get(opportunity.id, []),
+                assignee_name,
+                shared_with_me,
             )
-            for opportunity, internet_id, graph_id in rows
+            for opportunity, internet_id, graph_id, assignee_name, shared_with_me in rows
         ],
         "total": total,
         "limit": page_limit,
@@ -650,6 +677,8 @@ def _payload(
     graph_message_id: str | None,
     evidence: tuple[int, int],
     codes: list[OpportunityCode],
+    assignee_name: str | None,
+    shared_with_me: bool,
 ) -> dict:
     """One row, with absences preserved as absences."""
     verified_fields, total_fields = evidence
@@ -677,6 +706,17 @@ def _payload(
         "id": str(row.id),
         "internet_message_id": internet_message_id,
         "graph_message_id": graph_message_id,
+        "assigned_user_id": str(row.assigned_user_id) if row.assigned_user_id else None,
+        # Denormalised rather than resolved in the browser against the members
+        # list: otherwise every row's rendering depends on a second request
+        # having already landed, which is a race the list does not otherwise
+        # have.
+        "assignee_name": assignee_name,
+        "client_id": str(row.client_id) if row.client_id else None,
+        "source": row.source,
+        # "A share is one of the reasons you can see this", not "the only
+        # reason" — see the design note on why the two differ.
+        "shared_with_me": shared_with_me,
         # What replaces the confidence percentage the UI used to show. A
         # calibrated probability is not what a recruiter needs to decide
         # whether to trust a row — "6 of 8 values were found verbatim in the
