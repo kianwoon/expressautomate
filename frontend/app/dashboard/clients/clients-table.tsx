@@ -40,11 +40,23 @@ export function ClientsTable({
 }) {
   return (
     <div className="card jo-table-card">
-      <table className="jo-table">
+      <table className="jo-table jo-table-clients">
+        {/* Four columns, so this table fits the master column outright and
+            does not need the sideways scroll the job-orders table lives with.
+            It only did before because the floor was shared: forced to the
+            eight-column table's width, Status and Last seen sat off the right
+            edge of a card that was already as wide as the screen allowed.
+
+            Status is 23% because the badge sets it, and the badge is wider
+            than its label looks: uppercased and letter-spaced, "UNCONFIRMED"
+            measures 107px, so with the cell's 28px of padding it needs 135px
+            and 23% of the 600px floor gives 138. Last seen is 20% for the
+            same kind of reason — the date does not wrap. Name and Mail domain
+            do wrap, so they are the two that can give the room. */}
         <colgroup>
-          <col style={{ width: "34%" }} />
-          <col style={{ width: "28%" }} />
-          <col style={{ width: "18%" }} />
+          <col style={{ width: "30%" }} />
+          <col style={{ width: "27%" }} />
+          <col style={{ width: "23%" }} />
           <col style={{ width: "20%" }} />
         </colgroup>
         <thead>

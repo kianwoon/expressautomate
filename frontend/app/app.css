@@ -157,7 +157,7 @@
 }
 /* The table's column, holding the table and the pager that steps through it.
    `min-width: 0` for the same reason the grid tracks carry it: without it the
-   wrapper takes the width of the 960px table it contains and the column stops
+   wrapper takes the width of the table's own floor and the column stops
    being able to shrink, which is what lets the card scroll rather than the
    page. */
 .jo-list { min-width: 0; }
@@ -246,13 +246,28 @@
 /* ---- job-orders table ---- */
 /* The card supplies the border and background; the padding is dropped so the
    header strip runs edge to edge. `overflow-x: auto` is the backstop for a
-   phone — below about 900px scrolling beats eight columns crushed to one word
-   each. */
+   phone, and for the detail panel taking half the width on a laptop. Below
+   the table's own floor, scrolling beats eight columns crushed to one word
+   each — the floor is set by what the widest cell in each column actually
+   measures, in the note above COLUMNS. */
 .jo-table-card { padding: 0; overflow-x: auto; }
 .jo-table {
   width: 100%; min-width: 960px; border-collapse: collapse;
   table-layout: fixed; font-size: 0.875rem;
 }
+/* The floor is per table, not shared. These three tables have eight, five and
+   four columns, and one number for all of them is wrong in both directions:
+   at the eight-column table's floor the four-column one is forced 350px wider
+   than its own column and its last two columns fall off the edge, which is
+   what "the last column is chopped off" turned out to mean on clients. Each
+   floor is the sum of what that table's own widest cells measure. */
+.jo-table-jobs { min-width: 1040px; }
+.jo-table-clients { min-width: 600px; }
+/* Candidates has no modifier and keeps the 960 above, deliberately. Its five
+   columns would fit their card at around 620px too, but only by wrapping the
+   name, title and employer harder: measured, the rows go from 47px to 70px.
+   Scrolling sideways is the better trade there, where clients had no such
+   cost. Give it a modifier if that judgement changes. */
 .jo-th {
   text-align: left; padding: 12px 14px; background: var(--surface-alt);
   border-bottom: 1px solid var(--line); font-weight: 650;

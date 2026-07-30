@@ -35,33 +35,37 @@ export type Sort = { key: SortKey; descending: boolean };
  *  user somewhere they cannot get back from by clicking Received again. */
 export const DEFAULT_SORT: Sort = { key: "received", descending: true };
 
-/** Every width is measured against the table's 960px floor, which is the
+/** Every width is measured against the table's 1040px floor, which is the
  *  narrowest it is ever drawn — under that, `.jo-table-card` scrolls.
  *
- *  Hours and Duration are the two raw paragraphs left in the table and are
- *  clamped to two lines (see `.jo-clamp`), so they need enough width for two
- *  lines to say something: at 10% they held about seven characters a line,
- *  which is how "Not mentioned" came out as "Not mention / ed" — too narrow to
- *  break between words, so it broke inside one.
+ *  Each column is sized against the widest thing it actually holds, because
+ *  `table-layout: fixed` means a column cannot ask for more later:
  *
- *  Location is 13% because that is what "Not mentioned" costs: 96px of italic
- *  plus the cell's 28px of padding is 124px, and 13% of 960 is 125. It is the
- *  most common value in the column, and at 9% it wrapped to three lines and
- *  set the height of the whole row.
+ *  - Quality, 17%: the "Needs review 7/9" pill is 138px and the cell adds 28px
+ *    of padding, so it needs 166px and gets 177. At the 10% it had, it got 96
+ *    and the pill folded into a four-line block — the column read as chopped
+ *    off, and it set the height of every row carrying that state.
+ *  - Location, 12%: "Not mentioned" is 96px of italic, so the cell needs 124px
+ *    and gets 125. It is the commonest value in the column; at 9% it wrapped
+ *    to three lines.
+ *  - Hours and Duration are the raw paragraphs, clamped to two lines (see
+ *    `.jo-clamp`). They need enough width for two lines to say something: at
+ *    10% they held about seven characters a line, which is how "Not mentioned"
+ *    came out as "Not mention / ed" — too narrow to break between words, so it
+ *    broke inside one.
  *
- *  Its 4% is paid by the two clamped columns and Salary rather than by Company
- *  or Position. Losing width in a clamped column costs an ellipsis; losing it
- *  in a column that wraps freely costs row height, which is the thing all of
- *  this is protecting. */
+ *  The floor moved from 960 rather than taking Quality's room from the others,
+ *  which had none to give. It costs a little more sideways scrolling inside
+ *  the card, which is already how this table meets a narrow screen. */
 const COLUMNS: { key: SortKey; label: string; width: string }[] = [
-  { key: "received", label: "Received", width: "11%" },
-  { key: "company", label: "Company", width: "15%" },
-  { key: "position", label: "Position", width: "15%" },
-  { key: "salary", label: "Salary", width: "11%" },
-  { key: "hours", label: "Hours", width: "14%" },
-  { key: "duration", label: "Duration", width: "11%" },
-  { key: "location", label: "Location", width: "13%" },
-  { key: "quality", label: "Quality", width: "10%" },
+  { key: "received", label: "Received", width: "10%" },
+  { key: "company", label: "Company", width: "14%" },
+  { key: "position", label: "Position", width: "14%" },
+  { key: "salary", label: "Salary", width: "10%" },
+  { key: "hours", label: "Hours", width: "13%" },
+  { key: "duration", label: "Duration", width: "10%" },
+  { key: "location", label: "Location", width: "12%" },
+  { key: "quality", label: "Quality", width: "17%" },
 ];
 
 export function JobOrdersTable({
@@ -83,7 +87,7 @@ export function JobOrdersTable({
           their content, so one long position title would widen its column
           until the table pushed past the card. Fixed plus the widths above
           means a long value wraps instead. */}
-      <table className="jo-table">
+      <table className="jo-table jo-table-jobs">
         <colgroup>
           {COLUMNS.map((column) => (
             <col key={column.key} style={{ width: column.width }} />
