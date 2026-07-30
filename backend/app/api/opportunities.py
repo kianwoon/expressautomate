@@ -16,8 +16,8 @@ mention comes back as null and stays null all the way to the screen (§15) —
 an empty string or a zero would be indistinguishable from an extracted value
 of nothing, which is exactly the fabrication the pipeline is built to avoid.
 
-Two later decisions shape the payload. The chip counts are tenant-wide and
-computed apart from the page, because a count that shrank as you paged would
+Two later decisions shape the payload. The chip counts cover everything the
+caller may see and are computed apart from the page, because a count that shrank as you paged would
 be answering a different question than the one it appears to answer. And the
 trust signal is `verified_fields / total_fields` — how many extracted values
 were found verbatim in the source — not a model confidence score.
@@ -35,12 +35,17 @@ from pydantic import BaseModel, model_validator
 from sqlalchemy import String, case, cast, func, or_, select, update
 from sqlalchemy.orm import aliased
 
-from app.api.auth import _require_session
+from app.api.auth import _require_session_with_role
 from app.core.config import settings
 from app.db.rls import tenant_session
 from app.models import Candidate, EmailMessage, Opportunity, OpportunityCode
 from app.models.extraction import ExtractionEvidence
 from app.services.sourcing import eligibility
+from app.services.visibility import (
+    load_editable_opportunity,
+    load_visible_opportunity,
+    visible_opportunities,
+)
 
 router = APIRouter(tags=["opportunities"])
 
@@ -148,7 +153,13 @@ async def list_opportunities(
     behind a live grant would blank the page for the one user who most needs
     to see what was collected before it broke.
     """
-    _user_uuid, tenant_uuid = _require_session(request)
+    user_uuid, tenant_uuid, role = await _require_session_with_role(request)
+
+    # RLS keeps this inside the agency; this clause decides which recruiter
+    # inside that agency sees which job order. Both the counts and the page
+    # take it, and they must take the same one — a count over rows the page
+    # will not show tells a recruiter there are twelve and then shows four.
+    visible = visible_opportunities(user_uuid, role)
 
     ceiling = settings.OPPORTUNITIES_PAGE_LIMIT
     # Clamped, not rejected. A caller asking for more than the page holds is
@@ -161,7 +172,8 @@ async def list_opportunities(
     # — the failure is visible, but it is still a failure, and a plain
     # `SessionLocal()` here would be one edit away from a cross-agency leak.
     async with tenant_session(tenant_uuid) as session:
-        # The chips are counted over the whole tenant, in their own query,
+        # The chips are counted over everything visible to this caller, in
+        # their own query,
         # before any filter or window is applied. A count that moved with the
         # page would tell the recruiter there are 12 vacancies needing review
         # on page one and 3 on page two, which is not a smaller truth — it is
@@ -170,6 +182,7 @@ async def list_opportunities(
         counts["all"] = 0
         for stored, n in await session.execute(
             select(Opportunity.review_status, func.count())
+            .where(visible)
             .group_by(Opportunity.review_status)
         ):
             counts["all"] += n
@@ -185,8 +198,10 @@ async def list_opportunities(
         # let a recruiter open the original mail, and a copy that drifts from
         # the source is worse than a join.
         email = aliased(EmailMessage)
-        base = select(Opportunity, email.internet_message_id, email.graph_message_id).join(
-            email, email.id == Opportunity.email_message_id
+        base = (
+            select(Opportunity, email.internet_message_id, email.graph_message_id)
+            .join(email, email.id == Opportunity.email_message_id)
+            .where(visible)
         )
         if status is not None:
             base = base.where(Opportunity.review_status == _FILTER_TO_STORED[status])
@@ -408,16 +423,14 @@ async def set_review_status(
     stale, and restoring it would put the row back in a queue its own reviewer
     had already cleared.
     """
-    _user_uuid, tenant_uuid = _require_session(request)
+    user_uuid, tenant_uuid, role = await _require_session_with_role(request)
     new_status = _REVIEWED if body.reviewed else _READY
 
     async with tenant_session(tenant_uuid) as session:
-        # No ownership check in the WHERE clause beyond the id. That is not an
-        # omission: the RLS policy on `opportunities` carries both USING and
-        # WITH CHECK, so another agency's row is not visible to this UPDATE and
-        # the statement matches nothing. Re-stating `tenant_id = …` here would
-        # imply the isolation lives in this line, and the next endpoint written
-        # without it would look safe by comparison.
+        # RLS keeps this inside the agency; it says nothing about which
+        # recruiter inside that agency may change the row, which is what
+        # `load_editable_opportunity` decides.
+        await load_editable_opportunity(session, opportunity_id, user_uuid, role)
         updated = (
             await session.execute(
                 update(Opportunity)
@@ -445,9 +458,13 @@ async def set_placement_type(
 ) -> dict:
     """Set what kind of placement this vacancy is — a human decision, never an
     inference (see the column comment in `app/models/opportunity.py`)."""
-    user_uuid, tenant_uuid = _require_session(request)
+    user_uuid, tenant_uuid, role = await _require_session_with_role(request)
 
     async with tenant_session(tenant_uuid) as session:
+        # The name written into `placement_type_set_by` goes against a
+        # regulatory decision, so it must belong to someone actually given
+        # the job order — not merely someone it was shared with.
+        await load_editable_opportunity(session, opportunity_id, user_uuid, role)
         # `id` alongside `placement_type` in RETURNING: `RETURNING` gives back
         # exactly what was written, which is ambiguous when the write itself
         # is NULL — clearing an already-NULL placement_type on a real row
@@ -488,9 +505,12 @@ async def set_occupational_requirement(
     database, and `ck_opportunities_sex_requirement_has_reason` refuses it
     again for any row a script or a future endpoint writes directly.
     """
-    user_uuid, tenant_uuid = _require_session(request)
+    user_uuid, tenant_uuid, role = await _require_session_with_role(request)
 
     async with tenant_session(tenant_uuid) as session:
+        # Same reason as `placement-type`: `sex_requirement_set_by` records a
+        # lawful judgement, and a share is not the authority to make one.
+        await load_editable_opportunity(session, opportunity_id, user_uuid, role)
         updated = (
             await session.execute(
                 update(Opportunity)
@@ -554,17 +574,13 @@ async def get_eligibility(
     this endpoint exists to surface. See `app/services/sourcing/eligibility.py`
     and `tests/test_eligibility.py::test_no_boolean_rollup_in_response`.
     """
-    _user_uuid, tenant_uuid = _require_session(request)
+    user_uuid, tenant_uuid, role = await _require_session_with_role(request)
     evaluated_as_of = as_of or date.today()
 
     async with tenant_session(tenant_uuid) as session:
-        opportunity = (
-            await session.execute(
-                select(Opportunity).where(Opportunity.id == opportunity_id)
-            )
-        ).scalar_one_or_none()
-        if opportunity is None:
-            raise HTTPException(status_code=404, detail="No such job order.")
+        opportunity = await load_visible_opportunity(
+            session, opportunity_id, user_uuid, role
+        )
 
         candidate = (
             await session.execute(select(Candidate).where(Candidate.id == candidate_id))

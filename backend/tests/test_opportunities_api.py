@@ -488,7 +488,13 @@ async def test_marking_reviewed_and_putting_it_back(client, seeded) -> None:
     make_tenant, make_opportunity, _make_evidence = seeded
     tenant_id, user_id, mailbox_id = await make_tenant("agency-a")
     opportunity_id = await make_opportunity(
-        tenant_id, mailbox_id, company_name_raw="Acme Pte Ltd", review_status="needs_review"
+        tenant_id,
+        mailbox_id,
+        company_name_raw="Acme Pte Ltd",
+        review_status="needs_review",
+        # Assigned, not merely visible: an unassigned job order is claimable
+        # but not editable, so the review write is a 403 without this.
+        assigned_user_id=user_id,
     )
 
     sign_in(client, user_id, tenant_id)

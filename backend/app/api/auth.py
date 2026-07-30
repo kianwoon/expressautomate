@@ -230,6 +230,25 @@ def _require_session(request: Request) -> tuple[uuid.UUID, uuid.UUID]:
         raise HTTPException(status_code=401, detail="Session is invalid or expired.") from exc
 
 
+async def _require_session_with_role(request: Request) -> tuple[uuid.UUID, uuid.UUID, str]:
+    """The signed-in user, their agency, and their role.
+
+    Separate from `_require_session` because only the job-order routes need
+    the role, and making every route pay a query for it would be a cost
+    without a benefit.
+
+    The role is read rather than carried in the session cookie: a cookie
+    minted before a promotion would keep the old role until the user signed
+    out, and the role now decides who sees the agency's whole pipeline.
+    """
+    user_uuid, tenant_uuid = _require_session(request)
+    async with tenant_session(tenant_uuid) as session:
+        role = (
+            await session.execute(select(User.role).where(User.id == user_uuid))
+        ).scalar_one_or_none()
+    return user_uuid, tenant_uuid, role or "recruiter"
+
+
 def _granted(scope: str | None) -> set[str]:
     """The granted scopes, lowercased.
 
