@@ -3,6 +3,7 @@
 import { ProtectedBadge, flagged } from "./codes";
 import { Salary, Value, day } from "./format";
 import type { Opportunity } from "./opportunities";
+import { Initials } from "./person";
 import { QualityBadge } from "./quality";
 
 /**
@@ -117,6 +118,31 @@ export function JobOrdersTable({
               >
                 <Td nowrap>{day(row.received_datetime)}</Td>
                 <td className="jo-td jo-td-strong">
+                  {/* Whose job order it is, without spending a column: the
+                      table is `table-layout: fixed` and the eight widths above
+                      are each fitted to their content, so a ninth would take
+                      room none of them has to give. It sits beside the company
+                      because that is the cell a recruiter is already reading
+                      to identify the row.
+
+                      Outside the button on purpose. The button's label says
+                      what pressing it does; the owner is a fact about the row,
+                      not part of that action, and folding it in would have a
+                      screen reader announce "Show details for Priya Nair". */}
+                  <span className="jo-owner" title={row.assignee_name ?? "Unassigned"}>
+                    {row.assigned_user_id ? (
+                      <Initials
+                        name={row.assignee_name ?? "?"}
+                        seed={row.assigned_user_id}
+                        size={18}
+                      />
+                    ) : (
+                      // Drawn, not omitted. The unassigned queue is a state a
+                      // recruiter can claim from, so an empty ring says "nobody
+                      // yet" where a blank space would say nothing at all.
+                      <span className="jo-owner-empty" role="img" aria-label="Unassigned" />
+                    )}
+                  </span>
                   <button
                     type="button"
                     className="jo-rowbtn"

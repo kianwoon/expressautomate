@@ -8,7 +8,7 @@ import { DetailPanel } from "./detail-panel";
 import "./job-orders.css";
 import { LiveLight } from "./live-light";
 import { JobOrdersTable } from "./job-orders-table";
-import { useOpportunities, type Filter, type Opportunity } from "./opportunities";
+import { useOpportunities, type Filter, type Opportunity, type Scope } from "./opportunities";
 import { ReviewBell, StatCards } from "./stat-cards";
 import { MailboxOverview, SyncActivity } from "./sync-activity";
 
@@ -34,12 +34,34 @@ const CHIPS: { key: Filter; label: string; countKey: "all" | "new" | "needs_revi
     { key: "reviewed", label: "Reviewed", countKey: "reviewed" },
   ];
 
+/**
+ * Whose job orders, which is a different question from what state they are in.
+ *
+ * Two rows rather than one merged list, because the two are independent axes: a
+ * recruiter wanting "mine, needing review" is asking one question and must not
+ * have to choose which half of it to ask. Merging them into a single row would
+ * make every combination its own chip — sixteen of them — and would still make
+ * the two look mutually exclusive.
+ *
+ * No count on these. The endpoint returns counts per review status, not per
+ * scope; a number worked out in the browser would be a count of the page rather
+ * than of the set, and would disagree with the server on exactly the rows that
+ * made someone look.
+ */
+const SCOPES: { key: Scope; label: string }[] = [
+  { key: "mine", label: "Mine" },
+  { key: "queue", label: "Queue" },
+  { key: "shared_with_me", label: "Shared with me" },
+  { key: "all", label: "All" },
+];
+
 export function JobOrders({ me, heading = "h2" }: { me: Me; heading?: "h1" | "h2" }) {
   const Heading = heading;
 
   const {
     state,
     filter,
+    scope,
     offset,
     limit: pageSize,
     q,
@@ -47,6 +69,7 @@ export function JobOrders({ me, heading = "h2" }: { me: Me; heading?: "h1" | "h2
     counts,
     refreshing,
     setFilter,
+    setScope,
     setOffset,
     setLimit,
     setQ,
@@ -166,6 +189,30 @@ export function JobOrders({ me, heading = "h2" }: { me: Me; heading?: "h1" | "h2
           placeholder="Search company, role, salary, location…"
           aria-label="Search all job orders"
         />
+      </div>
+
+      {/* Its own row, under the status chips rather than beside them. Sharing
+          the row would put the two questions on one line with the search box
+          and read as one long list of alternatives — which is the one thing
+          they are not. */}
+      <div className="jo-scopes">
+        <div className="jo-chips" role="group" aria-label="Filter job orders by owner">
+          {SCOPES.map((chip) => {
+            const active = scope === chip.key;
+            return (
+              <button
+                key={chip.key}
+                type="button"
+                className="jo-chip"
+                data-active={active ? "yes" : undefined}
+                aria-pressed={active}
+                onClick={() => setScope(chip.key)}
+              >
+                <span>{chip.label}</span>
+              </button>
+            );
+          })}
+        </div>
       </div>
 
       {state.status === "loading" ? (

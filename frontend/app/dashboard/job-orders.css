@@ -120,6 +120,24 @@
    wrapper takes the width of the table's own floor and the column stops
    being able to shrink, which is what lets the card scroll rather than the
    page. */
+/* The ownership row. Closer to the status chips above it than `.jo-controls`'
+   own 22px, because the two rows are one control block asking two questions —
+   the gap says they belong together without saying they are the same list. */
+.jo-scopes { margin-top: 10px; }
+
+/* Who owns the row, drawn inside the company cell. `middle` rather than the
+   baseline a disc has none of: aligned on the text baseline an 18px circle
+   sits low enough to look like it has slipped out of the line. */
+.jo-owner { margin-right: 6px; }
+.jo-owner-empty {
+  display: inline-block;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 1px dashed var(--ink-300);
+  vertical-align: middle;
+}
+
 .jo-list { min-width: 0; }
 
 .jo-detail-find { margin-top: 18px; }
