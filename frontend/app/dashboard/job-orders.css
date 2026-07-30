@@ -476,3 +476,40 @@
 .src-act:focus-visible { opacity: 1; outline: 2px solid var(--blue-500); outline-offset: 2px; }
 .src-act-off { font-size: 0.75rem; color: var(--ink-500); }
 .src-done { font-size: 0.75rem; font-weight: 650; color: #2f7d54; }
+
+/* The share dialog. Sized narrow: it is one picker, one note and a short list
+   of names, and a wide card would leave the picker's dropdown stranded. */
+.shr { max-width: 30rem; }
+.shr-note { margin-top: 12px; }
+.shr-note-box { width: 100%; resize: vertical; }
+
+/* The broadcast control stays visible when it is not yours to use — disabled
+   with its reason under it, never hidden. A control that vanishes teaches
+   nobody why. */
+.shr-broadcast {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 14px;
+  font-size: 0.875rem;
+}
+.shr-broadcast input:disabled + label { color: var(--ink-500); cursor: default; }
+.shr-reason {
+  margin-top: 4px;
+  font-size: 0.75rem;
+  color: var(--ink-500);
+}
+
+.shr-actions { display: flex; gap: 8px; margin-top: 16px; }
+
+.shr-current { margin-top: 20px; }
+.shr-list { list-style: none; margin: 8px 0; padding: 0; }
+.shr-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  font-size: 0.875rem;
+}
+.shr-row-note { font-size: 0.75rem; }
+.shr-x { margin-left: auto; font-size: 0.75rem; padding: 2px 8px; }

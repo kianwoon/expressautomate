@@ -12,6 +12,7 @@ import { MemberSelect } from "./member-picker";
 import { type MutationResult, type Opportunity } from "./opportunities";
 import { Initials } from "./person";
 import { QualityNote, ReviewBadge } from "./quality";
+import { ShareDialog } from "./share-dialog";
 
 /**
  * One job order in full, beside the list.
@@ -122,6 +123,12 @@ function Detail({
   // around. Reset by the `key={row.id}` this component is mounted under, the
   // same trick `saving`/`error` above rely on.
   const [placement, setPlacement] = useState(row);
+  // Sharing is offered to everyone who can see the row, not only to whoever
+  // holds it: seeing a job order is the right to pass it to a named colleague,
+  // and that chain is how a vacancy reaches the desk that can fill it. What a
+  // recipient may not do — broadcast it to the office — is refused inside the
+  // dialog, with the reason showing.
+  const [sharing, setSharing] = useState(false);
 
   async function toggle() {
     if (saving) return;
@@ -324,6 +331,22 @@ function Detail({
           )}
         </div>
       )}
+
+      <div className="jo-detail-actions">
+        <button
+          type="button"
+          className="btn btn-secondary"
+          onClick={() => setSharing(true)}
+        >
+          Share this job order
+        </button>
+        <p className="body jo-sub jo-detail-hint">
+          Hand it to a colleague who can fill it. They get to read it and pass it on — not to edit
+          it.
+        </p>
+      </div>
+
+      {sharing && <ShareDialog row={row} onClose={() => setSharing(false)} />}
 
       <div className="jo-detail-actions">
         <button
