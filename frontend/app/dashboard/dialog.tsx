@@ -39,6 +39,15 @@ export function Dialog({
   // the document and a keyboard user starts the page again.
   const openerRef = useRef<Element | null>(null);
 
+  // Latched, so the effect below can depend on nothing and still call the
+  // caller's current `onClose`. Both callers pass an inline arrow, so the
+  // prop is a new function every render — with it in the deps the whole
+  // effect tore down and re-ran on each one, handing focus back to the opener
+  // and immediately stealing it to the heading. Visible: `saving` toggling
+  // knocked focus off the Save button twice per attempt.
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
   useEffect(() => {
     openerRef.current = document.activeElement;
     headingRef.current?.focus();
@@ -58,7 +67,7 @@ export function Dialog({
     function onKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
         event.stopPropagation();
-        onClose();
+        onCloseRef.current();
         return;
       }
       if (event.key !== "Tab") return;
@@ -92,7 +101,7 @@ export function Dialog({
         (openerRef.current as HTMLElement | null)?.focus?.();
       }
     };
-  }, [onClose]);
+  }, []);
 
   return (
     <div

@@ -446,7 +446,11 @@ function WhatsappModal({
   return (
     <Dialog
       titleId="wa-modal-title"
-      onClose={onClose}
+      // Held shut while a send is in flight. Escape used to close over the
+      // top of one, and the recruiter never saw whether the message went —
+      // the worst moment to hide the answer, since the retry is a second
+      // message to a real person.
+      onClose={sending ? () => {} : onClose}
       title={
         <>
           <WhatsappGlyph size={24} />
