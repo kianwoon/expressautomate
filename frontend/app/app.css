@@ -5,108 +5,14 @@
    media query — stay in globals.css, because both halves of the product use
    them and duplicating them is how they drift. */
 
-
 /* ---- dashboard workspace ---- */
-/* `section { padding: 60px 0 }` is a page-level rule, and this is a section
-   nested inside one — it was quietly collecting 60px of padding meant for
-   full-width bands. That, plus the margin below, plus the hero's own padding,
-   is how three separate rules stacked into a gap nobody had chosen. */
-.jo-workspace { padding: 0; margin-top: 44px; }
-/* When the workspace leads the page there is nothing above it to be separated
-   from, so the margin is space with no job. The hero's padding alone sets the
-   distance from the nav. */
-.jo-workspace[data-lead="yes"] { margin-top: 0; }
-.jo-stats { margin-bottom: 40px; }
-.jo-stat {
-  display: flex; flex-direction: column; gap: 4px;
-  /* A minimum, not a height: the four cards sit on one row and the longest
-     caption used to make its own card taller than its neighbours, which read
-     as a mistake rather than as a longer sentence. */
-  min-height: 148px;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
-}
-.jo-stat:hover { border-color: var(--ink-300); box-shadow: 0 4px 14px rgba(var(--shadow-rgb), 0.06); }
-/* The glyph sits in its own tinted square rather than floating beside the
-   text: at 18px a line icon on white disappears next to a 2rem numeral, and
-   the wash is what gives each card its colour without tinting the whole
-   surface. */
-.jo-stat-icon {
-  display: inline-flex; align-items: center; justify-content: center;
-  width: 34px; height: 34px; border-radius: 9px; margin-bottom: 8px;
-}
-.jo-stat[data-accent="blue"] .jo-stat-icon { background: var(--blue-050); color: var(--blue-600); }
-.jo-stat[data-accent="teal"] .jo-stat-icon { background: var(--teal-050); color: var(--teal-500); }
-.jo-stat[data-accent="amber"] .jo-stat-icon { background: var(--amber-050); color: var(--amber-600); }
-/* The label is the small uppercase key and the figure is the loud part, which
-   is the opposite of how these read before: four large numerals with their
-   meaning in smaller text underneath. */
-.jo-stat-k {
-  font-size: 0.75rem; font-weight: 650; letter-spacing: 0.08em;
-  text-transform: uppercase; color: var(--ink-500);
-}
-.jo-stat-v {
-  font-size: 2rem; font-weight: 700; line-height: 1.1; overflow-wrap: anywhere;
-  /* The sync card carries words where the others carry a numeral. Letting it
-     set its own smaller size keeps four cards looking like one row instead of
-     three numbers and an outlier wrapping onto two lines. */
-  font-size: clamp(1.4rem, 2.2vw, 2rem);
-}
-.jo-stat-sub { font-size: 0.8125rem; margin-top: 2px; }
-/* The one card that is asking for something gets a left edge, and nothing
-   else. A whole card tinted amber reads as an error, which a queue of work
-   waiting to be looked at is not. */
-.jo-stat[data-tone="attention"] { border-left: 3px solid var(--amber-600); }
 
 .jo-head { display: flex; align-items: flex-start; gap: 20px; flex-wrap: wrap; }
-.jo-head-title { margin-top: 12px; }
-.jo-head-body { margin-top: 12px; max-width: 68ch; }
+
 /* One shared muted-secondary size, so a caption under a stat and a caption in
    the detail panel are the same thing rather than two near-misses. */
 .jo-sub { font-size: 0.8125rem; color: var(--ink-500); }
 .jo-note { margin-top: 14px; font-size: 0.875rem; color: var(--ink-500); }
-.jo-note-card { margin-top: 16px; display: grid; gap: 16px; justify-items: start; }
-
-/* The bell is a shortcut, not an inbox. It is styled as a control with a
-   count, deliberately not as a badge on an icon — no dot, no red, nothing
-   that suggests an unread state we do not track. */
-.jo-bell {
-  margin-left: auto; display: inline-flex; align-items: center; gap: 8px;
-  padding: 8px 14px; font: inherit; font-size: 0.875rem; cursor: pointer;
-  color: var(--amber-700); background: var(--amber-050);
-  border: 1px solid var(--amber-200); border-radius: 999px;
-}
-
-/* Is this page still being told things?
-   Sits with the bell because both are status rather than content, and reads as
-   quiet by default: a working connection is the normal case and should not
-   compete with the numbers it is vouching for. */
-.jo-live {
-  margin-left: auto; display: inline-flex; align-items: center; gap: 8px;
-  padding: 8px 14px; font-size: 0.875rem; border-radius: 999px;
-  border: 1px solid transparent; white-space: nowrap;
-}
-.jo-live-dot { width: 8px; height: 8px; border-radius: 999px; flex: none; }
-.jo-live[data-status="live"] { color: var(--ink-500); }
-.jo-live[data-status="live"] .jo-live-dot { background: var(--teal-500); }
-.jo-live[data-status="waiting"] { color: var(--ink-500); }
-.jo-live[data-status="waiting"] .jo-live-dot { background: var(--ink-300); }
-/* The only one that earns a border and a colour. Amber, not red: the page is
-   stale, which is a caveat on what is shown — it is not an error, and nothing
-   the user did caused it. */
-.jo-live[data-status="offline"] {
-  color: var(--amber-700); background: var(--amber-050); border-color: var(--amber-200);
-}
-.jo-live[data-status="offline"] .jo-live-dot { background: var(--amber-600); }
-.jo-live[data-status="live"] .jo-live-dot { animation: jo-live-pulse 2.4s ease-in-out infinite; }
-.jo-live[data-status="waiting"] .jo-live-dot { animation: jo-live-pulse 1.2s ease-in-out infinite; }
-
-/* The bell keeps its own place when the light is beside it: two elements both
-   claiming `margin-left: auto` would put all the space before the first. */
-.jo-live + .jo-bell, .jo-bell + .jo-live { margin-left: 0; }
-
-.jo-bell:hover { border-color: var(--amber-600); }
-.jo-bell:focus-visible { outline: 2px solid var(--blue-500); outline-offset: 2px; }
-.jo-bell-n { font-weight: 700; }
 
 .jo-controls {
   margin-top: 22px; display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
@@ -155,12 +61,7 @@
   margin-top: 16px; display: grid; grid-template-columns: minmax(0, 1.85fr) minmax(0, 1fr);
   gap: 20px; align-items: start;
 }
-/* The table's column, holding the table and the pager that steps through it.
-   `min-width: 0` for the same reason the grid tracks carry it: without it the
-   wrapper takes the width of the table's own floor and the column stops
-   being able to shrink, which is what lets the card scroll rather than the
-   page. */
-.jo-list { min-width: 0; }
+
 /* Sticky so the row stays readable while the list is scrolled. Cleared of the
    sticky nav, and capped so a long description scrolls inside the panel
    instead of pushing the page. */
@@ -174,7 +75,6 @@
 .jo-detail-rows { margin-top: 18px; }
 .jo-detail-prose { margin-top: 18px; }
 .jo-detail-prose p { margin-top: 6px; font-size: 0.875rem; }
-.jo-detail-find { margin-top: 18px; }
 
 .cand-elig-banner {
   margin-top: 24px; padding: 16px 20px; display: grid; gap: 10px;
@@ -184,24 +84,9 @@
   display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
 }
 .cand-elig-note { margin-top: 0; }
-.jo-detail-source { margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--line); }
-.jo-detail-source p { margin-top: 6px; }
+
 .jo-detail-actions { margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--line); }
 
-.jo-placement { margin-top: 18px; padding: 14px; display: grid; gap: 10px; }
-.jo-placement-field { display: grid; gap: 4px; }
-.jo-placement-field select,
-.jo-placement-field textarea {
-  font: inherit;
-  padding: 7px 10px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--surface);
-  color: var(--ink-900);
-}
-.jo-placement-field textarea { resize: vertical; }
-.jo-placement-hint { margin-top: 0; font-size: 0.75rem; color: var(--ink-500); max-width: 60ch; }
-.jo-placement-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 /* Every action on one line. These four buttons are one decision — "what do I
    do with this person" — and wrapping split them into a group of three and an
    orphan, which read as two unrelated groups.
@@ -216,32 +101,10 @@
    out of their own boxes and across the gaps. Two tidy lines beat one line
    of overlapping words; the row stays single wherever it can. */
 @media (max-width: 430px) {
-  .jo-action-row { flex-wrap: wrap; }
+.jo-action-row { flex-wrap: wrap; }
 }
-.jo-detail-hint { margin-top: 10px; }
+
 .jo-detail-error { margin-top: 12px; color: var(--amber-700); font-size: 0.875rem; }
-
-/* Quality, never a percentage. Three named states, each with its own colour
-   and its own word — the word does the work, the colour only speeds up the
-   scan, so nothing here depends on seeing the difference between them. */
-.jo-quality {
-  display: inline-flex; align-items: center; gap: 6px; font-size: 0.75rem;
-  font-weight: 650; padding: 3px 9px; border-radius: 999px;
-  background: var(--surface-alt); color: var(--ink-700);
-}
-.jo-quality-dot { width: 7px; height: 7px; border-radius: 999px; background: currentColor; flex: none; }
-.jo-quality[data-state="verified"] { color: var(--teal-500); background: var(--teal-050); }
-.jo-quality[data-state="likely"] { color: var(--blue-600); background: var(--blue-050); }
-.jo-quality[data-state="needs_review"] { color: var(--amber-700); background: var(--amber-050); }
-.jo-quality-count { font-variant-numeric: tabular-nums; opacity: 0.85; }
-.jo-quality-note { margin-top: 16px; display: grid; gap: 8px; justify-items: start; }
-
-.jo-review {
-  font-size: 0.6875rem; font-weight: 700; padding: 3px 9px; border-radius: 999px;
-  margin-left: auto; background: var(--surface-alt); color: var(--ink-500);
-}
-.jo-review[data-state="needs_review"] { background: var(--amber-050); color: var(--amber-700); }
-.jo-review[data-state="reviewed"] { background: var(--teal-050); color: var(--teal-500); }
 
 /* ---- job-orders table ---- */
 /* The card supplies the border and background; the padding is dropped so the
@@ -263,7 +126,7 @@
   width: 100%; border-collapse: collapse;
   table-layout: fixed; font-size: 0.875rem;
 }
-.jo-table-jobs { min-width: 1040px; }
+
 .jo-table-clients { min-width: 600px; }
 .jo-table-candidates { min-width: 660px; }
 /* Only the job-orders table is wider than its column and scrolls. Eight
@@ -284,17 +147,7 @@
      unbreakable token would otherwise print straight over its neighbour. */
   overflow-wrap: anywhere;
 }
-/* Two lines, then stop. `-webkit-line-clamp` needs the -webkit-box display to
-   do anything, and both are still the only way to clamp to a line count — the
-   standard `line-clamp` is not shipped widely enough to rely on alone.
-   `break-word` rather than the `anywhere` its cell carries: `anywhere` breaks
-   inside a word, which at a narrow column turned "Not mentioned" into "Not
-   mention / ed". Between words is the only break worth having here; a genuinely
-   unbreakable token is now the cell's problem, and the cell still handles it. */
-.jo-clamp {
-  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
-  overflow: hidden; overflow-wrap: break-word;
-}
+
 .jo-td-strong { font-weight: 600; }
 /* The date must not wrap: broken over two lines it stops reading as a date at
    a glance, and it is what the eye scans this table by. */
@@ -322,59 +175,13 @@
   margin-top: 20px; display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
 }
 .jo-pager .btn:disabled { opacity: 0.5; cursor: default; }
-/* Pushed to the far end of the pager row: it is a setting for the list, not a
-   step through it, and sitting beside Next it would read as a third way to
-   move. `margin-left: auto` rather than a spacer so it falls back to sitting
-   under the buttons when the row wraps. */
-.jo-perpage {
-  margin-left: auto; display: flex; align-items: center; gap: 8px;
-  font-size: 0.875rem; color: var(--ink-500);
-}
-/* Its own rule rather than `.gl-input`, which is full-width by design — a
-   two-digit select does not want the row. */
-.jo-perpage-select {
-  font: inherit; padding: 7px 10px; color: var(--ink-900);
-  background: var(--surface); border: 1px solid var(--line);
-  border-radius: var(--radius);
-}
-.jo-perpage-select:focus-visible { outline: 2px solid var(--blue-500); outline-offset: 2px; }
 
 /* ---- sync activity and mailbox overview ---- */
 .jo-panels {
   margin-top: 40px; display: grid; gap: 22px;
   grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
 }
-.jo-activity h3, .jo-overview h3 { margin-bottom: 12px; }
-.jo-overview-rows { margin-bottom: 14px; }
-.jo-events { list-style: none; display: grid; gap: 12px; }
-.jo-events li { display: flex; align-items: flex-start; gap: 10px; font-size: 0.875rem; }
-.jo-event-dot {
-  width: 8px; height: 8px; border-radius: 999px; flex: none; margin-top: 7px;
-  background: var(--teal-500);
-}
-.jo-events li[data-outcome="failed"] .jo-event-dot { background: var(--amber-600); }
-.jo-event-body { display: grid; gap: 2px; min-width: 0; }
-.jo-event-body > * { overflow-wrap: anywhere; }
-.jo-event-when { margin-left: auto; color: var(--ink-300); font-size: 0.75rem; white-space: nowrap; }
-.jo-event-tag {
-  font-size: 0.6875rem; font-weight: 700; padding: 2px 8px; border-radius: 999px;
-  background: var(--amber-050); color: var(--amber-700); white-space: nowrap;
-}
 
-/* The whole header cell is the target, not just the label: a 40px-wide word
-   is a frustrating thing to hit, and a sortable column that looks like plain
-   text does not get clicked at all. */
-.jo-sort {
-  display: flex; align-items: center; gap: 6px; width: 100%;
-  background: none; border: 0; padding: 0; margin: 0; cursor: pointer;
-  font: inherit; color: inherit; letter-spacing: inherit; text-align: left;
-  text-transform: inherit;
-}
-.jo-sort:hover { color: var(--ink-900); }
-.jo-sort:focus-visible { outline: 2px solid var(--blue-500); outline-offset: 3px; }
-/* The arrow holds its width whether or not it is showing one, so the headings
-   do not jump sideways as the sort column moves. */
-.jo-arrow { flex: none; width: 10px; color: var(--blue-500); }
 .jo-search {
   width: 100%; max-width: 30rem; padding: 9px 12px; font: inherit;
   color: var(--ink-900); background: var(--surface);
@@ -382,56 +189,7 @@
 }
 .jo-search:focus-visible { outline: 2px solid var(--blue-500); outline-offset: -1px; }
 
-/* ---- decoded shorthand, on the job order ----
-   The literal code is set as a quotation — monospaced, on a wash, in a box —
-   because it is the only part of the pair that was actually in the email. The
-   meaning is plain body text: it is ours, and dressing it up the same way
-   would make an agency's definition look like a client's words. */
-.jo-codes { margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--line); }
-.jo-codes-lede { margin-top: 6px; max-width: 62ch; }
-.jo-codes-none { margin-top: 10px; font-size: 0.875rem; }
-.jo-codes-list { list-style: none; display: grid; gap: 8px; margin-top: 12px; }
-.jo-code {
-  display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
-  font-size: 0.875rem;
-}
-.jo-code > * { min-width: 0; overflow-wrap: anywhere; }
-.jo-code-lit {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 0.8125rem; font-weight: 650;
-  padding: 2px 7px; border-radius: 6px;
-  background: var(--surface-alt); border: 1px solid var(--line);
-  color: var(--ink-900);
-}
-.jo-code-arrow { color: var(--ink-300); flex: none; }
-.jo-code-mean { color: var(--ink-700); }
-.jo-code-attr {
-  font-size: 0.6875rem; font-weight: 650; padding: 2px 8px; border-radius: 999px;
-  background: var(--amber-050); color: var(--amber-700);
-  border: 1px solid var(--amber-200); white-space: nowrap;
-}
-
-/* Amber, the same "a person should look at this" colour the quality states
-   already use. Not red: this is a client's wording that needs judgement, not
-   a failure and not a finding against the agency. */
-.jo-protected {
-  display: inline-flex; align-items: center; gap: 7px;
-  font-size: 0.75rem; font-weight: 650; padding: 4px 10px; border-radius: 999px;
-  background: var(--amber-050); color: var(--amber-700);
-  border: 1px solid var(--amber-200);
-}
 .jo-td .jo-protected { margin-top: 6px; }
-.jo-protected-dot { width: 7px; height: 7px; border-radius: 999px; background: currentColor; flex: none; }
-.jo-protected-note { margin-top: 16px; display: grid; gap: 8px; justify-items: start; }
-.jo-protected-note p { max-width: 62ch; }
-
-/* Announced, never shown: the arrow is silent to a screen reader, and without
-   this the code and the meaning run together as one phrase the sender never
-   wrote. */
-.jo-sr {
-  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
-  overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0;
-}
 
 /* ---- glossary, in settings ---- */
 .gl-list { list-style: none; display: grid; gap: 16px; margin-top: 28px; }
@@ -491,8 +249,7 @@
    show where the focus is. `.btn:focus-visible` itself lives in globals.css,
    since `.btn` is shared with the landing page — only these two app-only
    button selectors belong here. */
-.gl-row button:focus-visible,
-.jo-codes button:focus-visible {
+.gl-row button:focus-visible {
   outline: 2px solid var(--blue-500); outline-offset: 2px;
 }
 select.gl-input:focus-visible { outline: 2px solid var(--blue-500); outline-offset: 2px; }
@@ -1033,30 +790,24 @@ select.gl-input:focus-visible { outline: 2px solid var(--blue-500); outline-offs
 /* Someone who has asked for less movement gets none of it: the controls appear
    at full strength instead of fading, and the disclosure simply is open. */
 @media (prefers-reduced-motion: reduce) {
-  .ch-tools,
+.ch-tools,
   .ch-add,
   .ch-tool,
   .cv-drop,
   .cv-doc-tools {
     transition: none;
   }
-  .ch-tools,
+.ch-tools,
   .cv-doc-tools { opacity: 1; }
-  .ch-more[open] > .ch-desc { animation: none; }
-  /* The pip stops moving but stays visible, because it is the only thing
+.ch-more[open] > .ch-desc { animation: none; }
+/* The pip stops moving but stays visible, because it is the only thing
      saying the parse is still running. */
-  .cv-pip { animation: none; opacity: 1; }
-  .ci-drop { transition: none; }
-  /* Same reasoning as `.cv-pip`: it is the only thing saying the import has
+.cv-pip { animation: none; opacity: 1; }
+.ci-drop { transition: none; }
+/* Same reasoning as `.cv-pip`: it is the only thing saying the import has
      not finished, so it stops moving rather than disappearing. */
-  .ci-pulse { animation: none; opacity: 1; }
-  /* The row's action stops fading in and is simply there — the reveal was
-     only ever a way of keeping the row quiet, never a way of hiding it. */
-  .src-act { transition: none; opacity: 1; }
-  .src-start { transition: none; }
-  /* Same reasoning as `.ci-pulse`: it is the only thing saying the shortlist
-     has not finished, so it stops moving rather than disappearing. */
-  .src-pulse { animation: none; opacity: 1; }
+.ci-pulse { animation: none; opacity: 1; }
+
 }
 
 /* The spreadsheet importer, on the candidates page rather than in the detail
@@ -1248,149 +999,9 @@ select.gl-input:focus-visible { outline: 2px solid var(--blue-500); outline-offs
    act on, revealed on hover and on `:focus-within` so they never leave the tab
    order, and no chunky button pairs anywhere. */
 .src { margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--line); }
-.src-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
-/* The one control that is always here — and therefore where focus lands after
-   an action removes the control that was pressed. */
-.src-start {
-  font: inherit;
-  font-size: 0.8125rem;
-  font-weight: 650;
-  padding: 2px 6px;
-  border: 0;
-  background: none;
-  color: var(--blue-500);
-  cursor: pointer;
-  border-radius: 4px;
-  transition: color 150ms ease;
-}
-.src-start:hover { color: var(--ink-900); }
-.src-start:disabled { cursor: default; opacity: 0.5; }
-.src-start:focus-visible { outline: 2px solid var(--blue-500); outline-offset: 2px; }
-.src-note { margin-top: 8px; font-size: 0.8125rem; color: var(--ink-500); max-width: 72ch; }
-.src-state {
-  margin-top: 8px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 0.8125rem;
-  color: var(--ink-700);
-}
-.src-error { margin-top: 8px; font-size: 0.8125rem; color: var(--amber-700); max-width: 72ch; }
-/* A slow pulse, not a spinner: scoring a whole database and then calling a
-   model takes as long as it takes, and a spinner promises a wait measured in
-   the moment. */
-.src-pulse {
-  flex: 0 0 auto;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--blue-500);
-  animation: cv-pulse 1400ms ease-in-out infinite;
-}
 
-/* The two things the shortlist did NOT do. Set apart from the list rather
-   than folded into it, because they qualify every row at once. */
-.src-notice {
-  margin-top: 10px;
-  padding: 8px 10px;
-  border: 1px solid var(--line);
-  border-left-width: 3px;
-  border-radius: var(--radius);
-  background: var(--surface-alt);
-}
-.src-notice[data-kind="protected"] { border-left-color: #8a5be1; }
-.src-notice[data-kind="client"] { border-left-color: var(--amber-700); }
 .src-notice .body { margin: 0; font-size: 0.8125rem; color: var(--ink-900); max-width: 72ch; }
-.src-notice .src-sub { margin-top: 4px; color: var(--ink-500); font-size: 0.75rem; }
 
-.src-list { margin: 12px 0 0; padding: 0; list-style: none; display: grid; gap: 10px; }
-.src-row {
-  padding: 8px 10px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-}
-.src-row-main { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
-.src-rank { font-size: 0.75rem; color: var(--ink-500); min-width: 1.25em; }
-.src-name { font-size: 0.875rem; font-weight: 650; color: var(--ink-900); overflow-wrap: anywhere; }
-/* A name we could not read falls back to the id, which stays traceable but
-   should not pretend to be a person's name. */
-.src-name-unknown { font-weight: 500; color: var(--ink-500); font-variant-numeric: tabular-nums; }
-.src-score {
-  margin-left: auto;
-  font-size: 0.8125rem;
-  font-weight: 650;
-  color: var(--ink-700);
-  font-variant-numeric: tabular-nums;
-}
-.src-reasons { margin: 6px 0 0; padding: 0; list-style: none; display: grid; gap: 2px; }
-.src-reason { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; font-size: 0.75rem; }
-.src-reason-k { color: var(--ink-500); min-width: 8em; }
-.src-reason-v { color: var(--ink-900); font-variant-numeric: tabular-nums; }
-.src-reason-note { color: var(--ink-500); }
-.src-why { margin-top: 6px; font-size: 0.8125rem; color: var(--ink-700); max-width: 72ch; }
-.src-quote { margin-top: 2px; font-size: 0.75rem; color: var(--ink-500); max-width: 72ch; }
-
-/* Eligibility flags: a compliance fact about the placement, not a score
-   component, so it sits visually apart from the reasons breakdown below it
-   rather than inside the same list. */
-.src-elig-note { margin-top: 6px; font-size: 0.8125rem; color: var(--ink-700); max-width: 72ch; }
-.src-elig-note[data-kind="not-applicable"] { color: var(--ink-500); }
-.src-elig { margin-top: 6px; display: grid; gap: 4px; }
-.src-elig-row {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-  flex-wrap: wrap;
-  font-size: 0.8125rem;
-  padding: 3px 6px;
-  border-radius: 4px;
-}
-/* `met`/`not_applicable` never reach this element — they render inside
-   `.src-elig-quiet` instead — so only the two outcomes that need to look
-   different from each other get a rule here. */
-.src-elig-row[data-outcome="not_met"] { background: var(--red-50, #fdf1f1); }
-.src-elig-row[data-outcome="unknown"] { background: var(--amber-50, #fdf6e8); }
-.src-elig-k { font-weight: 650; color: var(--ink-900); min-width: 9em; }
-.src-elig-basis { font-size: 0.6875rem; text-transform: uppercase; letter-spacing: 0.02em; }
-.src-elig-v { color: var(--ink-900); }
-.src-elig-v q { font-style: italic; }
-.src-elig-fix { font-size: 0.75rem; }
-/* Folded away by default: passing is the normal case and a rule that does
-   not apply to this placement type is not a fact about the candidate at
-   all, so neither should compete for attention with a real gap above. */
-.src-elig-quiet { margin-top: 2px; }
-.src-elig-summary {
-  font-size: 0.75rem;
-  color: var(--ink-500);
-  cursor: pointer;
-}
-.src-elig-quiet .src-elig-row { opacity: 0.8; }
-.src-elig-quiet .src-elig-row[data-outcome="met"],
-.src-elig-quiet .src-elig-row[data-outcome="not_applicable"] { background: none; }
-.src-elig-asof { margin-top: 4px; font-size: 0.6875rem; }
-
-.src-row-acts { margin-top: 6px; min-height: 1.5em; }
-/* Revealed by hover AND by `:focus-within`, so the control is reachable by
-   keyboard without a mouse ever having been near the row. */
-.src-act {
-  font: inherit;
-  font-size: 0.75rem;
-  padding: 2px 4px;
-  border: 0;
-  background: none;
-  color: var(--ink-500);
-  cursor: pointer;
-  border-radius: 4px;
-  opacity: 0;
-  transition: opacity 150ms ease, color 150ms ease;
-}
-.src-row:hover .src-act,
-.src-row:focus-within .src-act { opacity: 1; }
-.src-act:hover { color: var(--ink-900); }
-.src-act:disabled { cursor: default; opacity: 0.5; }
-.src-act:focus-visible { opacity: 1; outline: 2px solid var(--blue-500); outline-offset: 2px; }
-.src-act-off { font-size: 0.75rem; color: var(--ink-500); }
-.src-done { font-size: 0.75rem; font-weight: 650; color: #2f7d54; }
 /* The shared dialog — a dimmed backdrop and a centered card reusing the
    existing `.card` surface. Was `.wa-*`, private to the WhatsApp draft, until
    the candidate form needed the same thing; see `dashboard/dialog.tsx`. */
@@ -1507,7 +1118,7 @@ select.gl-input:focus-visible { outline: 2px solid var(--blue-500); outline-offs
    is the padding arithmetic, not a guess: the overlay takes 16px a side and
    the card 24px, so a 240px minimum third column needs 832px of viewport. */
 @media (max-width: 832px) {
-  .cand-group-permit,
+.cand-group-permit,
   .cand-group-record {
     grid-column: 1 / -1;
   }

@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { OPPORTUNITIES_PAGE_SIZE, OPPORTUNITIES_PAGE_SIZES } from "../api";
 import type { Me } from "../auth";
 import { DetailPanel } from "./detail-panel";
+import "./job-orders.css";
 import { LiveLight } from "./live-light";
 import { JobOrdersTable } from "./job-orders-table";
 import { useOpportunities, type Filter, type Opportunity } from "./opportunities";
