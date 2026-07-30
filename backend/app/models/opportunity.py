@@ -15,7 +15,17 @@ disagreement with the source impossible to see.
 import uuid
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Integer, Numeric, String, Text
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    ForeignKeyConstraint,
+    Integer,
+    Numeric,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.dialects.postgresql import UUID as PgUUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -33,16 +43,43 @@ class Opportunity(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
     EMPLOYMENT_PASS = "employment_pass"
     PLACEMENT_TYPES = (LOCAL_HIRE, MDW_WORK_PERMIT, OTHER_WORK_PERMIT, S_PASS, EMPLOYMENT_PASS)
 
-    email_message_id: Mapped[uuid.UUID] = mapped_column(
+    PIPELINE = "pipeline"
+    MANUAL = "manual"
+    SOURCES = (PIPELINE, MANUAL)
+
+    # Nullable since a job order may be taken over the phone or WhatsApp, and
+    # SET NULL rather than CASCADE because once a job order can be assigned,
+    # shared and worked on, a retention purge of the mail body must not delete
+    # it. `Client.first_seen_email_message_id` makes the same argument.
+    email_message_id: Mapped[uuid.UUID | None] = mapped_column(
         PgUUID(as_uuid=True),
-        ForeignKey("email_messages.id", ondelete="CASCADE"),
-        nullable=False,
+        ForeignKey("email_messages.id", ondelete="SET NULL"),
         index=True,
     )
     # Denormalised from the email so listing and filtering never needs the join.
     received_datetime: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), index=True
     )
+
+    # Which client this vacancy is for. Without it, `assigned_user_id` is a
+    # copied user id with no record of what drove it: reassigning a client
+    # could not find its job orders, and a manual job order would have no
+    # client at all.
+    client_id: Mapped[uuid.UUID | None] = mapped_column(PgUUID(as_uuid=True), index=True)
+
+    # The recruiter responsible. NULL is the unassigned queue — visible to
+    # everyone and claimable, not hidden. Set at ingestion from the client's
+    # assignee, never from whose mailbox the mail happened to land in.
+    assigned_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        PgUUID(as_uuid=True), index=True
+    )
+
+    # How the row came to exist. Not inferable from `email_message_id`: that
+    # column is now ON DELETE SET NULL, so a retention purge would otherwise
+    # silently reclassify a pipeline job order as manual — the same argument
+    # `Client.source` makes. There is no 'shared' value: sharing grants sight
+    # of the existing row and never creates one.
+    source: Mapped[str] = mapped_column(String(16), nullable=False, default=PIPELINE)
 
     company_name_raw: Mapped[str | None] = mapped_column(Text)
     company_name_normalized: Mapped[str | None] = mapped_column(Text, index=True)
@@ -129,6 +166,30 @@ class Opportunity(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
     quality_state: Mapped[str] = mapped_column(String(16), nullable=False, default="likely")
 
     __table_args__ = (
+        # Children reference (tenant_id, id) so their FK cannot cross
+        # agencies — the same idiom as `uq_clients_tenant_id_id`.
+        # `opportunity_shares` depends on this existing.
+        UniqueConstraint("tenant_id", "id", name="uq_opportunities_tenant_id_id"),
+        CheckConstraint(
+            "source IN ('pipeline', 'manual')",
+            name="ck_opportunities_source_known",
+        ),
+        # Same column-qualified SET NULL reasoning as the assignee FK below.
+        ForeignKeyConstraint(
+            ["tenant_id", "client_id"],
+            ["clients.tenant_id", "clients.id"],
+            name="fk_opportunities_client_same_tenant",
+            ondelete="SET NULL (client_id)",
+        ),
+        # Column-qualified SET NULL (PG15+): a plain SET NULL on a composite FK
+        # nulls every referencing column, including `tenant_id`, which is
+        # NOT NULL and would fail. Only `assigned_user_id` should clear.
+        ForeignKeyConstraint(
+            ["tenant_id", "assigned_user_id"],
+            ["users.tenant_id", "users.id"],
+            name="fk_opportunities_assignee_same_tenant",
+            ondelete="SET NULL (assigned_user_id)",
+        ),
         # Both vocabularies were guaranteed only by the function that wrote
         # them, and a guarantee that lives in one caller is one direct INSERT
         # away from being untrue. That is not hypothetical here: `salary_period`
