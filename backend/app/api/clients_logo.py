@@ -58,8 +58,17 @@ async def _read_within_limit(upload: UploadFile) -> bytes:
     The limit is enforced on the way in, before Pillow sees a byte: the
     `Content-Length` header is the client's claim about the body and a
     streaming upload need not send one at all, so the only honest place to
-    count is here, as the bytes arrive. Reading one chunk past the limit and
-    stopping means a 10 GB post costs the limit plus a chunk, not 10 GB.
+    count is here, as the bytes arrive. Reading one byte past the limit and
+    stopping is enough to tell "over" from "at" without buffering the whole
+    body into this function's own memory.
+
+    This does NOT bound disk or bandwidth: Starlette's multipart parser
+    already spools the full upload to a `SpooledTemporaryFile` during
+    dependency resolution, before this function — or the endpoint body — ever
+    runs, so the bytes are on disk (or in that spool's memory) regardless of
+    what happens here. What this check protects is the decode: without it, an
+    oversized file would still reach Pillow and pay for CPU and memory
+    decoding an image that is about to be rejected anyway.
     """
     limit = settings.CLIENT_LOGO_MAX_UPLOAD_BYTES
     content = await upload.read(limit + 1)

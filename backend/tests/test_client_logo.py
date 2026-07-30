@@ -171,6 +171,70 @@ async def test_a_wide_logo_is_contained_not_cropped(agency_with_clients, store):
     assert image.getpixel((image.width // 2, image.height // 2))[3] != 0
 
 
+async def test_an_oversized_logo_is_capped_and_stays_wide(agency_with_clients, store):
+    """The untested branch: `thumbnail` is a no-op below the bound, so every
+    other test in this file leaves the actual resize path unexercised.
+
+    A 2000x500 source (4:1) must come back with its long edge capped at
+    exactly the configured bound, still letterboxed onto a square, and with
+    its aspect ratio preserved — not squashed to 1:1.
+    """
+    tid, uid, ids = agency_with_clients
+    target = ids["live"]
+    bound = settings.CLIENT_LOGO_MAX_PIXEL_DIMENSION
+    async with _client_for(tid, uid) as http:
+        await _upload(http, target, _png_bytes(2000, 500), name="huge.png")
+
+    stored, _content_type = store.binary_objects[client_logo_key(tid, target)]
+    image = Image.open(io.BytesIO(stored))
+    assert image.width == image.height == bound  # capped on the long edge
+
+    # 2000x500 is 4:1; scaled so the long edge is exactly `bound`, the short
+    # edge should be bound / 4 (allow a pixel of rounding either way).
+    expected_band_height = round(bound * (500 / 2000))
+
+    # Scan the vertical opaque extent down the centre column: the band is
+    # the run of non-transparent rows, the rest is transparent padding.
+    centre_x = image.width // 2
+    opaque_rows = [
+        y for y in range(image.height) if image.getpixel((centre_x, y))[3] != 0
+    ]
+    band_height = max(opaque_rows) - min(opaque_rows) + 1
+    assert abs(band_height - expected_band_height) <= 1
+
+    # Padding survives above and below the band.
+    assert image.getpixel((centre_x, 0))[3] == 0
+    assert image.getpixel((centre_x, image.height - 1))[3] == 0
+
+
+async def test_a_small_logo_is_not_upscaled(agency_with_clients, store):
+    """The other half of the untested branch: `thumbnail` must be a genuine
+    no-op below the bound, not merely "small enough to look right" —
+    confirm the content stays at its original 64x64, not stretched up to
+    fill the canvas."""
+    tid, uid, ids = agency_with_clients
+    target = ids["live"]
+    async with _client_for(tid, uid) as http:
+        await _upload(http, target, _png_bytes(64, 64), name="small.png")
+
+    stored, _content_type = store.binary_objects[client_logo_key(tid, target)]
+    image = Image.open(io.BytesIO(stored))
+    assert image.width == image.height  # square canvas (64x64 is already square)
+
+    centre_x = image.width // 2
+    opaque_rows = [
+        y for y in range(image.height) if image.getpixel((centre_x, y))[3] != 0
+    ]
+    band_height = max(opaque_rows) - min(opaque_rows) + 1
+    assert band_height == 64
+
+    opaque_cols = [
+        x for x in range(image.width) if image.getpixel((x, image.height // 2))[3] != 0
+    ]
+    band_width = max(opaque_cols) - min(opaque_cols) + 1
+    assert band_width == 64
+
+
 async def test_oversized_upload_is_413_before_decode(agency_with_clients, store):
     tid, uid, ids = agency_with_clients
     target = ids["live"]
