@@ -162,8 +162,10 @@ describe("scope chips", () => {
     render(<JobOrders me={me()} />);
     await waitFor(() => expect(lastUrl(fetchMock)).toContain("offset=0"));
 
-    // "All" is a label both rows use, so each chip is pressed inside its own
-    // group rather than by a name that matches twice.
+    // Each chip is pressed inside its own group. The two rows no longer share
+    // a label — "All job orders" and "Everyone" say which question they answer
+    // — but the groups stay the anchor so a future label clash cannot make one
+    // of these clicks land on the wrong row silently.
     const status = screen.getByRole("group", { name: "Filter job orders" });
     fireEvent.click(within(status).getByRole("button", { name: /Needs review/ }));
     await waitFor(() => expect(lastUrl(fetchMock)).toContain("status=needs_review"));

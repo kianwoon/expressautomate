@@ -38,7 +38,7 @@ import { MailboxOverview, SyncActivity } from "./sync-activity";
 
 const CHIPS: { key: Filter; label: string; countKey: "all" | "new" | "needs_review" | "reviewed" }[] =
   [
-    { key: null, label: "All", countKey: "all" },
+    { key: null, label: "All job orders", countKey: "all" },
     { key: "new", label: "New", countKey: "new" },
     { key: "needs_review", label: "Needs review", countKey: "needs_review" },
     { key: "reviewed", label: "Reviewed", countKey: "reviewed" },
@@ -62,7 +62,7 @@ const SCOPES: { key: Scope; label: string }[] = [
   { key: "mine", label: "Mine" },
   { key: "queue", label: "Queue" },
   { key: "shared_with_me", label: "Shared with me" },
-  { key: "all", label: "All" },
+  { key: "all", label: "Everyone" },
 ];
 
 export function JobOrders({ me, heading = "h2" }: { me: Me; heading?: "h1" | "h2" }) {

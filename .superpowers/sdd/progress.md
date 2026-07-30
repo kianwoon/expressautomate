@@ -542,3 +542,88 @@ FABLE ② REVIEW of the post-migration tail (2d94732, 8322180): SHIP, 8/10, no C
   Archived still allowed, matching update_client. 1578 passed.
 FINAL STATE: 28 commits, 1578 passed, ruff clean, single head 314cc3da9ced. Production migrated.
   Branch NOT merged, code NOT deployed.
+
+## Job order sharing UI
+Plan: docs/superpowers/plans/2026-07-31-job-order-sharing-ui.md
+Branch: kianwoon/job-order-sharing-ui-a8ce83  Base: c121d03
+Worktree: .claude/worktrees/job-order-sharing-ui-a8ce83 (main checkout .env points at PROD - never test there)
+ENV: worktree .env -> localhost:5432 docker `ea-test-pg`; DATABASE_URL=app role, ADMIN=postgres.
+Baseline: backend 1578 passed, frontend 24 passed (7 files). Alembic head 314cc3da9ced.
+NOTE: no @testing-library/jest-dom or user-event installed, no setupFiles. House-style asserts only.
+UI Task 1: complete (c121d03..4020846, review clean after 1 minor fix, 1584 passed)
+  Payload gains assigned_user_id/assignee_name/client_id/source/shared_with_me.
+  LEFT join (an inner one would have dropped the whole queue); join now composite on tenant too.
+  NOTE: the cross-tenant test is a regression guard only - RLS blocks it either way, so it
+  cannot distinguish composite from bare join. Implementer said so rather than overclaiming.
+UI Task 2: complete (4020846..7887fb0, review clean, 1589 passed). GET /api/members.
+  Controller resolved the reviewer's one warning: seed_tenant_with_user inserts only
+  id/tenant_id/email/role, so both name columns really are NULL - the fallback test is valid.
+UI Task 3: complete (7887fb0..219a159, review clean after 1 minor fix, 1596 passed). opportunities.py 1029 LOC.
+  ?scope= ANDed with the predicate, never substituted - mutation-proven (dropping .where(visible)
+  fails test_no_scope_can_widen_visibility). _shared_with_me_exists shared by payload + filter.
+  HONEST LIMIT recorded in the test: only the `all` leg can discriminate. mine/queue/shared_with_me
+  clauses are verbatim OR-branches OF the predicate, so no row can match a scope yet be hidden.
+=== PHASE A (backend) COMPLETE. Frontend next. ===
+UI Task 4: complete (219a159..0cbff81, review clean, 34 frontend tests / 9 files). person.tsx + members.ts.
+  Client logo colours PROVABLY unchanged: indices 7/4/7 pinned and independently recomputed by the reviewer.
+  Implementer's own test caught a real bug: cache = pending.catch(...) stored the DERIVED promise, so
+  the cache===pending guard never fired and a failed fetch cached forever (picker dead for the tab).
+  resetMembers() wired into signOut() in site-nav.tsx (verified the only LOGOUT_PATH caller).
+  FOLLOW-UP: candidate-avatar.tsx holds a third copy of colorFor/initialsFor - deferred, different screen.
+UI Task 5: complete (0cbff81..2cc2aaf, review clean, 50 tests / 10 files). MemberPicker + MemberSelect.
+  Caller excluded via useAuth() INTERNALLY (no call site can forget). Disabled while auth loads, so
+  the caller never flickers into the list. Keyboard: Arrow/Enter/Escape mirroring dialog.tsx.
+  FOR TASKS 9/10: (a) MemberSelect renders a labelled "someone who has left" option when `value`
+  names an id absent from the staff list - stops a save silently meaning "nobody". (b) options
+  commit on MOUSEDOWN, so consumer tests must use fireEvent.mouseDown, not click.
+UI Task 5b: app.css split (user decision) - it was 1560 BEFORE this feature (bar is 1500), 1672 after.
+UI Task 5b: complete (2cc2aaf..0a17196). app.css 1672 -> 1283 (UNDER the 1500 bar); new
+  app/dashboard/job-orders.css = 440. npm run build passed (21/21 pages), 50 tests unchanged.
+  Shared primitives (.jo-table/.jo-chip/.person-initials/.mp-*) deliberately LEFT in app.css -
+  moving them would have broken the candidates and clients screens. New job-order-only CSS in
+  Tasks 7/9/10 goes in job-orders.css.
+UI Task 6: complete (0a17196..d628859, review clean, 60 tests / 11 files). opportunities.ts 679 LOC.
+  409/404/403/401 kept as DISTINCT sentences; conflict:true only on 409. Scope change resets offset.
+  allow-hardcode: annotation on the status->message map judged legitimate (statuses are the logic).
+  NOTE: opportunities.ts is near the ~700 split threshold - next addition there should split out.
+UI Task 7: complete (d628859..4e678b8, review clean, 65 tests / 12 files, build passed).
+  Table still exactly 8 columnheaders; avatar inside the company cell. Both chip rows COMBINE
+  (status + scope both reach the same request). job-orders.css 440->458; app.css untouched at 1283.
+  MINOR/UX for final review: both chip rows contain a chip labelled "All" - distinguished only by
+  group aria-label. Sighted users see "All ... All". Worth a look in the real app.
+  ALSO: implementer asked for an eyeball on the scope row's placement below .jo-controls.
+UI Task 8: complete (4e678b8..2988eed, review clean after 1 fix round, 74 tests / 14 files, build passed).
+  REAL BUG CAUGHT: claiming visibly SNAPPED BACK - own() set the fresh row but a sync effect found
+  the stale object still in items and overwrote it. Fixed with patchRow(fresh); mutation-verified
+  (removing that line fails job-orders-claim.test.tsx).
+  MutationResult now carries kind: conflict|gone|forbidden|denied|failed. No control flow anywhere
+  branches on message TEXT any more; GONE_MESSAGE/FORBIDDEN_MESSAGE deleted.
+  403 copy depends on the ROW: "shared with you, not assigned" vs "claim it first" when unassigned.
+=== PHASE C COMPLETE - assignment loop usable. Sharing next. ===
+UI Task 9: complete (2988eed..53e7fa6, review clean, 83 tests / 15 files, build passed). share-dialog.tsx.
+  Broadcast gate MUTATION-VERIFIED (loosening it fails 2 of 9 tests) and mirrors the API exactly.
+  Disabled-with-reason, two distinct reasons. No access level invented. job-orders.css 515; app.css 1283.
+  MINORS carried: (1) the `assigned_user_id !== null` clause is unreachable so no test protects it;
+  (2) no frontend test pins a repeat share - CONTROLLER RESOLVED: the backend already pins it in
+  test_resharing_the_same_user_in_a_fresh_request_updates_the_note (loops 6 upserts for the generic plan).
+=== PHASE D COMPLETE. Clients + manual creation next. ===
+UI Task 10 + 10b: complete (53e7fa6..8de162b, review clean after 2 fix rounds).
+  Backend 1604 passed, frontend 92 / 16 files, build passed. client-assignee.tsx 235 LOC (split out).
+  FOURTH API GAP the spec missed, fixed in 967f900: clients _serialize emitted NO assignee, so every
+  client would have read as unassigned in production. Also added collaborators to the DETAIL payload
+  only (list stays single-query).
+  MemberSelect now INCLUDES the caller (you must be able to assign a client to yourself);
+  MemberPicker still excludes. Collaborator picker passes a local exclude.
+  Whitespace-only name now falls through in opportunities.py too (8de162b), mutation-verified.
+  *** CARRY TO FINAL REVIEW: the email fallback still DIFFERS - clients.py yields the local-part
+  ("raj"), opportunities.py yields the full email ("raj@agency.sg"). Same person, two screens,
+  two names. Originated in the spec. Decide one and make both match. ***
+UI Task 11: complete (8de162b..e75055d, review approved, frontend 97/17, backend 1605, build passed).
+  FIFTH API GAP: GET /api/clients had NO q param - the search test would have passed against an
+  endpoint silently ignoring the query. Added + mutation-verified.
+  addRow added (patchRow no-ops for a row not already on the page). Mutations split to
+  opportunity-actions.ts (164), re-exported so no caller changed.
+  CARRY TO FINAL REVIEW: (1) addRow ignores current sort/scope/filter/q - prepends and bumps total
+  even when the server would not return the row (transient, self-corrects on poll).
+  (2) CLIENT_SEARCH_DEBOUNCE_MS is a second literal, not the shared constant. (3) no test pins the debounce.
+=== ALL 11 TASKS COMPLETE ===

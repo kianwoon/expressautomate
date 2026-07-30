@@ -119,6 +119,26 @@ async def test_a_whitespace_only_preferred_name_falls_through_to_display_name(
     assert row["assignee_name"] == "Mei Ling Tan"
 
 
+async def test_a_nameless_assignee_falls_back_to_the_email_local_part(client, tenant) -> None:
+    """"raj", never "raj@agency.sg" — `GET /api/members` and the clients screen
+    both render the local part, and one colleague must not carry two names
+    across two screens."""
+    tenant_id, mine = tenant
+    async with AdminSessionLocal() as s:
+        u = await s.get(User, mine)
+        u.preferred_name = None
+        u.display_name = None
+        email = u.email
+        await s.commit()
+    await _opportunity(tenant_id, assigned_user_id=mine)
+
+    sign_in(client, mine, tenant_id)
+    body = (await client.get("/api/opportunities")).json()
+
+    assert "@" not in email.split("@")[0]
+    assert body["items"][0]["assignee_name"] == email.split("@")[0]
+
+
 async def test_an_unassigned_row_reports_a_null_assignee(client, tenant) -> None:
     tenant_id, mine = tenant
     await _opportunity(tenant_id, assigned_user_id=None)

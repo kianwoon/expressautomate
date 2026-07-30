@@ -27,15 +27,15 @@ from app.models.opportunity_share import OpportunityShare
 OWNER_ROLE = "owner"
 
 
-def visible_opportunities(user_id: uuid.UUID, role: str) -> ColumnElement[bool]:
-    """A WHERE clause, not a query — so it composes with existing sort,
-    search and pagination without the caller changing shape.
-    """
-    if role == OWNER_ROLE:
-        # A three-person agency needs the boss to see the pipeline.
-        return true_()
+def shared_with_me_exists(user_id: uuid.UUID) -> ColumnElement[bool]:
+    """A share that reaches `user_id` — a named share or a tenant broadcast.
 
-    shared_with_me = (
+    The single source of truth for "shared with me". `visible_opportunities`
+    below, the list payload's row badge and the `scope=shared_with_me` filter
+    in `app/api/opportunities.py` all call this, so none of them can drift
+    from the others when sharing semantics change.
+    """
+    return (
         select(OpportunityShare.id)
         .where(OpportunityShare.opportunity_id == Opportunity.id)
         .where(
@@ -49,6 +49,17 @@ def visible_opportunities(user_id: uuid.UUID, role: str) -> ColumnElement[bool]:
         )
         .exists()
     )
+
+
+def visible_opportunities(user_id: uuid.UUID, role: str) -> ColumnElement[bool]:
+    """A WHERE clause, not a query — so it composes with existing sort,
+    search and pagination without the caller changing shape.
+    """
+    if role == OWNER_ROLE:
+        # A three-person agency needs the boss to see the pipeline.
+        return true_()
+
+    shared_with_me = shared_with_me_exists(user_id)
 
     # The recipient of the original mail keeps sight of what was extracted
     # from it. They have the email in Outlook; hiding the extracted version

@@ -45,6 +45,12 @@ because the UI is untestable without them.
 | `source` | `pipeline` or `manual` — a hand-typed job order should be identifiable as one |
 | `shared_with_me` | true when a share row grants the caller sight of this job order |
 
+`assignee_name` resolves `preferred_name` → `display_name` → the email
+**local-part**, the identical chain `GET /api/members` and the clients screen
+use. The local part and not the whole address: a colleague with no name set
+must read as "raj" everywhere, and "raj" in the sharing picker beside
+"raj@agency.sg" in the list looks like two different people.
+
 `assignee_name` is denormalised deliberately. The alternative — return only the
 id and have the browser resolve it against the members list — makes every row's
 rendering depend on a second request having already landed, which is a race the

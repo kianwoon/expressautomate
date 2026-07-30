@@ -41,7 +41,6 @@ from app.core.config import settings
 from app.db.rls import tenant_session
 from app.models import Candidate, EmailMessage, Opportunity, OpportunityCode, User
 from app.models.extraction import ExtractionEvidence
-from app.models.opportunity_share import OpportunityShare
 from app.services.notify.dispatch import emit_and_enqueue
 from app.services.notify.events import (
     EVENT_OPPORTUNITY_ASSIGNED,
@@ -52,6 +51,7 @@ from app.services.sourcing import eligibility
 from app.services.visibility import (
     load_editable_opportunity,
     load_visible_opportunity,
+    shared_with_me_exists,
     visible_opportunities,
 )
 
@@ -101,29 +101,6 @@ _SALARY_PER_MONTH = {
 _QUALITY_RANK = {"needs_review": 0, "likely": 1, "verified": 2}
 
 
-def _shared_with_me_exists(user_id: uuid.UUID):
-    """A share that reaches `user_id` — a named share or a tenant broadcast.
-
-    The single source of truth for "shared with me": the payload's row badge
-    and the `scope=shared_with_me` filter both call this, so the two can never
-    disagree about the same row.
-    """
-    return (
-        select(OpportunityShare.id)
-        .where(OpportunityShare.opportunity_id == Opportunity.id)
-        .where(
-            or_(
-                OpportunityShare.scope == OpportunityShare.SCOPE_TENANT,
-                and_(
-                    OpportunityShare.scope == OpportunityShare.SCOPE_USER,
-                    OpportunityShare.shared_with_user_id == user_id,
-                ),
-            )
-        )
-        .exists()
-    )
-
-
 def _scope_clause(scope: str, user_id: uuid.UUID):
     """A filter WITHIN what `visible_opportunities` already allows, never a
     widening of it. It is ANDed with the predicate, never substituted for it.
@@ -133,7 +110,7 @@ def _scope_clause(scope: str, user_id: uuid.UUID):
     if scope == "queue":
         return Opportunity.assigned_user_id.is_(None)
     if scope == "shared_with_me":
-        return _shared_with_me_exists(user_id)
+        return shared_with_me_exists(user_id)
     return true_()
 
 
@@ -248,20 +225,22 @@ async def list_opportunities(
         # the source is worse than a join.
         email = aliased(EmailMessage)
         assignee = aliased(User)
-        shared_with_me_expr = _shared_with_me_exists(user_uuid)
+        shared_with_me_expr = shared_with_me_exists(user_uuid)
         base = (
             select(
                 Opportunity,
                 email.internet_message_id,
                 email.graph_message_id,
-                # NULLIF over each candidate rather than a bare COALESCE — see
-                # `app/api/clients.py::_assignee_name_expr`. Without it, a user
-                # whose `preferred_name` is a single space would render blank
-                # here while showing their display name on the clients screen.
+                # NULLIF over each candidate rather than a bare COALESCE, and
+                # the email's LOCAL PART as the last resort — both exactly as
+                # `app/api/clients.py::_assignee_name_expr` and
+                # `GET /api/members` do it. A nameless colleague must be "raj"
+                # on every screen; "raj@agency.sg" here and "raj" in the
+                # sharing picker reads as two different people.
                 func.coalesce(
                     func.nullif(func.btrim(assignee.preferred_name), ""),
                     func.nullif(func.btrim(assignee.display_name), ""),
-                    assignee.email,
+                    func.split_part(assignee.email, "@", 1),
                 ).label("assignee_name"),
                 shared_with_me_expr.label("shared_with_me"),
             )
