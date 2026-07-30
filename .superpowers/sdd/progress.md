@@ -522,3 +522,14 @@ FINAL REVIEW round 2: READY WITH FIXES - guard test still missed route->module-l
   5003c4e; probe now caught, no true positives, no exemptions added. 1564 passed.
 FEATURE COMPLETE, NOT MERGED. Open: (1) should client reassignment be owner-only? (2) migrations
   not yet applied to live Koyeb DB - user chose live, deferred to one deliberate pass.
+CLIENT PERMS (user decision): owner OR current assignee; unassigned client claimable by any
+  recruiter; else 403. Implemented 2d94732, mutation-proven, 1571 passed.
+BACKFILL DEFECT FOUND ON LIVE DATA (8322180): client_mentions is EVIDENCE not a key - one email
+  legitimately names many clients. Live: 5 of 8 matchable opportunities had SIX candidate clients;
+  matched_by='email_domain' did NOT disambiguate. Original UPDATE..FROM would have picked an
+  arbitrary client, and client_id drives assignment. Now HAVING count(DISTINCT client_id)=1,
+  ambiguity -> NULL (CLAUDE.md no-fabrication rule). Pinned by tests/test_opportunity_client_backfill.py.
+PRODUCTION MIGRATED 2026-07-31: 8c7e0f3c5305 -> 314cc3da9ced (5 revisions). Verified live:
+  client_id 3/11 (matches prediction), assigned_user_id 0/11, 11 opportunities intact,
+  RLS enabled+forced on both new tables, all 3 composite FKs column-qualified.
+  Local .env still points at the docker container; prod URL was passed per-command only.

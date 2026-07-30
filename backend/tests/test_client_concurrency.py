@@ -10,12 +10,15 @@ extraction over a race that has an obvious correct answer.
 import asyncio
 import uuid
 
+import httpx
 import pytest
 from sqlalchemy import text
 
 from app.db.rls import tenant_session
+from app.main import app
 from app.services.client_matching import match_client
 from tests.conftest import AdminSessionLocal, cleanup_tenant
+from tests.test_opportunities_api import sign_in
 
 
 @pytest.fixture
@@ -54,3 +57,79 @@ async def test_two_concurrent_matches_produce_one_client(agency) -> None:
             )
         ).scalar_one()
     assert count == 1
+
+
+"""The reassignment race, below.
+
+`PUT /clients/{id}/assignee` decides permission from the client's current
+assignee and then, in the same breath, moves that recruiter's entire book of
+work under the client. Read and write must therefore be serialised against a
+concurrent reassignment, which is what `FOR UPDATE` on that read buys.
+"""
+
+
+async def _reassignment_race(agency_id: uuid.UUID) -> int:
+    """Drive the race and return the status code the losing request gets.
+
+    A held transaction stands in for the concurrent request: it locks the
+    client row and reassigns it away from `holder`, then commits only after
+    the API request is already in flight. With `FOR UPDATE` the API blocks on
+    that lock and, once released, reads the *committed* assignee — no longer
+    `holder`, so 403. Without it the API reads its own older snapshot, sees
+    `holder`, and proceeds. The sleep is not a race window: it only guarantees
+    the request is in flight before the commit, so a slow machine makes the
+    test slower, never flakier.
+    """
+    holder, newcomer = uuid.uuid4(), uuid.uuid4()
+    client_id = uuid.uuid4()
+    async with AdminSessionLocal() as s:
+        for uid in (holder, newcomer):
+            await s.execute(
+                text(
+                    "INSERT INTO users (id, tenant_id, email, role) "
+                    "VALUES (:i, :t, :e, 'recruiter')"
+                ),
+                {"i": uid, "t": agency_id, "e": f"u{uid.hex[:8]}@agency.sg"},
+            )
+        await s.execute(
+            text(
+                "INSERT INTO clients (id, tenant_id, name, name_normalized, status, "
+                "assigned_user_id) VALUES (:i, :t, 'Acme', 'acme', 'confirmed', :a)"
+            ),
+            {"i": client_id, "t": agency_id, "a": holder},
+        )
+        await s.commit()
+
+    async def _hold_then_commit() -> None:
+        async with AdminSessionLocal() as s:
+            await s.execute(
+                text("SELECT id FROM clients WHERE id = :i FOR UPDATE"), {"i": client_id}
+            )
+            await s.execute(
+                text("UPDATE clients SET assigned_user_id = :u WHERE id = :i"),
+                {"u": newcomer, "i": client_id},
+            )
+            await asyncio.sleep(1.0)
+            await s.commit()
+
+    async def _reassign() -> int:
+        # Started after the lock is taken, so the ordering is fixed.
+        await asyncio.sleep(0.2)
+        c = httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        )
+        sign_in(c, holder, agency_id)
+        async with c as http:
+            response = await http.put(
+                f"/api/clients/{client_id}/assignee", json={"user_id": str(holder)}
+            )
+        return response.status_code
+
+    _held, status = await asyncio.gather(_hold_then_commit(), _reassign())
+    return status
+
+
+async def test_a_stale_assignee_cannot_reassign_under_a_concurrent_handover(
+    agency,
+) -> None:
+    assert await _reassignment_race(agency) == 403

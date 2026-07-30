@@ -870,6 +870,36 @@ async def delete_contact(request: Request, client_id: uuid.UUID, contact_id: uui
         await session.execute(delete(ClientContact).where(ClientContact.id == contact_id))
 
 
+def _refuse_merged(status: str) -> None:
+    """A merged row is no longer a client, so it has nobody to hand on to.
+
+    Same refusal, same 400, same words as `update_client` and `_transition`:
+    reassignment and cover are edits to a live row, and a merged row is not
+    one. `archived` is deliberately *not* refused — `update_client`, the
+    ordinary edit route, allows it, and an archived account still has a
+    recruiter answerable for it.
+    """
+    if status == Client.MERGED:
+        raise HTTPException(status_code=400, detail="Unmerge the client first")
+
+
+async def _load_for_reassign(session, client_id: uuid.UUID) -> Client:
+    """`_load`, but holding the row lock the permission decision needs.
+
+    The decision reads `assigned_user_id`; without the lock a concurrent
+    reassignment can land between reading it and acting on it.
+    """
+    client = (
+        await session.execute(
+            select(Client).where(Client.id == client_id).with_for_update()
+        )
+    ).scalar_one_or_none()
+    if client is None:
+        raise HTTPException(status_code=404, detail="Client not found")
+    _refuse_merged(client.status)
+    return client
+
+
 def _require_may_reassign(
     user_uuid: uuid.UUID, role: str, current_assignee: uuid.UUID | None
 ) -> None:
@@ -910,15 +940,23 @@ async def set_client_assignee(
     user_uuid, tenant_uuid, role = await _require_session_with_role(request)
 
     async with tenant_session(tenant_uuid) as session:
-        # One read serves both jobs: it is the permission check's subject and
-        # the `previous` assignee whose job orders travel with the account.
+        # One *locked* read serves both jobs: it is the permission check's
+        # subject and the `previous` assignee whose job orders travel with the
+        # account. `FOR UPDATE` because otherwise the check and the write
+        # straddle a concurrent reassignment: the outgoing recruiter's
+        # in-flight request reads itself as the assignee, passes, and then
+        # moves the *new* assignee's whole book of work. Two separate reads
+        # would merely move that window, so there is deliberately only one.
         row = (
             await session.execute(
-                select(Client.id, Client.assigned_user_id).where(Client.id == client_id)
+                select(Client.id, Client.assigned_user_id, Client.status)
+                .where(Client.id == client_id)
+                .with_for_update()
             )
         ).one_or_none()
         if row is None:
             raise HTTPException(status_code=404, detail="Client not found")
+        _refuse_merged(row.status)
         previous = row.assigned_user_id
         _require_may_reassign(user_uuid, role, previous)
 
@@ -974,7 +1012,7 @@ async def add_collaborator(
     """
     user_uuid, tenant_uuid, role = await _require_session_with_role(request)
     async with tenant_session(tenant_uuid) as session:
-        client = await _load(session, client_id)
+        client = await _load_for_reassign(session, client_id)
         _require_may_reassign(user_uuid, role, client.assigned_user_id)
         await session.execute(
             pg_insert(ClientCollaborator)
@@ -991,7 +1029,7 @@ async def remove_collaborator(
     """Removing cover that is already gone is a no-op, for the same reason."""
     caller_uuid, tenant_uuid, role = await _require_session_with_role(request)
     async with tenant_session(tenant_uuid) as session:
-        client = await _load(session, client_id)
+        client = await _load_for_reassign(session, client_id)
         _require_may_reassign(caller_uuid, role, client.assigned_user_id)
         await session.execute(
             delete(ClientCollaborator)

@@ -464,3 +464,66 @@ async def test_anyone_may_manage_collaborators_on_an_unassigned_client(
             f"/api/clients/{acme}/collaborators", json={"user_id": str(incoming)}
         )
     assert added.status_code == 201
+
+
+async def _set_status(
+    client_id: uuid.UUID, status: str, target: uuid.UUID | None = None
+) -> None:
+    """`ck_clients_merged_has_target` means a merged row must name its target,
+    so the status and the target are written together.
+    """
+    async with AdminSessionLocal() as s:
+        await s.execute(
+            text("UPDATE clients SET status = :s, merged_into_client_id = :m WHERE id = :i"),
+            {"s": status, "m": target, "i": client_id},
+        )
+        await s.commit()
+
+
+async def test_a_merged_client_cannot_be_reassigned(agency) -> None:
+    """A merged row is no longer a client, so it has nobody to hand on to —
+    and reassigning one would move a book of work under a row that no longer
+    appears in the list. Refused in the same words the edit route uses.
+    """
+    tid, outgoing, incoming, acme, other = agency
+    await _set_status(acme, "merged", other)
+    async with await _http(tid, outgoing) as http:
+        response = await http.put(
+            f"/api/clients/{acme}/assignee", json={"user_id": str(incoming)}
+        )
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Unmerge the client first"
+
+
+async def test_a_merged_client_cannot_gain_a_collaborator(agency) -> None:
+    tid, outgoing, incoming, acme, other = agency
+    await _set_status(acme, "merged", other)
+    async with await _http(tid, outgoing) as http:
+        response = await http.post(
+            f"/api/clients/{acme}/collaborators", json={"user_id": str(incoming)}
+        )
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Unmerge the client first"
+
+
+async def test_a_merged_client_cannot_lose_a_collaborator(agency) -> None:
+    tid, outgoing, incoming, acme, other = agency
+    await _set_status(acme, "merged", other)
+    async with await _http(tid, outgoing) as http:
+        response = await http.delete(f"/api/clients/{acme}/collaborators/{incoming}")
+    assert response.status_code == 400
+
+
+async def test_an_archived_client_may_still_be_reassigned(agency) -> None:
+    """Only `merged` is refused, matching `update_client`, the ordinary edit
+    route, which also allows an archived row. An archived account still has
+    somebody answerable for it, and handing it on is how that changes.
+    """
+    tid, outgoing, incoming, acme, _other = agency
+    await _set_status(acme, "archived")
+    async with await _http(tid, outgoing) as http:
+        response = await http.put(
+            f"/api/clients/{acme}/assignee", json={"user_id": str(incoming)}
+        )
+    assert response.status_code == 200
+    assert response.json()["assigned_user_id"] == str(incoming)
