@@ -731,3 +731,35 @@ async def test_patch_refuses_a_merged_client(agency_with_clients) -> None:
         response = await http.patch(f"/api/clients/{ids['merged']}", json={"name": "Nope"})
     assert response.status_code == 400
     assert "unmerge" in response.json()["detail"].lower()
+
+
+async def test_patch_only_touches_the_field_sent(agency_with_clients) -> None:
+    """`exclude_unset=True` is what makes a single-field PATCH mean "change
+    this one thing", not "reset every omitted column to null". Nothing else
+    here would fail if that flag were dropped."""
+    tid, uid, ids = agency_with_clients
+    target = ids["live"]
+    async with await _client_for(tid, uid) as http:
+        response = await http.patch(f"/api/clients/{target}", json={"notes": "Called back"})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["notes"] == "Called back"
+    assert body["email_domain"] == "acme.com"
+
+
+async def test_patch_cannot_write_status_or_source(agency_with_clients) -> None:
+    """status and source are not fields on the patch body — Pydantic drops
+    them silently. This only proves it, so a future `extra = "allow"` would
+    fail it rather than sail through unnoticed."""
+    tid, uid, ids = agency_with_clients
+    target = ids["live"]
+    async with await _client_for(tid, uid) as http:
+        response = await http.patch(
+            f"/api/clients/{target}",
+            json={"status": "archived", "source": "manual", "notes": "Follow up"},
+        )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "unconfirmed"
+    assert body["source"] == "pipeline"
+    assert body["notes"] == "Follow up"

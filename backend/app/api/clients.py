@@ -31,10 +31,6 @@ router = APIRouter(tags=["clients"])
 
 StatusFilter = Literal["unconfirmed", "confirmed", "suspended", "archived", "merged"]
 
-# No `_is_duplicate`/`IntegrityError` narrowing here, unlike candidates.py:
-# every endpoint below takes no request body and creates nothing, so there is
-# no user-supplied value that could ever violate a uniqueness constraint.
-
 
 class MergeRequest(BaseModel):
     target_id: uuid.UUID
