@@ -26,6 +26,7 @@ from app.api import (
     glossary,
     graph_webhook,
     mailbox,
+    members,
     notifications,
     opportunities,
     opportunity_shares,
@@ -139,6 +140,7 @@ api.include_router(opportunities.router)
 api.include_router(opportunity_shares.router)
 api.include_router(activity.router)
 api.include_router(glossary.router)
+api.include_router(members.router)
 # Before `candidates`, deliberately: `/candidates/imports` would otherwise be
 # matched by `/candidates/{candidate_id}` and answered as a malformed UUID.
 api.include_router(candidate_imports.router)
