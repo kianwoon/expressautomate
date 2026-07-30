@@ -498,6 +498,103 @@ async def test_confirming_and_archiving_stay_idempotent(agency_with_clients) -> 
         assert (await http.post(f"/api/clients/{ids['live']}/archive")).status_code == 200
 
 
+async def test_suspend_requires_confirmed(agency_with_clients) -> None:
+    tid, uid, ids = agency_with_clients
+    async with await _client_for(tid, uid) as http:
+        response = await http.post(f"/api/clients/{ids['live']}/suspend", json={})
+    assert response.status_code == 400
+    assert "confirm" in response.json()["detail"].lower()
+
+
+async def test_suspend_then_unsuspend_returns_to_confirmed(agency_with_clients) -> None:
+    """Unsuspend lands on `confirmed`, not `unconfirmed` — a suspension never
+    revoked the judgement that the agency works with this firm."""
+    tid, uid, ids = agency_with_clients
+    target = ids["live"]
+    async with await _client_for(tid, uid) as http:
+        assert (await http.post(f"/api/clients/{target}/confirm")).status_code == 200
+
+        suspended = await http.post(
+            f"/api/clients/{target}/suspend", json={"reason": "Invoice 4021 unpaid"}
+        )
+        assert suspended.status_code == 200
+        assert suspended.json()["status"] == "suspended"
+
+        detail = (await http.get(f"/api/clients/{target}")).json()
+        assert detail["suspended_reason"] == "Invoice 4021 unpaid"
+        assert detail["suspended_at"] is not None
+
+        # Idempotent: a double-clicked button is not a mistake worth an error.
+        assert (
+            await http.post(f"/api/clients/{target}/suspend", json={})
+        ).status_code == 200
+
+        restored = await http.post(f"/api/clients/{target}/unsuspend")
+        assert restored.status_code == 200
+        assert restored.json()["status"] == "confirmed"
+
+        detail = (await http.get(f"/api/clients/{target}")).json()
+    assert detail["suspended_reason"] is None
+    assert detail["suspended_at"] is None
+
+
+async def test_unsuspend_refuses_a_live_client(agency_with_clients) -> None:
+    tid, uid, ids = agency_with_clients
+    target = ids["live"]
+    async with await _client_for(tid, uid) as http:
+        assert (await http.post(f"/api/clients/{target}/confirm")).status_code == 200
+        response = await http.post(f"/api/clients/{target}/unsuspend")
+    assert response.status_code == 400
+
+
+async def test_archive_from_suspended_clears_the_suspension(agency_with_clients) -> None:
+    """A hold that becomes permanent needs no unsuspend hop — but the reason
+    must not outlive the state it described."""
+    tid, uid, ids = agency_with_clients
+    target = ids["live"]
+    async with await _client_for(tid, uid) as http:
+        assert (await http.post(f"/api/clients/{target}/confirm")).status_code == 200
+        await http.post(f"/api/clients/{target}/suspend", json={"reason": "Dispute"})
+
+        archived = await http.post(f"/api/clients/{target}/archive")
+        assert archived.status_code == 200
+        assert archived.json()["status"] == "archived"
+
+        detail = (await http.get(f"/api/clients/{target}")).json()
+    assert detail["suspended_reason"] is None
+    assert detail["suspended_at"] is None
+
+
+async def test_confirm_on_suspended_names_unsuspend(agency_with_clients) -> None:
+    """Not "restore it before marking it confirmed" — that names an endpoint
+    which would refuse this row."""
+    tid, uid, ids = agency_with_clients
+    target = ids["live"]
+    async with await _client_for(tid, uid) as http:
+        assert (await http.post(f"/api/clients/{target}/confirm")).status_code == 200
+        await http.post(f"/api/clients/{target}/suspend", json={})
+
+        response = await http.post(f"/api/clients/{target}/confirm")
+    assert response.status_code == 400
+    assert "unsuspend" in response.json()["detail"].lower()
+
+
+async def test_suspended_is_a_live_client_in_the_listing(agency_with_clients) -> None:
+    tid, uid, ids = agency_with_clients
+    target = ids["live"]
+    async with await _client_for(tid, uid) as http:
+        assert (await http.post(f"/api/clients/{target}/confirm")).status_code == 200
+        await http.post(f"/api/clients/{target}/suspend", json={})
+
+        listing = (await http.get("/api/clients")).json()
+        assert str(target) in [row["id"] for row in listing["items"]]
+        assert listing["counts"]["suspended"] == 1
+        assert listing["counts"]["all"] >= 1
+
+        filtered = (await http.get("/api/clients?status=suspended")).json()
+    assert [row["id"] for row in filtered["items"]] == [str(target)]
+
+
 async def test_client_contacts_is_tenant_isolated(agency_with_clients) -> None:
     """The new table's RLS policy, exercised through the runtime role.
 

@@ -11,6 +11,7 @@ afraid to use, and an unused merge leaves the duplicates in the list.
 """
 
 import uuid
+from datetime import UTC, datetime
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -24,7 +25,7 @@ from app.models.client import Client, ClientMention
 
 router = APIRouter(tags=["clients"])
 
-StatusFilter = Literal["unconfirmed", "confirmed", "archived", "merged"]
+StatusFilter = Literal["unconfirmed", "confirmed", "suspended", "archived", "merged"]
 
 # No `_is_duplicate`/`IntegrityError` narrowing here, unlike candidates.py:
 # every endpoint below takes no request body and creates nothing, so there is
@@ -47,6 +48,15 @@ def _serialize(client: Client) -> dict:
         ),
         "last_seen_at": client.last_seen_at.isoformat() if client.last_seen_at else None,
         "created_at": client.created_at.isoformat(),
+        "website": client.website,
+        "phone": client.phone,
+        "address": client.address,
+        "fee_percent": float(client.fee_percent) if client.fee_percent is not None else None,
+        "payment_terms_days": client.payment_terms_days,
+        "notes": client.notes,
+        "source": client.source,
+        "suspended_reason": client.suspended_reason,
+        "suspended_at": client.suspended_at.isoformat() if client.suspended_at else None,
     }
 
 
@@ -186,7 +196,9 @@ async def confirm_client(request: Request, client_id: uuid.UUID) -> dict:
 
 @router.post("/clients/{client_id}/archive")
 async def archive_client(request: Request, client_id: uuid.UUID) -> dict:
-    return await _transition(request, client_id, Client.ARCHIVED)
+    # Clears any suspension: a reason that outlived the state it described
+    # would show a recruiter a hold on a client that is simply archived.
+    return await _transition(request, client_id, Client.ARCHIVED, dict(_CLEAR_SUSPENSION))
 
 
 @router.post("/clients/{client_id}/restore")
@@ -417,12 +429,35 @@ async def unmerge_client(request: Request, client_id: uuid.UUID) -> dict:
 # transitions stay idempotent — re-confirming a confirmed row is a no-op, not
 # an error, because a double-clicked button is not a mistake worth an error.
 _LEGAL_SOURCES: dict[str, frozenset[str]] = {
+    # `suspended` is deliberately absent here: unsuspend is the only exit from
+    # a suspension, and `confirm` special-cases it below with a message that
+    # names that endpoint rather than `restore`.
     Client.CONFIRMED: frozenset({Client.UNCONFIRMED, Client.CONFIRMED}),
-    Client.ARCHIVED: frozenset({Client.UNCONFIRMED, Client.CONFIRMED, Client.ARCHIVED}),
+    # Only a confirmed client can be put on hold. A client that was never
+    # confirmed is not one the agency has said it works with, and putting that
+    # away is what `archive` is for.
+    Client.SUSPENDED: frozenset({Client.CONFIRMED, Client.SUSPENDED}),
+    # From `suspended` too: a hold that becomes permanent should not need an
+    # unsuspend hop first.
+    Client.ARCHIVED: frozenset(
+        {Client.UNCONFIRMED, Client.CONFIRMED, Client.SUSPENDED, Client.ARCHIVED}
+    ),
 }
 
 
-async def _transition(request: Request, client_id: uuid.UUID, status: str) -> dict:
+async def _transition(
+    request: Request,
+    client_id: uuid.UUID,
+    status: str,
+    extra: dict | None = None,
+) -> dict:
+    """Move a client between statuses, optionally writing other columns with it.
+
+    `extra` exists because suspension is not status alone: `suspend` sets the
+    reason and timestamp, `unsuspend` and `archive` clear them. Doing that in
+    the same UPDATE is what makes it impossible for a stale reason to outlive
+    the state it describes — two statements could be interrupted between them.
+    """
     _user_uuid, tenant_uuid = _require_session(request)
     async with tenant_session(tenant_uuid) as session:
         client = await _load(session, client_id)
@@ -434,12 +469,84 @@ async def _transition(request: Request, client_id: uuid.UUID, status: str) -> di
         if client.status == Client.MERGED:
             raise HTTPException(status_code=400, detail="Unmerge the client first")
         if client.status not in _LEGAL_SOURCES[status]:
+            # A suspended row reached through `confirm` would otherwise be told
+            # to `restore` — an endpoint that refuses anything but `archived`,
+            # so the caller would be sent to a second error. Name the endpoint
+            # that actually works, exactly as the merged guard above does.
+            if client.status == Client.SUSPENDED:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Unsuspend the client first, then mark it {status}",
+                )
             raise HTTPException(
                 status_code=400,
                 detail=(
                     f"Client is {client.status}; restore it before marking it {status}"
                 ),
             )
-        await session.execute(update(Client).where(Client.id == client_id).values(status=status))
+        await session.execute(
+            update(Client)
+            .where(Client.id == client_id)
+            .values(status=status, **(extra or {}))
+        )
         await session.commit()
     return {"status": status}
+
+
+class SuspendRequest(BaseModel):
+    """A reason is optional but wanted.
+
+    Nothing invents one when it is absent (§15) — the row simply records that
+    the client is on hold without saying why, which is the truth.
+    """
+
+    reason: str | None = None
+
+
+_CLEAR_SUSPENSION = {"suspended_at": None, "suspended_reason": None}
+
+
+@router.post("/clients/{client_id}/suspend")
+async def suspend_client(
+    request: Request, client_id: uuid.UUID, body: SuspendRequest
+) -> dict:
+    """Put a live client on hold — an unpaid invoice, a contract dispute.
+
+    Distinct from `archive`, which says the agency no longer works with this
+    company at all. A suspended client stays in the list and keeps its domain,
+    and the matcher goes on attaching its mail; what stops is submitting
+    candidates to it (see `record_submission` in app/api/sourcing.py).
+    """
+    return await _transition(
+        request,
+        client_id,
+        Client.SUSPENDED,
+        {"suspended_at": datetime.now(UTC), "suspended_reason": body.reason},
+    )
+
+
+@router.post("/clients/{client_id}/unsuspend")
+async def unsuspend_client(request: Request, client_id: uuid.UUID) -> dict:
+    """Lift a hold, landing back on `confirmed`.
+
+    Deliberately unlike `restore`, which lands on `unconfirmed`. Archiving
+    revoked the judgement that the agency currently works with this firm, so
+    re-review is the point. A suspension revoked nothing — the agency still
+    works with the firm, it simply was not sending candidates — so sending the
+    row back through review would be noise.
+    """
+    _user_uuid, tenant_uuid = _require_session(request)
+    async with tenant_session(tenant_uuid) as session:
+        client = await _load(session, client_id)
+        if client.status != Client.SUSPENDED:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Client is {client.status}, not suspended; nothing to lift",
+            )
+        await session.execute(
+            update(Client)
+            .where(Client.id == client_id)
+            .values(status=Client.CONFIRMED, **_CLEAR_SUSPENSION)
+        )
+        await session.commit()
+    return {"status": Client.CONFIRMED}
