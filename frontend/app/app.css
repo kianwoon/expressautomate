@@ -1572,3 +1572,101 @@ select.gl-input:focus-visible { outline: 2px solid var(--blue-500); outline-offs
   display: grid;
   gap: 4px;
 }
+
+/* The colleague picker (`dashboard/member-picker.tsx`). Both controls share
+   the wrapper, the label and the note, so a sharing dialog and an assignment
+   row do not drift apart. */
+.mp {
+  position: relative;
+  display: grid;
+  gap: 6px;
+}
+.mp-label {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--ink-700);
+}
+.mp-note {
+  margin: 0;
+  font-size: 0.8125rem;
+  color: var(--ink-500);
+}
+.mp-chips {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.mp-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 6px 3px 3px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-alt);
+  font-size: 0.8125rem;
+}
+.mp-chip-x {
+  border: 0;
+  background: none;
+  cursor: pointer;
+  color: var(--ink-500);
+  font-size: 1rem;
+  line-height: 1;
+  padding: 0 2px;
+}
+.mp-chip-x:hover {
+  color: var(--ink-900);
+}
+/* Absolute, so opening the list does not shove the rest of a dialog down the
+   page under the recruiter's cursor. */
+.mp-list {
+  position: absolute;
+  z-index: 20;
+  top: 100%;
+  left: 0;
+  right: 0;
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 4px;
+  max-height: 240px;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 24px rgba(var(--shadow-rgb), 0.14);
+}
+.mp-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.875rem;
+}
+/* One highlight for both the pointer and the arrow keys: `is-active` follows
+   whichever moved last, so the two never disagree about where you are. */
+.mp-option.is-active {
+  background: var(--blue-050);
+}
+.mp-option-name {
+  font-weight: 500;
+  color: var(--ink-900);
+}
+.mp-option-email {
+  margin-left: auto;
+  color: var(--ink-300);
+  font-size: 0.75rem;
+}
+.mp-role {
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--amber-050);
+  color: var(--amber-700);
+  font-size: 0.6875rem;
+  font-weight: 600;
+}
