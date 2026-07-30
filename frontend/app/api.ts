@@ -103,6 +103,30 @@ export function opportunityPath(id: string): string {
 }
 
 /**
+ * Taking an unassigned job order for yourself. POST-only. A 409 means someone
+ * else got there first — an ordinary race between two recruiters, not an
+ * error — and a 404 means it is not visible to you, which deliberately does
+ * not say whether the row exists.
+ */
+export const opportunityClaimPath = (id: string) =>
+  `${OPPORTUNITIES_PATH}/${encodeURIComponent(id)}/claim`;
+
+/** Handing a job order to someone else, or — with `user_id: null` — back to
+ *  the unassigned queue. 403 when you may see it but not edit it. */
+export const opportunityAssignPath = (id: string) =>
+  `${OPPORTUNITIES_PATH}/${encodeURIComponent(id)}/assign`;
+
+/** Who else can see this job order: GET lists, POST shares it with one
+ *  colleague. */
+export const opportunitySharesPath = (id: string) =>
+  `${OPPORTUNITIES_PATH}/${encodeURIComponent(id)}/shares`;
+
+/** One share, for DELETE. Both ids are encoded for the reason every id-in-path
+ *  function on this page encodes its id. */
+export const opportunitySharePath = (id: string, shareId: string) =>
+  `${OPPORTUNITIES_PATH}/${encodeURIComponent(id)}/shares/${encodeURIComponent(shareId)}`;
+
+/**
  * Whether one candidate meets the placement requirements for one job order —
  * MOM Work Permit eligibility, never a hiring verdict. Both ids are path
  * segments and both are encoded for the reason every id-in-path function on

@@ -5,6 +5,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   OPPORTUNITIES_PAGE_SIZE,
   OPPORTUNITIES_PATH,
+  opportunityAssignPath,
+  opportunityClaimPath,
   opportunityPath,
   opportunityReviewPath,
 } from "../api";
@@ -101,7 +103,32 @@ export type Opportunity = {
   placement_type: PlacementType | null;
   sex_requirement: SexRequirement | null;
   sex_requirement_reason: string | null;
+  /** Who is working this one. `null` is the unassigned queue — a real,
+   *  visible state that a recruiter can claim from, not missing data, which
+   *  is why it is nullable rather than optional. */
+  assigned_user_id: string | null;
+  /** The assignee's name, resolved server-side so the browser never
+   *  re-derives one. `null` exactly when `assigned_user_id` is. */
+  assignee_name: string | null;
+  /** The confirmed client this job order belongs to, or `null` while the
+   *  evidence names more than one company. */
+  client_id: string | null;
+  /** Where the row came from: read out of an email, or typed by a recruiter. */
+  source: "pipeline" | "manual";
+  /** Visible to me because a colleague shared it, rather than because it is
+   *  mine. Changes what may be done with it, not just how it is labelled. */
+  shared_with_me: boolean;
 };
+
+/**
+ * Whose job orders to ask for.
+ *
+ * `all` is the default and is deliberately absent from the query string. The
+ * server takes these four from a `Literal`, so an unrecognised value is a 422
+ * rather than a quiet fallback to everything — which is the right trade when
+ * the parameter decides what a recruiter is shown.
+ */
+export type Scope = "mine" | "queue" | "shared_with_me" | "all";
 
 export type Counts = { all: number; new: number; needs_review: number; reviewed: number };
 
@@ -127,7 +154,14 @@ export type ListState =
 
 const ZERO_COUNTS: Counts = { all: 0, new: 0, needs_review: 0, reviewed: 0 };
 
-function listUrl(filter: Filter, offset: number, q: string, sort: Sort, limit: number): string {
+function listUrl(
+  filter: Filter,
+  offset: number,
+  q: string,
+  sort: Sort,
+  limit: number,
+  scope: Scope,
+): string {
   const params = new URLSearchParams({
     limit: String(limit),
     offset: String(offset),
@@ -136,6 +170,7 @@ function listUrl(filter: Filter, offset: number, q: string, sort: Sort, limit: n
   });
   if (filter) params.set("status", filter);
   if (q.trim()) params.set("q", q.trim());
+  if (scope !== "all") params.set("scope", scope);
   return `${OPPORTUNITIES_PATH}?${params.toString()}`;
 }
 
@@ -151,6 +186,8 @@ function messageFor(status: number): string {
 export type Opportunities = {
   state: ListState;
   filter: Filter;
+  /** Whose job orders are being shown. `all` by default. */
+  scope: Scope;
   offset: number;
   /** How many rows a page asks for. What the server actually used is
    *  `state.page.limit` — it clamps — so the two are read for different
@@ -169,6 +206,7 @@ export type Opportunities = {
    *  unmount the table and the open detail panel for no reason. */
   refreshing: boolean;
   setFilter: (filter: Filter) => void;
+  setScope: (scope: Scope) => void;
   setOffset: (offset: number) => void;
   setLimit: (limit: number) => void;
   setQ: (q: string) => void;
@@ -185,6 +223,7 @@ const SEARCH_DEBOUNCE_MS = 300;
 export function useOpportunities(): Opportunities {
   const [state, setState] = useState<ListState>({ status: "loading" });
   const [filter, setFilterRaw] = useState<Filter>(null);
+  const [scope, setScopeRaw] = useState<Scope>("all");
   const [offset, setOffset] = useState(0);
   const [limit, setLimitRaw] = useState(OPPORTUNITIES_PAGE_SIZE);
   const [q, setQRaw] = useState("");
@@ -204,8 +243,8 @@ export function useOpportunities(): Opportunities {
   // What the current request is for, readable from a callback that must not
   // change identity when the filter does. Assigned during render so a poll
   // firing between renders can never ask for the page we have just left.
-  const asked = useRef({ filter, offset, q: debouncedQ, sort, limit });
-  asked.current = { filter, offset, q: debouncedQ, sort, limit };
+  const asked = useRef({ filter, offset, q: debouncedQ, sort, limit, scope });
+  asked.current = { filter, offset, q: debouncedQ, sort, limit, scope };
 
   // Every load takes a ticket, and only the newest one is allowed to write.
   // Three things race here — a filter change, a page change, and the poll — and
@@ -260,8 +299,9 @@ export function useOpportunities(): Opportunities {
         q: forQ,
         sort: forSort,
         limit: forLimit,
+        scope: forScope,
       } = asked.current;
-      const res = await fetch(listUrl(forFilter, forOffset, forQ, forSort, forLimit), {
+      const res = await fetch(listUrl(forFilter, forOffset, forQ, forSort, forLimit, forScope), {
         credentials: "include",
         headers: { Accept: "application/json" },
       });
@@ -298,7 +338,7 @@ export function useOpportunities(): Opportunities {
     return () => {
       generation.current += 1;
     };
-  }, [filter, offset, debouncedQ, sort, limit, load]);
+  }, [filter, offset, debouncedQ, sort, limit, scope, load]);
 
   // The table keeps up because the server says when to look, not because a timer
   // fired. `extraction` is the only kind that can add a row here — `mail` means
@@ -314,6 +354,13 @@ export function useOpportunities(): Opportunities {
   // empty page that reads exactly like "there are none".
   const setFilter = useCallback((next: Filter) => {
     setFilterRaw(next);
+    setOffset(0);
+  }, []);
+  // Same reset, and for a sharper reason: "Unassigned" is usually a handful
+  // of rows where "All" is hundreds, so keeping offset 150 across the switch
+  // lands on nothing at all.
+  const setScope = useCallback((next: Scope) => {
+    setScopeRaw(next);
     setOffset(0);
   }, []);
   const setQ = useCallback((next: string) => {
@@ -390,6 +437,7 @@ export function useOpportunities(): Opportunities {
   return {
     state,
     filter,
+    scope,
     offset,
     limit,
     q,
@@ -397,6 +445,7 @@ export function useOpportunities(): Opportunities {
     counts,
     refreshing,
     setFilter,
+    setScope,
     setOffset,
     setLimit,
     setQ,
@@ -446,6 +495,80 @@ export async function updateOpportunityPlacement(
   });
   if (!res.ok) throw new ApiError(await readError(res));
   return (await res.json()) as Opportunity;
+}
+
+/**
+ * What a claim or an assignment did.
+ *
+ * A result rather than a thrown error, because none of these are exceptional:
+ * two recruiters reaching for the same job order in the same second is an
+ * ordinary Tuesday, and the caller's job is to render a sentence, not to
+ * recover. `conflict` is carried separately from the message so a screen can
+ * refresh the row on a race without parsing copy.
+ */
+export type MutationResult = { ok: true } | { ok: false; conflict: boolean; message: string };
+
+/**
+ * One sentence per status, and the statuses are the whole design.
+ *
+ * 409 is "someone else has taken this one" — the losing side of a real race,
+ * which is a fact about the world rather than a fault. 404 is "no longer
+ * available", worded so it says nothing about whether the row exists: the
+ * server refuses to distinguish "gone" from "never yours", and repeating that
+ * refusal here is what keeps one agency from probing another's ids. 403 is the
+ * one case where the row is admittedly visible and still not yours to move.
+ * Collapsing any of these into "something went wrong" throws away the only
+ * thing the backend went to the trouble of telling us.
+ *
+ * allow-hardcode: user-facing copy keyed by HTTP status — the statuses are the
+ * logic, these strings are only what the recruiter reads. Nothing is matched
+ * against them.
+ */
+const MUTATION_MESSAGES: Record<number, string> = {
+  409: "Someone else has taken this one.",
+  404: "This job order is no longer available.",
+  403: "This job order is not yours to reassign.",
+  401: "Your session has expired. Sign in again, then try that once more.",
+};
+
+const MUTATION_FALLBACK = "We could not save that just now. Nothing has changed.";
+
+async function mutate(url: string, body?: unknown): Promise<MutationResult> {
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+    if (res.ok) return { ok: true };
+    return {
+      ok: false,
+      // Only a 409 is a race. A dropped connection is not one, and reporting
+      // it as one would tell a recruiter a colleague took the job order when
+      // nobody did.
+      conflict: res.status === 409,
+      message: MUTATION_MESSAGES[res.status] ?? MUTATION_FALLBACK,
+    };
+  } catch {
+    return {
+      ok: false,
+      conflict: false,
+      message: "We could not reach the server. Nothing has changed.",
+    };
+  }
+}
+
+/** Takes an unassigned job order for yourself. */
+export function claimOpportunity(id: string): Promise<MutationResult> {
+  return mutate(opportunityClaimPath(id));
+}
+
+/** Hands a job order to a colleague, or — with `null` — releases it back to
+ *  the unassigned queue, which is a state a recruiter chooses rather than a
+ *  missing value. */
+export function assignOpportunity(id: string, userId: string | null): Promise<MutationResult> {
+  return mutate(opportunityAssignPath(id), { user_id: userId });
 }
 
 /**
