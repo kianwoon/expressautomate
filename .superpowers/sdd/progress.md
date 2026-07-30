@@ -358,3 +358,46 @@ HUMAN MUST CHECK ONCE SIGNED IN (nobody has run the UI - OAuth blocks automation
       real server);
   (3) suspend a client, then try a submission - the refusal must carry the typed reason.
 Fix 4229dd4 reviewed by fable: APPROVE, no findings. _CLEAR_SUSPENSION has no mutation hazard (** and dict() at every call site); merge's locking/mention logic byte-identical; the test asserts BOTH the merge and unmerge halves.
+
+## Piece 7 - client logos
+Plan: docs/superpowers/plans/2026-07-30-client-logos.md (4 tasks)
+Spec: docs/superpowers/specs/2026-07-30-client-logos-design.md
+Logo Task 1: complete (5821b2a..8aaa789, spec OK, quality approved, no findings). 1447 passed.
+  New alembic head 8c7e0f3c5305. NOT applied to Koyeb yet.
+  LEARNED: tests/test_deployment.py::test_every_setting_is_discoverable_in_the_env_example
+    fails for ANY new Settings field missing from the root .env.example. Every task that adds
+    a setting must update .env.example in the same commit.
+Logo Task 2: complete (8aaa789..7d1c5e0, spec OK, quality approved). 1458 passed, 1 skipped.
+  All four safety properties verified IN CODE by the reviewer: limit+1 read before Pillow;
+    Image.open header-first with DecompressionBombError -> 400; tenant check before the bytes
+    are read; delete object THEN null columns. GET recomputes the key rather than signing
+    whatever the row holds.
+  Containment is real and the test would fail against a centre-crop (a crop leaves no
+    transparent row). Resize path was UNTESTED (every fixture sat under the 1024 bound) -
+    closed in 7d1c5e0 with an over-bound test (aspect ratio preserved, long edge capped) and
+    a no-upscale test.
+  Corrected an inherited inaccurate docstring: the limit+1 read protects decode CPU and
+    memory, NOT disk - Starlette spools the whole multipart body before the endpoint runs.
+  MINORS for final review, ALL INHERITED from candidates_avatar.py, none introduced here:
+   - R2 put succeeding then the DB UPDATE failing leaves an orphan object (key is
+     deterministic so a re-upload overwrites it, but nothing sweeps it).
+   - deleting a CLIENT does not delete its R2 object. Same gap as deleting a candidate.
+     The {tenant_id}/ prefix still makes a tenant purge possible.
+Logo Task 3: complete (7d1c5e0..feb8a4b, spec OK, quality approved, no findings). tsc clean,
+  vitest 20 passed, build OK. clients.css now 246 lines; app.css untouched.
+  Reviewer verified: border-radius 12px not 50% (a circle would re-crop the wordmark the
+    backend letterboxed); :focus-within on the overlay so it is keyboard-reachable; the file
+    input is clip-rect hidden, NOT display:none, so it stays tab-reachable; the presign lives
+    only in useState keyed on [id, logo_key, logo_updated_at] with a `cancelled` flag, so a
+    stale response cannot land after the id changes.
+  DEVIATION UPHELD: when logo_key is null the component skips the GET entirely rather than
+    firing a request that would 404. The brief's own test requires it.
+Logo Task 4: complete (feb8a4b..82b9588, spec OK, quality approved, no findings). tsc clean,
+  vitest 22 passed, build OK.
+  DESIGN CALL UPHELD: client-logo.tsx gained a `readOnly` prop rather than a second component.
+    readOnly returns a DIFFERENT JSX tree with NO file input at all - not a hidden one, which
+    would still be tab-reachable and still uploadable. The panel's interactive path is
+    unchanged (onChange is now optional, called via onChange?.()).
+  The client fetch is keyed on clientId in its own effect, separate from the poll effect, so
+    it does NOT re-fire per poll tick while a run is pending/running.
+ALL 4 LOGO TASKS COMPLETE. Backend 1458 passed, 1 skipped; frontend 22 passed (controller-run).

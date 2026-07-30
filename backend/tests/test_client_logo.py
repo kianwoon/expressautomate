@@ -7,7 +7,10 @@ than losing its edges.
 """
 
 import io
+import math
+import struct
 import uuid
+import zlib
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -252,6 +255,90 @@ async def test_a_non_image_is_400_not_500(agency_with_clients, store):
     async with _client_for(tid, uid) as http:
         response = await _upload(http, target, b"%PDF-1.4 not an image", name="cv.pdf")
     assert response.status_code == 400
+
+
+def _png_header_only(width: int, height: int) -> bytes:
+    """A structurally valid PNG whose IHDR lies about an enormous canvas.
+
+    Under a hundred bytes on the wire, because the pixel data is a few
+    compressed zeros. `Image.open` parses the IHDR and reports the declared
+    size; anything that goes on to `load()` allocates width*height*channels.
+    Built by hand rather than by Pillow: asking Pillow for a real image this
+    large is exactly the allocation the guard exists to prevent.
+    """
+
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        return (
+            struct.pack(">I", len(data))
+            + kind
+            + data
+            + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+        )
+
+    ihdr = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)  # 8-bit truecolour
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", ihdr)
+        + chunk(b"IDAT", zlib.compress(b"\0" * 16))
+        + chunk(b"IEND", b"")
+    )
+
+
+async def test_a_canvas_over_the_decode_budget_is_refused_without_allocating(
+    agency_with_clients, store
+):
+    """The gap Pillow's own bomb check leaves open.
+
+    `DecompressionBombError` only fires above ~179 Mpx. A canvas below that but
+    above our budget used to sail through `open` and allocate hundreds of
+    megabytes in `load()` — enough to OOM the container, from any signed-in
+    session, repeatedly.
+
+    That the payload is a handful of bytes is the point: if the refusal
+    happened after decoding, this test would allocate gigabytes rather than
+    return.
+    """
+    side = math.isqrt(settings.IMAGE_DECODE_MAX_PIXELS) + 1
+    payload = _png_header_only(side, side)
+    assert side * side > settings.IMAGE_DECODE_MAX_PIXELS
+    assert side * side < Image.MAX_IMAGE_PIXELS  # Pillow itself would not object
+    assert len(payload) < 1024  # tiny on the wire, enormous once decoded
+
+    tid, uid, ids = agency_with_clients
+    async with _client_for(tid, uid) as http:
+        response = await _upload(http, ids["live"], payload)
+
+    assert response.status_code == 400
+    assert store.binary_objects == {}
+
+
+async def test_a_canvas_under_the_decode_budget_still_succeeds(agency_with_clients, store):
+    """The guard bounds the decode; it does not refuse ordinary logos."""
+    assert 256 * 256 < settings.IMAGE_DECODE_MAX_PIXELS
+
+    tid, uid, ids = agency_with_clients
+    async with _client_for(tid, uid) as http:
+        response = await _upload(http, ids["live"], _png_bytes(256, 256))
+
+    assert response.status_code == 200
+
+
+async def test_a_format_outside_the_allowlist_is_never_decoded(agency_with_clients, store):
+    """`Image.open` is pinned to an explicit list of plugins.
+
+    Unpinned, Pillow tries every registered plugin, EPS among them — and EPS
+    shells out to ghostscript where it is installed. A TIFF stands in for any
+    format off the list: real, decodable by Pillow, and refused here anyway.
+    """
+    buffer = io.BytesIO()
+    Image.new("RGB", (32, 32), (10, 20, 30)).save(buffer, format="TIFF")
+
+    tid, uid, ids = agency_with_clients
+    async with _client_for(tid, uid) as http:
+        response = await _upload(http, ids["live"], buffer.getvalue(), name="logo.tiff")
+
+    assert response.status_code == 400
+    assert store.binary_objects == {}
 
 
 async def test_exif_is_stripped(agency_with_clients, store):

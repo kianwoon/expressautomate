@@ -39,6 +39,14 @@ from app.services.storage.r2 import BodyStore, R2BodyStore, avatar_key
 
 router = APIRouter(tags=["candidates"])
 
+# Which Pillow plugins `Image.open` is allowed to try. A module constant, not a
+# setting: this is a security allowlist and must not be reachable from .env,
+# where widening it would be a config change rather than a code review. Left
+# unrestricted, Pillow will try every registered plugin — including EPS, which
+# shells out to ghostscript when it is installed, a historical RCE surface.
+# Nothing about a candidate photo needs it.
+_ALLOWED_FORMATS = ["PNG", "JPEG", "GIF", "WEBP", "BMP", "ICO"]
+
 
 def body_store() -> BodyStore:
     """The object store, as a dependency so tests can substitute the double.
@@ -104,7 +112,16 @@ def _reencode(content: bytes) -> bytes:
     within bounds, so a small photo is not upscaled.
     """
     try:
-        with Image.open(io.BytesIO(content)) as image:
+        with Image.open(io.BytesIO(content), formats=_ALLOWED_FORMATS) as image:
+            # Pillow's own bomb check only fires above ~179 Mpx, and a decode
+            # far below that still allocates hundreds of megabytes. The header
+            # has been read here but no pixel buffer exists yet, so this is the
+            # one window in which the declared size can be refused for free.
+            width, height = image.size
+            if width * height > settings.IMAGE_DECODE_MAX_PIXELS:
+                raise HTTPException(
+                    status_code=400, detail="Photo dimensions are implausibly large."
+                )
             image.load()  # force the decode here, inside the guard
             bound = settings.AVATAR_MAX_PIXEL_DIMENSION
             image.thumbnail((bound, bound))

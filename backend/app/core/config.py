@@ -178,6 +178,17 @@ class Settings(BaseSettings):
     # requests are signed and R2 would reject them.
     R2_REGION: str = "auto"
 
+    # --- Image decoding safety ---
+    # Not a product limit — a bound on this process. Pillow only raises
+    # DecompressionBombError above its own ~179 Mpx threshold, so a tiny
+    # crafted file declaring, say, 120 Mpx opens with nothing worse than a
+    # warning and then allocates hundreds of megabytes on decode, which is
+    # enough to OOM-kill a small container. Every decode path checks the
+    # declared size against this before touching pixels. Shared by avatars and
+    # logos because it describes the machine, not the feature: far above any
+    # real photo or wordmark, far below what hurts.
+    IMAGE_DECODE_MAX_PIXELS: int = Field(default=30_000_000, gt=0)
+
     # --- Candidate avatar photos (shown only inside the candidate modal) ---
     AVATAR_MAX_UPLOAD_BYTES: int = Field(default=5 * 1024 * 1024, gt=0)
     AVATAR_MAX_PIXEL_DIMENSION: int = Field(default=1024, gt=0)
