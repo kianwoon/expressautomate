@@ -94,6 +94,8 @@ async def admin_session() -> AsyncGenerator[AsyncSession, None]:
 # allow-hardcode: fixed SQL DDL/DML teardown statements (human-written schema
 # knowledge -- FK-safe delete order), not a scoring/matching oracle.
 _CLEANUP_STATEMENTS = (
+    "DELETE FROM opportunity_shares WHERE tenant_id = :t",
+    "DELETE FROM client_collaborators WHERE tenant_id = :t",
     "DELETE FROM client_contacts WHERE tenant_id = :t",
     "DELETE FROM client_mentions WHERE tenant_id = :t",
     # `ck_clients_merged_has_target` forbids status='merged' with a null
@@ -124,3 +126,35 @@ async def cleanup_tenant(*tenant_ids: uuid.UUID) -> None:
                     await session.commit()
             except Exception:
                 pass
+
+
+async def seed_tenant_with_user(role: str = "recruiter") -> tuple[uuid.UUID, uuid.UUID]:
+    """One tenant and one user in it. Returns (tenant_id, user_id).
+
+    Uses the admin session because creating the tenant is what makes the
+    RLS-scoped session possible in the first place.
+    """
+    tenant_id = uuid.uuid4()
+    user_id = uuid.uuid4()
+    async with AdminSessionLocal() as session:
+        await session.execute(
+            text(
+                "INSERT INTO tenants (id, name, slug) "
+                "VALUES (:id, :name, :slug)"
+            ),
+            {"id": tenant_id, "name": f"Agency {tenant_id.hex[:8]}", "slug": tenant_id.hex[:12]},
+        )
+        await session.execute(
+            text(
+                "INSERT INTO users (id, tenant_id, email, role) "
+                "VALUES (:id, :tenant_id, :email, :role)"
+            ),
+            {
+                "id": user_id,
+                "tenant_id": tenant_id,
+                "email": f"{user_id.hex[:8]}@example.test",
+                "role": role,
+            },
+        )
+        await session.commit()
+    return tenant_id, user_id

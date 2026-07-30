@@ -90,6 +90,12 @@ class Client(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
 
     source: Mapped[str] = mapped_column(String(16), nullable=False, default=PIPELINE)
 
+    # The recruiter who takes care of this account. Nullable in both
+    # directions of the word: a pipeline-proposed client arrives with nobody
+    # on it, and a departing recruiter's clients must outlive the account
+    # rather than vanishing with it.
+    assigned_user_id: Mapped[uuid.UUID | None] = mapped_column(PgUUID(as_uuid=True))
+
     # The logo lives in R2; this names it. Nullable because most clients are
     # proposed by the pipeline and will never have one.
     logo_key: Mapped[str | None] = mapped_column(Text)
@@ -104,6 +110,12 @@ class Client(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
             ["tenant_id", "merged_into_client_id"],
             ["clients.tenant_id", "clients.id"],
             name="fk_clients_merged_into_same_tenant",
+            ondelete="SET NULL",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "assigned_user_id"],
+            ["users.tenant_id", "users.id"],
+            name="fk_clients_assignee_same_tenant",
             ondelete="SET NULL",
         ),
         # The identity key, declared here as well as in the migration so
@@ -205,5 +217,42 @@ class ClientContact(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
             "client_id",
             unique=True,
             postgresql_where=text("is_primary"),
+        ),
+    )
+
+
+class ClientCollaborator(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
+    """A recruiter who covers this account besides the primary.
+
+    Deliberately grants nothing. This is a record of who else knows the
+    client, not a share: making it an implicit grant on the client's job
+    orders would put a second, invisible path into the visibility predicate,
+    and then "why can Raj see this?" would have two possible answers. Cover
+    that needs sight of the work is an explicit share or a reassignment.
+
+    There is no `is_primary` flag — the primary lives on `clients.assigned_user_id`,
+    so there is one place to read it and no way for the two to disagree.
+    """
+
+    __tablename__ = "client_collaborators"
+
+    client_id: Mapped[uuid.UUID] = mapped_column(PgUUID(as_uuid=True), nullable=False, index=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(PgUUID(as_uuid=True), nullable=False, index=True)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "client_id"],
+            ["clients.tenant_id", "clients.id"],
+            name="fk_client_collaborators_client_same_tenant",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "user_id"],
+            ["users.tenant_id", "users.id"],
+            name="fk_client_collaborators_user_same_tenant",
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint(
+            "tenant_id", "client_id", "user_id", name="uq_client_collaborators_once"
         ),
     )
