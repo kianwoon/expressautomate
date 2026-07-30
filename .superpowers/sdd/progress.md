@@ -430,3 +430,25 @@ HUMAN MUST CHECK ONCE SIGNED IN: (1) upload, replace and remove a logo - focus r
   overlay included; (2) a real WIDE wordmark renders letterboxed, not cropped, on both the
   panel and the sourcing screen; (3) the sourcing screen names the client instead of a UUID,
   and an unresolved run still shows its notice with no logo.
+Security fix reviewed independently (fable, 8/10 SHIP WITH FIXES). Both closed in e6708eb:
+ - THE ORDERING TEST PROVED NOTHING. test_a_canvas_over_the_decode_budget_is_refused_without_
+   allocating stayed green if the guard moved AFTER load(): Pillow would allocate ~90MB, then
+   the truncated IDAT raised OSError -> the same 400, store still empty. It now monkeypatches
+   PIL.ImageFile.ImageFile.load to raise if called, so moving the guard fails loudly.
+ - An unlisted-but-real format (TIFF, iPhone HEIC) said "That file is not a readable image",
+   which reads as "your file is corrupt". UnidentifiedImageError now names what IS accepted,
+   derived from _ALLOWED_FORMATS so the two lists cannot drift; OSError/ValueError keep the
+   malformed-bytes message.
+ - IMPLEMENTER'S FINDING: with the allowlist applied, plain garbage ALSO raises
+   UnidentifiedImageError - Pillow cannot tell "wrong format" from "no format". So the
+   corrupt-bytes test uses a valid PNG header with a truncated body, which parses at open()
+   and fails in load() with a real OSError.
+ CONFIRMED BY REVIEW: load() decodes frame 0 only (no seek), so animated GIF/WEBP and
+   multi-size ICO stay bounded by the declared canvas; formats= is real plugin-dispatch
+   prevention in the pinned Pillow 12.3.0 (uv.lock), so EPS/ghostscript is unreachable.
+ IMAGE_DECODE_MAX_PIXELS STAYS 30M: worst case ~120MB RGBA (~240MB for 16-bit PNG), clears
+   24Mpx iPhone defaults, and 48Mpx exports are mostly stopped by the 5MB gate anyway.
+   Only TIFF is a real behavioural regression, and it is deliberate.
+ CONCURRENCY IS ONLY SOFTLY BOUNDED - the cap is per request, not per process. A human should
+   check the api instance's RAM against two concurrent worst-case decodes.
+ 1466 passed, 1 skipped.
