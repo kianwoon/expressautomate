@@ -88,6 +88,29 @@ export function JobOrders({ me, heading = "h2" }: { me: Me; heading?: "h1" | "h2
   // is what "some rows matched" looks like now, not something computed here.
   const searched = q.trim().length > 0;
 
+  // Built once and rendered in one of two places: under the table when there
+  // are rows, and on its own when the page turned out to be empty. Two call
+  // sites with the same six props is two things to keep in step.
+  const pager = (
+    <Pager
+      total={total}
+      limit={limit}
+      offset={offset}
+      pageSize={pageSize}
+      onOffset={(next) => {
+        setOffset(next);
+        // The panel is showing a row from the page being left behind.
+        setSelected(null);
+      }}
+      onPageSize={(next) => {
+        setLimit(next);
+        // Same reason as paging: resizing the page goes back to the first one,
+        // so the open row is very likely not on it.
+        setSelected(null);
+      }}
+    />
+  );
+
   return (
     <section className="jo-workspace" data-lead={heading === "h1" ? "yes" : undefined}>
       <StatCards me={me} counts={counts} />
@@ -158,7 +181,11 @@ export function JobOrders({ me, heading = "h2" }: { me: Me; heading?: "h1" | "h2
             {items.length === 0
               ? searched
                 ? `Nothing matches “${q.trim()}”.`
-                : emptyLine(filter)
+                : offset > 0
+                  ? // Not "there are none" — there are, on an earlier page.
+                    // The list shrank while this page was open.
+                    "This page is empty now. The list changed while you were reading it."
+                  : emptyLine(filter)
               : searched
                 ? `${total.toLocaleString()} match${total === 1 ? "" : "es"} “${q.trim()}”, including the requirements and description.`
                 : `Showing ${offset + 1}–${offset + items.length} of ${total.toLocaleString()}.`}
@@ -178,13 +205,20 @@ export function JobOrders({ me, heading = "h2" }: { me: Me; heading?: "h1" | "h2
 
           {items.length > 0 && (
             <div className="jo-split" aria-busy={refreshing || undefined}>
-              <JobOrdersTable
-                rows={items}
-                sort={sort}
-                onSort={setSort}
-                selectedId={shown?.id ?? null}
-                onSelect={setSelected}
-              />
+              {/* The pager lives in this column, under the table it steps
+                  through. Below the split it sat under the detail panel too,
+                  which is sticky and a screen tall, so the control for the
+                  list ended up nowhere near the list. */}
+              <div className="jo-list">
+                <JobOrdersTable
+                  rows={items}
+                  sort={sort}
+                  onSort={setSort}
+                  selectedId={shown?.id ?? null}
+                  onSelect={setSelected}
+                />
+                {pager}
+              </div>
               {/* Reviewing the row the fallback offered pins it first. Under
                   "Needs review" the act of reviewing takes it out of the list,
                   and an unpinned fallback would slide the panel onto the next
@@ -200,23 +234,12 @@ export function JobOrders({ me, heading = "h2" }: { me: Me; heading?: "h1" | "h2
             </div>
           )}
 
-          <Pager
-            total={total}
-            limit={limit}
-            offset={offset}
-            pageSize={pageSize}
-            onOffset={(next) => {
-              setOffset(next);
-              // The panel is showing a row from the page being left behind.
-              setSelected(null);
-            }}
-            onPageSize={(next) => {
-              setLimit(next);
-              // Same reason as paging: resizing the page goes back to the
-              // first one, so the open row is very likely not on it.
-              setSelected(null);
-            }}
-          />
+          {/* An empty page that is not the first one. A poll re-reads the
+              offset the reader is standing on, so a colleague reviewing the
+              last rows of page 2 under "Needs review" empties it underneath
+              them. The pager is how they get back, and it is inside the split
+              above, which this state does not render. */}
+          {items.length === 0 && offset > 0 && pager}
         </>
       )}
 
@@ -263,9 +286,16 @@ function Pager({
   onOffset: (offset: number) => void;
   onPageSize: (limit: number) => void;
 }) {
-  const paged = total > limit;
   const page = Math.floor(offset / limit) + 1;
-  const pages = Math.max(1, Math.ceil(total / limit));
+  // `page` is in the max because the two can disagree: a list that shrank
+  // under a poll leaves someone standing on page 2 of a set that now fits on
+  // page 1, and "Page 2 of 1" is not a thing to show anyone.
+  const pages = Math.max(1, Math.ceil(total / limit), page);
+  // `offset > 0` and not only `total > limit`: in that same case there is one
+  // page's worth of rows and the reader is past it, so the steps are the only
+  // way back — hiding them because everything now fits is what would strand
+  // them.
+  const paged = total > limit || offset > 0;
 
   return (
     <nav className="jo-pager" aria-label="Job order pages and page size">

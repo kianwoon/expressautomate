@@ -35,20 +35,32 @@ export type Sort = { key: SortKey; descending: boolean };
  *  user somewhere they cannot get back from by clicking Received again. */
 export const DEFAULT_SORT: Sort = { key: "received", descending: true };
 
-/** Hours and Duration are the two raw paragraphs left in the table, and they
- *  are clamped to two lines (see `.jo-clamp`) — so they are also the two that
- *  need enough width for two lines to say something. At 10% they held about
- *  seven characters a line, which is how "Not mentioned" came out as "Not
- *  mention / ed": too narrow to break between words, so it broke inside one.
- *  The room comes from Position and Salary, which are short by nature. */
+/** Every width is measured against the table's 960px floor, which is the
+ *  narrowest it is ever drawn — under that, `.jo-table-card` scrolls.
+ *
+ *  Hours and Duration are the two raw paragraphs left in the table and are
+ *  clamped to two lines (see `.jo-clamp`), so they need enough width for two
+ *  lines to say something: at 10% they held about seven characters a line,
+ *  which is how "Not mentioned" came out as "Not mention / ed" — too narrow to
+ *  break between words, so it broke inside one.
+ *
+ *  Location is 13% because that is what "Not mentioned" costs: 96px of italic
+ *  plus the cell's 28px of padding is 124px, and 13% of 960 is 125. It is the
+ *  most common value in the column, and at 9% it wrapped to three lines and
+ *  set the height of the whole row.
+ *
+ *  Its 4% is paid by the two clamped columns and Salary rather than by Company
+ *  or Position. Losing width in a clamped column costs an ellipsis; losing it
+ *  in a column that wraps freely costs row height, which is the thing all of
+ *  this is protecting. */
 const COLUMNS: { key: SortKey; label: string; width: string }[] = [
   { key: "received", label: "Received", width: "11%" },
   { key: "company", label: "Company", width: "15%" },
   { key: "position", label: "Position", width: "15%" },
-  { key: "salary", label: "Salary", width: "12%" },
-  { key: "hours", label: "Hours", width: "16%" },
-  { key: "duration", label: "Duration", width: "12%" },
-  { key: "location", label: "Location", width: "9%" },
+  { key: "salary", label: "Salary", width: "11%" },
+  { key: "hours", label: "Hours", width: "14%" },
+  { key: "duration", label: "Duration", width: "11%" },
+  { key: "location", label: "Location", width: "13%" },
   { key: "quality", label: "Quality", width: "10%" },
 ];
 

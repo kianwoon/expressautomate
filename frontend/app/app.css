@@ -155,6 +155,12 @@
   margin-top: 16px; display: grid; grid-template-columns: minmax(0, 1.85fr) minmax(0, 1fr);
   gap: 20px; align-items: start;
 }
+/* The table's column, holding the table and the pager that steps through it.
+   `min-width: 0` for the same reason the grid tracks carry it: without it the
+   wrapper takes the width of the 960px table it contains and the column stops
+   being able to shrink, which is what lets the card scroll rather than the
+   page. */
+.jo-list { min-width: 0; }
 /* Sticky so the row stays readable while the list is scrolled. Cleared of the
    sticky nav, and capped so a long description scrolls inside the panel
    instead of pushing the page. */
