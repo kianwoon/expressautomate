@@ -828,23 +828,17 @@ async def assign_opportunity(
                     status_code=422, detail="That colleague is not in this agency."
                 )
 
-        assigned = (
-            await session.execute(
-                update(Opportunity)
-                .where(Opportunity.id == opportunity_id)
-                .values(assigned_user_id=body.user_id)
-                .returning(Opportunity.id)
-            )
-        ).scalar_one_or_none()
+        await session.execute(
+            update(Opportunity)
+            .where(Opportunity.id == opportunity_id)
+            .values(assigned_user_id=body.user_id)
+        )
 
         actor = (
             await session.execute(
                 select(User.display_name).where(User.id == user_uuid)
             )
         ).scalar_one_or_none()
-
-    if assigned is None:
-        raise HTTPException(status_code=404, detail="No such job order.")
 
     job_title, company_name, location, salary = subject
     if body.user_id is None:

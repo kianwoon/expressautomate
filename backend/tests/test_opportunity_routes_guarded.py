@@ -15,8 +15,9 @@ EDIT_GUARD = "load_editable_opportunity"
 
 # Routes that legitimately do not load a single opportunity by id, or that
 # deliberately bypass `can_edit`: claiming an UNASSIGNED job order is exactly
-# the case `can_edit` refuses, and `assign` is guarded by its own rule.
-EXEMPT = {"list_opportunities", "claim_opportunity", "assign_opportunity"}
+# the case `can_edit` refuses, so `claim_opportunity` cannot go through the
+# edit guard.
+EXEMPT = {"list_opportunities", "claim_opportunity"}
 
 
 def _routes() -> list[ast.AsyncFunctionDef]:

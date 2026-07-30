@@ -227,3 +227,27 @@ async def test_eligibility_on_a_colleagues_job_order_is_a_404(
 
     assert response.status_code == 404, response.text
     assert response.json()["detail"] == "No such job order."
+
+
+async def test_assigning_to_a_real_user_in_another_tenant_is_refused(client, seeded) -> None:
+    """`assign_opportunity` looks the target user up with `select(User.id)`
+    inside the caller's `tenant_session`, so RLS scopes that query to the
+    caller's own agency. A user who is real, but belongs to a different
+    tenant, is therefore simply not found — the same 422 the stranger-id case
+    gets, not a 500 from the composite FK and not a leak of the other
+    tenant's user id via a distinguishable error."""
+    make_tenant, make_opportunity, _make_evidence = seeded
+    tenant_a, user_a, mailbox_a = await make_tenant("agency-a")
+    tenant_b, user_b, _mailbox_b = await make_tenant("agency-b")
+    opportunity_id = await make_opportunity(
+        tenant_a, mailbox_a, company_name_raw="Acme Pte Ltd", assigned_user_id=user_a
+    )
+    sign_in(client, user_a, tenant_a)
+
+    response = await client.post(
+        f"/api/opportunities/{opportunity_id}/assign",
+        json={"user_id": str(user_b)},
+    )
+
+    assert response.status_code == 422, response.text
+    assert response.json()["detail"] == "That colleague is not in this agency."
