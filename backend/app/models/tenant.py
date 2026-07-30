@@ -42,6 +42,11 @@ class User(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
     __table_args__ = (
         UniqueConstraint("tenant_id", "email", name="uq_users_tenant_email"),
         UniqueConstraint("tenant_id", "ms_object_id", name="uq_users_tenant_ms_object_id"),
+        # Children reference (tenant_id, id) so their FK cannot cross agencies —
+        # the same idiom `clients` carries as `uq_clients_tenant_id_id`. Declared
+        # here as well as in the migration so autogenerate does not propose
+        # dropping it.
+        UniqueConstraint("tenant_id", "id", name="uq_users_tenant_id_id"),
         # Partial unique index: guarantees at most one owner per tenant.
         # This is what enables irreversible deletion of a candidate's personal data
         # (only the owner can authorize it). Declared here so autogenerate does not
