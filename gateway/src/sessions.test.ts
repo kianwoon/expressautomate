@@ -210,9 +210,14 @@ describe('SessionManager', { skip: SKIP }, () => {
 
     const started = Date.now();
     const snapshot = await manager.pair(ref);
+    const waited = Date.now() - started;
     assert.equal(snapshot.status, 'pairing');
     assert.equal(snapshot.qr, null);
-    assert.ok(Date.now() - started < 1_000, 'must not wait longer than it was told to');
+    // Both bounds, because only the lower one proves a wait happened at all:
+    // asserting `qr === null` and "fast" alone passes just as well if the
+    // wait is deleted, which is the shape of a test that guards nothing.
+    assert.ok(waited >= 25, `expected to wait for the timeout, waited ${waited}ms`);
+    assert.ok(waited < 1_000, `must not wait longer than it was told to, waited ${waited}ms`);
   });
 
   test('pair → QR → open drives pairing through connected, and the QR is never written to the database', async () => {
