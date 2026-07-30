@@ -3,17 +3,28 @@
 import { useEffect, useRef, useState } from "react";
 
 import { CLIENTS_PATH } from "../../api";
-import type { Client, ClientMention, ClientPage, MatchedBy } from "../clients";
-import { getClient, mergeClient, unmergeClient } from "../clients";
+import type { Client, ClientMention, ClientPage, Contact, MatchedBy } from "../clients";
+import { getClient, mergeClient, suspendClient, unmergeClient, unsuspendClient } from "../clients";
 import { day, when } from "../format";
+import { ClientForm } from "./client-form";
 
 /**
  * One client in full, beside the list.
  *
- * A client-specific sibling of `candidate-panel.tsx`. The differences are
- * deliberate, not omissions: there is no edit form (the pipeline proposes a
- * client, a human only judges it) and no delete (clients have no owner-only
- * action at all — every button here is open to any signed-in user).
+ * A client-specific sibling of `candidate-panel.tsx`. There is still no
+ * delete — clients are archived, never destroyed — and no owner-only action:
+ * every button here is open to any signed-in user.
+ *
+ * Editing lives in `client-form.tsx` rather than in this file. That is a size
+ * decision as much as a structural one: this panel was already past 450 lines
+ * before the commercial fields existed, and a twenty-control form inside it
+ * would have made the one file nobody wants to open.
+ *
+ * Suspend and Unsuspend call the API from here rather than being threaded
+ * through the page as `onConfirm`/`onArchive` are, following `MergePicker`
+ * directly below: suspending carries a reason typed in this panel, and
+ * passing that reason up through a prop only to have it come straight back
+ * would put the panel's own input in the parent's signature.
  *
  * The mentions list is the point of this panel. Confirming "is this really a
  * client?" is a judgement about evidence, and `matched_by` is the only thing
@@ -99,6 +110,9 @@ function Detail({
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [editing, setEditing] = useState(false);
+  const [askingReason, setAskingReason] = useState(false);
+  const [reason, setReason] = useState("");
 
   async function run(action: () => Promise<void>, failMessage: string) {
     if (busy) return;
@@ -120,6 +134,25 @@ function Detail({
     }, "We could not unmerge that just now.");
   }
 
+  async function suspend() {
+    await run(async () => {
+      // Trimmed to nothing means nothing was said, and nothing is what gets
+      // sent — an invented reason is worse than a blank one (§15).
+      const typed = reason.trim();
+      await suspendClient(row.id, typed === "" ? undefined : typed);
+      setAskingReason(false);
+      setReason("");
+      onChanged();
+    }, "We could not suspend that client just now.");
+  }
+
+  async function unsuspend() {
+    await run(async () => {
+      await unsuspendClient(row.id);
+      onChanged();
+    }, "We could not take that client off hold just now.");
+  }
+
   return (
     <aside className="card jo-detail" aria-label="Client details">
       <div className="jo-detail-head">
@@ -128,6 +161,23 @@ function Detail({
       </div>
 
       <h3 className="jo-detail-title">{row.name}</h3>
+
+      {/* Above everything, including the name's own details: a suspended
+          client refuses submissions, and someone reading this panel to decide
+          whether to submit needs to know that before they read anything
+          else. */}
+      {row.status === "suspended" && <SuspensionBanner row={row} />}
+
+      {editing && (
+        <ClientForm
+          client={row}
+          onCancel={() => setEditing(false)}
+          onDone={() => {
+            setEditing(false);
+            onChanged();
+          }}
+        />
+      )}
 
       {row.status === "merged" ? (
         <MergedInto row={row} onUnmerge={unmerge} busy={busy} onSelectClient={onSelectClient} />
@@ -147,6 +197,8 @@ function Detail({
               </span>
             </div>
           </div>
+
+          <ClientFacts row={row} onEdit={() => setEditing(true)} />
 
           <Mentions mentions={row.mentions} />
 
@@ -186,7 +238,82 @@ function Detail({
               {busy ? "Saving…" : "Restore"}
             </button>
           )}
+          {/* Each offered only for the status that accepts it — the server
+              refuses the others with a 400, and a button whose only outcome
+              is an error message is not an offer. Suspend is `confirmed`
+              only; unconfirmed means nobody has agreed this client is real
+              yet, so there is nothing to put on hold. */}
+          {row.status === "confirmed" && !askingReason && (
+            <button
+              type="button"
+              className="btn btn-secondary"
+              disabled={busy}
+              onClick={() => setAskingReason(true)}
+            >
+              Suspend…
+            </button>
+          )}
+          {row.status === "suspended" && (
+            <button
+              type="button"
+              className="btn btn-primary"
+              disabled={busy}
+              onClick={() => void unsuspend()}
+            >
+              {busy ? "Saving…" : "Unsuspend"}
+            </button>
+          )}
+          {row.status !== "merged" && (
+            <button
+              type="button"
+              className="btn btn-secondary"
+              disabled={busy}
+              onClick={() => setEditing(true)}
+            >
+              Edit
+            </button>
+          )}
         </div>
+
+        {askingReason && (
+          <div className="cl-suspend-ask">
+            <label className="body" style={{ display: "grid", gap: 4 }}>
+              <span className="row-k">Why is this client on hold? (optional)</span>
+              <input
+                className="jo-search"
+                autoFocus
+                value={reason}
+                onChange={(event) => setReason(event.target.value)}
+                placeholder="Unpaid invoice, contract under review…"
+              />
+            </label>
+            <p className="body jo-sub">
+              Whatever you type here is what the recruiter trying to submit a candidate will be
+              shown when the submission is refused. Leave it blank if there is nothing to say.
+            </p>
+            <div style={{ display: "flex", gap: 10 }}>
+              <button
+                type="button"
+                className="btn btn-primary"
+                disabled={busy}
+                onClick={() => void suspend()}
+              >
+                {busy ? "Saving…" : "Suspend client"}
+              </button>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                disabled={busy}
+                onClick={() => {
+                  setAskingReason(false);
+                  setReason("");
+                }}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {error && (
@@ -195,6 +322,108 @@ function Detail({
         </p>
       )}
     </aside>
+  );
+}
+
+/** Why this client is on hold, and since when.
+ *
+ *  The reason is optional on the server, so it is genuinely absent much of
+ *  the time and the banner says so plainly rather than inventing one (§15).
+ *  The date is the half a recruiter can always be given: "on hold since
+ *  March" is actionable even when nobody wrote down why. */
+function SuspensionBanner({ row }: { row: Client }) {
+  return (
+    <div className="cl-suspended-banner" role="status">
+      <span className="row-k">On hold</span>
+      <p className="body">
+        {row.suspended_reason ?? (
+          <span className="muted">No reason was recorded when this client was suspended.</span>
+        )}
+      </p>
+      <p className="body jo-sub">
+        {row.suspended_at ? `Suspended ${day(row.suspended_at)}.` : "Suspended."} Candidates cannot
+        be submitted to this client until it is taken off hold.
+      </p>
+    </div>
+  );
+}
+
+/** The facts a recruiter owns, read-only, with the one button that changes
+ *  them. Read-only on purpose: this panel is where a client is judged and
+ *  acted on, and an always-live form here would put a stray keystroke between
+ *  a recruiter and the record. Editing is a deliberate act, in a dialog.
+ *
+ *  Nothing is filled in on a recruiter's behalf. An unset fee reads "Not
+ *  recorded", not "0%" — a fee of zero is a commercial fact somebody agreed,
+ *  and claiming it because a column is null would be exactly the fabrication
+ *  §15 forbids. */
+function ClientFacts({ row, onEdit }: { row: Client; onEdit: () => void }) {
+  return (
+    <div className="jo-detail-prose">
+      <div className="cl-facts-head">
+        <span className="row-k">Details</span>
+        <button type="button" className="btn btn-secondary cl-edit" onClick={onEdit}>
+          Edit
+        </button>
+      </div>
+      <div className="rows jo-detail-rows">
+        <Fact label="Website" value={row.website} />
+        <Fact label="Phone" value={row.phone} />
+        <Fact label="Address" value={row.address} />
+        <Fact
+          label="Fee"
+          value={row.fee_percent != null ? `${row.fee_percent}%` : null}
+        />
+        <Fact
+          label="Payment terms"
+          value={row.payment_terms_days != null ? `${row.payment_terms_days} days` : null}
+        />
+        <Fact label="Notes" value={row.notes} />
+      </div>
+      <Contacts contacts={row.contacts} />
+    </div>
+  );
+}
+
+const NOT_RECORDED = "Not recorded";
+
+function Fact({ label, value }: { label: string; value: string | null }) {
+  return (
+    <div className="row">
+      <span className="row-k">{label}</span>
+      <span className={value ? undefined : "muted"}>{value ?? NOT_RECORDED}</span>
+    </div>
+  );
+}
+
+/** The people at this company. The primary one is marked rather than merely
+ *  sorted first: the API already returns primary-first, and a list whose
+ *  order carries the meaning loses it the moment anyone reads it out of
+ *  order or a screen reader announces it flat. */
+function Contacts({ contacts }: { contacts: Contact[] | undefined }) {
+  if (!contacts) return null;
+  return (
+    <div style={{ marginTop: 12 }}>
+      <span className="row-k">Contacts ({contacts.length})</span>
+      {contacts.length === 0 ? (
+        <p className="body muted">No contacts recorded.</p>
+      ) : (
+        <ul className="cl-contacts">
+          {contacts.map((c) => (
+            <li key={c.id} className="cl-contact">
+              <span className="cl-contact-name">
+                {c.name}
+                {c.is_primary && <span className="cl-primary-mark"> Primary</span>}
+              </span>
+              {c.title && <span className="muted"> — {c.title}</span>}
+              <span className="body jo-sub">
+                {[c.email, c.phone].filter(Boolean).join(" · ") || NOT_RECORDED}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }
 

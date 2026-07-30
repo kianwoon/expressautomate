@@ -1,0 +1,123 @@
+/*
+ * Clients screen styles.
+ *
+ * These belong with `app.css` by convention — the whole dashboard's styling
+ * lives there — and they are here instead for one reason: `app.css` had
+ * already reached 1,507 lines, and this block would have carried it past the
+ * 1,500-line ceiling this repo holds every file to. Splitting by screen is the
+ * cheaper half of that fix; the rest of `app.css` is left alone.
+ *
+ * Imported once, from `page.tsx`, which is the root every component using
+ * these classes renders under.
+ */
+/* ── Clients: status, suspension, contacts ───────────────────────────────
+   Added with the manual-administration work. The chips row gained a button
+   at its right end, so the row has to be a two-part flex rather than the
+   plain block it was; everything else here is the vocabulary a suspended
+   client needs, which the page had no way to say before. */
+
+/* The chips still start the row; the action sits at the far end and drops
+   under them rather than squeezing when the row runs out of width. */
+.jo-controls-split {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+/* Status as a badge, not a bare word. Suspended and archived were being read
+   as the same grey, and they mean opposite things: one is a live client you
+   are expected to come back to, the other is finished with. Amber carries
+   "needs you later" everywhere else on this dashboard (`jo-stat`,
+   `jo-live`), so it carries it here too; archived keeps the muted grey. */
+.cl-status {
+  display: inline-block;
+  font-size: 0.6875rem;
+  font-weight: 650;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  color: var(--ink-500);
+}
+.cl-status[data-status="suspended"] {
+  color: var(--amber-700);
+  background: var(--amber-050);
+  border-color: var(--amber-200);
+}
+.cl-status[data-status="confirmed"] { color: var(--ink-700); border-color: var(--ink-700); }
+/* Archived and merged are both "not in play". Left deliberately at the muted
+   default so suspended is the only thing in the column that draws an eye. */
+
+/* The panel banner. A left rule rather than a filled block: it has to be
+   unmissable at the top of the panel without turning a routine hold into
+   something that reads like an error. */
+.cl-suspended-banner {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-left: 3px solid var(--amber-600);
+  background: var(--amber-050);
+  border-radius: 0 8px 8px 0;
+}
+.cl-suspended-banner .row-k { color: var(--amber-700); }
+.cl-suspended-banner p { margin-top: 4px; }
+
+/* The Details heading and its Edit button on one line, so the button is
+   plainly attached to that section and not to the panel as a whole. */
+.cl-facts-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.cl-edit { padding: 2px 10px; font-size: 0.8125rem; }
+
+.cl-contacts { margin-top: 8px; list-style: none; padding: 0; }
+.cl-contact { display: grid; gap: 2px; margin-top: 8px; }
+.cl-contact-name { font-weight: 600; }
+/* The primary mark is a word, not a colour or a position. The API returns
+   primary first, but an order is not something a screen reader announces and
+   not something that survives being read out of sequence. */
+.cl-primary-mark {
+  margin-left: 6px;
+  font-size: 0.6875rem;
+  font-weight: 650;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--amber-700);
+}
+
+/* The reason box, opened by "Suspend…" rather than shown always: the panel's
+   action row is a list of things you might do, and a text input sitting in it
+   permanently reads as a thing you must fill in. */
+.cl-suspend-ask {
+  margin-top: 12px;
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+/* One contact per block inside the form, ruled off from the next. Without the
+   rule, sixteen inputs in a two-column grid read as one long undifferentiated
+   field list and it stops being obvious which phone belongs to which person. */
+.cf-contacts { display: block; }
+.cf-contact {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 10px 16px;
+  padding: 12px 0;
+  border-top: 1px solid var(--line);
+}
+.cf-contact-acts {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.cf-primary { display: flex; align-items: center; gap: 6px; }

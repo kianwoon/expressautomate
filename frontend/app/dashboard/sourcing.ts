@@ -128,9 +128,17 @@ export async function recordSubmission(
     headers: { Accept: "application/json", "Content-Type": "application/json" },
     body: JSON.stringify({ client_id: clientId, opportunity_id: opportunityId }),
   });
-  // A repeat is a 409 saying so in words. Surfaced rather than swallowed: it
-  // means the row is already there, which is what the recruiter wanted, but
-  // they asked because they did not know that.
+  // Two different refusals now arrive as a 409, and they differ only in
+  // prose — there is no code to switch on:
+  //
+  //   * a repeat, meaning the row is already there, which is what the
+  //     recruiter wanted but did not know;
+  //   * the client is suspended, and the message carries the reason someone
+  //     typed when they put it on hold.
+  //
+  // So the server's `detail` is what has to reach the screen. A caller that
+  // hardcodes "already submitted" for a 409 would tell a recruiter the
+  // opposite of what happened on the second one.
   if (!res.ok) throw new ApiError(await readError(res));
   return (await res.json()) as Submission;
 }

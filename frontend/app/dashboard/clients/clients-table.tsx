@@ -10,6 +10,13 @@ import type { Client } from "../clients";
  * of it: there is no pipeline stage here, only a review status, and a client
  * has no title or employer — it has a name and a mail domain.
  *
+ * Status is a badge rather than plain text because two of the five mean
+ * opposite things and were being read as the same word-shaped grey. Suspended
+ * is amber — a live client on hold, something you are expected to come back
+ * to; archived stays the muted grey of a row that is finished with. The
+ * colouring is `data-status` in `app.css`, so the labels above stay the only
+ * place the wording lives.
+ *
  * allow-hardcode: the strings here are user-facing copy, not a list anything
  * is matched against.
  */
@@ -75,7 +82,11 @@ export function ClientsTable({
                 <td className="jo-td">
                   {row.email_domain ?? <span className="muted">Not mentioned</span>}
                 </td>
-                <td className="jo-td">{STATUS_LABEL[row.status]}</td>
+                <td className="jo-td">
+                  <span className="cl-status" data-status={row.status}>
+                    {STATUS_LABEL[row.status]}
+                  </span>
+                </td>
                 <td className="jo-td" data-nowrap="yes">
                   {day(row.last_seen_at) ?? <span className="muted">Never</span>}
                 </td>

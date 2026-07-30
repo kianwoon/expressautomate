@@ -8,18 +8,22 @@ import { SiteFooter } from "../../site-footer";
 import { SiteNav } from "../../site-nav";
 import { archiveClient, confirmClient, getClient, restoreClient, useClients } from "../clients";
 import type { Client, Filter } from "../clients";
+import { ClientForm } from "./client-form";
+import "./clients.css";
 import { ClientPanel } from "./client-panel";
 import { ClientsTable } from "./clients-table";
 
 /**
  * The signed-in screen for the companies a job order came from.
  *
- * There is no "Add client" button and no role gate — the whole reason this
- * screen exists is that the ingestion pipeline already proposes a client for
- * every job-order email, landing `unconfirmed`, and confirm/merge/archive
- * are deliberately human-only. Before this screen that queue rendered
- * nowhere; this makes it reachable, and open to any signed-in user, the same
- * as every other action here.
+ * The review queue is still the centre of it: the ingestion pipeline proposes
+ * a client for every job-order email, landing `unconfirmed`, and
+ * confirm/merge/archive are deliberately human-only. **Add client** sits
+ * beside the chips because a client that has never sent an email — one you
+ * were introduced to, one that only ever phones — is still a client, and
+ * waiting for an email before it can be recorded is not a rule anyone asked
+ * for. There is no role gate: every action here is open to any signed-in
+ * user, the same as everywhere else in the dashboard.
  *
  * Composed exactly like `dashboard/candidates/page.tsx`: the same `useAuth()`
  * and the same anonymous-user redirect.
@@ -32,6 +36,10 @@ const CHIPS: { key: Filter; label: string }[] = [
   { key: "unconfirmed", label: "Unconfirmed" },
   { key: null, label: "All" },
   { key: "confirmed", label: "Confirmed" },
+  // A live client on hold, not a dead one. It sits between Confirmed and
+  // Archived here because that is where it sits in the lifecycle, and it is
+  // counted inside "All" — suspending a client does not make it disappear.
+  { key: "suspended", label: "Suspended" },
   { key: "archived", label: "Archived" },
   // Its own chip, and load-bearing: merged rows are hidden from the default
   // list and the pointer runs loser -> survivor, so this is the only route
@@ -93,6 +101,7 @@ function Workspace() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<Client | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
+  const [adding, setAdding] = useState(false);
 
   const items = state.status === "ready" ? state.page.items : EMPTY;
   const total = state.status === "ready" ? state.page.total : 0;
@@ -164,12 +173,12 @@ function Workspace() {
         The companies behind your job orders.
       </h1>
       <p className="lede" style={{ marginTop: 18 }}>
-        Every one of these was proposed automatically from an email — nothing here was typed by
-        hand. Confirm the ones that are real, archive what is not, and merge duplicates as they
-        turn up.
+        Most of these were proposed automatically from an email. Confirm the ones that are real,
+        archive what is not, and merge duplicates as they turn up — and add one yourself when a
+        client arrives some other way.
       </p>
 
-      <div className="jo-controls" style={{ marginTop: 24 }}>
+      <div className="jo-controls jo-controls-split" style={{ marginTop: 24 }}>
         <div className="jo-chips" role="group" aria-label="Filter clients">
           {CHIPS.map((chip) => {
             const active = filter === chip.key;
@@ -189,7 +198,27 @@ function Workspace() {
             );
           })}
         </div>
+        <button type="button" className="btn btn-primary" onClick={() => setAdding(true)}>
+          Add client
+        </button>
       </div>
+
+      {adding && (
+        <ClientForm
+          client={null}
+          onCancel={() => setAdding(false)}
+          onDone={(saved) => {
+            setAdding(false);
+            // Straight to the record that was just created, rather than
+            // leaving the recruiter to find it: a manual client lands
+            // `confirmed`, so the default `unconfirmed` chip would not show it
+            // and the add would look as though it had not worked.
+            setFilter(null);
+            setSelectedId(saved.id);
+            reload();
+          }}
+        />
+      )}
 
       {state.status === "loading" ? (
         <p className="body jo-note">Loading your clients.</p>
@@ -242,8 +271,9 @@ const EMPTY: Client[] = [];
 function emptyLine(filter: Filter): string {
   if (filter === "merged") return "Nothing has been merged.";
   if (filter === "unconfirmed") return "Nothing is waiting on you. New proposals appear here as job-order emails arrive.";
+  if (filter === "suspended") return "No client is on hold.";
   if (filter) return "No clients at this status yet.";
-  return "No clients yet. They appear automatically as job-order emails are ingested.";
+  return "No clients yet. They appear automatically as job-order emails are ingested — or add the first one yourself.";
 }
 
 function Pager({

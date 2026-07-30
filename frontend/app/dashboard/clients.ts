@@ -20,12 +20,17 @@ import {
  * The agency's client list, and the one place that talks to the clients
  * endpoint.
  *
- * Every row was proposed by the ingestion pipeline, never typed by a person —
- * the opposite of `candidates.ts`. So there is no create and no delete here:
- * only the state transitions a human makes over a proposal (confirm, archive,
- * restore, merge, unmerge). Follows the same fetch and typing pattern as
- * `candidates.ts`: `credentials: "include"`, an `Accept: application/json`
- * header, and `URLSearchParams` for the query string.
+ * Most rows are proposed by the ingestion pipeline rather than typed by a
+ * person, so the state transitions a human makes over a proposal — confirm,
+ * archive, restore, merge, unmerge — are the centre of this file. A recruiter
+ * can also add and edit a client by hand (`createClient`, `updateClient`,
+ * `suspendClient` and the contact calls below): a client that has never sent
+ * an email is still a client, and `source` records which way a row arrived.
+ * There is still no delete — nothing here is destroyed, only archived.
+ *
+ * Follows the same fetch and typing pattern as `candidates.ts`:
+ * `credentials: "include"`, an `Accept: application/json` header, and
+ * `URLSearchParams` for the query string.
  */
 
 export type ClientStatus =
@@ -199,17 +204,83 @@ export function useClients(): Clients {
  *  conflicting client — the message is the only thing telling the recruiter
  *  what to do next. */
 async function readError(res: Response): Promise<string> {
-  if (res.status === 401) return "Your session has expired. Sign in again, then try that once more.";
+  return (await readProblem(res)).message;
+}
+
+/** A refusal, and which request field it was about when the server said so.
+ *  `field` is `null` for everything that is not about one field — a 409, a
+ *  400, an expired session. */
+type Problem = { message: string; field: string | null };
+
+/** FastAPI's `HTTPException` puts a string in `detail`; a body that fails
+ *  validation puts a *list* of `{loc, msg}` entries there instead. The
+ *  free-provider domain rule is the second kind — a `field_validator` in
+ *  `app/api/clients.py` — so without this branch its sentence would reach the
+ *  recruiter as `[object Object]`. Nothing here rewrites the server's words;
+ *  it only finds them.
+ *
+ *  Pydantic prefixes a `ValueError`'s text with "Value error, ". That prefix
+ *  is the library's, not the message's, and it is dropped: the sentence the
+ *  server author wrote is the sentence the recruiter should read. */
+const PYDANTIC_VALUE_ERROR_PREFIX = /^Value error,\s*/;
+
+type ValidationEntry = { loc?: unknown[]; msg?: string };
+
+function fromValidationEntries(entries: ValidationEntry[]): Problem | null {
+  const first = entries.find((e) => typeof e.msg === "string");
+  if (!first?.msg) return null;
+  // `loc` is ["body", "<field>"] for a body field. The last element is the
+  // field; anything shorter is not about a field we render.
+  const loc = Array.isArray(first.loc) ? first.loc : [];
+  const last = loc.length > 1 ? loc[loc.length - 1] : null;
+  return {
+    message: first.msg.replace(PYDANTIC_VALUE_ERROR_PREFIX, ""),
+    field: typeof last === "string" ? last : null,
+  };
+}
+
+async function readProblem(res: Response): Promise<Problem> {
+  if (res.status === 401) {
+    return {
+      message: "Your session has expired. Sign in again, then try that once more.",
+      field: null,
+    };
+  }
   try {
-    const body = (await res.json()) as { detail?: string };
-    if (body.detail) return body.detail;
+    const body = (await res.json()) as { detail?: string | ValidationEntry[] };
+    if (typeof body.detail === "string" && body.detail) {
+      return { message: body.detail, field: null };
+    }
+    if (Array.isArray(body.detail)) {
+      const problem = fromValidationEntries(body.detail);
+      if (problem) return problem;
+    }
   } catch {
     /* not JSON, or empty */
   }
-  return "We could not save that just now. Nothing has changed.";
+  return { message: "We could not save that just now. Nothing has changed.", field: null };
 }
 
 export class ApiError extends Error {}
+
+/** A refusal the server tied to one request field, so a form can render it
+ *  beside that input instead of as a page-level banner. Still an `ApiError`,
+ *  so every existing `instanceof ApiError` handler keeps working and keeps
+ *  showing the server's own sentence. */
+export class FieldError extends ApiError {
+  constructor(
+    message: string,
+    readonly field: string,
+  ) {
+    super(message);
+  }
+}
+
+/** The one place a non-2xx becomes something to throw. */
+async function apiError(res: Response): Promise<ApiError> {
+  const problem = await readProblem(res);
+  return problem.field ? new FieldError(problem.message, problem.field) : new ApiError(problem.message);
+}
 
 export async function getClient(id: string): Promise<Client> {
   const res = await fetch(clientPath(id), {
@@ -277,7 +348,7 @@ export async function createClient(body: ClientInput): Promise<Client> {
     headers: { "Content-Type": "application/json", Accept: "application/json" },
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new ApiError(await readError(res));
+  if (!res.ok) throw await apiError(res);
   return (await res.json()) as Client;
 }
 
@@ -291,7 +362,7 @@ export async function updateClient(id: string, body: Partial<ClientInput>): Prom
     headers: { "Content-Type": "application/json", Accept: "application/json" },
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new ApiError(await readError(res));
+  if (!res.ok) throw await apiError(res);
   return (await res.json()) as Client;
 }
 
@@ -324,7 +395,7 @@ export async function createContact(clientId: string, body: ContactInput): Promi
     headers: { "Content-Type": "application/json", Accept: "application/json" },
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new ApiError(await readError(res));
+  if (!res.ok) throw await apiError(res);
   return (await res.json()) as Contact;
 }
 
@@ -339,7 +410,7 @@ export async function updateContact(
     headers: { "Content-Type": "application/json", Accept: "application/json" },
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new ApiError(await readError(res));
+  if (!res.ok) throw await apiError(res);
   return (await res.json()) as Contact;
 }
 
