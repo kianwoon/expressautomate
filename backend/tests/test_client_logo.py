@@ -14,7 +14,7 @@ import zlib
 
 import pytest
 from httpx import ASGITransport, AsyncClient
-from PIL import Image
+from PIL import Image, ImageFile
 from sqlalchemy import text
 
 from app.api import clients_logo
@@ -285,9 +285,9 @@ def _png_header_only(width: int, height: int) -> bytes:
 
 
 async def test_a_canvas_over_the_decode_budget_is_refused_without_allocating(
-    agency_with_clients, store
+    agency_with_clients, store, monkeypatch
 ):
-    """The gap Pillow's own bomb check leaves open.
+    """The gap Pillow's own bomb check leaves open — and proof of ordering.
 
     `DecompressionBombError` only fires above ~179 Mpx. A canvas below that but
     above our budget used to sail through `open` and allocate hundreds of
@@ -297,12 +297,28 @@ async def test_a_canvas_over_the_decode_budget_is_refused_without_allocating(
     That the payload is a handful of bytes is the point: if the refusal
     happened after decoding, this test would allocate gigabytes rather than
     return.
+
+    The 400/empty-store assertions alone do not prove the check runs before
+    the decode: if the size guard were moved to after `image.load()`, Pillow
+    would allocate the buffer, then the truncated IDAT would raise `OSError`,
+    which the endpoint already maps to the same 400 with nothing stored — the
+    test would stay green either way. To make the ordering itself the thing
+    under test, `ImageFile.load` is monkeypatched to raise `AssertionError` if
+    it is ever called. If the guard still runs first, `load` is never reached
+    and the request returns its ordinary 400. If the guard ever moves after
+    the decode, `load` runs, the patched `AssertionError` propagates out of
+    the ASGI app, and this test fails loudly instead of quietly passing.
     """
     side = math.isqrt(settings.IMAGE_DECODE_MAX_PIXELS) + 1
     payload = _png_header_only(side, side)
     assert side * side > settings.IMAGE_DECODE_MAX_PIXELS
     assert side * side < Image.MAX_IMAGE_PIXELS  # Pillow itself would not object
     assert len(payload) < 1024  # tiny on the wire, enormous once decoded
+
+    def _load_should_not_be_called(self, *args, **kwargs):
+        raise AssertionError("load called")
+
+    monkeypatch.setattr(ImageFile.ImageFile, "load", _load_should_not_be_called)
 
     tid, uid, ids = agency_with_clients
     async with _client_for(tid, uid) as http:
@@ -329,6 +345,10 @@ async def test_a_format_outside_the_allowlist_is_never_decoded(agency_with_clien
     Unpinned, Pillow tries every registered plugin, EPS among them — and EPS
     shells out to ghostscript where it is installed. A TIFF stands in for any
     format off the list: real, decodable by Pillow, and refused here anyway.
+
+    The message matters as much as the status code: a real TIFF is not
+    corrupt, so the caller must be told which formats we do accept, not that
+    their file is unreadable.
     """
     buffer = io.BytesIO()
     Image.new("RGB", (32, 32), (10, 20, 30)).save(buffer, format="TIFF")
@@ -339,6 +359,31 @@ async def test_a_format_outside_the_allowlist_is_never_decoded(agency_with_clien
 
     assert response.status_code == 400
     assert store.binary_objects == {}
+    detail = response.json()["detail"]
+    for fmt in clients_logo._ALLOWED_FORMATS:
+        assert fmt in detail
+    assert "not a readable image" not in detail
+
+
+async def test_corrupt_bytes_get_the_unreadable_message(agency_with_clients, store):
+    """Truncated bytes are a different failure than an unlisted format.
+
+    Bytes matching no format signature at all (plain garbage) also raise
+    `UnidentifiedImageError`, so they are not a useful contrast here — Pillow
+    cannot tell "wrong format" from "no format" once plugins are restricted.
+    A PNG with a valid header but a body cut short parses as PNG, then fails
+    inside `load()` with `OSError`: the real "malformed bytes" case. This
+    proves the caller is told the bytes were corrupt, not that the format is
+    merely unsupported — the two messages must not swap.
+    """
+    truncated = _png_bytes(64, 64)[:-30]  # valid header, body cut short
+    tid, uid, ids = agency_with_clients
+    async with _client_for(tid, uid) as http:
+        response = await _upload(http, ids["live"], truncated, name="logo.png")
+
+    assert response.status_code == 400
+    detail = response.json()["detail"]
+    assert "not a readable image" in detail
 
 
 async def test_exif_is_stripped(agency_with_clients, store):

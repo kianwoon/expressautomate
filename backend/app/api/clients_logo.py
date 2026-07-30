@@ -140,7 +140,12 @@ def _reencode(content: bytes) -> bytes:
         raise HTTPException(
             status_code=400, detail="Logo dimensions are implausibly large."
         ) from exc
-    except (UnidentifiedImageError, OSError, ValueError) as exc:
+    except UnidentifiedImageError as exc:
+        accepted = ", ".join(_ALLOWED_FORMATS[:-1]) + " or " + _ALLOWED_FORMATS[-1]
+        raise HTTPException(
+            status_code=400, detail=f"We accept {accepted} images."
+        ) from exc
+    except (OSError, ValueError) as exc:
         raise HTTPException(status_code=400, detail="That file is not a readable image.") from exc
     return buffer.getvalue()
 
