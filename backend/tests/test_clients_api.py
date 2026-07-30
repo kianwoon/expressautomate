@@ -763,3 +763,102 @@ async def test_patch_cannot_write_status_or_source(agency_with_clients) -> None:
     assert body["status"] == "unconfirmed"
     assert body["source"] == "pipeline"
     assert body["notes"] == "Follow up"
+
+
+@pytest.fixture
+async def other_agency_client_id():
+    """A client under a second tenant — for asserting cross-tenant 404s."""
+    other_tid, other_uid = uuid.uuid4(), uuid.uuid4()
+    cid = uuid.uuid4()
+    async with AdminSessionLocal() as s:
+        await s.execute(
+            text("INSERT INTO tenants (id, name, slug) VALUES (:i, :n, :n)"),
+            {"i": other_tid, "n": f"other-{other_tid.hex[:6]}"},
+        )
+        await s.execute(
+            text("INSERT INTO users (id, tenant_id, email, role) VALUES (:i, :t, :e, 'owner')"),
+            {"i": other_uid, "t": other_tid, "e": f"o{other_uid.hex[:6]}@other.sg"},
+        )
+        await s.execute(
+            text(
+                "INSERT INTO clients (id, tenant_id, name, name_normalized, status) "
+                "VALUES (:i, :t, 'Other Co', 'other co', 'confirmed')"
+            ),
+            {"i": cid, "t": other_tid},
+        )
+        await s.commit()
+    yield cid
+    await cleanup_tenant(other_tid)
+
+
+async def test_contacts_keep_exactly_one_primary(agency_with_clients) -> None:
+    """Two contacts posted as primary in sequence: the second demotes the
+    first, because `uq_client_contacts_one_primary` permits nothing else."""
+    tid, uid, ids = agency_with_clients
+    target = ids["live"]
+    async with await _client_for(tid, uid) as http:
+        first = await http.post(
+            f"/api/clients/{target}/contacts",
+            json={"name": "Priya Menon", "title": "Head of Talent", "is_primary": True},
+        )
+        assert first.status_code == 201
+
+        second = await http.post(
+            f"/api/clients/{target}/contacts",
+            json={"name": "Daniel Ong", "email": "daniel@example.com", "is_primary": True},
+        )
+        assert second.status_code == 201
+
+        contacts = (await http.get(f"/api/clients/{target}")).json()["contacts"]
+    assert len(contacts) == 2
+    assert [c["name"] for c in contacts if c["is_primary"]] == ["Daniel Ong"]
+
+
+async def test_contact_patch_and_delete(agency_with_clients) -> None:
+    tid, uid, ids = agency_with_clients
+    target = ids["live"]
+    async with await _client_for(tid, uid) as http:
+        created = (
+            await http.post(f"/api/clients/{target}/contacts", json={"name": "Temp"})
+        ).json()
+
+        patched = await http.patch(
+            f"/api/clients/{target}/contacts/{created['id']}",
+            json={"name": "Temporary Contact", "phone": "+6591234567"},
+        )
+        assert patched.status_code == 200
+        assert patched.json()["name"] == "Temporary Contact"
+
+        deleted = await http.delete(f"/api/clients/{target}/contacts/{created['id']}")
+        assert deleted.status_code == 204
+        assert (await http.get(f"/api/clients/{target}")).json()["contacts"] == []
+
+
+async def test_contacts_of_another_agency_are_404(
+    agency_with_clients, other_agency_client_id
+) -> None:
+    """Read, patch and delete alike. A 403 would itself disclose that the id
+    exists — the same reasoning as `_load`."""
+    tid, uid, _ids = agency_with_clients
+    async with await _client_for(tid, uid) as http:
+        assert (
+            await http.get(f"/api/clients/{other_agency_client_id}")
+        ).status_code == 404
+        assert (
+            await http.post(
+                f"/api/clients/{other_agency_client_id}/contacts", json={"name": "X"}
+            )
+        ).status_code == 404
+
+        contact_id = uuid.uuid4()
+        assert (
+            await http.patch(
+                f"/api/clients/{other_agency_client_id}/contacts/{contact_id}",
+                json={"name": "X"},
+            )
+        ).status_code == 404
+        assert (
+            await http.delete(
+                f"/api/clients/{other_agency_client_id}/contacts/{contact_id}"
+            )
+        ).status_code == 404

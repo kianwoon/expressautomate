@@ -24,7 +24,7 @@ from app.api.auth import _require_session
 from app.api.integrity import is_duplicate
 from app.core.config import settings
 from app.db.rls import tenant_session
-from app.models.client import Client, ClientMention
+from app.models.client import Client, ClientContact, ClientMention
 from app.services.client_naming import normalize_company_name
 
 router = APIRouter(tags=["clients"])
@@ -205,6 +205,20 @@ async def get_client(request: Request, client_id: uuid.UUID) -> dict:
             .all()
         )
 
+        contacts = (
+            (
+                await session.execute(
+                    select(ClientContact)
+                    .where(ClientContact.client_id == client_id)
+                    # Primary first, then oldest first — a stable order, so two
+                    # readers of the same client see the same list.
+                    .order_by(ClientContact.is_primary.desc(), ClientContact.created_at)
+                )
+            )
+            .scalars()
+            .all()
+        )
+
     payload = _serialize(client)
     payload["mentions"] = [
         {
@@ -215,6 +229,7 @@ async def get_client(request: Request, client_id: uuid.UUID) -> dict:
         }
         for m in mentions
     ]
+    payload["contacts"] = [_serialize_contact(c) for c in contacts]
     return payload
 
 
@@ -715,3 +730,124 @@ async def unsuspend_client(request: Request, client_id: uuid.UUID) -> dict:
         )
         await session.commit()
     return {"status": Client.CONFIRMED}
+
+
+class ContactIn(BaseModel):
+    name: str
+    email: str | None = None
+    phone: str | None = None
+    title: str | None = None
+    is_primary: bool = False
+
+
+class ContactUpdate(BaseModel):
+    name: str | None = None
+    email: str | None = None
+    phone: str | None = None
+    title: str | None = None
+    is_primary: bool | None = None
+
+
+def _serialize_contact(contact: ClientContact) -> dict:
+    return {
+        "id": str(contact.id),
+        "name": contact.name,
+        "email": contact.email,
+        "phone": contact.phone,
+        "title": contact.title,
+        "is_primary": contact.is_primary,
+        "created_at": contact.created_at.isoformat(),
+    }
+
+
+async def _demote_primary(session, client_id: uuid.UUID, except_id: uuid.UUID | None) -> None:
+    """Clear the existing primary before another row claims the title.
+
+    Order is the whole safety mechanism. `uq_client_contacts_one_primary` is a
+    partial unique INDEX, and an index cannot be DEFERRABLE — Postgres has no
+    partial unique constraint to defer. A unique index is checked at the end of
+    each statement, so demote-then-promote never has two `true` rows visible to
+    a check; promote-then-demote fails mid-transaction every time.
+    """
+    statement = update(ClientContact).where(
+        ClientContact.client_id == client_id, ClientContact.is_primary.is_(True)
+    )
+    if except_id is not None:
+        statement = statement.where(ClientContact.id != except_id)
+    await session.execute(statement.values(is_primary=False))
+
+
+async def _load_contact(session, client_id: uuid.UUID, contact_id: uuid.UUID) -> ClientContact:
+    """404 for a contact that is not this client's, for the same reason `_load`
+    404s across tenants: an id that exists but is not yours is a disclosure."""
+    contact = (
+        await session.execute(
+            select(ClientContact).where(
+                ClientContact.id == contact_id, ClientContact.client_id == client_id
+            )
+        )
+    ).scalar_one_or_none()
+    if contact is None:
+        raise HTTPException(status_code=404, detail="Contact not found")
+    return contact
+
+
+@router.post("/clients/{client_id}/contacts", status_code=201)
+async def create_contact(request: Request, client_id: uuid.UUID, body: ContactIn) -> dict:
+    _user_uuid, tenant_uuid = _require_session(request)
+    contact_id = uuid.uuid4()
+    async with tenant_session(tenant_uuid) as session:
+        # Loaded, not trusted: another agency's client id is a 404 here rather
+        # than a foreign key violation later.
+        await _load(session, client_id)
+        if body.is_primary:
+            await _demote_primary(session, client_id, except_id=None)
+        contact = ClientContact(
+            id=contact_id,
+            tenant_id=tenant_uuid,
+            client_id=client_id,
+            **body.model_dump(),
+        )
+        session.add(contact)
+        # Flushed and refreshed within the same transaction, not committed and
+        # re-queried: `tenant_session` sets `app.tenant_id` with SET LOCAL, so
+        # it is scoped to this one transaction and would vanish from under a
+        # second commit's fresh transaction, turning the reload into a
+        # cross-tenant read that RLS answers with zero rows.
+        await session.flush()
+        await session.refresh(contact)
+        return _serialize_contact(contact)
+
+
+@router.patch("/clients/{client_id}/contacts/{contact_id}")
+async def update_contact(
+    request: Request, client_id: uuid.UUID, contact_id: uuid.UUID, body: ContactUpdate
+) -> dict:
+    _user_uuid, tenant_uuid = _require_session(request)
+    changes = body.model_dump(exclude_unset=True)
+    async with tenant_session(tenant_uuid) as session:
+        await _load(session, client_id)
+        contact = await _load_contact(session, client_id, contact_id)
+        if changes.get("is_primary"):
+            await _demote_primary(session, client_id, except_id=contact_id)
+        if changes:
+            await session.execute(
+                update(ClientContact).where(ClientContact.id == contact_id).values(**changes)
+            )
+        await session.flush()
+        await session.refresh(contact)
+        return _serialize_contact(contact)
+
+
+@router.delete("/clients/{client_id}/contacts/{contact_id}", status_code=204)
+async def delete_contact(request: Request, client_id: uuid.UUID, contact_id: uuid.UUID) -> None:
+    """Deleted, not archived — unlike everything else in this module.
+
+    A contact is not evidence that something happened; it is a current fact
+    about who to call. A stale one is worse than an absent one.
+    """
+    _user_uuid, tenant_uuid = _require_session(request)
+    async with tenant_session(tenant_uuid) as session:
+        await _load(session, client_id)
+        await _load_contact(session, client_id, contact_id)
+        await session.execute(delete(ClientContact).where(ClientContact.id == contact_id))
