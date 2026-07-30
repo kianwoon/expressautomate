@@ -1958,7 +1958,7 @@ async def share_opportunity(
                 )
                 .on_conflict_do_update(
                     index_elements=["tenant_id", "opportunity_id"],
-                    index_where=OpportunityShare.scope == OpportunityShare.SCOPE_TENANT,
+                    index_where=_TENANT_SCOPE,  # text(), not a bind param — see note below,
                     set_={"note": body.note, "shared_by_user_id": user_uuid},
                 )
             )
@@ -2007,7 +2007,7 @@ async def share_opportunity(
                         index_elements=[
                             "tenant_id", "opportunity_id", "shared_with_user_id"
                         ],
-                        index_where=OpportunityShare.scope == OpportunityShare.SCOPE_USER,
+                        index_where=_USER_SCOPE,  # text(), not a bind param — see note below,
                         set_={"note": body.note, "shared_by_user_id": user_uuid},
                     )
                 )
@@ -2016,6 +2016,15 @@ async def share_opportunity(
 
     return {"opportunity_id": str(opportunity_id), "newly_shared_with": shared_count}
 ```
+
+**`index_where` must be `text()`, not a SQLAlchemy comparison.** Declare these at module level:
+
+```python
+_USER_SCOPE = text("scope = 'user'")
+_TENANT_SCOPE = text("scope = 'tenant'")
+```
+
+A comparison like `OpportunityShare.scope == OpportunityShare.SCOPE_USER` renders as a **bind parameter** (`WHERE scope = $8`), and Postgres cannot match a bind parameter to a partial index when it plans the statement. The failure is delayed and looks like flakiness: Postgres uses a custom plan for a prepared statement's first five executions — which succeed — then switches to a generic plan and raises `InvalidColumnReferenceError: there is no unique or exclusion constraint matching the ON CONFLICT specification`. A test that shares fewer than six times passes against broken code. The `text()` form mirrors `postgresql_where` on the model's two partial indexes, which is what it has to match.
 
 Plus `GET .../shares` (visible-only, returns scope, recipient, sharer, note, created_at) and `DELETE .../shares/{share_id}` permitting the assignee, the original sharer, the owner, and a recipient removing themselves.
 
