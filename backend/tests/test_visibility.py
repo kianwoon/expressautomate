@@ -12,9 +12,12 @@ from fastapi import HTTPException
 from sqlalchemy import insert, select, text
 
 from app.db.rls import tenant_session
+from app.models.email_message import EmailMessage
+from app.models.mailbox import Mailbox
 from app.models.opportunity import Opportunity
 from app.models.opportunity_share import OpportunityShare
 from app.services.visibility import (
+    OWNER_ROLE,
     can_edit,
     load_editable_opportunity,
     load_visible_opportunity,
@@ -39,17 +42,48 @@ async def _second_user(tenant_id: uuid.UUID, role: str = "recruiter") -> uuid.UU
 
 async def _opportunity(tenant_id: uuid.UUID, **values) -> uuid.UUID:
     opportunity_id = uuid.uuid4()
+    values.setdefault("email_message_id", None)
+    values.setdefault("source", Opportunity.MANUAL)
     async with tenant_session(tenant_id) as session:
         await session.execute(
             insert(Opportunity).values(
                 id=opportunity_id,
                 tenant_id=tenant_id,
-                email_message_id=None,
-                source=Opportunity.MANUAL,
                 **values,
             )
         )
     return opportunity_id
+
+
+async def _mailbox(tenant_id: uuid.UUID, user_id: uuid.UUID | None) -> uuid.UUID:
+    mailbox_id = uuid.uuid4()
+    async with tenant_session(tenant_id) as session:
+        await session.execute(
+            insert(Mailbox).values(
+                id=mailbox_id,
+                tenant_id=tenant_id,
+                user_id=user_id,
+                ms_user_id=mailbox_id.hex[:8],
+                scope="whole_inbox",
+                folder_id=mailbox_id.hex[:8],
+                retention_months=12,
+            )
+        )
+    return mailbox_id
+
+
+async def _email_message(tenant_id: uuid.UUID, mailbox_id: uuid.UUID) -> uuid.UUID:
+    email_id = uuid.uuid4()
+    async with tenant_session(tenant_id) as session:
+        await session.execute(
+            insert(EmailMessage).values(
+                id=email_id,
+                tenant_id=tenant_id,
+                mailbox_id=mailbox_id,
+                graph_message_id=email_id.hex[:8],
+            )
+        )
+    return email_id
 
 
 async def _visible_ids(tenant_id, user_id, role) -> set[uuid.UUID]:
@@ -127,10 +161,10 @@ async def test_a_tenant_share_reveals_it_to_a_user_who_did_not_exist_yet() -> No
 
 async def test_the_owner_sees_everything() -> None:
     tenant_id, mine = await seed_tenant_with_user()
-    boss = await _second_user(tenant_id, role="owner")
+    boss = await _second_user(tenant_id, role=OWNER_ROLE)
     opportunity_id = await _opportunity(tenant_id, assigned_user_id=mine)
     try:
-        assert opportunity_id in await _visible_ids(tenant_id, boss, "owner")
+        assert opportunity_id in await _visible_ids(tenant_id, boss, OWNER_ROLE)
     finally:
         await cleanup_tenant(tenant_id)
 
@@ -183,5 +217,68 @@ async def test_unassigned_is_readable_by_all_and_editable_by_none() -> None:
         async with tenant_session(tenant_id) as session:
             row = await load_visible_opportunity(session, opportunity_id, other, "recruiter")
             assert can_edit(row, other, "recruiter") is False
+    finally:
+        await cleanup_tenant(tenant_id)
+
+
+async def test_owning_the_mailbox_reveals_a_job_order_assigned_to_someone_else() -> None:
+    """The recipient of the original mail keeps sight of what was extracted
+    from it, even when it was assigned away — they already have the email.
+    """
+    tenant_id, mine = await seed_tenant_with_user()
+    other = await _second_user(tenant_id)
+    mailbox_id = await _mailbox(tenant_id, user_id=mine)
+    email_id = await _email_message(tenant_id, mailbox_id)
+    opportunity_id = await _opportunity(
+        tenant_id, assigned_user_id=other, email_message_id=email_id
+    )
+    try:
+        assert opportunity_id in await _visible_ids(tenant_id, mine, "recruiter")
+    finally:
+        await cleanup_tenant(tenant_id)
+
+
+async def test_owning_no_relevant_mailbox_does_not_reveal_it() -> None:
+    tenant_id, mine = await seed_tenant_with_user()
+    other = await _second_user(tenant_id)
+    mailbox_id = await _mailbox(tenant_id, user_id=other)
+    email_id = await _email_message(tenant_id, mailbox_id)
+    opportunity_id = await _opportunity(
+        tenant_id, assigned_user_id=other, email_message_id=email_id
+    )
+    try:
+        assert opportunity_id not in await _visible_ids(tenant_id, mine, "recruiter")
+    finally:
+        await cleanup_tenant(tenant_id)
+
+
+async def test_a_mailbox_with_no_owner_is_not_visible_to_everyone() -> None:
+    """`mailboxes.user_id` is nullable; a naive `== user_id` comparison
+    against NULL must not make the row public.
+    """
+    tenant_id, mine = await seed_tenant_with_user()
+    other = await _second_user(tenant_id)
+    third = await _second_user(tenant_id)
+    mailbox_id = await _mailbox(tenant_id, user_id=None)
+    email_id = await _email_message(tenant_id, mailbox_id)
+    opportunity_id = await _opportunity(
+        tenant_id, assigned_user_id=third, email_message_id=email_id
+    )
+    try:
+        assert opportunity_id not in await _visible_ids(tenant_id, mine, "recruiter")
+        assert opportunity_id not in await _visible_ids(tenant_id, other, "recruiter")
+    finally:
+        await cleanup_tenant(tenant_id)
+
+
+async def test_a_manual_job_order_is_not_reachable_via_mailbox_ownership() -> None:
+    """`email_message_id IS NULL` on a manual job order must not accidentally
+    join to some unrelated email via the mailbox term.
+    """
+    tenant_id, mine = await seed_tenant_with_user()
+    other = await _second_user(tenant_id)
+    opportunity_id = await _opportunity(tenant_id, assigned_user_id=other)
+    try:
+        assert opportunity_id not in await _visible_ids(tenant_id, mine, "recruiter")
     finally:
         await cleanup_tenant(tenant_id)
