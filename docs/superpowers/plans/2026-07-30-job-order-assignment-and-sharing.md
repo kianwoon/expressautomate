@@ -1615,19 +1615,25 @@ uv run pytest tests/test_opportunity_routes_guarded.py -v
 
 Expected: 3 failed — every by-id route is currently an offender.
 
-- [ ] **Step 3: Make `_require_session` return the role**
+- [ ] **Step 3: Add a role-aware session helper**
 
-In `backend/app/api/auth.py`, change `_require_session` (l.217) to look the role up and return a 3-tuple. The session cookie carries only `uid` and `tid`, so the role comes from the database:
+`_require_session` stays exactly as it is — synchronous, returning `(user_uuid, tenant_uuid)`. It has 65 call sites across 17 API modules, and 57 of them have no use for the role; changing it would churn every one of them and add a database round-trip to every authenticated request in the application.
+
+Add a second helper beside it in `backend/app/api/auth.py`:
 
 ```python
-async def _require_session(request: Request) -> tuple[uuid.UUID, uuid.UUID, str]:
+async def _require_session_with_role(request: Request) -> tuple[uuid.UUID, uuid.UUID, str]:
     """The signed-in user, their agency, and their role.
 
-    The role is read rather than carried in the cookie: a cookie minted
-    before a promotion would otherwise keep the old role until the user
-    signed out, and the role now gates who can see the whole pipeline.
+    Separate from `_require_session` because only the job-order routes need
+    the role, and making every route pay a query for it would be a cost
+    without a benefit.
+
+    The role is read rather than carried in the session cookie: a cookie
+    minted before a promotion would keep the old role until the user signed
+    out, and the role now decides who sees the agency's whole pipeline.
     """
-    user_uuid, tenant_uuid = _session_identity(request)  # the existing body
+    user_uuid, tenant_uuid = _require_session(request)
     async with tenant_session(tenant_uuid) as session:
         role = (
             await session.execute(select(User.role).where(User.id == user_uuid))
@@ -1635,13 +1641,7 @@ async def _require_session(request: Request) -> tuple[uuid.UUID, uuid.UUID, str]
     return user_uuid, tenant_uuid, role or "recruiter"
 ```
 
-Keep the existing synchronous cookie-parsing logic as `_session_identity`. Then update **every** call site — grep for it:
-
-```bash
-grep -rn "_require_session(request)" app/
-```
-
-Each becomes `user_uuid, tenant_uuid, role = await _require_session(request)`. Call sites that ignore the role use `_user_uuid, tenant_uuid, _role`.
+`tenant_session`, `select` and `User` are already imported in `auth.py`. Use it ONLY in the routes this task and later tasks touch. Do not change any existing `_require_session` call site.
 
 - [ ] **Step 4: Apply the predicate in `list_opportunities`**
 
