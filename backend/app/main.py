@@ -28,6 +28,7 @@ from app.api import (
     mailbox,
     notifications,
     opportunities,
+    opportunity_shares,
     sourcing,
     telegram_webhook,
     wa_gateway,
@@ -135,6 +136,7 @@ api.include_router(graph_webhook.router)
 # each of these paths still resolves.
 api.include_router(sourcing.router)
 api.include_router(opportunities.router)
+api.include_router(opportunity_shares.router)
 api.include_router(activity.router)
 api.include_router(glossary.router)
 # Before `candidates`, deliberately: `/candidates/imports` would otherwise be
