@@ -98,6 +98,27 @@ async def test_the_list_reports_the_assignee_and_their_name(client, tenant) -> N
     assert row["shared_with_me"] is False
 
 
+async def test_a_whitespace_only_preferred_name_falls_through_to_display_name(
+    client, tenant
+) -> None:
+    """A blank `preferred_name` must not out-rank a real `display_name` — the
+    same rule `app/api/clients.py::_assignee_name_expr` enforces, so the same
+    recruiter renders identically on both screens."""
+    tenant_id, mine = tenant
+    async with AdminSessionLocal() as s:
+        u = await s.get(User, mine)
+        u.preferred_name = "   "
+        u.display_name = "Mei Ling Tan"
+        await s.commit()
+    await _opportunity(tenant_id, assigned_user_id=mine)
+
+    sign_in(client, mine, tenant_id)
+    body = (await client.get("/api/opportunities")).json()
+
+    row = body["items"][0]
+    assert row["assignee_name"] == "Mei Ling Tan"
+
+
 async def test_an_unassigned_row_reports_a_null_assignee(client, tenant) -> None:
     tenant_id, mine = tenant
     await _opportunity(tenant_id, assigned_user_id=None)

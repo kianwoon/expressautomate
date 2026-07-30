@@ -254,8 +254,14 @@ async def list_opportunities(
                 Opportunity,
                 email.internet_message_id,
                 email.graph_message_id,
+                # NULLIF over each candidate rather than a bare COALESCE — see
+                # `app/api/clients.py::_assignee_name_expr`. Without it, a user
+                # whose `preferred_name` is a single space would render blank
+                # here while showing their display name on the clients screen.
                 func.coalesce(
-                    assignee.preferred_name, assignee.display_name, assignee.email
+                    func.nullif(func.btrim(assignee.preferred_name), ""),
+                    func.nullif(func.btrim(assignee.display_name), ""),
+                    assignee.email,
                 ).label("assignee_name"),
                 shared_with_me_expr.label("shared_with_me"),
             )
