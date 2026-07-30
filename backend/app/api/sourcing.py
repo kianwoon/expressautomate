@@ -302,6 +302,20 @@ async def record_submission(
         if client is None:
             raise HTTPException(status_code=404, detail="Client not found")
 
+        if client.status == Client.SUSPENDED:
+            # A hold is a commercial decision, and putting a candidate in front
+            # of the client is the act it exists to stop. Sourcing and ranking
+            # for the same client stay open — see the design note in
+            # docs/superpowers/specs/2026-07-30-clients-administration-design.md.
+            #
+            # The reason is echoed rather than summarised: "this client is
+            # suspended" sends the recruiter hunting for why, and the why is
+            # already stored.
+            detail = f"{client.name} is suspended"
+            if client.suspended_reason:
+                detail = f"{detail}: {client.suspended_reason}"
+            raise HTTPException(status_code=409, detail=detail)
+
         if body.opportunity_id is not None:
             await _opportunity_or_404(session, body.opportunity_id)
 

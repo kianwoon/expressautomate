@@ -500,6 +500,43 @@ async def test_deleting_a_submission_restores_eligibility(agency) -> None:
     assert candidate_id in unfiltered
 
 
+async def test_submission_to_a_suspended_client_is_refused(agency) -> None:
+    """Submitting is the outward-facing act, and the one that must not happen
+    while a client is on hold."""
+    tenant_id, user_id = agency
+    opportunity_id, _message_id = await _opportunity(tenant_id, user_id)
+    candidate_id = await _candidate(tenant_id)
+    client_id = await _client(tenant_id, "Acme Health", "acme.sg")
+
+    async with _http(tenant_id, user_id) as http:
+        await http.post(
+            f"/api/clients/{client_id}/suspend", json={"reason": "Invoice 4021 unpaid"}
+        )
+        response = await http.post(
+            f"/api/candidates/{candidate_id}/submissions",
+            json={"client_id": str(client_id), "opportunity_id": str(opportunity_id)},
+        )
+
+    assert response.status_code == 409
+    # The reason, not a generic failure — the recruiter must be able to act on it.
+    assert "Invoice 4021 unpaid" in response.json()["detail"]
+
+
+async def test_sourcing_still_runs_for_a_suspended_client(agency, queued) -> None:
+    """Ranking is internal research. Blocking it would stop a recruiter
+    preparing for the day the hold lifts."""
+    tenant_id, user_id = agency
+    opportunity_id, message_id = await _opportunity(tenant_id, user_id)
+    client_id = await _client(tenant_id, "Acme Health", "acme.sg")
+    await _mention(tenant_id, client_id, message_id, "email_domain")
+
+    async with _http(tenant_id, user_id) as http:
+        await http.post(f"/api/clients/{client_id}/suspend", json={"reason": "Invoice unpaid"})
+        response = await http.post(f"/api/opportunities/{opportunity_id}/sourcing")
+
+    assert response.status_code == 202
+
+
 async def test_another_agency_cannot_delete_a_submission(agency, other_agency) -> None:
     tenant_id, user_id = agency
     other_tenant, other_user = other_agency

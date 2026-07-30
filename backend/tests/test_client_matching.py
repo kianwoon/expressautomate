@@ -163,6 +163,38 @@ async def test_re_seeing_an_archived_client_does_not_resurrect_it(agency) -> Non
     assert await _status_of(agency, cid) == "archived"
 
 
+async def test_matcher_leaves_a_suspended_client_suspended(agency) -> None:
+    """Suspension is a commercial state, not an identity one.
+
+    `_BY_DOMAIN` matches any non-deprioritised status and `_surviving` never
+    writes `status`, so an inbound email touches `last_seen_at` and nothing
+    else. The same reasoning as the archived-row comment above.
+    """
+    async with tenant_session(agency) as s:
+        cid = await match_client(s, agency, None, "hr@acme.com.sg", "Acme Pte Ltd")
+        await s.commit()
+    async with tenant_session(agency) as s:
+        await s.execute(
+            text("UPDATE clients SET status = 'suspended' WHERE id = :i"), {"i": cid}
+        )
+        await s.commit()
+
+    async with tenant_session(agency) as s:
+        matched = await match_client(s, agency, None, "hr@acme.com.sg", "Acme Pte Ltd")
+        await s.commit()
+
+    async with tenant_session(agency) as s:
+        row = (
+            await s.execute(
+                text("SELECT status, last_seen_at FROM clients WHERE id = :i"), {"i": matched}
+            )
+        ).one()
+
+    assert matched == cid
+    assert row.status == "suspended"
+    assert row.last_seen_at is not None
+
+
 async def test_reprocessing_with_no_message_id_adds_no_second_mention(agency) -> None:
     async with tenant_session(agency) as s:
         cid = await match_client(s, agency, None, "hr@acme.com.sg", "Acme Pte Ltd")
