@@ -19,6 +19,7 @@ from app.models.notification import (
 )
 from app.models.opportunity import Opportunity
 from app.models.opportunity_code import OpportunityCode
+from app.models.opportunity_share import OpportunityShare
 from app.models.signup import EarlyAccessSignup
 from app.models.sourcing import CandidateSubmission, SourcingMatch, SourcingRun
 from app.models.sync_event import SyncEvent
@@ -47,6 +48,7 @@ __all__ = [
     "Opportunity",
     "OpportunityCode",
     "OpportunityFieldOverride",
+    "OpportunityShare",
     "CandidateSubmission",
     "SourcingMatch",
     "SourcingRun",
