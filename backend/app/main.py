@@ -21,6 +21,7 @@ from app.api import (
     candidates,
     candidates_avatar,
     clients,
+    clients_logo,
     events,
     glossary,
     graph_webhook,
@@ -148,6 +149,7 @@ api.include_router(candidate_roles.router)
 api.include_router(candidates_avatar.router)
 api.include_router(candidate_documents.router)
 api.include_router(clients.router)
+api.include_router(clients_logo.router)
 api.include_router(notifications.router)
 api.include_router(events.router)
 api.include_router(telegram_webhook.router)
