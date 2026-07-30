@@ -281,3 +281,80 @@ P5 final fix reviewed by Fable (9/10 APPROVE). Cap sits immediately after the so
   MINOR accepted: when protected_attribute_noticed is set with no note, the banner shows but
   the recruiter cannot tell coded from plainly-worded. The copy omits the pointer rather than
   guessing, so it is honest - cosmetic only.
+
+## Piece 6 - clients administration (add/edit/suspend/contacts)
+Plan: docs/superpowers/plans/2026-07-30-clients-administration.md (7 tasks)
+Spec: docs/superpowers/specs/2026-07-30-clients-administration-design.md
+NOTE: the plan's stated baseline was stale. Real head before Task 1 was 6b1e9f4d7a20,
+  suite already at 1421 passed. New alembic head after Task 1: a0bfc93f7eb8.
+NOTE FOR EVERY LATER TASK: agency_with_clients yields a TUPLE, not an object with
+  .confirmed_id - the plan's sample test code uses placeholder attribute names.
+Task 1: complete (e46d0e3..9759a82, spec OK, quality approved). 1421 passed, 1 skipped.
+  MINOR for final review: client_contacts has no touch_updated_at trigger, unlike
+    clients/client_mentions (20260728_1100_client_profiles.py:134-146). ORM onupdate covers
+    ORM writes, so not a bug today; a raw SQL UPDATE would leave updated_at stale.
+Task 2: complete (9759a82..074c106, spec OK, quality approved, no findings). 1427 passed, 1 skipped.
+Task 3: complete (074c106..ef68b1c, spec OK). 1437 passed, 1 skipped.
+  Review (opus) found 4 Minors; 3 closed in ef68b1c: stale "no narrowing here" comment deleted;
+  PATCH exclude_unset now pinned (an omitted field must not be nulled); PATCH cannot write
+  status/source now pinned. The fixer caught its own vacuous assertion (source default IS
+  'pipeline', so asserting != 'pipeline' proved nothing) and injected 'manual' instead.
+  MINOR left for final review: PATCH email_domain:"" is coerced to a clear rather than 422 -
+    defensible, undocumented, untested.
+Task 4: complete (ef68b1c..a3e8903, spec OK, quality approved). 1442 passed, 1 skipped.
+  PLAN BUG the implementer caught and fixed: tenant_session sets app.tenant_id with SET LOCAL,
+    so it is TRANSACTION-scoped. The plan's commit-then-reread-in-the-same-session pattern
+    silently 404s under RLS. Code now uses flush()/refresh() and lets the context manager
+    commit. NEVER commit then re-read on the same session anywhere in this codebase.
+  Review (opus) findings closed in a3e8903: PATCH contact {"name": null} wrote NULL into a
+    NOT NULL column (500) - now 422 at the request model; _load_contact's client_id filter
+    (client A's contact reached via client B's URL, same tenant) is now negatively tested.
+  clients.py is 853 lines (cap 1500).
+Task 5: complete (a3e8903..4e0031e, spec OK, quality approved). 1445 passed, 1 skipped.
+  Matcher test passed on FIRST run, as designed - it pins existing indifference so a future
+    _BY_DOMAIN change cannot silently break it. Reviewer confirmed it would fail if the
+    matcher started skipping or rewriting suspended rows.
+  Sourcing-still-runs test asserts 202, the route's real code (the plan guessed 200/201).
+  MINORS for final review:
+   - the suspension 409 and the pre-existing duplicate-submission 409 differ only by prose;
+     no error code. TASK 7 must render detail verbatim, never a generic "already submitted".
+   - the suspension check runs before the opportunity 404, so a suspended client plus a bad
+     opportunity_id yields 409 rather than 404.
+Task 6: complete (4e0031e..c3171e6, spec OK, quality approved, no findings). vitest 5/5, tsc clean.
+  readError in clients.ts ALREADY preserves the server's `detail` - unchanged.
+  Widening Client forced STATUS_LABEL maps in client-panel.tsx and clients-table.tsx to gain
+    `suspended` (they are exhaustive Records, so tsc caught it).
+  CARRY TO TASK 7: two stale docstrings say "there is no create form here" - now false.
+Task 7: complete (c3171e6..f5ca951, spec OK). tsc clean, build OK, vitest 16 passed.
+  DEVIATION UPHELD by review: the free-provider 422 comes from a pydantic field_validator and
+    backend/app/main.py has NO RequestValidationError handler, so detail is a LIST, not a
+    string. Task 6's readError would have rendered "[object Object]". clients.ts gained
+    readProblem + FieldError; the string branch (all the 409s) is byte-identical.
+  DEVIATION UPHELD: frontend/app/app.css was ALREADY 1507 lines (pre-existing, over the 1500
+    cap), so new styles went in dashboard/clients/clients.css. app.css untouched.
+  Review (opus) findings closed in f5ca951: Cancel after a PARTIAL create (client POSTed,
+    contact call failed) left a real client invisible in the list - now reloads and selects
+    it; fromValidationEntries no longer assumes index 0 and no longer drops later messages.
+  Submissions 409 verified by hand at job-orders-sourcing.tsx:194 - renders err.message
+    verbatim, so the suspension reason reaches the recruiter.
+ALL 7 TASKS COMPLETE. Backend 1445 passed, 1 skipped (verified by controller, not reported).
+FINAL REVIEW (fable): SHIP WITH FIXES 8.5/10. One cross-task seam - merge left a suspended
+  loser's suspended_at/suspended_reason behind, so unmerge produced an `unconfirmed` row still
+  carrying a suspension reason. Closed in 4229dd4. 1446 passed, 1 skipped.
+  Tenancy (§18) judged CLOSED: policy + composite FK + _load-before-_load_contact on every
+  contact endpoint + same-tenant-wrong-client and cross-tenant 404s all tested.
+  ACCEPTED AS-IS (fable triaged all five as fine to ship): no touch_updated_at trigger on
+  client_contacts; PATCH email_domain:"" clears rather than 422s; the two 409s differ only by
+  prose; 409-before-404 on suspended+bad opportunity_id; app.css 1507 lines is PRE-EXISTING
+  debt over the repo's own 1500 cap - own follow-up task.
+  KNOWN, ACCEPTED: update_client checks MERGED then updates without a row lock, so a
+  concurrent merge can let a PATCH land on a just-merged row (pre-existing pattern).
+NOT PUSHED. Migration a0bfc93f7eb8 NOT applied to Koyeb.
+HUMAN MUST CHECK ONCE SIGNED IN (nobody has run the UI - OAuth blocks automation):
+  (1) add a client end-to-end, including the partial-create recovery path (cancel after the
+      client POSTed but a contact call failed - the row must appear, not vanish);
+  (2) the duplicate-domain 409 names the holding client, and the free-provider 422 lands
+      inline on the domain field (that is the readProblem list branch, untested against a
+      real server);
+  (3) suspend a client, then try a submission - the refusal must carry the typed reason.
+Fix 4229dd4 reviewed by fable: APPROVE, no findings. _CLEAR_SUSPENSION has no mutation hazard (** and dict() at every call site); merge's locking/mention logic byte-identical; the test asserts BOTH the merge and unmerge halves.
