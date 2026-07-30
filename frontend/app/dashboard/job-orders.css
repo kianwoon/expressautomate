@@ -162,6 +162,26 @@
 
 .jo-detail-hint { margin-top: 10px; }
 
+/* Whose job order this is. A row, not a badge: the name is the content, and
+   the disc beside it only makes it findable again on the next visit. */
+.jo-detail-owner {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  margin: 10px 0 0; font-size: 0.8125rem; color: var(--ink-700);
+}
+.jo-detail-shared {
+  font-size: 0.6875rem; font-weight: 650; padding: 2px 8px; border-radius: 999px;
+  background: var(--surface-alt); color: var(--ink-500);
+}
+
+/* Claim and assign, boxed off from the review toggle below. They answer a
+   different question — who works this — and running them together reads as
+   one set of buttons where a mis-click costs a colleague their job order. */
+.jo-detail-own {
+  display: flex; flex-direction: column; gap: 10px; align-items: flex-start;
+  margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line);
+}
+.jo-detail-own .mp { width: 100%; max-width: 280px; }
+
 /* Quality, never a percentage. Three named states, each with its own colour
    and its own word — the word does the work, the colour only speeds up the
    scan, so nothing here depends on seeing the difference between them. */

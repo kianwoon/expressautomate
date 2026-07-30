@@ -524,10 +524,18 @@ export type MutationResult = { ok: true } | { ok: false; conflict: boolean; mess
  * logic, these strings are only what the recruiter reads. Nothing is matched
  * against them.
  */
+/** Two of the four are named because a screen has to *recognise* them, not
+ *  only print them. A 404 under an open panel is a closed state rather than an
+ *  error, and a 403 is the one message a screen may replace with something
+ *  truer about the row in front of it. Comparing against the exported constant
+ *  keeps that recognition on one string rather than a second copy of the copy. */
+export const GONE_MESSAGE = "This job order is no longer available.";
+export const FORBIDDEN_MESSAGE = "This job order is not yours to reassign.";
+
 const MUTATION_MESSAGES: Record<number, string> = {
   409: "Someone else has taken this one.",
-  404: "This job order is no longer available.",
-  403: "This job order is not yours to reassign.",
+  404: GONE_MESSAGE,
+  403: FORBIDDEN_MESSAGE,
   401: "Your session has expired. Sign in again, then try that once more.",
 };
 

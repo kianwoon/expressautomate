@@ -8,7 +8,16 @@ import { DetailPanel } from "./detail-panel";
 import "./job-orders.css";
 import { LiveLight } from "./live-light";
 import { JobOrdersTable } from "./job-orders-table";
-import { useOpportunities, type Filter, type Opportunity, type Scope } from "./opportunities";
+import {
+  assignOpportunity,
+  claimOpportunity,
+  getOpportunity,
+  useOpportunities,
+  type Filter,
+  type MutationResult,
+  type Opportunity,
+  type Scope,
+} from "./opportunities";
 import { ReviewBell, StatCards } from "./stat-cards";
 import { MailboxOverview, SyncActivity } from "./sync-activity";
 
@@ -81,6 +90,23 @@ export function JobOrders({ me, heading = "h2" }: { me: Me; heading?: "h1" | "h2
   // panel someone is mid-way through reading should not empty itself as a
   // reward for using it.
   const [selected, setSelected] = useState<Opportunity | null>(null);
+
+  /** One ownership move, then the row read back from the server.
+   *
+   * Read back rather than patched in place: the new assignee's *name* is
+   * resolved server-side, and inventing one here would be a second place
+   * deciding what a colleague is called. A failed read-back is swallowed —
+   * the move itself succeeded, and the next poll brings the row round. */
+  async function own(id: string, run: () => Promise<MutationResult>): Promise<MutationResult> {
+    const result = await run();
+    if (!result.ok) return result;
+    try {
+      setSelected(await getOpportunity(id));
+    } catch {
+      /* the next poll will bring it */
+    }
+    return result;
+  }
 
   const items = state.status === "ready" ? state.page.items : EMPTY;
 
@@ -278,6 +304,18 @@ export function JobOrders({ me, heading = "h2" }: { me: Me; heading?: "h1" | "h2
                   if (!selected && shown) setSelected(shown);
                   return review(id, reviewed);
                 }}
+                onClaim={(id) => {
+                  if (!selected && shown) setSelected(shown);
+                  return own(id, () => claimOpportunity(id));
+                }}
+                onAssign={(id, userId) => {
+                  if (!selected && shown) setSelected(shown);
+                  return own(id, () => assignOpportunity(id, userId));
+                }}
+                // The row went out from under the panel. Dropping the pinned
+                // selection is what lets the next poll choose a row that still
+                // exists, instead of the panel reopening on what is gone.
+                onVanished={() => setSelected(null)}
               />
             </div>
           )}
