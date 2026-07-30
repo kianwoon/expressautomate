@@ -274,3 +274,31 @@
   font-weight: 600;
   color: var(--ink-900, inherit);
 }
+
+/* ── The client's recruiter ───────────────────────────────────────────────
+   Who holds the account decides where its next job order lands, so this sits
+   above the facts and reads as one block rather than a row in a table. */
+.cl-assignee { margin-top: 16px; }
+/* The two selects here are full width; the checkbox and the button that act
+   on the first one sit under it rather than beside, so a long colleague name
+   never squeezes them. */
+.cl-assignee-move {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  font-size: 0.875rem;
+}
+.cl-assignee-save { margin-top: 8px; }
+.cl-assignee-held { margin-top: 4px; font-weight: 600; }
+/* The count of what moved. Stated, not celebrated — it is a receipt. */
+.cl-assignee-note { margin-top: 8px; font-size: 0.875rem; color: var(--ink-700); }
+.cl-assignee-failed { margin-top: 8px; font-size: 0.875rem; color: var(--amber-700); }
+
+.cl-collab-head { margin-top: 16px; }
+/* The sentence that keeps this list from reading as a share. Small, but never
+   hidden behind a tooltip: it is the whole meaning of the list under it. */
+.cl-collab-note { margin-top: 4px; font-size: 0.8125rem; }
+.cl-collab-list { list-style: none; padding: 0; margin-top: 8px; }
+.cl-collab { display: flex; align-items: center; gap: 6px; margin-top: 6px; }
+.cl-collab-add { margin-top: 10px; display: grid; gap: 8px; justify-items: start; }

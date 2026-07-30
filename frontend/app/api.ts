@@ -521,6 +521,23 @@ export function clientLogoPath(id: string): string {
   return `${clientPath(id)}/logo`;
 }
 
+/** Which recruiter looks after this client. PUT only — there is no GET; the
+ *  current assignee rides on the client record itself. */
+export function clientAssigneePath(id: string): string {
+  return `${clientPath(id)}/assignee`;
+}
+
+/** Who else knows this account. POST records a colleague; it grants nothing
+ *  — see `ClientCollaborator` in `app/models/client.py`. */
+export function clientCollaboratorsPath(id: string): string {
+  return `${clientPath(id)}/collaborators`;
+}
+
+/** One collaborator, for DELETE. Both ids encoded, as `clientContactPath`. */
+export function clientCollaboratorPath(id: string, userId: string): string {
+  return `${clientCollaboratorsPath(id)}/${encodeURIComponent(userId)}`;
+}
+
 /**
  * Everyone who works at this agency — who a job order can be assigned to, and
  * who it can be shared with.

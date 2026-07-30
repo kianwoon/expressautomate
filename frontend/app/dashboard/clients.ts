@@ -5,6 +5,9 @@ import { useCallback, useEffect, useState } from "react";
 import {
   CLIENTS_PATH,
   clientArchivePath,
+  clientAssigneePath,
+  clientCollaboratorPath,
+  clientCollaboratorsPath,
   clientConfirmPath,
   clientContactPath,
   clientContactsPath,
@@ -82,6 +85,13 @@ export type ClientInput = {
   notes?: string | null;
 };
 
+export type Collaborator = {
+  user_id: string;
+  /** Resolved server-side like `Member.name`. Null when the row outlives the
+   *  person — nothing here invents a name (§15). */
+  name: string | null;
+};
+
 export type Client = {
   id: string;
   name: string;
@@ -102,6 +112,20 @@ export type Client = {
   suspended_at: string | null;
   logo_key: string | null;
   logo_updated_at: string | null;
+  /**
+   * The recruiter answerable for this account, and their resolved name.
+   *
+   * Optional rather than required: `_serialize` in `app/api/clients.py` does
+   * not yet emit either field, so a shipped response has neither. Everything
+   * reading them must treat absent and null alike — an assignment control that
+   * mistook `undefined` for "nobody" would offer to reassign a client that is
+   * already held.
+   */
+  assigned_user_id?: string | null;
+  assignee_name?: string | null;
+  /** Colleagues recorded as also covering the account. Grants no access to
+   *  the client's job orders — see `ClientCollaborator`. */
+  collaborators?: Collaborator[];
   /** Only present on the single-record GET, not on a list row. */
   mentions?: ClientMention[];
   /** Only present on the single-record GET, not on a list row. */
@@ -480,6 +504,68 @@ export async function uploadClientLogo(
   });
   if (!res.ok) throw new ApiError(await readError(res));
   return (await res.json()) as { logo_key: string; logo_updated_at: string };
+}
+
+/** What the server reports after a reassignment.
+ *
+ *  `opportunities_moved` is the response key; the *request* field asking for
+ *  the move is `move_open_opportunities`. The two names differ, both are fixed
+ *  by the shipped API, and neither is tidied here. */
+export type AssigneeResult = {
+  client_id: string;
+  assigned_user_id: string | null;
+  opportunities_moved: number;
+};
+
+/**
+ * Hands the account to a recruiter, and its job orders with it.
+ *
+ * `moveOpportunities` maps to `move_open_opportunities`. The word "open" is
+ * the API's and stays inside this function: no lifecycle state exists on
+ * `Opportunity` to make it true, so nothing shown to a recruiter may say it.
+ * What actually moves is every job order for this client currently held by the
+ * outgoing recruiter.
+ *
+ * A 403 here is the server refusing a caller who is neither the owner nor the
+ * current assignee. The interface hides the control in exactly those cases, so
+ * reaching this branch means the client changed hands under the reader.
+ */
+export async function setClientAssignee(
+  id: string,
+  userId: string | null,
+  moveOpportunities: boolean,
+): Promise<AssigneeResult> {
+  const res = await fetch(clientAssigneePath(id), {
+    method: "PUT",
+    credentials: "include",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify({ user_id: userId, move_open_opportunities: moveOpportunities }),
+  });
+  if (!res.ok) throw new ApiError(await readError(res));
+  return (await res.json()) as AssigneeResult;
+}
+
+/** Records that a colleague also knows this account. Idempotent server-side
+ *  (`ON CONFLICT DO NOTHING`), so naming the same person twice is a success,
+ *  not an error, and nothing here special-cases it. */
+export async function addCollaborator(clientId: string, userId: string): Promise<void> {
+  const res = await fetch(clientCollaboratorsPath(clientId), {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify({ user_id: userId }),
+  });
+  if (!res.ok) throw new ApiError(await readError(res));
+}
+
+/** Removing cover that is already gone is a no-op, for the same reason. */
+export async function removeCollaborator(clientId: string, userId: string): Promise<void> {
+  const res = await fetch(clientCollaboratorPath(clientId, userId), {
+    method: "DELETE",
+    credentials: "include",
+    headers: { Accept: "application/json" },
+  });
+  if (!res.ok) throw new ApiError(await readError(res));
 }
 
 export async function deleteClientLogo(id: string): Promise<void> {

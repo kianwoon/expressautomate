@@ -6,6 +6,7 @@ import { CLIENTS_PATH } from "../../api";
 import type { Client, ClientMention, ClientPage, Contact, MatchedBy } from "../clients";
 import { getClient, mergeClient, suspendClient, unmergeClient, unsuspendClient } from "../clients";
 import { day, when } from "../format";
+import { ClientAssignee } from "./client-assignee";
 import { ClientForm } from "./client-form";
 import { ClientLogo } from "./client-logo";
 
@@ -209,6 +210,11 @@ function Detail({
               </span>
             </div>
           </div>
+
+          {/* Above the facts: which recruiter holds the account decides where
+              its next job order lands, so it outranks the fee and the phone
+              number. */}
+          <ClientAssignee client={row} onChanged={onDetailChanged} />
 
           <ClientFacts row={row} onEdit={() => setEditing(true)} />
 

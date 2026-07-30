@@ -60,12 +60,22 @@ afterEach(() => {
 
 describe("ClientPanel logo wiring", () => {
   it("routes a logo upload to onDetailChanged alone, never onChanged", async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce(
-        jsonResponse({ logo_key: "tenant/cl-1/logo.png", logo_updated_at: "2026-07-30T00:00:00Z" }),
-      )
-      .mockResolvedValueOnce(jsonResponse({ url: "https://r2.example/new.png", expires_in: 300 }));
+    // Routed by URL rather than by call order: the panel also renders
+    // `ClientAssignee`, which reads the staff list and the signed-in user. An
+    // ordered `mockResolvedValueOnce` chain handed those two requests the
+    // logo's responses and left the rest of the panel unrendered.
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (String(url).includes("/logo")) {
+        return (init?.method ?? "GET") === "POST"
+          ? jsonResponse({
+              logo_key: "tenant/cl-1/logo.png",
+              logo_updated_at: "2026-07-30T00:00:00Z",
+            })
+          : jsonResponse({ url: "https://r2.example/new.png", expires_in: 300 });
+      }
+      if (String(url).includes("/members")) return jsonResponse([]);
+      return jsonResponse(null, { ok: false, status: 401 });
+    });
     vi.stubGlobal("fetch", fetchMock);
 
     const onChanged = vi.fn(); // stands in for `refreshDetail` (list reload + detail) in page.tsx
