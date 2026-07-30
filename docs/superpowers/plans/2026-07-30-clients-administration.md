@@ -18,7 +18,8 @@
 - **No file exceeds 1500 lines.** `clients.py` is 446 lines today and will roughly double; that is fine. `client-panel.tsx` is 455 lines and must not absorb the form.
 - **The AI must not fabricate missing values** (§15). An unset optional field stays NULL. No endpoint invents a default for a commercial term.
 - **Removal is a status change.** No task in this plan adds a `DELETE` for a client. Contacts are the sole exception and the spec argues why.
-- **Run from `backend/`:** `uv run pytest`, `uv run ruff check .`, `uv run alembic upgrade head`.
+- **Run tests with `cd backend && scripts/test-env.sh -q`** — never hand-rolled env vars and never CI's values. CI uses a different app-role password, and forcing it produces hundreds of bogus auth failures that read as flakiness. The script sources `backend/.env.test` and hides any root `.env` for the run. Lint and migrate with `uv run ruff check .` and `uv run alembic upgrade head` from `backend/`. Where a step below says `uv run pytest ...`, run `scripts/test-env.sh` with the same arguments instead.
+- **Baseline before this plan:** 1208 passed, 1 skipped. Alembic head `f4b8c1e7d290`.
 - **Commit after every task.** Conventional commit messages.
 
 ---
