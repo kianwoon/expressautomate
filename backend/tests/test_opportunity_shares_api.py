@@ -177,6 +177,96 @@ async def test_a_recipient_removes_themselves_but_a_stranger_cannot(
     assert await _listed(client) == []
 
 
+async def test_resharing_the_same_user_in_a_fresh_request_updates_the_note(
+    client, assigned
+) -> None:
+    """Standalone regression test for the ON CONFLICT predicate.
+
+    If `index_where` on the upsert ever regresses from the literal
+    `text("scope = 'user'")` to a bound column comparison
+    (`OpportunityShare.scope == ...`), asyncpg's prepared-statement cache
+    makes the failure state-dependent: Postgres plans the first ~5
+    executions of a given SQL text per connection as a "custom plan", where
+    it can still verify the bound value matches the partial index, and only
+    switches to a "generic plan" — which cannot, and raises
+    `InvalidColumnReferenceError` — after that. A single request-response
+    pair therefore hits the custom-plan path and passes even when the
+    predicate is broken; that's exactly what let the regression slip through
+    upstream. Repeating the same upsert past that threshold, inside one
+    test, is what makes the failure deterministic rather than luck-of-plan.
+    """
+    tenant_id, assignee, opportunity_id = assigned
+    colleague = await _colleague(tenant_id)
+    sign_in(client, assignee, tenant_id)
+
+    # 6 requests: Postgres's custom-plan window for a prepared statement is
+    # the first 5 executions, so this guarantees at least one generic-plan
+    # execution of the ON CONFLICT upsert.
+    for i in range(6):
+        response = await client.post(
+            f"/api/opportunities/{opportunity_id}/shares",
+            json={"scope": "user", "user_ids": [str(colleague)], "note": f"note {i}"},
+        )
+        assert response.status_code == 200, f"iteration {i}: {response.text}"
+
+    shares = (await client.get(f"/api/opportunities/{opportunity_id}/shares")).json()
+    rows = [r for r in shares["items"] if r["shared_with_user_id"] == str(colleague)]
+    assert len(rows) == 1, rows
+    assert rows[0]["note"] == "note 5"
+
+
+async def test_a_visible_stranger_cannot_delete_someone_elses_share(
+    client, assigned
+) -> None:
+    """A caller who can see the job order only via a tenant-wide broadcast is
+    not the assignee, the owner, the original sharer, or the recipient — so
+    they cannot withdraw a named share between two other colleagues."""
+    tenant_id, assignee, opportunity_id = assigned
+    colleague = await _colleague(tenant_id)
+    onlooker = await _colleague(tenant_id)
+
+    sign_in(client, assignee, tenant_id)
+    await client.post(
+        f"/api/opportunities/{opportunity_id}/shares",
+        json={"scope": "user", "user_ids": [str(colleague)]},
+    )
+    # Gives the onlooker sight of the job order without making them a party
+    # to the named share above.
+    await client.post(
+        f"/api/opportunities/{opportunity_id}/shares", json={"scope": "tenant"}
+    )
+    share_id = next(
+        row["id"]
+        for row in (
+            await client.get(f"/api/opportunities/{opportunity_id}/shares")
+        ).json()["items"]
+        if row["shared_with_user_id"] == str(colleague)
+    )
+
+    sign_in(client, onlooker, tenant_id)
+    refused = await client.delete(
+        f"/api/opportunities/{opportunity_id}/shares/{share_id}"
+    )
+    assert refused.status_code == 403, refused.text
+    assert refused.json()["detail"] == "This share is not yours to withdraw."
+
+
+async def test_sharing_with_yourself_is_a_silent_no_op(client, assigned) -> None:
+    """Sharing with yourself succeeds but creates no share row for the caller."""
+    tenant_id, assignee, opportunity_id = assigned
+
+    sign_in(client, assignee, tenant_id)
+    response = await client.post(
+        f"/api/opportunities/{opportunity_id}/shares",
+        json={"scope": "user", "user_ids": [str(assignee)]},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["newly_shared_with"] == 0
+
+    shares = (await client.get(f"/api/opportunities/{opportunity_id}/shares")).json()
+    assert shares["items"] == []
+
+
 async def test_sharing_a_job_order_you_cannot_see_is_a_404(client, assigned) -> None:
     tenant_id, _assignee, opportunity_id = assigned
     stranger = await _colleague(tenant_id)

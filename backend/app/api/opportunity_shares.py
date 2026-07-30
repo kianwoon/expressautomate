@@ -148,6 +148,14 @@ async def share_opportunity(
             # update — so 200, and 201 is reserved for the broadcast.
             response.status_code = 200
 
+    # Deliberately outside the `tenant_session` block, i.e. after commit: the
+    # share row must exist before anyone is told about it. This is not
+    # atomic — if `emit_and_enqueue` raises or the process dies here, the
+    # share exists with no notification ever sent. That is the acceptable
+    # failure mode; the alternative (emit inside the transaction, or roll the
+    # share back if emit fails) risks the opposite: notifying about a share
+    # that was never actually written, or discarding a share the caller was
+    # told succeeded because a downstream queue hiccuped.
     # Nothing to announce when every named target already had it.
     if recipients is None or recipients:
         job_title, company_name, location, salary = subject
