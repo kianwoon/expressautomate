@@ -94,6 +94,7 @@ async def admin_session() -> AsyncGenerator[AsyncSession, None]:
 # allow-hardcode: fixed SQL DDL/DML teardown statements (human-written schema
 # knowledge -- FK-safe delete order), not a scoring/matching oracle.
 _CLEANUP_STATEMENTS = (
+    "DELETE FROM client_contacts WHERE tenant_id = :t",
     "DELETE FROM client_mentions WHERE tenant_id = :t",
     # `ck_clients_merged_has_target` forbids status='merged' with a null
     # target, so clear both together rather than orphaning a merged row.

@@ -17,12 +17,16 @@ able to overwrite the other.
 
 import uuid
 from datetime import datetime
+from decimal import Decimal
 
 from sqlalchemy import (
+    Boolean,
     DateTime,
     ForeignKey,
     ForeignKeyConstraint,
     Index,
+    Integer,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
@@ -41,6 +45,13 @@ class Client(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
     CONFIRMED = "confirmed"
     MERGED = "merged"
     ARCHIVED = "archived"
+    SUSPENDED = "suspended"
+
+    # How the row came to exist. Not inferable from
+    # `first_seen_email_message_id`: that column is ON DELETE SET NULL, so a
+    # retention purge would silently reclassify a pipeline client as manual.
+    PIPELINE = "pipeline"
+    MANUAL = "manual"
 
     name: Mapped[str] = mapped_column(Text, nullable=False)
     # A hint for proposing a match to a person, never a key. Two unrelated
@@ -60,6 +71,24 @@ class Client(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
         PgUUID(as_uuid=True), ForeignKey("email_messages.id", ondelete="SET NULL")
     )
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+
+    # Firm-level facts a recruiter maintains by hand. All nullable: an unset
+    # field is "not recorded", and nothing infers a value for it (§15).
+    website: Mapped[str | None] = mapped_column(Text)
+    phone: Mapped[str | None] = mapped_column(Text)
+    address: Mapped[str | None] = mapped_column(Text)
+    # A percent, because that is what a recruiter quotes: 20.00.
+    fee_percent: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
+    payment_terms_days: Mapped[int | None] = mapped_column(Integer)
+    notes: Mapped[str | None] = mapped_column(Text)
+
+    # A suspension is a commercial hold on a client the agency still works
+    # with. Both columns are cleared by `unsuspend` and by `archive`, so a
+    # stale reason can never outlive the state it describes.
+    suspended_reason: Mapped[str | None] = mapped_column(Text)
+    suspended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    source: Mapped[str] = mapped_column(String(16), nullable=False, default=PIPELINE)
 
     __table_args__ = (
         # Children reference (tenant_id, id) so their FK cannot cross agencies.
@@ -128,5 +157,46 @@ class ClientMention(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
             "email_message_id",
             name="uq_client_mentions_once_per_message",
             postgresql_nulls_not_distinct=True,
+        ),
+    )
+
+
+class ClientContact(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
+    """One person at a client company.
+
+    Deleted outright rather than status-flagged, unlike a `ClientMention`. A
+    mention is evidence that something happened, and erasing it would assert
+    that it never did; a contact is a current fact about who to call, and a
+    stale one is worse than an absent one.
+    """
+
+    __tablename__ = "client_contacts"
+
+    client_id: Mapped[uuid.UUID] = mapped_column(PgUUID(as_uuid=True), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    email: Mapped[str | None] = mapped_column(Text)
+    phone: Mapped[str | None] = mapped_column(Text)
+    title: Mapped[str | None] = mapped_column(Text)
+    is_primary: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+    __table_args__ = (
+        # Composite, so a contact cannot cross agencies — the same reason
+        # `client_mentions` carries one.
+        ForeignKeyConstraint(
+            ["tenant_id", "client_id"],
+            ["clients.tenant_id", "clients.id"],
+            name="fk_client_contacts_client_same_tenant",
+            ondelete="CASCADE",
+        ),
+        # At most one primary per client. A partial unique INDEX cannot be
+        # DEFERRABLE (only constraints can be, and Postgres has no partial
+        # unique constraint), so the demote statement must run before the
+        # promote statement — see `_set_primary` in app/api/clients.py.
+        Index(
+            "uq_client_contacts_one_primary",
+            "tenant_id",
+            "client_id",
+            unique=True,
+            postgresql_where=text("is_primary"),
         ),
     )

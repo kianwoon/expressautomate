@@ -496,3 +496,32 @@ async def test_confirming_and_archiving_stay_idempotent(agency_with_clients) -> 
         assert (await http.post(f"/api/clients/{ids['live']}/confirm")).status_code == 200
         assert (await http.post(f"/api/clients/{ids['live']}/archive")).status_code == 200
         assert (await http.post(f"/api/clients/{ids['live']}/archive")).status_code == 200
+
+
+async def test_client_contacts_is_tenant_isolated(agency_with_clients) -> None:
+    """The new table's RLS policy, exercised through the runtime role.
+
+    `verify_rls_enforced()` only checks the table has FORCE RLS; this checks
+    the policy predicate actually filters.
+    """
+    from sqlalchemy import select
+
+    from app.db.rls import tenant_session
+    from app.models.client import ClientContact
+
+    tid, uid, ids = agency_with_clients
+    async with tenant_session(tid) as session:
+        session.add(
+            ClientContact(
+                tenant_id=tid,
+                client_id=ids["live"],
+                name="Priya",
+                is_primary=True,
+            )
+        )
+        await session.commit()
+
+    other_tenant = uuid.uuid4()
+    async with tenant_session(other_tenant) as session:
+        rows = (await session.execute(select(ClientContact))).scalars().all()
+    assert rows == []
