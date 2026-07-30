@@ -224,11 +224,27 @@ describe("MemberSelect", () => {
     expect(onChange).toHaveBeenCalledWith(JO.id);
   });
 
-  it("excludes the signed-in user", async () => {
-    render(<MemberSelect value={null} onChange={() => {}} label="Assign to" />);
+  it("offers the signed-in user, and says which row is theirs", async () => {
+    // Unlike the picker: assigning to yourself is the commonest case there is.
+    // An owner taking on a client could not record it while this excluded
+    // them, and a recruiter who already held one was shown through the
+    // "someone who has left" branch.
+    const onChange = vi.fn();
+    render(<MemberSelect value={null} onChange={onChange} label="Assign to" />);
 
-    expect(screen.queryByRole("option", { name: "Mei Wong" })).toBeNull();
+    const mine = screen.queryByRole("option", { name: "Mei Wong · you · Owner" });
+    expect(mine).not.toBeNull();
     expect(screen.queryByRole("option", { name: /Priya Nair/ })).not.toBeNull();
+
+    fireEvent.change(screen.getByLabelText("Assign to"), { target: { value: MEI.id } });
+    expect(onChange).toHaveBeenCalledWith(MEI.id);
+  });
+
+  it("does not call whoever already holds it someone who has left", async () => {
+    render(<MemberSelect value={MEI.id} onChange={() => {}} label="Assign to" />);
+
+    expect(screen.queryByRole("option", { name: "Someone who has left" })).toBeNull();
+    expect((screen.getByLabelText("Assign to") as HTMLSelectElement).value).toBe(MEI.id);
   });
 
   it("offers nobody only when asked, and reports null for it", async () => {

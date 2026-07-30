@@ -11,10 +11,18 @@ import { Initials } from "./person";
  * select (assignment).
  *
  * Both read `useAuth()` themselves rather than taking the caller's id as a
- * prop. Excluding yourself is not a decision each screen gets to make: sharing
- * with yourself is a no-op the API silently skips, and assigning a job order to
- * yourself has its own button. A prop is a thing a call site can forget; a hook
- * call inside the component is not.
+ * prop: whether you may name yourself is a property of the control, not a
+ * decision each screen gets to make. A prop is a thing a call site can forget;
+ * a hook call inside the component is not.
+ *
+ * The two answer it differently, and that is the point. `MemberPicker` shares,
+ * and sharing with yourself is a no-op the API silently skips, so offering it
+ * is offering a click that does nothing. `MemberSelect` assigns, and assigning
+ * to yourself is the commonest case there is — an owner taking on a client,
+ * a recruiter keeping the account they already hold. Leaving the caller out
+ * there did not make the assignment impossible so much as unrecordable: the
+ * select had no row to choose, and whoever already held it was rendered
+ * through the "someone who has left" branch.
  *
  * `useAuth()` is a state union, so there is a stretch where the answer to "who
  * am I" does not exist yet. Both controls are disabled until it does, rather
@@ -37,19 +45,31 @@ function matches(member: Member, query: string): boolean {
   );
 }
 
-/** Who this control may offer: the agency, less the caller, less anyone the
- *  caller has ruled out. Returns `null` while the caller is still unknown, so
- *  the two "not ready" reasons stay one check at every use site. */
-function useOfferable(exclude?: string[]): { members: Member[] | null; message?: string } {
+/** Who this control may offer: the agency, less anyone the caller has ruled
+ *  out, and less the caller themselves unless `includeSelf`. Returns `null`
+ *  while the caller is still unknown, so the two "not ready" reasons stay one
+ *  check at every use site — and `me` alongside, so a control that does offer
+ *  the caller can say which row that is. */
+function useOfferable(options?: { exclude?: string[]; includeSelf?: boolean }): {
+  members: Member[] | null;
+  message?: string;
+  me?: string;
+} {
   const auth = useAuth();
   const list = useMembers();
+  const exclude = options?.exclude;
   const excluded = useMemo(() => new Set(exclude ?? []), [exclude]);
 
   if (list.status === "unreadable") return { members: null, message: list.message };
   if (auth.status !== "signed-in" || list.status !== "ready") return { members: null };
 
   const me = auth.me.user.id;
-  return { members: list.members.filter((m) => m.id !== me && !excluded.has(m.id)) };
+  return {
+    me,
+    members: list.members.filter(
+      (m) => (options?.includeSelf || m.id !== me) && !excluded.has(m.id),
+    ),
+  };
 }
 
 export function MemberPicker({
@@ -63,7 +83,7 @@ export function MemberPicker({
   exclude?: string[];
   label: string;
 }) {
-  const { members, message } = useOfferable(exclude);
+  const { members, message } = useOfferable({ exclude });
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
   // Which row the arrow keys are sitting on. -1 is "none yet", so the first
@@ -232,15 +252,16 @@ export function MemberSelect({
   allowNone?: boolean;
   label: string;
 }) {
-  const { members, message } = useOfferable();
+  const { members, message, me } = useOfferable({ includeSelf: true });
   const baseId = useId();
   const selectId = `${baseId}-select`;
 
   const list = members ?? [];
   // Whoever is already assigned stays on the list even if they have since left
-  // the agency — or are the caller, who can hold an assignment without being
-  // offerable. Dropping them would make the select read "nobody" and the next
-  // save would quietly mean it.
+  // the agency. Dropping them would make the select read "nobody" and the next
+  // save would quietly mean it. This no longer catches the caller — they are
+  // on the list now — which is what it was really doing before: telling a
+  // recruiter that they themselves had left.
   const missing = value !== null && !list.some((m) => m.id === value);
 
   return (
@@ -260,10 +281,15 @@ export function MemberSelect({
         )}
         {missing && <option value={value}>Someone who has left</option>}
         {list.map((member) => {
+          // "you" before the role, because which row is yours is what the
+          // reader is scanning for; the role is a detail about it.
+          const parts = [member.name];
+          if (member.id === me) parts.push("you");
           const role = roleLabel(member);
+          if (role) parts.push(role);
           return (
             <option key={member.id} value={member.id}>
-              {role ? `${member.name} · ${role}` : member.name}
+              {parts.join(" · ")}
             </option>
           );
         })}
