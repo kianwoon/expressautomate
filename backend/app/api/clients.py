@@ -12,16 +12,20 @@ afraid to use, and an unused merge leaves the duplicates in the list.
 
 import uuid
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from pydantic import BaseModel
-from sqlalchemy import delete, func, select, update
+from pydantic import BaseModel, Field, field_validator
+from sqlalchemy import delete, func, insert, select, update
+from sqlalchemy.exc import IntegrityError
 
 from app.api.auth import _require_session
+from app.api.integrity import is_duplicate
 from app.core.config import settings
 from app.db.rls import tenant_session
 from app.models.client import Client, ClientMention
+from app.services.client_naming import normalize_company_name
 
 router = APIRouter(tags=["clients"])
 
@@ -34,6 +38,72 @@ StatusFilter = Literal["unconfirmed", "confirmed", "suspended", "archived", "mer
 
 class MergeRequest(BaseModel):
     target_id: uuid.UUID
+
+
+class _ClientFieldRules:
+    """Validation shared by the create and patch bodies.
+
+    The pipeline never stores a free-provider domain — `domain_of` returns None
+    for anything in `settings.FREE_EMAIL_DOMAINS`, because such a domain
+    identifies a person rather than a company. This API must not be the back
+    door that puts one in.
+    """
+
+    @field_validator("email_domain", check_fields=False)
+    @classmethod
+    def _domain_is_a_company(cls, value: str | None) -> str | None:
+        # None is meaningful and allowed: on create it means "no domain known",
+        # on patch it means "clear the one we got wrong".
+        if value is None:
+            return None
+        cleaned = value.strip().lower().lstrip("@")
+        if not cleaned:
+            return None
+        if cleaned in settings.FREE_EMAIL_DOMAINS:
+            raise ValueError(
+                f"{cleaned} is a free email provider and identifies a person, "
+                "not a company; leave the domain unset"
+            )
+        return cleaned
+
+    @field_validator("name", check_fields=False)
+    @classmethod
+    def _name_is_not_blank(cls, value: str | None) -> str | None:
+        if value is None or not value.strip():
+            raise ValueError("name must not be blank")
+        return value.strip()
+
+
+class ClientCreate(_ClientFieldRules, BaseModel):
+    """Only `name` is required — everything else is a fact one may not have yet."""
+
+    name: str
+    email_domain: str | None = None
+    website: str | None = None
+    phone: str | None = None
+    address: str | None = None
+    fee_percent: Decimal | None = Field(default=None, ge=0, le=100)
+    payment_terms_days: int | None = Field(default=None, ge=0)
+    notes: str | None = None
+
+
+class ClientUpdate(_ClientFieldRules, BaseModel):
+    """Every field optional — this is a PATCH.
+
+    Reusing `ClientCreate` would make `PATCH {"notes": "..."}` a 422 for
+    omitting `name`. `exclude_unset=True` on the dump is what keeps "not sent"
+    different from "set to null", and that distinction only exists because
+    every field may be absent here.
+    """
+
+    name: str | None = None
+    email_domain: str | None = None
+    website: str | None = None
+    phone: str | None = None
+    address: str | None = None
+    fee_percent: Decimal | None = Field(default=None, ge=0, le=100)
+    payment_terms_days: int | None = Field(default=None, ge=0)
+    notes: str | None = None
 
 
 def _serialize(client: Client) -> dict:
@@ -179,6 +249,105 @@ async def _load(session, client_id: uuid.UUID) -> Client:
     if client is None:
         raise HTTPException(status_code=404, detail="Client not found")
     return client
+
+
+async def _domain_conflict(tenant_uuid: uuid.UUID, domain: str) -> HTTPException:
+    """Build the 409 for a domain that is already spoken for.
+
+    The IntegrityError does not carry the holder, and the transaction that
+    raised it is rolled back, so the holder is read in a fresh session. If it
+    has since gone (a merge in between), the message degrades to naming the
+    domain alone rather than inventing a client.
+    """
+    async with tenant_session(tenant_uuid) as session:
+        holder = (
+            await session.execute(
+                select(Client).where(
+                    Client.email_domain == domain, Client.status != Client.MERGED
+                )
+            )
+        ).scalar_one_or_none()
+    if holder is None:
+        return HTTPException(status_code=409, detail=f"The domain {domain} is already in use")
+    return HTTPException(
+        status_code=409,
+        detail=(
+            f"{holder.name} ({holder.id}) already holds {domain} and is {holder.status}. "
+            "Open that client and edit it instead of adding a second one."
+        ),
+    )
+
+
+@router.post("/clients", status_code=201)
+async def create_client(request: Request, body: ClientCreate) -> dict:
+    """Add a client by hand, at `confirmed`.
+
+    The pipeline's rows start at `unconfirmed` because a domain match is not a
+    fact about which company an email is from. A recruiter typing the name is
+    that judgement being made, so asking them to confirm it afterwards would
+    be asking them to agree with themselves.
+    """
+    _user_uuid, tenant_uuid = _require_session(request)
+    client_id = uuid.uuid4()
+    values = body.model_dump()
+    values.update(
+        id=client_id,
+        tenant_id=tenant_uuid,
+        name_normalized=normalize_company_name(body.name),
+        status=Client.CONFIRMED,
+        source=Client.MANUAL,
+    )
+
+    async with tenant_session(tenant_uuid) as session:
+        try:
+            await session.execute(insert(Client).values(**values))
+            await session.commit()
+        except IntegrityError as exc:
+            # `uq_clients_tenant_domain` is the only constraint these values
+            # can violate with a 23505: `id` is server-side generated here and
+            # `status` is fixed. Anything else is a bug in this endpoint and is
+            # re-raised rather than disguised as a collision.
+            await session.rollback()
+            if not is_duplicate(exc) or body.email_domain is None:
+                raise
+            raise await _domain_conflict(tenant_uuid, body.email_domain) from exc
+
+    return await get_client(request, client_id)
+
+
+@router.patch("/clients/{client_id}")
+async def update_client(request: Request, client_id: uuid.UUID, body: ClientUpdate) -> dict:
+    """Edit the facts a recruiter owns. Status is not among them.
+
+    Every status change has its own endpoint, because each one is a decision
+    with its own legal sources; letting PATCH write `status` would route around
+    all of them.
+    """
+    _user_uuid, tenant_uuid = _require_session(request)
+    # exclude_unset, so an omitted field is left alone and an explicit null
+    # clears the column. Those are different requests and must stay different.
+    changes = body.model_dump(exclude_unset=True)
+    if not changes:
+        return await get_client(request, client_id)
+    if "name" in changes:
+        changes["name_normalized"] = normalize_company_name(changes["name"])
+
+    async with tenant_session(tenant_uuid) as session:
+        client = await _load(session, client_id)
+        if client.status == Client.MERGED:
+            # Editing a merged row would edit something no longer in the list,
+            # and an unmerge would then resurrect an edit nobody remembers.
+            raise HTTPException(status_code=400, detail="Unmerge the client first")
+        try:
+            await session.execute(update(Client).where(Client.id == client_id).values(**changes))
+            await session.commit()
+        except IntegrityError as exc:
+            await session.rollback()
+            if not is_duplicate(exc) or not changes.get("email_domain"):
+                raise
+            raise await _domain_conflict(tenant_uuid, changes["email_domain"]) from exc
+
+    return await get_client(request, client_id)
 
 
 @router.post("/clients/{client_id}/confirm")

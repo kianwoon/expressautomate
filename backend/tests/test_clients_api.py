@@ -14,7 +14,9 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 
 from app.api import clients as clients_api
+from app.core.config import settings
 from app.main import app
+from app.services.client_naming import normalize_company_name
 from tests.conftest import AdminSessionLocal, cleanup_tenant
 
 # Reuse, do not redefine: this is the same session cookie the real app reads.
@@ -622,3 +624,110 @@ async def test_client_contacts_is_tenant_isolated(agency_with_clients) -> None:
     async with tenant_session(other_tenant) as session:
         rows = (await session.execute(select(ClientContact))).scalars().all()
     assert rows == []
+
+
+async def test_create_client_starts_confirmed_and_manual(agency_with_clients) -> None:
+    """A recruiter typing the name IS the human judgement `confirmed` records.
+    Sending it to review would ask them to confirm what they just asserted."""
+    tid, uid, ids = agency_with_clients
+    async with await _client_for(tid, uid) as http:
+        response = await http.post(
+            "/api/clients",
+            json={
+                "name": "Meridian Partners  Pte Ltd",
+                "email_domain": "MERIDIAN.com.sg ",
+                "fee_percent": 18.5,
+                "payment_terms_days": 30,
+                "notes": "Introduced by Lim",
+            },
+        )
+    assert response.status_code == 201
+    body = response.json()
+    assert body["status"] == "confirmed"
+    assert body["source"] == "manual"
+    # Lowercased and stripped, so it can never miss a match on whitespace.
+    assert body["email_domain"] == "meridian.com.sg"
+    assert body["fee_percent"] == 18.5
+    assert body["name_normalized"] == normalize_company_name("Meridian Partners  Pte Ltd")
+
+
+async def test_create_client_without_a_domain(agency_with_clients) -> None:
+    tid, uid, ids = agency_with_clients
+    async with await _client_for(tid, uid) as http:
+        response = await http.post("/api/clients", json={"name": "Referral Only Ltd"})
+    assert response.status_code == 201
+    assert response.json()["email_domain"] is None
+
+
+async def test_create_client_refuses_a_free_provider_domain(agency_with_clients) -> None:
+    """`gmail.com` identifies a person, not a company. Storing it would claim
+    the tenant's one slot for it and match every Gmail sender to this client."""
+    tid, uid, ids = agency_with_clients
+    free = next(iter(settings.FREE_EMAIL_DOMAINS))
+    async with await _client_for(tid, uid) as http:
+        response = await http.post(
+            "/api/clients", json={"name": "Sole Trader", "email_domain": free}
+        )
+    assert response.status_code == 422
+
+
+async def test_create_client_names_the_domain_holder(agency_with_clients) -> None:
+    """409, never a silent adoption: "Add client" must not sometimes mean
+    "edit a row you did not know existed"."""
+    tid, uid, ids = agency_with_clients
+    async with await _client_for(tid, uid) as http:
+        existing = (await http.get(f"/api/clients/{ids['live']}")).json()
+        assert existing["email_domain"] is not None
+
+        response = await http.post(
+            "/api/clients",
+            json={"name": "Same Firm Retyped", "email_domain": existing["email_domain"]},
+        )
+    assert response.status_code == 409
+    detail = response.json()["detail"]
+    assert existing["name"] in detail
+    assert existing["status"] in detail
+
+
+async def test_patch_renames_and_renormalises(agency_with_clients) -> None:
+    tid, uid, ids = agency_with_clients
+    target = ids["live"]
+    async with await _client_for(tid, uid) as http:
+        response = await http.patch(
+            f"/api/clients/{target}", json={"name": "Acme Holdings Pte Ltd"}
+        )
+    assert response.status_code == 200
+    assert response.json()["name"] == "Acme Holdings Pte Ltd"
+    assert response.json()["name_normalized"] == normalize_company_name("Acme Holdings Pte Ltd")
+
+
+async def test_patch_can_clear_the_domain(agency_with_clients) -> None:
+    """A legitimate edit — "we got this wrong" — leaving the row on name-only
+    matching, where every free-provider-sender row already sits."""
+    tid, uid, ids = agency_with_clients
+    target = ids["live"]
+    async with await _client_for(tid, uid) as http:
+        response = await http.patch(f"/api/clients/{target}", json={"email_domain": None})
+    assert response.status_code == 200
+    assert response.json()["email_domain"] is None
+
+
+async def test_patch_into_a_taken_domain_is_409(agency_with_clients) -> None:
+    tid, uid, ids = agency_with_clients
+    async with await _client_for(tid, uid) as http:
+        holder = (await http.get(f"/api/clients/{ids['live']}")).json()
+        created = (await http.post("/api/clients", json={"name": "Other Firm"})).json()
+
+        response = await http.patch(
+            f"/api/clients/{created['id']}", json={"email_domain": holder["email_domain"]}
+        )
+    assert response.status_code == 409
+    assert holder["name"] in response.json()["detail"]
+
+
+async def test_patch_refuses_a_merged_client(agency_with_clients) -> None:
+    tid, uid, ids = agency_with_clients
+    async with await _client_for(tid, uid) as http:
+        response = await http.patch(f"/api/clients/{ids['merged']}", json={"name": "Nope"})
+    assert response.status_code == 400
+    assert "unmerge" in response.json()["detail"].lower()

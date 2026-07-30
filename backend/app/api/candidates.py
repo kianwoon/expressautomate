@@ -20,6 +20,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 
 from app.api.auth import _require_session
+from app.api.integrity import is_duplicate as _is_duplicate
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.db.rls import tenant_session
@@ -619,18 +620,9 @@ MAX_EXPECTED_SALARY = float(
     10 ** (_SALARY_TYPE.precision - _SALARY_TYPE.scale) - 10 ** -_SALARY_TYPE.scale
 )
 
-# Postgres SQLSTATE for a unique/exclusion violation. Only this class of
-# integrity error means "somebody already has that"; every other one (a CHECK,
-# a foreign key) is a different fault and must not be dressed up as a duplicate.
-_UNIQUE_VIOLATION = "23505"
-
 # Two uppercase letters, the ISO 3166-1 alpha-2 shape. The database CHECK says
 # the same; this is here so the caller gets a 422 naming the field.
 _ISO_ALPHA2 = re.compile(r"[A-Z]{2}")
-
-
-def _is_duplicate(exc: IntegrityError) -> bool:
-    return getattr(exc.orig, "sqlstate", None) == _UNIQUE_VIOLATION
 
 
 class _CandidateFieldRules:
