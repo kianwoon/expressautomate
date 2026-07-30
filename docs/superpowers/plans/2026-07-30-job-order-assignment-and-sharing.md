@@ -1065,11 +1065,18 @@ class OpportunityShare(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
         ),
         # SET NULL, for the opposite reason: the fact that someone shared this
         # must outlive the account that did.
+        #
+        # The column list is not optional. A bare `SET NULL` on a COMPOSITE
+        # key nulls EVERY referencing column, `tenant_id` included — and
+        # `tenant_id` is NOT NULL, so deleting the sharer would fail outright
+        # rather than merely doing the wrong thing. Proven against the real
+        # database while building this feature; `clients.assigned_user_id`
+        # shipped with the bare form and had to be corrected in 19d5bbf.
         ForeignKeyConstraint(
             ["tenant_id", "shared_by_user_id"],
             ["users.tenant_id", "users.id"],
             name="fk_opportunity_shares_sharer_same_tenant",
-            ondelete="SET NULL",
+            ondelete="SET NULL (shared_by_user_id)",
         ),
         # Re-sharing updates rather than duplicating. Two partial indexes
         # rather than one constraint, because the two scopes have different

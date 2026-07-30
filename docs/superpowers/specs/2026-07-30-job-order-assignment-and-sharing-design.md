@@ -74,6 +74,16 @@ of the work is an explicit share or a reassignment.
 leaves: their job orders drop into the queue, visible and claimable, rather than
 disappearing.
 
+**Every `SET NULL` on a composite key must name its column** — `ON DELETE SET
+NULL (assigned_user_id)`, not a bare `SET NULL`. The bare form nulls *every*
+referencing column, `tenant_id` included, and `tenant_id` is NOT NULL: so
+deleting a recruiter fails outright instead of releasing their work. This was
+found against the real database during implementation, after
+`clients.assigned_user_id` had already shipped with the bare form. Postgres 15+
+only. It applies to `clients.assigned_user_id`, `opportunities.assigned_user_id`,
+`opportunities.client_id` and `opportunity_shares.shared_by_user_id` — every
+composite `SET NULL` in this design.
+
 ### `opportunity_shares`
 
 One row per grant. Tenant-scoped, RLS-covered.
