@@ -71,9 +71,15 @@ function fakeSocketFactory(): {
   emit: (event: string, payload?: unknown) => void;
   sockets: unknown[];
   sent: { jid: string; text: string }[];
+  /** Resolves once a handler for `event` is attached — immediately if one
+   *  already is, otherwise the moment `ev.on(event, ...)` runs. This is what
+   *  lets a test emit right after the real handler attaches instead of
+   *  racing a wall-clock timer against `SessionManager`'s own DB awaits. */
+  subscribed: (event: string) => Promise<void>;
 } {
   const handlers = new Map<string, Handler[]>();
   const sent: { jid: string; text: string }[] = [];
+  const subscribers = new Map<string, (() => void)[]>();
   let loggedOut = false;
   const socket = {
     user: undefined as { id: string } | undefined,
@@ -82,6 +88,8 @@ function fakeSocketFactory(): {
         const list = handlers.get(event) ?? [];
         list.push(cb);
         handlers.set(event, list);
+        for (const resolve of subscribers.get(event) ?? []) resolve();
+        subscribers.delete(event);
       },
     },
     logout: async () => {
@@ -110,6 +118,16 @@ function fakeSocketFactory(): {
     },
     sockets,
     sent,
+    subscribed: (event) =>
+      new Promise<void>((resolve) => {
+        if ((handlers.get(event) ?? []).length > 0) {
+          resolve();
+          return;
+        }
+        const list = subscribers.get(event) ?? [];
+        list.push(resolve);
+        subscribers.set(event, list);
+      }),
   };
 }
 
@@ -187,11 +205,27 @@ describe('SessionManager', { skip: SKIP }, () => {
       pairQrWaitMs: 2_000,
     });
 
-    // Emitted after `pair()` is already waiting, which is the real ordering:
-    // Baileys produces the QR a beat after the socket opens.
-    setTimeout(() => fake.emit('connection.update', { qr: 'qr-in-first-response' }), 20);
+    // Start pairing, then wait for the moment `pair()` has actually attached
+    // its `connection.update` handler — not a fixed wall-clock delay racing
+    // `#openOnce()`'s two database round trips (ensureWaSessionRow, then
+    // usePostgresAuthState) — before emitting the QR. A timed emit dropped
+    // the event silently whenever those awaits ran long, e.g. on a loaded CI
+    // runner, since the fake never buffers or replays events.
+    const pairing = manager.pair(ref);
+    await fake.subscribed('connection.update');
+    // `subscribed()` resolves the instant `ev.on` runs, which is still inside
+    // `#open()` — one promise-chain hop earlier than `pair()`'s own
+    // continuation past `await this.#openOnce(ref)`. Racing the emit directly
+    // off `subscribed()` would let it land ahead of that continuation on
+    // microtask ordering alone, which made a broken `pair()` (the wait
+    // deleted) pass by accident in the mutation check below. Yielding to a
+    // macrotask flushes every pending microtask first — including that
+    // continuation, if it exists — so what happens next depends only on
+    // whether `pair()` is actually still waiting, not on tick-count luck.
+    await new Promise((resolve) => setImmediate(resolve));
+    fake.emit('connection.update', { qr: 'qr-in-first-response' });
 
-    const snapshot = await manager.pair(ref);
+    const snapshot = await pairing;
     assert.equal(snapshot.status, 'pairing');
     assert.equal(snapshot.qr, 'qr-in-first-response');
   });
