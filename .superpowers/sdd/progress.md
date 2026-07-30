@@ -627,3 +627,17 @@ UI Task 11: complete (8de162b..e75055d, review approved, frontend 97/17, backend
   even when the server would not return the row (transient, self-corrects on poll).
   (2) CLIENT_SEARCH_DEBOUNCE_MS is a second literal, not the shared constant. (3) no test pins the debounce.
 === ALL 11 TASKS COMPLETE ===
+FINAL REVIEW: READY WITH FIXES. 3 findings raised; controller REJECTED 2 as wrong:
+  - "Share button ungated" - WRONG. The 403 at opportunity_shares.py:68 is INSIDE
+    `if body.scope == SCOPE_TENANT:` and gates broadcast only. Named sharing is deliberately
+    open to anyone who can see the row (design: work finds the right person through a chain).
+  - "no cross-tenant test for /api/members" - WRONG. test_it_never_lists_another_agency exists.
+  GENUINE finding fixed in 99e3930: shared_with_me EXISTS was written TWICE (visibility.py and
+  opportunities.py). Extracted to visibility.py::shared_with_me_exists; inverting it now fails
+  BOTH a visibility test and a scope test.
+  Also fixed: email fallback now local-part in all 3 places (spec updated); chips relabelled
+  "All job orders" / "Everyone".
+  ACCEPTED as cosmetic: addRow ignores sort/filter (self-corrects on poll); duplicate debounce
+  literal; no debounce test; unreachable null clause; candidate-avatar.tsx third helper copy.
+FINAL: backend 1606 passed + ruff clean; frontend 97 passed / 17 files; build passed.
+  All files under 1500. FEATURE COMPLETE, NOT MERGED.
