@@ -6,10 +6,14 @@ import {
   CLIENTS_PATH,
   clientArchivePath,
   clientConfirmPath,
+  clientContactPath,
+  clientContactsPath,
   clientMergePath,
   clientPath,
   clientRestorePath,
+  clientSuspendPath,
   clientUnmergePath,
+  clientUnsuspendPath,
 } from "../api";
 
 /**
@@ -24,7 +28,12 @@ import {
  * header, and `URLSearchParams` for the query string.
  */
 
-export type ClientStatus = "unconfirmed" | "confirmed" | "archived" | "merged";
+export type ClientStatus =
+  | "unconfirmed"
+  | "confirmed"
+  | "suspended"
+  | "archived"
+  | "merged";
 
 // "human" is not included: `client_matching.py` only ever writes
 // "email_domain" or "name" (checked at `_resolve` and its callers) — there is
@@ -38,6 +47,35 @@ export type ClientMention = {
   created_at: string;
 };
 
+export type Contact = {
+  id: string;
+  name: string;
+  email: string | null;
+  phone: string | null;
+  title: string | null;
+  is_primary: boolean;
+  created_at: string;
+};
+
+export type ContactInput = {
+  name: string;
+  email?: string | null;
+  phone?: string | null;
+  title?: string | null;
+  is_primary?: boolean;
+};
+
+export type ClientInput = {
+  name: string;
+  email_domain?: string | null;
+  website?: string | null;
+  phone?: string | null;
+  address?: string | null;
+  fee_percent?: number | null;
+  payment_terms_days?: number | null;
+  notes?: string | null;
+};
+
 export type Client = {
   id: string;
   name: string;
@@ -47,8 +85,19 @@ export type Client = {
   merged_into_client_id: string | null;
   last_seen_at: string | null;
   created_at: string;
+  website: string | null;
+  phone: string | null;
+  address: string | null;
+  fee_percent: number | null;
+  payment_terms_days: number | null;
+  notes: string | null;
+  source: "pipeline" | "manual";
+  suspended_reason: string | null;
+  suspended_at: string | null;
   /** Only present on the single-record GET, not on a list row. */
   mentions?: ClientMention[];
+  /** Only present on the single-record GET, not on a list row. */
+  contacts?: Contact[];
 };
 
 export type ClientPage = {
@@ -211,6 +260,92 @@ export async function mergeClient(id: string, targetId: string): Promise<void> {
 export async function unmergeClient(id: string): Promise<void> {
   const res = await fetch(clientUnmergePath(id), {
     method: "POST",
+    credentials: "include",
+    headers: { Accept: "application/json" },
+  });
+  if (!res.ok) throw new ApiError(await readError(res));
+}
+
+/** Adds a client by hand, at `confirmed` — the one row type in this file a
+ *  person creates rather than the pipeline proposing. A 409 here names the
+ *  client that already holds the domain (see `_domain_conflict` in
+ *  `app/api/clients.py`); `readError` is what carries that string through. */
+export async function createClient(body: ClientInput): Promise<Client> {
+  const res = await fetch(CLIENTS_PATH, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new ApiError(await readError(res));
+  return (await res.json()) as Client;
+}
+
+/** Edits the facts a recruiter owns — never `status`, which has its own
+ *  endpoint per transition. `body` is sent as given, a `Partial`, so a field
+ *  the recruiter never touched is never cleared by an undefined creeping in. */
+export async function updateClient(id: string, body: Partial<ClientInput>): Promise<Client> {
+  const res = await fetch(clientPath(id), {
+    method: "PATCH",
+    credentials: "include",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new ApiError(await readError(res));
+  return (await res.json()) as Client;
+}
+
+/** Puts a live client on hold. `reason` is optional — nothing invents one
+ *  when it is absent (§15). A 409 here carries the reason someone already
+ *  typed on a prior suspension attempt in flight elsewhere. */
+export async function suspendClient(id: string, reason?: string): Promise<void> {
+  const res = await fetch(clientSuspendPath(id), {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify({ reason }),
+  });
+  if (!res.ok) throw new ApiError(await readError(res));
+}
+
+export async function unsuspendClient(id: string): Promise<void> {
+  const res = await fetch(clientUnsuspendPath(id), {
+    method: "POST",
+    credentials: "include",
+    headers: { Accept: "application/json" },
+  });
+  if (!res.ok) throw new ApiError(await readError(res));
+}
+
+export async function createContact(clientId: string, body: ContactInput): Promise<Contact> {
+  const res = await fetch(clientContactsPath(clientId), {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new ApiError(await readError(res));
+  return (await res.json()) as Contact;
+}
+
+export async function updateContact(
+  clientId: string,
+  contactId: string,
+  body: Partial<ContactInput>,
+): Promise<Contact> {
+  const res = await fetch(clientContactPath(clientId, contactId), {
+    method: "PATCH",
+    credentials: "include",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new ApiError(await readError(res));
+  return (await res.json()) as Contact;
+}
+
+export async function deleteContact(clientId: string, contactId: string): Promise<void> {
+  const res = await fetch(clientContactPath(clientId, contactId), {
+    method: "DELETE",
     credentials: "include",
     headers: { Accept: "application/json" },
   });

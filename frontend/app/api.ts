@@ -458,6 +458,28 @@ export function clientUnmergePath(id: string): string {
   return `${clientPath(id)}/unmerge`;
 }
 
+/** Puts a live client on hold, or lifts that hold. Distinct from
+ *  archive/restore — see `app/api/clients.py::suspend_client`. */
+export function clientSuspendPath(id: string): string {
+  return `${clientPath(id)}/suspend`;
+}
+
+export function clientUnsuspendPath(id: string): string {
+  return `${clientPath(id)}/unsuspend`;
+}
+
+/** A client's contacts. POST creates; the collection itself is never fetched
+ *  directly, since `GET /clients/{id}` already embeds it. */
+export function clientContactsPath(id: string): string {
+  return `${clientPath(id)}/contacts`;
+}
+
+/** One contact, for PATCH and DELETE. Both ids are encoded for the same
+ *  reason `clientPath` encodes one. */
+export function clientContactPath(id: string, contactId: string): string {
+  return `${clientContactsPath(id)}/${encodeURIComponent(contactId)}`;
+}
+
 /** Where a visitor reaches a person. Used by the footer and every stub page,
  *  so it lives here rather than being retyped in nine files. */
 export const CONTACT_EMAIL = "support@expressautomate.app";

@@ -17,6 +17,7 @@ import type { Client } from "../clients";
 const STATUS_LABEL: Record<Client["status"], string> = {
   unconfirmed: "Unconfirmed",
   confirmed: "Confirmed",
+  suspended: "Suspended",
   archived: "Archived",
   merged: "Merged",
 };
