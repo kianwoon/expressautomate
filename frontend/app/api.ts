@@ -480,6 +480,12 @@ export function clientContactPath(id: string, contactId: string): string {
   return `${clientContactsPath(id)}/${encodeURIComponent(contactId)}`;
 }
 
+/** The client's logo: POST to upload, GET for a presigned URL, DELETE to
+ *  remove. Mirrors `candidateAvatarPath` — see `clients_logo.py`. */
+export function clientLogoPath(id: string): string {
+  return `${clientPath(id)}/logo`;
+}
+
 /** Where a visitor reaches a person. Used by the footer and every stub page,
  *  so it lives here rather than being retyped in nine files. */
 export const CONTACT_EMAIL = "support@expressautomate.app";

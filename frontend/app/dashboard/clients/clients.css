@@ -121,3 +121,126 @@
   flex-wrap: wrap;
 }
 .cf-primary { display: flex; align-items: center; gap: 6px; }
+
+/* ── Client logo ──────────────────────────────────────────────────────────
+   Mirrors `.ca-*` in `app.css` (the candidate photo) with one deliberate
+   change: `border-radius: 12px` throughout instead of `50%`. A logo is a
+   wordmark the backend has already letterboxed onto a transparent square
+   canvas; a circular mask here would crop it a second time. */
+.jo-detail-logo {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 4px 0 2px;
+}
+.cl-logo-shell {
+  position: relative;
+  width: 56px;
+  height: 56px;
+  flex: 0 0 56px;
+}
+.cl-logo-trigger {
+  display: block;
+  position: relative;
+  width: 56px;
+  height: 56px;
+  border-radius: 12px;
+  overflow: hidden;
+  cursor: pointer;
+}
+.cl-logo-photo {
+  width: 56px;
+  height: 56px;
+  border-radius: 12px;
+  object-fit: contain;
+  display: block;
+  background: var(--surface);
+}
+.cl-logo-initials {
+  width: 56px;
+  height: 56px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-weight: 600;
+  font-size: 18px;
+}
+.cl-logo-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 12px;
+  color: #fff;
+  background: rgba(12, 22, 38, 0.55);
+  opacity: 0;
+  transition: opacity 150ms ease;
+}
+.cl-logo-trigger:hover .cl-logo-overlay,
+.cl-logo-trigger:focus-within .cl-logo-overlay {
+  opacity: 1;
+}
+/* The focus ring belongs on the square, not on the invisible input, or a
+   keyboard user gets an outline around nothing they can see. */
+.cl-logo-trigger:focus-within {
+  outline: 2px solid var(--blue-500);
+  outline-offset: 2px;
+}
+.cl-logo-shell[data-busy="yes"] .cl-logo-trigger {
+  cursor: default;
+  opacity: 0.65;
+}
+/* Hidden from sight but deliberately still in the tab order — `display:
+   none` here would take the only real control away from the keyboard. */
+.cl-logo-file {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  border: 0;
+}
+.cl-logo-spinner {
+  position: absolute;
+  inset: -4px;
+  border-radius: 12px;
+  border: 2px solid transparent;
+  border-top-color: var(--blue-500);
+  animation: ca-spin 700ms linear infinite;
+  pointer-events: none;
+}
+/* A small badge on the corner rather than a second grey button in the row:
+   it is only ever offered when there is in fact a logo to take away. */
+.cl-logo-remove {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink-700);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 1px 3px rgba(12, 22, 38, 0.18);
+  transition: color 150ms ease, border-color 150ms ease;
+}
+.cl-logo-remove:hover {
+  color: #c74f4f;
+  border-color: #c74f4f;
+}
+.cl-logo-remove:focus-visible {
+  outline: 2px solid var(--blue-500);
+  outline-offset: 2px;
+}

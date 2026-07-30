@@ -7,6 +7,7 @@ import type { Client, ClientMention, ClientPage, Contact, MatchedBy } from "../c
 import { getClient, mergeClient, suspendClient, unmergeClient, unsuspendClient } from "../clients";
 import { day, when } from "../format";
 import { ClientForm } from "./client-form";
+import { ClientLogo } from "./client-logo";
 
 /**
  * One client in full, beside the list.
@@ -160,7 +161,10 @@ function Detail({
         <span className="eyebrow">{STATUS_LABEL[row.status]}</span>
       </div>
 
-      <h3 className="jo-detail-title">{row.name}</h3>
+      <div className="jo-detail-avatar">
+        <ClientLogo client={row} onChange={onChanged} />
+        <h3 className="jo-detail-title">{row.name}</h3>
+      </div>
 
       {/* Above everything, including the name's own details: a suspended
           client refuses submissions, and someone reading this panel to decide

@@ -8,6 +8,7 @@ import {
   clientConfirmPath,
   clientContactPath,
   clientContactsPath,
+  clientLogoPath,
   clientMergePath,
   clientPath,
   clientRestorePath,
@@ -99,6 +100,8 @@ export type Client = {
   source: "pipeline" | "manual";
   suspended_reason: string | null;
   suspended_at: string | null;
+  logo_key: string | null;
+  logo_updated_at: string | null;
   /** Only present on the single-record GET, not on a list row. */
   mentions?: ClientMention[];
   /** Only present on the single-record GET, not on a list row. */
@@ -440,6 +443,47 @@ export async function updateContact(
 
 export async function deleteContact(clientId: string, contactId: string): Promise<void> {
   const res = await fetch(clientContactPath(clientId, contactId), {
+    method: "DELETE",
+    credentials: "include",
+    headers: { Accept: "application/json" },
+  });
+  if (!res.ok) throw new ApiError(await readError(res));
+}
+
+export type LogoUrl = { url: string; expires_in: number };
+
+/** A presigned URL good for roughly `expires_in` seconds — `null` means the
+ *  client has no logo (a 404), not a failed request. Callers must not hold
+ *  onto the URL past the component's lifetime: re-fetch it fresh rather than
+ *  caching it anywhere longer-lived. Mirrors `getCandidateAvatar`. */
+export async function getClientLogo(id: string): Promise<LogoUrl | null> {
+  const res = await fetch(clientLogoPath(id), {
+    credentials: "include",
+    headers: { Accept: "application/json" },
+  });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new ApiError(await readError(res));
+  return (await res.json()) as LogoUrl;
+}
+
+export async function uploadClientLogo(
+  id: string,
+  file: File,
+): Promise<{ logo_key: string; logo_updated_at: string }> {
+  const form = new FormData();
+  form.append("file", file);
+  const res = await fetch(clientLogoPath(id), {
+    method: "POST",
+    credentials: "include",
+    headers: { Accept: "application/json" },
+    body: form,
+  });
+  if (!res.ok) throw new ApiError(await readError(res));
+  return (await res.json()) as { logo_key: string; logo_updated_at: string };
+}
+
+export async function deleteClientLogo(id: string): Promise<void> {
+  const res = await fetch(clientLogoPath(id), {
     method: "DELETE",
     credentials: "include",
     headers: { Accept: "application/json" },

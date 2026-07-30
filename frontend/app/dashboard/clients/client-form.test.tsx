@@ -51,6 +51,8 @@ function client(overrides: Partial<Client> = {}): Client {
     source: "manual",
     suspended_reason: null,
     suspended_at: null,
+    logo_key: null,
+    logo_updated_at: null,
     mentions: [],
     contacts: [],
     ...overrides,
