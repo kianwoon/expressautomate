@@ -126,4 +126,34 @@ describe("ClientForm", () => {
 
     expect((await screen.findByRole("alert")).textContent).toBe(detail);
   });
+
+  it("reports the created id on Cancel after a partial create failure", async () => {
+    // The client POST succeeds, then the contact call that follows it fails.
+    // The client is real on the server from that moment on — Cancel must not
+    // look like nothing happened, or the recruiter is liable to add it again.
+    const created = client({ id: "cl-new" });
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(created))
+      .mockResolvedValueOnce(
+        jsonResponse({ detail: "could not save contact" }, { ok: false, status: 500 }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const onCancel = vi.fn();
+    render(<ClientForm client={null} onDone={() => {}} onCancel={onCancel} />);
+
+    fireEvent.change(screen.getByLabelText("Client name *"), { target: { value: "New Co" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add contact" }));
+    fireEvent.change(screen.getAllByLabelText("Name *")[0], { target: { value: "Jo Tan" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add client" }));
+
+    // The partial-failure banner, pinned already by the surrounding suite's
+    // convention of asserting on the server-derived text.
+    await screen.findByRole("alert");
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect(onCancel).toHaveBeenCalledWith("cl-new");
+  });
 });

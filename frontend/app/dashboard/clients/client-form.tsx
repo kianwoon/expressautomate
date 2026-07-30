@@ -4,6 +4,7 @@ import { useState, type FormEvent, type ReactNode } from "react";
 
 import {
   ApiError,
+  DOMAIN_FIELD,
   FieldError,
   createClient,
   createContact,
@@ -49,11 +50,6 @@ import { Dialog } from "../dialog";
  * user-facing form copy rendered to the page, not values anything is matched
  * against.
  */
-
-/** The one server field name this form places an error against. It is the
- *  `loc` pydantic reports and the key the API takes, so it is not a second
- *  spelling of anything — but it is compared, so it is named once. */
-const DOMAIN_FIELD = "email_domain";
 
 type FormState = {
   name: string;
@@ -194,7 +190,12 @@ export function ClientForm({
   /** `null` for create. */
   client: Client | null;
   onDone: (saved: Client) => void;
-  onCancel: () => void;
+  /** Called with the id of a client that was actually created before the
+   *  recruiter cancelled — non-null only when create succeeded but a
+   *  subsequent contact call failed, the one case where a real row exists on
+   *  the server and the caller's list has not heard about it yet. `null`
+   *  otherwise, so a plain cancel-with-nothing-created stays a no-op. */
+  onCancel: (createdId: string | null) => void;
 }) {
   const [form, setForm] = useState<FormState>(() => toFormState(client));
   // Captured once at mount so an edit is diffed against what the record held,
@@ -350,7 +351,7 @@ export function ClientForm({
     <Dialog
       titleId="client-form-title"
       className="dlg-modal-wide"
-      onClose={saving ? () => {} : onCancel}
+      onClose={saving ? () => {} : () => onCancel(createdId)}
       title={client ? `Edit ${client.name}` : "Add client"}
     >
       {error && (
@@ -514,7 +515,12 @@ export function ClientForm({
           <button type="submit" className="btn btn-primary" disabled={!canSubmit}>
             {saving ? "Saving…" : client || createdId ? "Save changes" : "Add client"}
           </button>
-          <button type="button" className="btn btn-secondary" onClick={onCancel} disabled={saving}>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={() => onCancel(createdId)}
+            disabled={saving}
+          >
             Cancel
           </button>
         </div>

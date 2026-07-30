@@ -199,6 +199,13 @@ export function useClients(): Clients {
   return { state, filter, offset, counts, setFilter, setOffset, reload };
 }
 
+/** The one server field name a 422 is checked against when picking which
+ *  entry of a multi-error `detail` list to surface inline — the free-provider
+ *  domain rule in `app/api/clients.py`. Shared with `client-form.tsx`, which
+ *  is the only place that renders it against a field, so there is exactly one
+ *  spelling of it. */
+export const DOMAIN_FIELD = "email_domain";
+
 /** Turns a non-2xx response into the server's own message where it gave one,
  *  rather than a generic failure. A 409 on merge or unmerge names the
  *  conflicting client — the message is the only thing telling the recruiter
@@ -226,16 +233,33 @@ const PYDANTIC_VALUE_ERROR_PREFIX = /^Value error,\s*/;
 
 type ValidationEntry = { loc?: unknown[]; msg?: string };
 
-function fromValidationEntries(entries: ValidationEntry[]): Problem | null {
-  const first = entries.find((e) => typeof e.msg === "string");
-  if (!first?.msg) return null;
-  // `loc` is ["body", "<field>"] for a body field. The last element is the
-  // field; anything shorter is not about a field we render.
-  const loc = Array.isArray(first.loc) ? first.loc : [];
+/** `loc` is ["body", "<field>"] for a body field. The last element is the
+ *  field; anything shorter is not about a field we render. */
+function fieldOfEntry(entry: ValidationEntry): string | null {
+  const loc = Array.isArray(entry.loc) ? entry.loc : [];
   const last = loc.length > 1 ? loc[loc.length - 1] : null;
+  return typeof last === "string" ? last : null;
+}
+
+/** A 422 `detail` is a *list* — pydantic reports every failing field, not
+ *  just one. Taking `entries[0]` unconditionally meant a domain error placed
+ *  second in the list never reached `DOMAIN_FIELD`'s inline hint, because
+ *  whatever validator pydantic ran first won regardless of which field a
+ *  form actually renders. `DOMAIN_FIELD` is looked for by name instead, and
+ *  any other messages present are not dropped — they ride along in the
+ *  banner text so a second, unrendered field error is still visible to the
+ *  recruiter rather than silently lost. */
+function fromValidationEntries(entries: ValidationEntry[]): Problem | null {
+  const withMsg = entries.filter((e): e is ValidationEntry & { msg: string } => typeof e.msg === "string");
+  if (withMsg.length === 0) return null;
+
+  const primary = withMsg.find((e) => fieldOfEntry(e) === DOMAIN_FIELD) ?? withMsg[0];
+  const clean = (msg: string) => msg.replace(PYDANTIC_VALUE_ERROR_PREFIX, "");
+  const rest = withMsg.filter((e) => e !== primary).map((e) => clean(e.msg));
+
   return {
-    message: first.msg.replace(PYDANTIC_VALUE_ERROR_PREFIX, ""),
-    field: typeof last === "string" ? last : null,
+    message: [clean(primary.msg), ...rest].join(" "),
+    field: fieldOfEntry(primary),
   };
 }
 

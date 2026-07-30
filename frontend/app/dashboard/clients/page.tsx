@@ -206,7 +206,20 @@ function Workspace() {
       {adding && (
         <ClientForm
           client={null}
-          onCancel={() => setAdding(false)}
+          onCancel={(createdId) => {
+            setAdding(false);
+            // A plain cancel with nothing created is a no-op, same as
+            // before. But if create had already succeeded and only a
+            // contact call afterwards failed, the client is real on the
+            // server the moment `createdId` is set — reload so it is not
+            // left invisible, and select it so Cancel does not read as
+            // "nothing happened" and invite a duplicate.
+            if (createdId) {
+              setFilter(null);
+              setSelectedId(createdId);
+              reload();
+            }
+          }}
           onDone={(saved) => {
             setAdding(false);
             // Straight to the record that was just created, rather than
