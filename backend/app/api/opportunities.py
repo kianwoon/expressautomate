@@ -236,7 +236,20 @@ async def list_opportunities(
             # from the list while the chip counts above (which do not join)
             # still count them, so the page would say twelve and show eleven.
             .join(email, email.id == Opportunity.email_message_id, isouter=True)
-            .join(assignee, assignee.id == Opportunity.assigned_user_id, isouter=True)
+            # Composite, not just `id`: every user reference in this codebase
+            # carries the tenant predicate alongside the id so tenant safety
+            # never rests on RLS alone (see the composite FKs on
+            # clients.assigned_user_id, opportunities.assigned_user_id and
+            # opportunity_shares.shared_with_user_id). OUTER — an inner join
+            # would drop every unassigned job order, the entire queue.
+            .join(
+                assignee,
+                and_(
+                    assignee.id == Opportunity.assigned_user_id,
+                    assignee.tenant_id == Opportunity.tenant_id,
+                ),
+                isouter=True,
+            )
             .where(visible)
         )
         if status is not None:

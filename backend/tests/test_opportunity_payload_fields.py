@@ -138,6 +138,40 @@ async def test_shared_with_me_is_true_for_a_tenant_broadcast(client, tenant) -> 
     assert row["shared_with_me"] is True
 
 
+async def test_the_assignee_join_never_crosses_a_tenant(client, tenant) -> None:
+    """A job order's `assigned_user_id` is a bare uuid; only the tenant
+    predicate stops the join from ever resolving a same-id user row that
+    belongs to a different agency.
+
+    RLS on `users` already blocks tenant B's row from being visible in a
+    tenant-A session, so this does not by itself prove the join predicate
+    is composite rather than bare on `id` alone -- both implementations
+    pass under RLS. It stands as a regression guard: it fails loudly if
+    RLS is ever weakened or bypassed (e.g. an admin-session code path)
+    while the join stays on `id` alone.
+    """
+    tenant_a, mine = tenant
+    tenant_b, other_user = await seed_tenant_with_user()
+    try:
+        async with AdminSessionLocal() as s:
+            u = await s.get(User, other_user)
+            u.preferred_name = "Not Me"
+            await s.commit()
+        await _opportunity(tenant_b, assigned_user_id=other_user)
+        await _opportunity(tenant_a, assigned_user_id=None)
+
+        sign_in(client, mine, tenant_a)
+        body = (await client.get("/api/opportunities")).json()
+
+        assert len(body["items"]) == 1
+        row = body["items"][0]
+        assert row["assigned_user_id"] is None
+        assert row["assignee_name"] is None
+        assert all(item.get("assignee_name") != "Not Me" for item in body["items"])
+    finally:
+        await cleanup_tenant(tenant_b)
+
+
 async def test_shared_with_me_is_true_even_when_i_also_own_it(client, tenant) -> None:
     """The flag means "a share reaches you", not "only a share reaches you".
 
