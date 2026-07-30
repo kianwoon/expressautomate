@@ -1355,7 +1355,40 @@ select.gl-input:focus-visible { outline: 2px solid var(--blue-500); outline-offs
 /* Wider than the default: the form's date, number and select controls sit
    badly at 460px, where the date picker's own chrome starts wrapping. */
 .dlg-modal-wide {
-  max-width: 620px;
+  max-width: 880px;
+}
+
+/* Two columns, which is what stops the form being a tall ribbon. Twenty-odd
+   fields stacked singly ran well past the bottom of a laptop screen, so the
+   recruiter scrolled to reach Save and lost sight of the fields above it.
+   Paired up, the whole record is one glance.
+
+   `auto-fit` with a floor rather than a fixed `1fr 1fr`: at a narrow viewport
+   — the modal is `width: 100%` until it hits its max — two columns of 200px
+   would squeeze the date and number controls into their own wrapping, so the
+   grid drops itself back to one column instead. */
+.cand-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px 16px;
+  align-items: start;
+}
+/* The ones a column would misrepresent. A name, a skills list and a notes box
+   are all longer than half a row and read worse cut in half; the two grouped
+   fieldsets carry their own explanatory line, which would wrap to four lines
+   in a column. The button row spans so the buttons stay left-aligned under
+   everything rather than floating into the second column. */
+.cand-form-full {
+  grid-column: 1 / -1;
+}
+/* `.jo-search` caps itself at 30rem, which is right where it was written —
+   a lone search box stretched across a page is hard to read along. Here the
+   cap fights the span: a name or a notes box told to take the whole row
+   stopped a third of the way across it, and the row looked broken rather
+   than deliberate. Only the spanning fields are released; the ones sitting
+   in a column are narrower than the cap anyway. */
+.cand-form-full > .jo-search {
+  max-width: none;
 }
 /* The mark sits on the heading's text baseline rather than its line box, so a
    long candidate name wrapping to a second line does not drag it downwards. */
@@ -1370,14 +1403,39 @@ select.gl-input:focus-visible { outline: 2px solid var(--blue-500); outline-offs
    nothing, and the two must not read as one list of demographics. */
 .cand-group {
   display: grid;
-  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px 16px;
+  align-items: start;
   border: 1px solid var(--line);
   border-radius: var(--radius);
   padding: 16px;
   margin: 4px 0 0;
 }
+/* The legend and the sentence under it describe every field in the group, so
+   both run the full width rather than sitting in the first column with the
+   fields wrapping around them. */
+.cand-group > legend,
 .cand-group-note {
+  grid-column: 1 / -1;
   margin: 0;
+}
+/* The two groups share a row instead of stacking. Stacked, they were most of
+   the form's height — measured at 1372px tall against 849 wide, which is the
+   tall ribbon this layout exists to stop being. Side by side it is 900.
+   The permit group gets the wider share because it holds four fields to the
+   other's one. Both fall back to the full width when the grid itself has
+   collapsed to a single column. */
+.cand-group-permit {
+  grid-column: span 2;
+}
+.cand-group-record {
+  grid-column: span 1;
+}
+@media (max-width: 800px) {
+  .cand-group-permit,
+  .cand-group-record {
+    grid-column: 1 / -1;
+  }
 }
 /* No width or height here: the mark renders at 16px in the action row and
    24px in the modal heading, and the size comes from the attributes each

@@ -263,8 +263,8 @@ export function CandidateForm({
         </p>
       )}
 
-      <form onSubmit={submit} style={{ marginTop: 16, display: "grid", gap: 12 }}>
-        <Field label="Full name" required>
+      <form onSubmit={submit} className="cand-form" style={{ marginTop: 16 }}>
+        <Field label="Full name" full required>
           <input
             className="jo-search"
             value={form.full_name}
@@ -376,7 +376,7 @@ export function CandidateForm({
             ))}
           </select>
         </Field>
-        <Field label="Skills (comma separated)">
+        <Field label="Skills (comma separated)" full>
           <input
             className="jo-search"
             value={form.skills}
@@ -387,7 +387,7 @@ export function CandidateForm({
             what a Work Permit is decided on; race below it decides nothing.
             Putting them in one block would imply race is another eligibility
             input, which is exactly the reading `redact.py` exists to prevent. */}
-        <fieldset className="cand-group">
+        <fieldset className="cand-group cand-group-permit">
           <legend className="row-k">Work Permit details</legend>
           <p className="body jo-sub cand-group-note">
             A Work Permit is granted on these four facts, so the eligibility filter on the
@@ -446,7 +446,7 @@ export function CandidateForm({
           </Field>
         </fieldset>
 
-        <fieldset className="cand-group">
+        <fieldset className="cand-group cand-group-record">
           {/* Not "Race": a legend repeating the field label below it gives the
               control an accessible name of "Race Race", and a screen reader
               user hears the ambiguity a sighted user does not. */}
@@ -480,7 +480,7 @@ export function CandidateForm({
           )}
         </fieldset>
 
-        <Field label="Notes">
+        <Field label="Notes" full>
           <textarea
             className="jo-search"
             style={{ minHeight: 80 }}
@@ -489,7 +489,7 @@ export function CandidateForm({
           />
         </Field>
 
-        <div style={{ display: "flex", gap: 10, marginTop: 8 }}>
+        <div className="cand-form-full" style={{ display: "flex", gap: 10, marginTop: 8 }}>
           <button type="submit" className="btn btn-primary" disabled={!canSubmit}>
             {saving ? "Saving…" : row ? "Save changes" : "Add candidate"}
           </button>
@@ -505,14 +505,18 @@ export function CandidateForm({
 function Field({
   label,
   required = false,
+  full = false,
   children,
 }: {
   label: string;
   required?: boolean;
+  /** Spans both columns. For the fields a half-row misrepresents — a name, a
+   *  comma-separated list, a notes box. */
+  full?: boolean;
   children: ReactNode;
 }) {
   return (
-    <label style={{ display: "grid", gap: 4 }}>
+    <label className={full ? "cand-form-full" : undefined} style={{ display: "grid", gap: 4 }}>
       <span className="row-k">
         {label}
         {required && " *"}
