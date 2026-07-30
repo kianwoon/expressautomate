@@ -33,6 +33,7 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, model_validator
 from sqlalchemy import String, and_, case, cast, func, or_, select, update
+from sqlalchemy import true as true_
 from sqlalchemy.orm import aliased
 
 from app.api.auth import _require_session_with_role
@@ -73,6 +74,8 @@ _STORED_TO_FILTER = {stored: name for name, stored in _FILTER_TO_STORED.items()}
 
 StatusFilter = Literal["new", "needs_review", "reviewed"]
 
+ScopeFilter = Literal["mine", "queue", "shared_with_me", "all"]
+
 SortKey = Literal[
     "received", "company", "position", "salary", "hours", "duration", "location", "quality"
 ]
@@ -96,6 +99,42 @@ _SALARY_PER_MONTH = {
 # job-orders-sort.ts (~line 84): the rows that need a human are the reason
 # anyone sorts this column at all.
 _QUALITY_RANK = {"needs_review": 0, "likely": 1, "verified": 2}
+
+
+def _shared_with_me_exists(user_id: uuid.UUID):
+    """A share that reaches `user_id` — a named share or a tenant broadcast.
+
+    The single source of truth for "shared with me": the payload's row badge
+    and the `scope=shared_with_me` filter both call this, so the two can never
+    disagree about the same row.
+    """
+    return (
+        select(OpportunityShare.id)
+        .where(OpportunityShare.opportunity_id == Opportunity.id)
+        .where(
+            or_(
+                OpportunityShare.scope == OpportunityShare.SCOPE_TENANT,
+                and_(
+                    OpportunityShare.scope == OpportunityShare.SCOPE_USER,
+                    OpportunityShare.shared_with_user_id == user_id,
+                ),
+            )
+        )
+        .exists()
+    )
+
+
+def _scope_clause(scope: str, user_id: uuid.UUID):
+    """A filter WITHIN what `visible_opportunities` already allows, never a
+    widening of it. It is ANDed with the predicate, never substituted for it.
+    """
+    if scope == "mine":
+        return Opportunity.assigned_user_id == user_id
+    if scope == "queue":
+        return Opportunity.assigned_user_id.is_(None)
+    if scope == "shared_with_me":
+        return _shared_with_me_exists(user_id)
+    return true_()
 
 
 class ReviewRequest(BaseModel):
@@ -148,6 +187,7 @@ async def list_opportunities(
     limit: int | None = Query(default=None, ge=1),
     offset: int = Query(default=0, ge=0),
     status: StatusFilter | None = None,
+    scope: ScopeFilter = "all",
     q: str | None = None,
     sort: SortKey = "received",
     descending: bool = True,
@@ -167,6 +207,7 @@ async def list_opportunities(
     # take it, and they must take the same one — a count over rows the page
     # will not show tells a recruiter there are twelve and then shows four.
     visible = visible_opportunities(user_uuid, role)
+    scope_clause = _scope_clause(scope, user_uuid)
 
     ceiling = settings.OPPORTUNITIES_PAGE_LIMIT
     # Clamped, not rejected. A caller asking for more than the page holds is
@@ -190,6 +231,7 @@ async def list_opportunities(
         for stored, n in await session.execute(
             select(Opportunity.review_status, func.count())
             .where(visible)
+            .where(scope_clause)
             .group_by(Opportunity.review_status)
         ):
             counts["all"] += n
@@ -206,20 +248,7 @@ async def list_opportunities(
         # the source is worse than a join.
         email = aliased(EmailMessage)
         assignee = aliased(User)
-        shared_with_me_expr = (
-            select(OpportunityShare.id)
-            .where(OpportunityShare.opportunity_id == Opportunity.id)
-            .where(
-                or_(
-                    OpportunityShare.scope == OpportunityShare.SCOPE_TENANT,
-                    and_(
-                        OpportunityShare.scope == OpportunityShare.SCOPE_USER,
-                        OpportunityShare.shared_with_user_id == user_uuid,
-                    ),
-                )
-            )
-            .exists()
-        )
+        shared_with_me_expr = _shared_with_me_exists(user_uuid)
         base = (
             select(
                 Opportunity,
@@ -251,6 +280,7 @@ async def list_opportunities(
                 isouter=True,
             )
             .where(visible)
+            .where(scope_clause)
         )
         if status is not None:
             base = base.where(Opportunity.review_status == _FILTER_TO_STORED[status])
