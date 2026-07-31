@@ -7,6 +7,8 @@ import pytest
 from sqlalchemy import select, text
 
 from app.models.candidate import Candidate
+from app.models.candidate_share import CandidateShare
+from app.services.visibility import can_edit_candidate, visible_candidates
 from tests.conftest import make_candidate, make_user
 
 
@@ -43,10 +45,6 @@ async def test_deleting_a_recruiter_releases_their_candidates(admin_session, see
     ).one()
     assert row.owner_id is None
     assert row.tenant_id == tenant_id, "tenant_id was nulled — the SET NULL is not column-qualified"
-
-
-from app.models.candidate_share import CandidateShare
-from app.services.visibility import can_edit_candidate, visible_candidates
 
 
 @pytest.mark.asyncio
