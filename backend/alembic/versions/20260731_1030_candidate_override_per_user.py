@@ -53,6 +53,16 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # NOT SAFE once any per-user row exists. `uq_candidate_overrides_one_per_field`
+    # is keyed on (tenant_id, candidate_id, field_name) alone, so two rows for
+    # the same field with different `user_id` values — exactly what the PATCH
+    # upsert's JUDGEMENT_FIELDS branch writes — collide on it and this
+    # `create_unique_constraint` raises `UniqueViolation`. This migration adds
+    # no backfill or delete to make room for it, on purpose: silently
+    # collapsing two recruiters' readings into one row on downgrade would lose
+    # data with no log of what was lost. An operator downgrading past this
+    # revision must first decide, per colliding field, which user's row wins
+    # (or export/delete the losers) rather than have that decided for them.
     op.drop_index(
         "uq_candidate_overrides_one_tenant_wide_per_field",
         table_name="candidate_field_overrides",

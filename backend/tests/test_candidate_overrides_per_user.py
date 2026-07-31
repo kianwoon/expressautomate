@@ -10,7 +10,7 @@ import pytest
 from sqlalchemy import text
 
 from app.models.candidate import CandidateFieldOverride
-from tests.conftest import make_candidate, make_user
+from tests.conftest import make_candidate, make_user, sign_in
 
 
 @pytest.mark.asyncio
@@ -29,7 +29,7 @@ async def test_two_recruiters_hold_different_values_for_one_field(
                 tenant_id=tenant_id,
                 candidate_id=candidate_id,
                 user_id=user_id,
-                field_name="salary_expectation",
+                field_name="expected_salary",
                 human_value=value,
                 changed_by=user_id,
             )
@@ -99,7 +99,7 @@ async def test_rendering_reads_the_null_tier_plus_the_callers(
     tenant_id, first, _ = await make_tenant("agency-render-tiers")
     second = await make_user(admin_session, tenant_id, "render2@agency.test")
     candidate_id = await make_candidate(admin_session, tenant_id, owner_id=first)
-    for user_id, field in ((None, "current_title"), (first, "salary_expectation")):
+    for user_id, field in ((None, "current_title"), (first, "expected_salary")):
         admin_session.add(
             CandidateFieldOverride(
                 id=uuid.uuid4(),
@@ -115,7 +115,7 @@ async def test_rendering_reads_the_null_tier_plus_the_callers(
 
     assert await overridden_fields(admin_session, candidate_id, first) == {
         "current_title",
-        "salary_expectation",
+        "expected_salary",
     }
     # The second recruiter sees the agency-wide tier and their own — not the
     # first recruiter's private reading.
@@ -149,3 +149,166 @@ def test_every_candidate_column_is_classified() -> None:
     }
     unclassified = columns - JUDGEMENT_FIELDS - SHARED_FACT_FIELDS
     assert unclassified == set(), f"classify these as fact or judgement: {unclassified}"
+
+
+@pytest.mark.asyncio
+async def test_patching_a_judgement_field_writes_the_callers_user_id(
+    client, admin_session, seeded
+) -> None:
+    """The only production code path onto the new four-column constraint.
+
+    A JUDGEMENT field PATCHed through the real API must land as this
+    recruiter's private row (`user_id = <caller>`), not the agency-wide NULL
+    tier — otherwise the split documented in `app/services/candidate_overrides.py`
+    is decoration, not behaviour.
+    """
+    make_tenant, _, _ = seeded
+    tenant_id, first, _ = await make_tenant("agency-judgement-write")
+    candidate_id = await make_candidate(admin_session, tenant_id, owner_id=first)
+    await admin_session.commit()
+
+    sign_in(client, first, tenant_id)
+    r = await client.patch(
+        f"/api/candidates/{candidate_id}", json={"expected_salary": 9000}
+    )
+    assert r.status_code == 200
+
+    row = (
+        await admin_session.execute(
+            text(
+                "SELECT user_id, human_value FROM candidate_field_overrides "
+                "WHERE candidate_id = :c AND field_name = 'expected_salary'"
+            ),
+            {"c": candidate_id},
+        )
+    ).one()
+    assert row.user_id == first
+    assert row.human_value == "9000.0" or row.human_value == "9000"
+
+
+@pytest.mark.asyncio
+async def test_patching_a_judgement_field_twice_updates_not_inserts(
+    client, admin_session, seeded
+) -> None:
+    """The `ON CONFLICT` path on `uq_candidate_overrides_one_per_field_per_user`.
+
+    Same recruiter, same field, second value: this must UPDATE the existing
+    row, not add a second one for the same (tenant, candidate, user, field).
+    """
+    make_tenant, _, _ = seeded
+    tenant_id, first, _ = await make_tenant("agency-judgement-upsert")
+    candidate_id = await make_candidate(admin_session, tenant_id, owner_id=first)
+    await admin_session.commit()
+
+    sign_in(client, first, tenant_id)
+    r1 = await client.patch(
+        f"/api/candidates/{candidate_id}", json={"expected_salary": 9000}
+    )
+    assert r1.status_code == 200
+    r2 = await client.patch(
+        f"/api/candidates/{candidate_id}", json={"expected_salary": 8500}
+    )
+    assert r2.status_code == 200
+
+    rows = (
+        await admin_session.execute(
+            text(
+                "SELECT human_value FROM candidate_field_overrides "
+                "WHERE candidate_id = :c AND field_name = 'expected_salary'"
+            ),
+            {"c": candidate_id},
+        )
+    ).all()
+    assert len(rows) == 1
+    assert rows[0].human_value in ("8500.0", "8500")
+
+
+@pytest.mark.asyncio
+async def test_patching_a_shared_fact_field_writes_user_id_null(
+    client, admin_session, seeded
+) -> None:
+    """A SHARED_FACT_FIELDS field PATCHed by anyone lands on the tenant-wide
+    (`user_id IS NULL`) tier so a later import stays overridden for everyone,
+    not just the recruiter who typed the correction."""
+    make_tenant, _, _ = seeded
+    tenant_id, first, _ = await make_tenant("agency-fact-write")
+    candidate_id = await make_candidate(admin_session, tenant_id, owner_id=first)
+    await admin_session.commit()
+
+    sign_in(client, first, tenant_id)
+    r = await client.patch(
+        f"/api/candidates/{candidate_id}", json={"current_title": "Senior Engineer"}
+    )
+    assert r.status_code == 200
+
+    row = (
+        await admin_session.execute(
+            text(
+                "SELECT user_id, human_value FROM candidate_field_overrides "
+                "WHERE candidate_id = :c AND field_name = 'current_title'"
+            ),
+            {"c": candidate_id},
+        )
+    ).one()
+    assert row.user_id is None
+    assert row.human_value == "Senior Engineer"
+
+
+@pytest.mark.asyncio
+async def test_deleting_a_recruiter_cascades_their_override_but_not_the_shared_tier(
+    admin_session, seeded
+) -> None:
+    """`fk_candidate_overrides_user_same_tenant ... ON DELETE CASCADE` must
+    remove a departed recruiter's private row — and must NOT touch the
+    `user_id IS NULL` row on the same candidate. A departed recruiter's
+    opinion becoming agency-wide protection (by surviving with a dangling FK,
+    or by some other path making it NULL) would be the opposite of what this
+    tier split is for.
+    """
+    make_tenant, _, _ = seeded
+    tenant_id, first, _ = await make_tenant("agency-cascade-delete")
+    second = await make_user(admin_session, tenant_id, "cascade2@agency.test")
+    candidate_id = await make_candidate(admin_session, tenant_id, owner_id=first)
+
+    admin_session.add(
+        CandidateFieldOverride(
+            id=uuid.uuid4(),
+            tenant_id=tenant_id,
+            candidate_id=candidate_id,
+            user_id=second,
+            field_name="expected_salary",
+            human_value="7000",
+            changed_by=second,
+        )
+    )
+    admin_session.add(
+        CandidateFieldOverride(
+            id=uuid.uuid4(),
+            tenant_id=tenant_id,
+            candidate_id=candidate_id,
+            user_id=None,
+            field_name="current_title",
+            human_value="Tech Lead",
+            changed_by=first,
+        )
+    )
+    # commit, not flush: see the note on the first test in this file — the
+    # DELETE FROM users below is a separate statement that must not deadlock
+    # against an open transaction holding these rows.
+    await admin_session.commit()
+
+    await admin_session.execute(
+        text("DELETE FROM users WHERE id = :u"), {"u": second}
+    )
+    await admin_session.commit()
+
+    rows = (
+        await admin_session.execute(
+            text(
+                "SELECT user_id, field_name FROM candidate_field_overrides "
+                "WHERE candidate_id = :c"
+            ),
+            {"c": candidate_id},
+        )
+    ).all()
+    assert [(r.user_id, r.field_name) for r in rows] == [(None, "current_title")]
