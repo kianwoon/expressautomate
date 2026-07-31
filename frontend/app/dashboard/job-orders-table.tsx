@@ -56,17 +56,27 @@ export const DEFAULT_SORT: Sort = { key: "received", descending: true };
  *    broke inside one.
  *
  *  The floor moved from 960 rather than taking Quality's room from the others,
- *  which had none to give. It costs a little more sideways scrolling inside
- *  the card, which is already how this table meets a narrow screen. */
-const COLUMNS: { key: SortKey; label: string; width: string }[] = [
-  { key: "received", label: "Received", width: "10%" },
-  { key: "company", label: "Company", width: "14%" },
-  { key: "position", label: "Position", width: "14%" },
-  { key: "salary", label: "Salary", width: "10%" },
-  { key: "hours", label: "Hours", width: "13%" },
-  { key: "duration", label: "Duration", width: "10%" },
-  { key: "location", label: "Location", width: "12%" },
-  { key: "quality", label: "Quality", width: "17%" },
+ *  which had none to give.
+ *
+ *  1040px is more than the list column is ever given: `.jo-split` hands it
+ *  1.85 of 2.85 parts, so even a 1440px screen leaves it about 900px and the
+ *  last column sat off the edge behind a scrollbar nobody found. Rather than
+ *  crush eight columns, the two prose ones — Hours and Duration — are dropped
+ *  below that width by a container query in `job-orders.css`, which takes the
+ *  floor to 780px. They are the two already clamped to two lines here and
+ *  shown whole in the panel, so nothing becomes unreachable.
+ *
+ *  The widths live in CSS rather than inline, because the narrow case has to
+ *  override them and an inline style cannot be overridden by a stylesheet. */
+const COLUMNS: { key: SortKey; label: string }[] = [
+  { key: "received", label: "Received" },
+  { key: "company", label: "Company" },
+  { key: "position", label: "Position" },
+  { key: "salary", label: "Salary" },
+  { key: "hours", label: "Hours" },
+  { key: "duration", label: "Duration" },
+  { key: "location", label: "Location" },
+  { key: "quality", label: "Quality" },
 ];
 
 export function JobOrdersTable({
@@ -91,7 +101,7 @@ export function JobOrdersTable({
       <table className="jo-table jo-table-jobs">
         <colgroup>
           {COLUMNS.map((column) => (
-            <col key={column.key} style={{ width: column.width }} />
+            <col key={column.key} data-col={column.key} />
           ))}
         </colgroup>
         <thead>

@@ -138,7 +138,11 @@
   vertical-align: middle;
 }
 
-.jo-list { min-width: 0; }
+/* The list column is what the table has to fit into, and it is narrower than
+   the viewport by a factor the table cannot see — `.jo-split` gives it 1.85 of
+   2.85 parts. Naming it as a container is what lets the table respond to the
+   room it actually has rather than to the window. */
+.jo-list { min-width: 0; container-type: inline-size; container-name: jo-list; }
 
 .jo-detail-find { margin-top: 18px; }
 
@@ -233,7 +237,52 @@
 .jo-review[data-state="needs_review"] { background: var(--amber-050); color: var(--amber-700); }
 .jo-review[data-state="reviewed"] { background: var(--teal-050); color: var(--teal-500); }
 
+/* The eight columns at their full width. Each is fitted to the widest thing it
+   actually holds — the measurements are on `COLUMNS` in `job-orders-table.tsx`
+   — and they sum to 100 so `table-layout: fixed` has nothing left to hand out.
+   In CSS rather than inline on the `<col>` elements so the narrow case below
+   can override them; an inline style cannot be. */
 .jo-table-jobs { min-width: 1040px; }
+.jo-table-jobs col[data-col="received"] { width: 10%; }
+.jo-table-jobs col[data-col="company"] { width: 14%; }
+.jo-table-jobs col[data-col="position"] { width: 14%; }
+.jo-table-jobs col[data-col="salary"] { width: 10%; }
+.jo-table-jobs col[data-col="hours"] { width: 13%; }
+.jo-table-jobs col[data-col="duration"] { width: 10%; }
+.jo-table-jobs col[data-col="location"] { width: 12%; }
+.jo-table-jobs col[data-col="quality"] { width: 17%; }
+
+/* Below the table's full width, Hours and Duration come out rather than every
+   column being crushed or the last one being left off the right edge behind a
+   scrollbar nobody finds. They are the two prose fields — clamped to two lines
+   even at full width, and shown whole in the panel beside the table — so they
+   are the two that cost the least to drop and the only two nothing depends on
+   scanning.
+
+   `display: none` on the `<col>` AND on its cells, both needed, and it has to
+   be `display: none` on the column rather than `width: 0`. A zero-width column
+   still occupies a slot: the six surviving cells then shift left into slots
+   1–6, land on the two zeroed columns, and Location and Quality render at 0px
+   with 38% of the table left blank — the original complaint, worse. Removing
+   the column removes the slot, so the cells line up with the widths below.
+   Those six sum to 100 again, so the freed 23% is redistributed on purpose
+   rather than by whatever the browser does with a short sum. */
+@container jo-list (max-width: 1039px) {
+  .jo-table-jobs { min-width: 780px; }
+  .jo-table-jobs col[data-col="hours"],
+  .jo-table-jobs col[data-col="duration"] { display: none; }
+  /* 5 and 6 are Hours and Duration, counted off `COLUMNS` in
+     `job-orders-table.tsx`. A cell carries no key to select on, so reordering
+     that array means changing these two numbers with it. */
+  .jo-table-jobs th:nth-child(5), .jo-table-jobs td:nth-child(5),
+  .jo-table-jobs th:nth-child(6), .jo-table-jobs td:nth-child(6) { display: none; }
+  .jo-table-jobs col[data-col="received"] { width: 13%; }
+  .jo-table-jobs col[data-col="company"] { width: 18%; }
+  .jo-table-jobs col[data-col="position"] { width: 18%; }
+  .jo-table-jobs col[data-col="salary"] { width: 13%; }
+  .jo-table-jobs col[data-col="location"] { width: 15%; }
+  .jo-table-jobs col[data-col="quality"] { width: 23%; }
+}
 
 /* Two lines, then stop. `-webkit-line-clamp` needs the -webkit-box display to
    do anything, and both are still the only way to clamp to a line count — the
