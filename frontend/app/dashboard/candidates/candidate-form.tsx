@@ -2,7 +2,16 @@
 
 import { useState, type FormEvent, type ReactNode } from "react";
 
-import { ApiError, createCandidate, updateCandidate, type Candidate, type Stage } from "../candidates";
+import {
+  ApiError,
+  CandidateCollisionError,
+  createCandidate,
+  requestCandidateAccess,
+  updateCandidate,
+  type Candidate,
+  type CandidateCollision,
+  type Stage,
+} from "../candidates";
 import { Dialog } from "../dialog";
 
 /**
@@ -221,6 +230,12 @@ export function CandidateForm({
   const [initial] = useState<FormState>(() => toFormState(row));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Kept apart from `error`, and that separation is the whole point. A
+  // collision is not a failure the recruiter caused and not a field they can
+  // fix: the person exists, a colleague holds them, and the only next move is
+  // to ask. Folded into `error` it would render as red text above a form that
+  // still looks like it wants correcting.
+  const [collision, setCollision] = useState<CandidateCollision | null>(null);
 
   function set<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -233,6 +248,7 @@ export function CandidateForm({
     if (!canSubmit) return;
     setSaving(true);
     setError(null);
+    setCollision(null);
 
     const fullBody = toSubmitBody(form);
 
@@ -244,7 +260,11 @@ export function CandidateForm({
       const saved = row ? await updateCandidate(row.id, body) : await createCandidate(fullBody);
       onDone(saved);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "We could not save that just now.");
+      if (err instanceof CandidateCollisionError) {
+        setCollision(err.collision);
+      } else {
+        setError(err instanceof ApiError ? err.message : "We could not save that just now.");
+      }
     } finally {
       setSaving(false);
     }
@@ -262,6 +282,8 @@ export function CandidateForm({
           {error}
         </p>
       )}
+
+      {collision && <HeldByColleague collision={collision} />}
 
       <form onSubmit={submit} className="cand-form" style={{ marginTop: 16 }}>
         <Field label="Full name" full required>
@@ -499,6 +521,87 @@ export function CandidateForm({
         </div>
       </form>
     </Dialog>
+  );
+}
+
+/**
+ * "Already registered by Sarah Lim", and a way to ask her.
+ *
+ * A `role="status"` region, not `role="alert"`, and not a field error. Nothing
+ * the recruiter typed is wrong — they met a real person and typed that
+ * person's real email. What happened is that a colleague recorded them first
+ * and the record is invisible from here, which is a fact about the agency
+ * rather than about this form. Marking the email input `aria-invalid` would
+ * tell them to change a value that is correct, and a screen reader would
+ * announce a validation failure that does not exist.
+ *
+ * The name is rendered exactly as the server gave it. `abbreviate` in
+ * `candidate_matching.py` masks it deliberately — "Wei Ming T." is the whole
+ * disclosure, and expanding or prettifying it here would undo the masking in
+ * the one place it was designed to hold.
+ *
+ * allow-hardcode: user-facing copy rendered to the page, not a list anything
+ * is matched against.
+ */
+function HeldByColleague({ collision }: { collision: CandidateCollision }) {
+  const [state, setState] = useState<"idle" | "asking" | "asked" | "failed">("idle");
+  const { full_name, held_by, id } = collision.candidate;
+
+  // The server does NOT send the candidate id with this 409 — see
+  // `CandidateCollision.candidate.id`. The button is therefore rendered and
+  // disabled with its reason showing, never hidden: a control that vanishes
+  // teaches the reader neither that asking is possible nor why it is not
+  // available, and "walk to Sarah's desk" is a worse answer when the reader
+  // does not even know the feature exists.
+  const askable = collision.can_request_access && typeof id === "string" && id !== "";
+
+  async function ask() {
+    if (!askable || state === "asking" || state === "asked") return;
+    setState("asking");
+    try {
+      await requestCandidateAccess(id as string, null);
+      setState("asked");
+    } catch {
+      setState("failed");
+    }
+  }
+
+  return (
+    <div className="card cand-held" role="status" style={{ marginTop: 12 }}>
+      <p className="body">
+        <strong>{full_name}</strong> is already registered by {held_by}.
+      </p>
+      <p className="body jo-sub">
+        Nothing you entered is wrong — this person is already in your agency’s database, and the
+        record belongs to a colleague. Ask them to share it rather than creating a second copy.
+      </p>
+      <div style={{ display: "flex", gap: 10, marginTop: 8, alignItems: "center" }}>
+        <button
+          type="button"
+          className="btn btn-primary"
+          onClick={ask}
+          disabled={!askable || state === "asking" || state === "asked"}
+        >
+          {state === "asking" ? "Asking…" : state === "asked" ? "Access requested" : "Request access"}
+        </button>
+      </div>
+      {!askable && collision.can_request_access && (
+        <p className="body jo-sub">
+          We can’t send the request from here yet — this reply names the colleague but not the
+          record, so there is nothing to attach the request to. Ask {held_by} directly for now.
+        </p>
+      )}
+      {state === "asked" && (
+        <p className="body jo-sub">
+          {held_by} has been asked. You’ll see the candidate here once they say yes.
+        </p>
+      )}
+      {state === "failed" && (
+        <p className="body jo-detail-error" role="alert">
+          We could not send that request just now. Try again in a moment.
+        </p>
+      )}
+    </div>
   );
 }
 

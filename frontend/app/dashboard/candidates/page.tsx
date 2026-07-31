@@ -13,12 +13,13 @@ import {
   restoreCandidate,
   useCandidates,
 } from "../candidates";
-import type { Candidate, Filter, ListState } from "../candidates";
+import type { Candidate, Filter, ListState, Scope } from "../candidates";
 import { getOpportunity } from "../opportunities";
 import type { Opportunity } from "../opportunities";
 import { CandidateForm } from "./candidate-form";
 import { CandidateImports } from "./candidate-imports";
 import { CandidatePanel } from "./candidate-panel";
+import { AccessRequestInbox } from "./candidate-share";
 import { CandidatesTable } from "./candidates-table";
 
 /**
@@ -42,6 +43,29 @@ const CHIPS: { key: Filter; label: string }[] = [
   // list and the pointer runs loser -> survivor, so this is the only route
   // back to a wrongly merged person.
   { key: "merged", label: "Merged" },
+];
+
+/**
+ * Whose candidates, which is a different question from what stage they are at.
+ *
+ * The same four, in the same order, with the same words as the job order list
+ * — `SCOPES` in `job-orders.tsx`. Copied deliberately rather than generalised:
+ * a shared component would have to carry both pages' chip rows, and the thing
+ * that matters here is that the two screens read alike, which a recruiter
+ * checks with their eyes and not with an import.
+ *
+ * Its own row under the stage chips, again as job orders has it. On one line
+ * the two would read as a single list of alternatives, which is the one thing
+ * they are not: "mine, at the submitted stage" is one question.
+ *
+ * No counts. The endpoint counts per pipeline stage, not per scope, and a
+ * number worked out in the browser would count the page rather than the set.
+ */
+const SCOPES: { key: Scope; label: string }[] = [
+  { key: "mine", label: "Mine" },
+  { key: "queue", label: "Queue" },
+  { key: "shared_with_me", label: "Shared with me" },
+  { key: "all", label: "Everyone" },
 ];
 
 /** Everything the bar can ever offer, in the order it is always drawn. `#` is
@@ -122,6 +146,7 @@ function Workspace({ role }: { role: string }) {
     q,
     initial,
     eligibleFor,
+    scope,
     counts,
     initials,
     refreshing,
@@ -130,6 +155,7 @@ function Workspace({ role }: { role: string }) {
     setQ,
     setInitial,
     setEligibleFor,
+    setScope,
     reload,
   } = useCandidates(initialEligibleFor());
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -252,6 +278,18 @@ function Workspace({ role }: { role: string }) {
     [setInitial],
   );
 
+  // Lets go of the selection along with the scope, exactly as picking a letter
+  // does: "Mine" almost certainly does not contain the colleague's candidate
+  // the panel is open on, and leaving it there reads as a row that refuses to
+  // deselect.
+  const pickScope = useCallback(
+    (next: Scope) => {
+      setScope(next);
+      setSelectedId(null);
+    },
+    [setScope],
+  );
+
   // An undone import may have deleted the person the panel is open on. Re-read
   // the list and let go of the selection, rather than leaving a detail fetch
   // pointed at a row that is no longer there — which reads as "we could not
@@ -327,6 +365,12 @@ function Workspace({ role }: { role: string }) {
       {/* Above the filters rather than inside the table: an import acts on the
           whole list, and most of what it does is create people no filter is
           currently pointed at. */}
+      {/* Above the imports and the filters both: somebody is waiting on an
+          answer from this reader, and a request buried under the controls is
+          a request that stays pending while they wait and then ask again.
+          Draws nothing at all when the inbox is empty. */}
+      <AccessRequestInbox onResolved={reload} />
+
       <CandidateImports onImported={reload} onUndone={dropSelection} />
 
       <div className="jo-controls" style={{ marginTop: 20 }}>
@@ -373,6 +417,30 @@ function Workspace({ role }: { role: string }) {
           placeholder="Search name, email or phone…"
           aria-label="Search candidates"
         />
+      </div>
+
+      {/* Its own row, under the stage chips rather than beside them — see the
+          note on `SCOPES`. This row is what makes "Everyone" honest: it was
+          always "everyone I am allowed to see", and until these three sat
+          beside it there was nothing on the screen saying so. */}
+      <div className="jo-scopes">
+        <div className="jo-chips" role="group" aria-label="Filter candidates by owner">
+          {SCOPES.map((chip) => {
+            const active = scope === chip.key;
+            return (
+              <button
+                key={chip.key}
+                type="button"
+                className="jo-chip"
+                data-active={active ? "yes" : undefined}
+                aria-pressed={active}
+                onClick={() => pickScope(chip.key)}
+              >
+                <span>{chip.label}</span>
+              </button>
+            );
+          })}
+        </div>
       </div>
 
       {/* Always the whole alphabet, never only the letters in use: a bar whose
@@ -426,7 +494,7 @@ function Workspace({ role }: { role: string }) {
         </p>
       ) : items.length === 0 ? (
         <p className="body jo-note" aria-live="polite">
-          {emptyLine(filter, initial)}
+          {emptyLine(filter, initial, scope)}
         </p>
       ) : (
         <>
@@ -552,13 +620,20 @@ function EligibleForBanner({
 
 const EMPTY: Candidate[] = [];
 
-function emptyLine(filter: Filter, initial: string | null): string {
+function emptyLine(filter: Filter, initial: string | null, scope: Scope): string {
   // The letter comes first: with one selected, "Nobody is at this stage yet."
   // is simply untrue — someone may well be, just not under this letter.
   if (initial === NON_ALPHA_INITIAL) return "No names outside A–Z match the rest of your filters.";
   if (initial) return `No names beginning with ${initial} match the rest of your filters.`;
   if (filter === "merged") return "Nothing has been merged.";
   if (filter) return "Nobody is at this stage yet.";
+  // Before the last line, because that line invites adding the first candidate
+  // to an agency — which under "Mine" or "Queue" is very probably not empty at
+  // all, and telling a recruiter their agency has no candidates because their
+  // own desk is clear is the exact misreading the scope row exists to prevent.
+  if (scope === "mine") return "You do not hold any candidates yet. Claim one from the queue, or add someone.";
+  if (scope === "queue") return "Nothing is waiting in the queue — every candidate has a recruiter.";
+  if (scope === "shared_with_me") return "No colleague has shared a candidate with you.";
   return "No candidates yet. Add the first one, or import a spreadsheet once that lands.";
 }
 

@@ -356,6 +356,56 @@ export function candidateArchivePath(id: string): string {
   return `${candidatePath(id)}/archive`;
 }
 
+/** Who else can see this candidate: GET lists, POST shares it. Mirrors
+ *  `opportunitySharesPath` — one sharing idiom in this codebase, not two, and
+ *  the server module says the same about itself. */
+export function candidateSharesPath(id: string): string {
+  return `${candidatePath(id)}/shares`;
+}
+
+/** One share, for DELETE. Both ids encoded for the reason `candidatePath`
+ *  encodes one. */
+export function candidateSharePath(id: string, shareId: string): string {
+  return `${candidateSharesPath(id)}/${encodeURIComponent(shareId)}`;
+}
+
+/** Asking to be shown a candidate you cannot see — the one candidate route
+ *  that is deliberately reachable for an invisible row. */
+export function candidateAccessRequestsPath(id: string): string {
+  return `${candidatePath(id)}/access-requests`;
+}
+
+/**
+ * The inbox: requests waiting on ME.
+ *
+ * A literal sibling of `/api/candidates/{id}`, not nested under a candidate,
+ * and the server declares it first for exactly that reason — otherwise
+ * `access-requests` is matched as a candidate id. Nothing here can encode it,
+ * because it is not an id.
+ */
+export const CANDIDATE_ACCESS_REQUESTS_PATH = `${CANDIDATES_PATH}/access-requests`;
+
+/** Answering one request, yes or no. Two paths rather than one with a body,
+ *  because that is what the server serves. */
+export function candidateAccessRequestGrantPath(id: string, requestId: string): string {
+  return `${candidateAccessRequestsPath(id)}/${encodeURIComponent(requestId)}/grant`;
+}
+
+export function candidateAccessRequestDeclinePath(id: string, requestId: string): string {
+  return `${candidateAccessRequestsPath(id)}/${encodeURIComponent(requestId)}/decline`;
+}
+
+/** Taking an unowned candidate out of the queue. */
+export function candidateClaimPath(id: string): string {
+  return `${candidatePath(id)}/claim`;
+}
+
+/** Handing a candidate to a colleague — or, with a null user, letting go of
+ *  it back to the queue. One route for both, as the server has it. */
+export function candidateAssignPath(id: string): string {
+  return `${candidatePath(id)}/assign`;
+}
+
 export function candidateRestorePath(id: string): string {
   return `${candidatePath(id)}/restore`;
 }

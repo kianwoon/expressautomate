@@ -147,3 +147,58 @@ describe("the chips and letter bar go silent while filtering, not stale", () => 
     expect(result.current.state.status).not.toBe("ready");
   });
 });
+
+/**
+ * `scope` is the parameter that makes "Everyone" honest.
+ *
+ * "All candidates" was never everything — it was always everything this
+ * recruiter is allowed to see — and the server has said so since
+ * `candidate_scope` shipped. What was missing was any way to ask the other
+ * three questions, so the list could not distinguish "the agency has nobody"
+ * from "I hold nobody".
+ */
+describe("whose candidates", () => {
+  function lastUrl(fetchMock: ReturnType<typeof vi.fn>): string {
+    const calls = fetchMock.mock.calls;
+    return String(calls[calls.length - 1][0]);
+  }
+
+  it("sends nothing at all for the default, and the value for the rest", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(page()));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { result } = renderHook(() => useCandidates());
+    await waitFor(() => expect(result.current.state.status).toBe("ready"));
+
+    // `all` is the server's own default; sending it would put a redundant
+    // parameter on every ordinary request.
+    expect(result.current.scope).toBe("all");
+    expect(lastUrl(fetchMock)).not.toContain("scope=");
+
+    act(() => result.current.setScope("mine"));
+    await waitFor(() => expect(lastUrl(fetchMock)).toContain("scope=mine"));
+
+    act(() => result.current.setScope("shared_with_me"));
+    await waitFor(() => expect(lastUrl(fetchMock)).toContain("scope=shared_with_me"));
+
+    act(() => result.current.setScope("all"));
+    await waitFor(() => expect(lastUrl(fetchMock)).not.toContain("scope="));
+  });
+
+  it("resets the page, so a narrower scope cannot land on an empty offset", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(page({ total: 400 })));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { result } = renderHook(() => useCandidates());
+    await waitFor(() => expect(result.current.state.status).toBe("ready"));
+
+    act(() => result.current.setOffset(150));
+    await waitFor(() => expect(result.current.offset).toBe(150));
+
+    // Staying on offset 150 of five matching rows reads exactly like "you
+    // hold nobody", which is the misreading this whole row exists to prevent.
+    act(() => result.current.setScope("queue"));
+    await waitFor(() => expect(result.current.offset).toBe(0));
+    expect(lastUrl(fetchMock)).toContain("offset=0");
+  });
+});

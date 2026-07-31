@@ -3,13 +3,21 @@
 import { useCallback, useEffect, useState } from "react";
 
 import {
+  CANDIDATE_ACCESS_REQUESTS_PATH,
   CANDIDATE_IMPORTS_LIMIT,
   CANDIDATE_IMPORTS_PATH,
   CANDIDATES_PAGE_SIZE,
   CANDIDATES_PATH,
+  candidateAccessRequestDeclinePath,
+  candidateAccessRequestGrantPath,
+  candidateAccessRequestsPath,
   candidateActivitiesPath,
   candidateArchivePath,
+  candidateAssignPath,
   candidateAvatarPath,
+  candidateClaimPath,
+  candidateSharePath,
+  candidateSharesPath,
   candidateDocumentDownloadPath,
   candidateDocumentPath,
   candidateDocumentsPath,
@@ -150,6 +158,19 @@ export type Candidate = {
   pipeline_stage: Stage;
   record_status: "active" | "archived" | "merged";
   updated_at: string;
+  /**
+   * The recruiter who holds this candidate — `null` for the unclaimed queue.
+   *
+   * OPTIONAL, and that is a statement about the server rather than about the
+   * data: `_serialize` in `backend/app/api/candidates.py` does not emit it
+   * yet, though `Candidate.owner_id` is the column every ownership rule in
+   * `app/services/visibility.py` turns on. So `undefined` here means "the
+   * server did not say", which is not the same as `null` ("nobody holds it"),
+   * and nothing may collapse the two: `canEditCandidate` below treats a
+   * silent server as no reason to lock the record, and treats an explicit
+   * `null` as the queue.
+   */
+  owner_id?: string | null;
   merged_into_candidate_id?: string | null;
   /** Only present on the single-record GET, not on a list row. */
   skills?: string[];
@@ -225,12 +246,27 @@ export type CandidatePage = {
  *  `pipeline_stage` one. */
 export type Filter = null | Stage | "merged";
 
+/**
+ * Whose candidates, which is a different question from what stage they are at.
+ *
+ * The same four values the job order list uses, and deliberately the same
+ * words: a recruiter who has learnt "Queue" on one screen must not have to
+ * learn a second vocabulary on the other. `all` is the server's default and
+ * the only one that is not sent — see `listUrl`.
+ *
+ * It is also what makes "all" honest. `all` was never everything; it was
+ * always "everything I am allowed to see", and without the other three
+ * beside it there is nothing on the screen saying so.
+ */
+export type Scope = "mine" | "queue" | "shared_with_me" | "all";
+
 function listUrl(
   filter: Filter,
   offset: number,
   q: string,
   initial: string | null,
   eligibleFor: string | null,
+  scope: Scope,
 ): string {
   const params = new URLSearchParams({
     limit: String(CANDIDATES_PAGE_SIZE),
@@ -241,6 +277,10 @@ function listUrl(
   if (q.trim()) params.set("q", q.trim());
   if (initial) params.set("initial", initial);
   if (eligibleFor) params.set("eligible_for", eligibleFor);
+  // Omitted at `all`, exactly as `opportunities.ts` omits it: `all` is the
+  // server's own default, and sending it would put a redundant parameter on
+  // every ordinary request.
+  if (scope !== "all") params.set("scope", scope);
   return `${CANDIDATES_PATH}?${params.toString()}`;
 }
 
@@ -278,6 +318,10 @@ export type Candidates = {
    *  unfiltered list. Carried in from the job order's "Find candidates for
    *  this role" action via the URL, never from a picker on this page. */
   eligibleFor: string | null;
+  /** Whose candidates the list is narrowed to. A second axis, independent of
+   *  `filter`: "mine, at the submitted stage" is one question, and a recruiter
+   *  must not have to choose which half of it to ask. */
+  scope: Scope;
   /** The last counts we were told, kept across a reload so the chips do not
    *  blink back to nothing every time a filter changes. `null` while the
    *  eligibility filter is on — and the stickiness is exactly why that has to
@@ -301,6 +345,7 @@ export type Candidates = {
   setQ: (q: string) => void;
   setInitial: (initial: string | null) => void;
   setEligibleFor: (eligibleFor: string | null) => void;
+  setScope: (scope: Scope) => void;
   reload: () => void;
 };
 
@@ -317,6 +362,7 @@ export function useCandidates(initialEligibleFor: string | null = null): Candida
   const [eligibleFor, setEligibleForRaw] = useState<string | null>(initialEligibleFor);
   const [counts, setCounts] = useState<Record<string, number> | null>(ZERO_COUNTS);
   const [initials, setInitials] = useState<string[] | null>(NO_INITIALS);
+  const [scope, setScopeRaw] = useState<Scope>("all");
   const [refreshing, setRefreshing] = useState(true);
   const [nonce, setNonce] = useState(0);
 
@@ -330,7 +376,7 @@ export function useCandidates(initialEligibleFor: string | null = null): Candida
     setRefreshing(true);
     (async () => {
       try {
-        const res = await fetch(listUrl(filter, offset, q, initial, eligibleFor), {
+        const res = await fetch(listUrl(filter, offset, q, initial, eligibleFor, scope), {
           credentials: "include",
           headers: { Accept: "application/json" },
           signal: controller.signal,
@@ -367,7 +413,7 @@ export function useCandidates(initialEligibleFor: string | null = null): Candida
       }
     })();
     return () => controller.abort();
-  }, [filter, offset, q, initial, eligibleFor, nonce]);
+  }, [filter, offset, q, initial, eligibleFor, scope, nonce]);
 
   // Changing the filter or the search must reset the page, for the same
   // reason as job orders: staying on offset 150 of five matching rows reads
@@ -394,6 +440,14 @@ export function useCandidates(initialEligibleFor: string | null = null): Candida
     setEligibleForRaw(next);
     setOffset(0);
   }, []);
+  // Whose candidates is a filter like any other, so it resets the page for
+  // the reason above — and more sharply than the others: "Mine" over a
+  // tenant-wide offset is the case most likely to land on an empty page and
+  // read as "you hold nobody".
+  const setScope = useCallback((next: Scope) => {
+    setScopeRaw(next);
+    setOffset(0);
+  }, []);
   const reload = useCallback(() => setNonce((n) => n + 1), []);
 
   return {
@@ -403,6 +457,7 @@ export function useCandidates(initialEligibleFor: string | null = null): Candida
     q,
     initial,
     eligibleFor,
+    scope,
     counts,
     initials,
     refreshing,
@@ -411,6 +466,7 @@ export function useCandidates(initialEligibleFor: string | null = null): Candida
     setQ,
     setInitial,
     setEligibleFor,
+    setScope,
     reload,
   };
 }
@@ -422,8 +478,14 @@ export function useCandidates(initialEligibleFor: string | null = null): Candida
 export async function readError(res: Response): Promise<string> {
   if (res.status === 401) return "Your session has expired. Sign in again, then try that once more.";
   try {
-    const body = (await res.json()) as { detail?: string };
-    if (body.detail) return body.detail;
+    const body = (await res.json()) as { detail?: unknown };
+    // `typeof === "string"`, not merely truthy. FastAPI's `detail` is whatever
+    // the route passed it, and the collision 409 passes an OBJECT — returned
+    // from here it would be handed to React as the error text and thrown on
+    // render. `collisionFrom` below is what reads that shape; anything else
+    // structured falls through to the generic line rather than crashing the
+    // form it was supposed to explain.
+    if (typeof body.detail === "string" && body.detail) return body.detail;
   } catch {
     /* not JSON, or empty */
   }
@@ -431,6 +493,84 @@ export async function readError(res: Response): Promise<string> {
 }
 
 export class ApiError extends Error {}
+
+/**
+ * A candidate a colleague already holds.
+ *
+ * The abbreviated name is the server's, masked in `candidate_matching.py`, and
+ * is rendered exactly as given: expanding "Wei Ming T." back to a full name is
+ * the disclosure the masking exists to prevent, and prettifying it is guessing
+ * at a real person's name.
+ */
+export type CandidateCollision = {
+  reason: "already_registered";
+  candidate: {
+    full_name: string;
+    held_by: string;
+    /**
+     * NOT sent by the shipped server — `held_by_colleague` says so in prose
+     * ("not even the candidate id") — and it is the one thing the access
+     * request needs, since the route is `POST /candidates/{id}/access-requests`.
+     * Read optionally so the button wires itself up the day the server starts
+     * sending one, and says why it cannot until then.
+     */
+    id?: string | null;
+  };
+  can_request_access: boolean;
+};
+
+/** Thrown instead of a bare `ApiError` when a create or an edit collides with
+ *  a candidate outside the caller's sight. Carries the body, because the whole
+ *  point is that this is not a validation failure and must not be rendered as
+ *  one — the value the recruiter typed is correct. */
+export class CandidateCollisionError extends ApiError {
+  readonly collision: CandidateCollision;
+
+  constructor(collision: CandidateCollision) {
+    super(`Already registered by ${collision.candidate.held_by}`);
+    this.collision = collision;
+  }
+}
+
+/** The collision body, or `null` for any other 409. Reads through FastAPI's
+ *  `detail` wrapper, which is where `HTTPException(detail={...})` puts it. */
+function collisionFrom(body: unknown): CandidateCollision | null {
+  const detail = (body as { detail?: unknown } | null)?.detail;
+  if (typeof detail !== "object" || detail === null) return null;
+  const shape = detail as Partial<CandidateCollision>;
+  if (shape.reason !== "already_registered") return null;
+  if (typeof shape.candidate?.full_name !== "string") return null;
+  if (typeof shape.candidate?.held_by !== "string") return null;
+  return {
+    reason: "already_registered",
+    candidate: {
+      full_name: shape.candidate.full_name,
+      held_by: shape.candidate.held_by,
+      id: shape.candidate.id ?? null,
+    },
+    can_request_access: shape.can_request_access === true,
+  };
+}
+
+/** Every non-2xx from a write, as the right kind of error.
+ *
+ * One function rather than a branch repeated at each call site: a create and
+ * an edit can both collide, and the second copy of this is where the two
+ * would drift on which one still renders a red field.
+ */
+async function writeError(res: Response): Promise<ApiError> {
+  if (res.status === 409) {
+    // Cloned, so `readError` below can still read the body if this is some
+    // other 409 — a response body can only be consumed once.
+    const parsed = await res
+      .clone()
+      .json()
+      .catch(() => null);
+    const collision = collisionFrom(parsed);
+    if (collision) return new CandidateCollisionError(collision);
+  }
+  return new ApiError(await readError(res));
+}
 
 export async function getCandidate(id: string): Promise<Candidate> {
   const res = await fetch(candidatePath(id), {
@@ -450,7 +590,7 @@ export async function createCandidate(
     headers: { "Content-Type": "application/json", Accept: "application/json" },
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new ApiError(await readError(res));
+  if (!res.ok) throw await writeError(res);
   return (await res.json()) as Candidate;
 }
 
@@ -461,7 +601,10 @@ export async function updateCandidate(id: string, body: Partial<Candidate>): Pro
     headers: { "Content-Type": "application/json", Accept: "application/json" },
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new ApiError(await readError(res));
+  // A PATCH collides too — changing an email onto a key a colleague holds is
+  // the same event as creating one, and `patch_collision` returns the same
+  // body for it.
+  if (!res.ok) throw await writeError(res);
   return (await res.json()) as Candidate;
 }
 
@@ -999,4 +1142,199 @@ export async function deleteCandidateAvatar(id: string): Promise<void> {
     headers: { Accept: "application/json" },
   });
   if (!res.ok) throw new ApiError(await readError(res));
+}
+
+// ------------------------------------------------ ownership and sharing
+//
+// Every one of these lives here rather than in the component that calls it,
+// for the reason the module docstring gives: this is the one place that talks
+// to the candidates endpoint, and a path built inline in a component is
+// invisible to `app/api.contract.test.ts`. That has already shipped two dead
+// routes in this repo.
+//
+// A share grants SIGHT and nothing else, exactly as on the job order side —
+// there is no access level here, and adding one would invent a concept the
+// server does not have.
+
+export type CandidateShareScope = "user" | "tenant";
+
+export type CandidateShare = {
+  id: string;
+  scope: CandidateShareScope;
+  /** Null exactly for the tenant broadcast, which is shared with everybody
+   *  rather than with a particular person. */
+  shared_with_user_id: string | null;
+  shared_by_user_id: string | null;
+  note: string | null;
+  created_at: string;
+};
+
+export type CandidateShareRequest = {
+  scope: CandidateShareScope;
+  user_ids: string[];
+  /** Trimmed to `null` by the caller: an empty string is a note that says
+   *  nothing, and storing one puts a blank line in the notification. */
+  note: string | null;
+};
+
+/** One person asking to be shown a candidate they cannot see.
+ *
+ * Deliberately says nothing about the candidate beyond its id — the server's
+ * inbox route returns no name, because naming the row here would leak through
+ * the inbox what the request route itself refuses to return. The owner already
+ * knows who they hold; the id is what the grant needs. */
+export type CandidateAccessRequest = {
+  id: string;
+  candidate_id: string;
+  requested_by_user_id: string;
+  status: "pending" | "granted" | "declined";
+  note: string | null;
+  created_at: string;
+  resolved_at: string | null;
+};
+
+/** Who can currently see this candidate, oldest first — the server's order,
+ *  kept, because it reads as the history of how the row travelled. */
+export async function listCandidateShares(id: string): Promise<CandidateShare[]> {
+  const res = await fetch(candidateSharesPath(id), {
+    credentials: "include",
+    headers: { Accept: "application/json" },
+  });
+  if (!res.ok) throw new ApiError(await readError(res));
+  const body = (await res.json()) as { items?: CandidateShare[] };
+  return body.items ?? [];
+}
+
+/** Shows this candidate to named colleagues, or to the whole agency.
+ *
+ * Returns how many people were newly given sight — re-sharing to somebody who
+ * already had it counts for nothing, because they were told the first time.
+ * The broadcast is 403 for anyone but the owner, which the dialog mirrors
+ * rather than discovers. */
+export async function shareCandidate(
+  id: string,
+  body: CandidateShareRequest,
+): Promise<{ newly_shared_with: number }> {
+  const res = await fetch(candidateSharesPath(id), {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new ApiError(await readError(res));
+  return (await res.json()) as { newly_shared_with: number };
+}
+
+/** Takes sight back, and only sight. Activities the recipient logged while
+ *  they could see the candidate record what that person did; they are not the
+ *  candidate, and the server keeps them. */
+export async function deleteCandidateShare(id: string, shareId: string): Promise<void> {
+  const res = await fetch(candidateSharePath(id, shareId), {
+    method: "DELETE",
+    credentials: "include",
+    headers: { Accept: "application/json" },
+  });
+  if (!res.ok) throw new ApiError(await readError(res));
+}
+
+/** Asks the owner to be shown a candidate. The one candidate route reachable
+ *  for a row you cannot see — a second click updates the one pending request
+ *  rather than filing a second. */
+export async function requestCandidateAccess(
+  id: string,
+  note: string | null,
+): Promise<{ id: string }> {
+  const res = await fetch(candidateAccessRequestsPath(id), {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify({ note }),
+  });
+  if (!res.ok) throw new ApiError(await readError(res));
+  return (await res.json()) as { id: string };
+}
+
+/** The inbox: requests waiting on ME, scoped server-side to candidates I own.
+ *  Defaults to pending, which is the only status anyone can act on. */
+export async function listCandidateAccessRequests(
+  status: CandidateAccessRequest["status"] = "pending",
+): Promise<CandidateAccessRequest[]> {
+  const params = new URLSearchParams({ status });
+  const res = await fetch(`${CANDIDATE_ACCESS_REQUESTS_PATH}?${params.toString()}`, {
+    credentials: "include",
+    headers: { Accept: "application/json" },
+  });
+  if (!res.ok) throw new ApiError(await readError(res));
+  const body = (await res.json()) as { items?: CandidateAccessRequest[] };
+  return body.items ?? [];
+}
+
+/** Yes. Writes the share and closes the request in one server transaction —
+ *  the share IS the grant. */
+export async function grantCandidateAccess(id: string, requestId: string): Promise<void> {
+  const res = await fetch(candidateAccessRequestGrantPath(id, requestId), {
+    method: "POST",
+    credentials: "include",
+    headers: { Accept: "application/json" },
+  });
+  if (!res.ok) throw new ApiError(await readError(res));
+}
+
+/** No — and saying it is not optional politeness. A request that never
+ *  resolves leaves the asker waiting, and then asking again. */
+export async function declineCandidateAccess(id: string, requestId: string): Promise<void> {
+  const res = await fetch(candidateAccessRequestDeclinePath(id, requestId), {
+    method: "POST",
+    credentials: "include",
+    headers: { Accept: "application/json" },
+  });
+  if (!res.ok) throw new ApiError(await readError(res));
+}
+
+/** Takes an unclaimed candidate. A 409 here means a colleague got there
+ *  first — the server resolves the race in the database, and its message is
+ *  the one worth showing. */
+export async function claimCandidate(id: string): Promise<void> {
+  const res = await fetch(candidateClaimPath(id), {
+    method: "POST",
+    credentials: "include",
+    headers: { Accept: "application/json" },
+  });
+  if (!res.ok) throw new ApiError(await readError(res));
+}
+
+/** Hands a candidate to a colleague, or — with `null` — lets go of it back to
+ *  the queue. One call for both, because handing over and letting go are the
+ *  same act with a different destination. */
+export async function assignCandidate(id: string, userId: string | null): Promise<void> {
+  const res = await fetch(candidateAssignPath(id), {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify({ user_id: userId }),
+  });
+  if (!res.ok) throw new ApiError(await readError(res));
+}
+
+/**
+ * Whether this reader may edit this candidate — the server's rule, mirrored.
+ *
+ * `can_edit_candidate` on the server is: the `owner` role, or you are the
+ * owner. An UNOWNED candidate is visible and claimable but explicitly NOT
+ * editable, because a row nobody has taken responsibility for is where a wrong
+ * edit is least likely to be noticed.
+ *
+ * The `undefined` branch is not the same question. The server does not
+ * serialize `owner_id` at all today, so `undefined` means "not told", and
+ * answering `false` to that would grey out the edit button on every candidate
+ * in the app. Absent evidence, nothing is refused here — the server still
+ * refuses, with a 403 the panel surfaces.
+ */
+export function canEditCandidate(
+  row: Pick<Candidate, "owner_id">,
+  me: { id: string; role: string },
+): boolean {
+  if (me.role === "owner") return true;
+  if (row.owner_id === undefined) return true;
+  return row.owner_id !== null && row.owner_id === me.id;
 }

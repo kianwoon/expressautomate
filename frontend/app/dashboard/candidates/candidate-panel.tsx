@@ -4,12 +4,15 @@ import { useEffect, useRef, useState } from "react";
 
 import { Breakable } from "../../breakable";
 import { CANDIDATES_PATH } from "../../api";
+import { useAuth } from "../../auth";
 import type { Candidate, CandidatePage } from "../candidates";
-import { mergeCandidate, unmergeCandidate } from "../candidates";
+import { canEditCandidate, claimCandidate, mergeCandidate, unmergeCandidate } from "../candidates";
 import { Value, day } from "../format";
+import { useMembers } from "../members";
 import { CandidateAvatar } from "./candidate-avatar";
 import { CandidateCv } from "./candidate-cv";
 import { CandidateHistory } from "./candidate-history";
+import { CandidateShareDialog } from "./candidate-share";
 import { WhatsappActivityTimeline, WhatsappButton } from "./candidate-whatsapp";
 
 /**
@@ -107,11 +110,39 @@ function Detail({
   onChanged: () => void;
   onDetailChanged: () => void;
 }) {
+  const auth = useAuth();
+  const members = useMembers();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [sharing, setSharing] = useState(false);
   // Bumped after a WhatsApp open is logged, so the activity timeline below
   // refetches even though the candidate's own id hasn't changed.
   const [activityVersion, setActivityVersion] = useState(0);
+
+  const signedIn = auth.status === "signed-in" ? auth.me.user : null;
+  // The server's rule, mirrored. A signed-out reader cannot be here at all —
+  // the page redirects — so `null` is the momentary gap before the session
+  // resolves, and locking the record for it would flicker the button.
+  const canEdit = signedIn === null || canEditCandidate(row, signedIn);
+  const unclaimed = row.owner_id === null;
+  const ownerName =
+    row.owner_id == null
+      ? null
+      : (members.members.find((member) => member.id === row.owner_id)?.name ?? "A colleague");
+
+  async function claim() {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await claimCandidate(row.id);
+      onChanged();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "We could not claim that just now.");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function archive() {
     if (busy) return;
@@ -195,6 +226,20 @@ function Detail({
       ) : (
         <>
           <div className="rows jo-detail-rows">
+            {/* First, above every other field. Who holds this record decides
+                whether the rest of the panel is something you can act on, and
+                a reader who learns it only by pressing a greyed-out button has
+                already been confused once. `undefined` — the server not saying
+                — draws nothing rather than guessing "unclaimed", which would
+                put a Claim button on rows somebody already holds. */}
+            {row.owner_id !== undefined && (
+              <div className="row">
+                <span className="row-k">Owner</span>
+                <span className={ownerName ? undefined : "muted"}>
+                  {ownerName ?? "Unclaimed — anyone at the agency can take this one"}
+                </span>
+              </div>
+            )}
             <OverrideRow row={row} field="email" k="Email" v={row.email} />
             <OverrideRow row={row} field="phone_raw" k="Phone" v={row.phone_raw} />
             <OverrideRow row={row} field="location" k="Location" v={row.location} />
@@ -252,9 +297,40 @@ function Detail({
 
       <div className="jo-detail-actions">
         <div className="jo-action-row">
-          <button type="button" className="btn btn-primary" onClick={onEdit} disabled={busy}>
+          {/* DISABLED, never hidden. A share recipient can read this record
+              and cannot change it; an Edit button that simply vanishes for
+              them reads as a page that failed to finish loading, and the one
+              thing they need to understand — that the record belongs to
+              somebody else — is the thing that disappeared with it. Kept in
+              place, greyed, with the sentence below saying why. */}
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={onEdit}
+            disabled={busy || !canEdit}
+            title={canEdit ? undefined : "Only the recruiter who holds this candidate can edit it."}
+          >
             Edit
           </button>
+          {row.record_status !== "merged" && (
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => setSharing(true)}
+              disabled={busy}
+            >
+              Share
+            </button>
+          )}
+          {/* Claiming is what CREATES the right to edit, so it is offered
+              exactly where editing is refused for want of an owner — and it is
+              offered to everyone, because an unclaimed candidate is queue work
+              the whole agency can already see. */}
+          {unclaimed && row.record_status === "active" && (
+            <button type="button" className="btn btn-secondary" onClick={claim} disabled={busy}>
+              {busy ? "Saving…" : "Claim"}
+            </button>
+          )}
           {row.record_status !== "merged" && (
             <WhatsappButton row={row} onLogged={() => setActivityVersion((v) => v + 1)} />
           )}
@@ -274,7 +350,16 @@ function Detail({
             </button>
           )}
         </div>
+        {!canEdit && (
+          <p className="body jo-sub">
+            {unclaimed
+              ? "Nobody holds this candidate yet. Claim them to edit the record — an unclaimed record is where a wrong edit is least likely to be noticed, so the server refuses it too."
+              : `${ownerName ?? "A colleague"} holds this candidate. You can read the record, log a WhatsApp message against it, and pass it on to someone else — but only they can change it.`}
+          </p>
+        )}
       </div>
+
+      {sharing && <CandidateShareDialog row={row} onClose={() => setSharing(false)} />}
 
       {error && (
         <p className="body jo-detail-error" role="alert">
