@@ -39,7 +39,14 @@ from sqlalchemy.orm import aliased
 from app.api.auth import _require_session_with_role
 from app.core.config import settings
 from app.db.rls import tenant_session
-from app.models import Candidate, EmailMessage, Opportunity, OpportunityCode, User
+from app.models import (
+    Candidate,
+    Client,
+    EmailMessage,
+    Opportunity,
+    OpportunityCode,
+    User,
+)
 from app.models.extraction import ExtractionEvidence
 from app.services.notify.dispatch import emit_and_enqueue
 from app.services.notify.events import (
@@ -49,6 +56,7 @@ from app.services.notify.events import (
 )
 from app.services.sourcing import eligibility
 from app.services.visibility import (
+    can_edit,
     load_editable_opportunity,
     load_visible_opportunity,
     shared_with_me_exists,
@@ -56,6 +64,25 @@ from app.services.visibility import (
 )
 
 router = APIRouter(tags=["opportunities"])
+
+
+def _assignee_name_expr(user):
+    """How a colleague is named, wherever this module names one.
+
+    NULLIF over each candidate rather than a bare COALESCE, and the email's
+    LOCAL PART as the last resort — both exactly as
+    `app/api/clients.py::_assignee_name_expr` and `GET /api/members` do it. A
+    nameless colleague must be "raj" on every screen; "raj@agency.sg" here and
+    "raj" in the sharing picker reads as two different people.
+
+    Takes the entity (an alias or the mapped class) so the list's join and a
+    single-row lookup can share one definition instead of drifting apart.
+    """
+    return func.coalesce(
+        func.nullif(func.btrim(user.preferred_name), ""),
+        func.nullif(func.btrim(user.display_name), ""),
+        func.split_part(user.email, "@", 1),
+    )
 
 # The stored column and the word the UI shows are deliberately not the same.
 # `persist.py` writes `ready` for a clean extraction and owns that value; this
@@ -231,17 +258,7 @@ async def list_opportunities(
                 Opportunity,
                 email.internet_message_id,
                 email.graph_message_id,
-                # NULLIF over each candidate rather than a bare COALESCE, and
-                # the email's LOCAL PART as the last resort — both exactly as
-                # `app/api/clients.py::_assignee_name_expr` and
-                # `GET /api/members` do it. A nameless colleague must be "raj"
-                # on every screen; "raj@agency.sg" here and "raj" in the
-                # sharing picker reads as two different people.
-                func.coalesce(
-                    func.nullif(func.btrim(assignee.preferred_name), ""),
-                    func.nullif(func.btrim(assignee.display_name), ""),
-                    func.split_part(assignee.email, "@", 1),
-                ).label("assignee_name"),
+                _assignee_name_expr(assignee).label("assignee_name"),
                 shared_with_me_expr.label("shared_with_me"),
             )
             # OUTER, and that matters: `email_message_id` is nullable — a job
@@ -793,6 +810,15 @@ class AssignRequest(BaseModel):
     user_id: uuid.UUID | None = None
 
 
+class ClientLinkRequest(BaseModel):
+    client_id: uuid.UUID | None
+    # Defaults true: linking a client should produce the same outcome the
+    # pipeline would have produced had the link been there from the start —
+    # a job order goes to the client's recruiter. It stays a flag because
+    # linking a client and taking ownership are two different intentions.
+    adopt_client_recruiter: bool = True
+
+
 class ManualOpportunityRequest(BaseModel):
     """A vacancy taken over the phone or on WhatsApp and typed in.
 
@@ -953,6 +979,108 @@ async def assign_opportunity(
     return {
         "id": str(opportunity_id),
         "assigned_user_id": str(body.user_id) if body.user_id else None,
+    }
+
+
+@router.post("/opportunities/{opportunity_id}/client")
+async def set_opportunity_client(
+    opportunity_id: uuid.UUID, body: ClientLinkRequest, request: Request
+) -> dict:
+    """Say which client this job order came from.
+
+    Guarded by "editable OR unassigned", not by `load_editable_opportunity`.
+    `can_edit` refuses unassigned rows on purpose — claiming is what makes a
+    job order editable — but recording which company a job order came from is
+    a factual correction rather than an act of ownership, and the queue is
+    shared work. Someone else's *assigned* job order stays closed.
+    """
+    user_uuid, tenant_uuid, role = await _require_session_with_role(request)
+
+    async with tenant_session(tenant_uuid) as session:
+        opportunity = await load_visible_opportunity(
+            session, opportunity_id, user_uuid, role
+        )
+        if not (
+            opportunity.assigned_user_id is None
+            or can_edit(opportunity, user_uuid, role)
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail="This job order is shared with you, not assigned to you.",
+            )
+
+        # Read off the row while the session is open: after commit a
+        # committed instance's attributes are expired, and the event below
+        # needs these. Same ordering argument as `assign_opportunity`.
+        previous_assignee = opportunity.assigned_user_id
+        subject_title = opportunity.job_title_raw
+        subject_company = opportunity.company_name_raw
+        subject_location = opportunity.location_raw
+        subject_salary = opportunity.salary_raw
+
+        adopted: uuid.UUID | None = opportunity.assigned_user_id
+        if body.client_id is not None:
+            # RLS scopes this to the agency, so a client of another agency is
+            # simply not found — refused here rather than as a 500 from the
+            # composite foreign key.
+            client = (
+                await session.execute(
+                    select(Client.id, Client.assigned_user_id).where(
+                        Client.id == body.client_id
+                    )
+                )
+            ).one_or_none()
+            if client is None:
+                raise HTTPException(
+                    status_code=422, detail="That client is not in this agency."
+                )
+            # Only an unassigned job order adopts. An assigned one never
+            # changes hands here — that is what the assign route is for.
+            if (
+                body.adopt_client_recruiter
+                and opportunity.assigned_user_id is None
+                and client.assigned_user_id is not None
+            ):
+                adopted = client.assigned_user_id
+
+        await session.execute(
+            update(Opportunity)
+            .where(Opportunity.id == opportunity_id)
+            .values(client_id=body.client_id, assigned_user_id=adopted)
+        )
+
+        name = None
+        if adopted is not None:
+            name = (
+                await session.execute(
+                    select(_assignee_name_expr(User)).where(User.id == adopted)
+                )
+            ).scalar_one_or_none()
+
+    # A job order quietly becoming yours is exactly what the assigned event
+    # exists to announce. `assign_opportunity` emits it; this route assigns
+    # too, so it must as well, or adoption is the one way to gain work without
+    # being told. Emitted after the transaction commits, matching the ordering
+    # `opportunity_shares.py` uses and explains.
+    if adopted is not None and adopted != previous_assignee:
+        await emit_and_enqueue(
+            OpportunityEvent(
+                kind=EVENT_OPPORTUNITY_ASSIGNED,
+                tenant_id=tenant_uuid,
+                opportunity_id=opportunity_id,
+                recipient_user_ids=(adopted,),
+                job_title=subject_title,
+                company_name=subject_company,
+                location=subject_location,
+                salary=subject_salary,
+            )
+        )
+
+    return {
+        "id": str(opportunity_id),
+        "client_id": str(body.client_id) if body.client_id else None,
+        "assigned_user_id": str(adopted) if adopted else None,
+        "assignee_name": name,
     }
 
 
