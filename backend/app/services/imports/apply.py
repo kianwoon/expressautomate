@@ -309,9 +309,18 @@ async def _apply_candidates(
     uploaded_by: uuid.UUID | None,
     records: list[CandidateRecord],
     outcome: ImportOutcome,
-) -> dict[tuple[str, str], _Applied]:
-    """Every candidate row, matched or created, before a single role is read."""
+) -> tuple[dict[tuple[str, str], _Applied], set[uuid.UUID]]:
+    """Every candidate row, matched or created, before a single role is read.
+
+    Returns `seen` alongside `held` — the ids of candidates this run found
+    but was refused permission to touch. `_apply_roles` needs both: `seen` to
+    resolve a row to a person, `held` to refuse writing a role onto one this
+    run was not allowed to edit. Recording `held` once here, rather than
+    re-testing `owner_id` in the roles path, keeps the ownership rule in one
+    place — a second copy of the same test is a second place it can drift.
+    """
     seen: dict[tuple[str, str], _Applied] = {}
+    held: set[uuid.UUID] = set()
 
     for record in records:
         line = record.line
@@ -372,8 +381,16 @@ async def _apply_candidates(
             # bulk edit, and a row the importer does not own is not theirs to
             # change — whether they cannot see it at all, or can see it only
             # through a share.
+            #
+            # `uploaded_by` is nullable (`CandidateImport.uploaded_by`), so it
+            # can be `None` here. That collapses this test to "skip every
+            # already-owned row" — conservative, since `None` matches nothing
+            # a colleague could hold — but it means every row this run does
+            # create (below) lands with `owner_id=None`, unowned in the shared
+            # queue, rather than being refused outright.
             if candidate.owner_id not in (None, uploaded_by):
                 outcome.held_by_colleagues += 1
+                held.add(candidate.id)
                 continue
             if await _update_candidate(
                 session,
@@ -424,7 +441,7 @@ async def _apply_candidates(
         for key in keys:
             seen[key] = _Applied(candidate_id=candidate.id, record=record)
 
-    return seen
+    return seen, held
 
 
 def _dates(
@@ -478,6 +495,7 @@ async def _candidate_for(
     tenant_id: uuid.UUID,
     record: RoleRecord,
     seen: dict[tuple[str, str], _Applied],
+    held: set[uuid.UUID],
     problems: list[RowProblem],
     line: int,
 ) -> uuid.UUID | None:
@@ -487,6 +505,15 @@ async def _candidate_for(
     nothing to create a person *from*: inventing one would produce a record
     with a job and no human attached to it. An unmatched row is therefore
     reported and skipped, never turned into a candidate.
+
+    A candidate the candidates pass refused to touch (`held`) is refused here
+    too: a skipped candidate never enters `seen`, so without this check the
+    match below would fall through to the tenant-wide `find_candidate` and
+    hand back the very id the ownership guard just withheld — the row would
+    then get a new `CandidateRole` even though every candidate field stayed
+    untouched. This is not counted in `held_by_colleagues`: that counter
+    already counts the candidate once, and a role skipped for the same
+    candidate is not a second held row.
     """
     keys = _keys(record.candidate_email, record.candidate_phone)
     applied = next((seen[key] for key in keys if key in seen), None)
@@ -522,6 +549,19 @@ async def _candidate_for(
             )
         )
         return None
+    if match.candidate_id in held:
+        who = record.candidate_email or record.candidate_phone
+        problems.append(
+            RowProblem(
+                sheet=_ROLE_SHEET,
+                line=line,
+                reason=(
+                    f"{who} matches candidate {match.candidate_id}, which this import "
+                    "was not allowed to edit; this job was not attached"
+                ),
+            )
+        )
+        return None
     return match.candidate_id
 
 
@@ -532,6 +572,7 @@ async def _apply_roles(
     import_id: uuid.UUID,
     records: list[RoleRecord],
     seen: dict[tuple[str, str], _Applied],
+    held: set[uuid.UUID],
     today: date,
     outcome: ImportOutcome,
 ) -> None:
@@ -544,6 +585,7 @@ async def _apply_roles(
             tenant_id=tenant_id,
             record=record,
             seen=seen,
+            held=held,
             problems=outcome.problems,
             line=line,
         )
@@ -717,7 +759,7 @@ async def apply_import(
         raise ValueError(f"import {import_id} belongs to tenant {owner}, not {tenant_id}")
 
     outcome = ImportOutcome()
-    seen = await _apply_candidates(
+    seen, held = await _apply_candidates(
         session,
         tenant_id=tenant_id,
         import_id=import_id,
@@ -732,6 +774,7 @@ async def apply_import(
         import_id=import_id,
         records=roles,
         seen=seen,
+        held=held,
         today=today,
         outcome=outcome,
     )

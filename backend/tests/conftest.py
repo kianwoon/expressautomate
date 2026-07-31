@@ -395,9 +395,9 @@ async def run_import():
 
     from app.models.candidate import CandidateImport
     from app.services.imports.apply import apply_import
-    from app.services.imports.rows import CandidateRecord
+    from app.services.imports.rows import CandidateRecord, RoleRecord
 
-    async def _run(tenant_id, uploaded_by, rows):
+    async def _run(tenant_id, uploaded_by, rows, role_rows=()):
         async with AdminSessionLocal() as session:
             import_id = uuid.uuid4()
             session.add(
@@ -438,7 +438,25 @@ async def run_import():
                     )
                     for line, row in enumerate(rows, start=2)
                 ],
-                roles=[],
+                roles=[
+                    RoleRecord(
+                        **{
+                            "line": line,
+                            "candidate_email": None,
+                            "candidate_phone": None,
+                            "employer": "",
+                            "title": "",
+                            "started_on": None,
+                            "started_precision": None,
+                            "ended_on": None,
+                            "ended_precision": None,
+                            "location": None,
+                            "description": None,
+                            **row,
+                        }
+                    )
+                    for line, row in enumerate(role_rows, start=1000)
+                ],
                 today=dt.date(2026, 7, 31),
             )
             # `apply_import` never commits — the worker owns that (§
