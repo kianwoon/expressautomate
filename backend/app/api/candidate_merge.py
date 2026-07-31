@@ -1,12 +1,14 @@
 """Combining two records of one human being, and taking that back.
 
-Lifted verbatim out of `candidates.py`, which had reached the 1500-line ceiling
-this project sets. Nothing about the behaviour changed: the same two routes,
-the same lock ordering, the same guards.
+Lifted out of `candidates.py`, which had reached the 1500-line ceiling this
+project sets. Nothing about the behaviour changed: the same two routes, the
+same lock ordering, the same guards.
 
-The dependency runs one way only. This module imports `_load` and `_serialize`
-from `candidates`; `candidates` must never import this one, or the two files
-form a cycle at import time.
+It reads and writes `Candidate` rows directly (via the ORM and raw SQL, both
+inside `tenant_session`) and uses `load_editable_candidate` from
+`app.services.visibility` for the edit-rights check on each side. It does not
+import `_load` or `_serialize` from `candidates`, and `candidates` does not
+import this module — no cycle either way.
 """
 
 import uuid

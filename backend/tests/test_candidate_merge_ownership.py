@@ -32,20 +32,28 @@ async def test_merge_needs_edit_rights_on_both_sides(client, admin_session, seed
 @pytest.mark.asyncio
 async def test_unmerge_restores_the_original_owner(client, admin_session, seeded) -> None:
     """The revived row goes back to whoever held it, not to whoever pressed
-    the button."""
+    the button.
+
+    The presser is a colleague, not the original owner: `role='owner'` gets
+    them past the edit guard (the documented escape hatch for a cross-owner
+    unmerge), while the merged row itself stays owned by someone else. That
+    way `owner_id == user_uuid` and `owner_id == original_owner` disagree, so
+    the assertion below only holds if the code truly leaves `owner_id` alone.
+    """
     make_tenant, _, _ = seeded
-    tenant_id, me, _ = await make_tenant("agency-unmerge-owner")
-    target = await make_candidate(admin_session, tenant_id, owner_id=me)
+    tenant_id, original_owner, _ = await make_tenant("agency-unmerge-owner")
+    presser = await make_user(admin_session, tenant_id, "boss@agency.test", role="owner")
+    target = await make_candidate(admin_session, tenant_id, owner_id=original_owner)
     merged = await make_candidate(
         admin_session,
         tenant_id,
-        owner_id=me,
+        owner_id=original_owner,
         record_status="merged",
         merged_into_candidate_id=target,
     )
     await admin_session.commit()
 
-    sign_in(client, me, tenant_id)
+    sign_in(client, presser, tenant_id)
     assert (await client.post(f"/api/candidates/{merged}/unmerge")).status_code == 200
 
     row = (
@@ -54,4 +62,6 @@ async def test_unmerge_restores_the_original_owner(client, admin_session, seeded
         )
     ).one()
     assert row.record_status == "active"
-    assert row.owner_id == me, "unmerge reassigned the row to whoever pressed the button"
+    assert row.owner_id == original_owner, (
+        "unmerge reassigned the row to whoever pressed the button"
+    )
