@@ -162,6 +162,7 @@ async def test_linking_a_client_adopts_its_recruiter() -> None:
         assert response.json() == {
             "id": str(opportunity_id),
             "client_id": str(client_id),
+            "client_name": "Acme Pte Ltd",
             "assigned_user_id": str(wei_kian),
             "assignee_name": "Wei Kian",
         }
@@ -431,3 +432,42 @@ async def test_a_client_from_another_agency_is_refused() -> None:
     finally:
         await cleanup_tenant(tenant_a)
         await cleanup_tenant(tenant_b)
+
+
+async def test_the_response_names_the_client_it_just_linked() -> None:
+    """So the panel can show what it did without reading the row back.
+
+    The same reason `assignee_name` is here: the browser holds an id and no
+    name, and a second request to turn one into the other is a request the
+    panel would be rendering an empty picker during.
+    """
+    tenant_id, user_id = await seed_tenant_with_user()
+    try:
+        client_id = await _client_row(tenant_id, name="Sunrise Logistics")
+        opportunity_id = await _opportunity(tenant_id, assigned_user_id=None)
+
+        response = await _post(
+            tenant_id, user_id, opportunity_id, {"client_id": str(client_id)}
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["client_name"] == "Sunrise Logistics"
+    finally:
+        await cleanup_tenant(tenant_id)
+
+
+async def test_unlinking_reports_no_client_name() -> None:
+    """`null` is the answer, not the previous name left behind."""
+    tenant_id, user_id = await seed_tenant_with_user()
+    try:
+        client_id = await _client_row(tenant_id, name="Sunrise Logistics")
+        opportunity_id = await _opportunity(tenant_id, assigned_user_id=None)
+        await _post(tenant_id, user_id, opportunity_id, {"client_id": str(client_id)})
+
+        response = await _post(tenant_id, user_id, opportunity_id, {"client_id": None})
+
+        assert response.status_code == 200, response.text
+        assert response.json()["client_id"] is None
+        assert response.json()["client_name"] is None
+    finally:
+        await cleanup_tenant(tenant_id)

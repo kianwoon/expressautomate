@@ -252,6 +252,7 @@ async def list_opportunities(
         # the source is worse than a join.
         email = aliased(EmailMessage)
         assignee = aliased(User)
+        linked_client = aliased(Client)
         shared_with_me_expr = shared_with_me_exists(user_uuid)
         base = (
             select(
@@ -259,6 +260,7 @@ async def list_opportunities(
                 email.internet_message_id,
                 email.graph_message_id,
                 _assignee_name_expr(assignee).label("assignee_name"),
+                linked_client.name.label("client_name"),
                 shared_with_me_expr.label("shared_with_me"),
             )
             # OUTER, and that matters: `email_message_id` is nullable — a job
@@ -278,6 +280,20 @@ async def list_opportunities(
                 and_(
                     assignee.id == Opportunity.assigned_user_id,
                     assignee.tenant_id == Opportunity.tenant_id,
+                ),
+                isouter=True,
+            )
+            # The client the job order is filed under, resolved here rather
+            # than a lookup per row. Composite and OUTER for the same two
+            # reasons as the assignee join above — and OUTER matters more
+            # here: most job orders are not linked to a client at all (eight
+            # of eleven in production when this was written), so an inner join
+            # would drop the majority of the list.
+            .join(
+                linked_client,
+                and_(
+                    linked_client.id == Opportunity.client_id,
+                    linked_client.tenant_id == Opportunity.tenant_id,
                 ),
                 isouter=True,
             )
@@ -352,9 +368,17 @@ async def list_opportunities(
                 evidence.get(opportunity.id, (0, 0)),
                 codes.get(opportunity.id, []),
                 assignee_name,
+                client_name,
                 shared_with_me,
             )
-            for opportunity, internet_id, graph_id, assignee_name, shared_with_me in rows
+            for (
+                opportunity,
+                internet_id,
+                graph_id,
+                assignee_name,
+                client_name,
+                shared_with_me,
+            ) in rows
         ],
         "total": total,
         "limit": page_limit,
@@ -723,6 +747,7 @@ def _payload(
     evidence: tuple[int, int],
     codes: list[OpportunityCode],
     assignee_name: str | None,
+    client_name: str | None,
     shared_with_me: bool,
 ) -> dict:
     """One row, with absences preserved as absences."""
@@ -758,6 +783,11 @@ def _payload(
         # have.
         "assignee_name": assignee_name,
         "client_id": str(row.client_id) if row.client_id else None,
+        # Denormalised for the same reason as `assignee_name`, and for one
+        # more: the id alone is unreadable, so a recruiter who has just filed
+        # eight job orders under six different companies has no way to check
+        # what they chose.
+        "client_name": client_name,
         "source": row.source,
         # "A share is one of the reasons you can see this", not "the only
         # reason" — see the design note on why the two differ.
@@ -1019,13 +1049,14 @@ async def set_opportunity_client(
         subject_salary = opportunity.salary_raw
 
         adopted: uuid.UUID | None = opportunity.assigned_user_id
+        client_name: str | None = None
         if body.client_id is not None:
             # RLS scopes this to the agency, so a client of another agency is
             # simply not found — refused here rather than as a 500 from the
             # composite foreign key.
             client = (
                 await session.execute(
-                    select(Client.id, Client.assigned_user_id).where(
+                    select(Client.id, Client.name, Client.assigned_user_id).where(
                         Client.id == body.client_id
                     )
                 )
@@ -1034,6 +1065,10 @@ async def set_opportunity_client(
                 raise HTTPException(
                     status_code=422, detail="That client is not in this agency."
                 )
+            # Named in the response for the same reason `assignee_name` is:
+            # the browser sent an id and holds no name, so without this the
+            # picker goes empty again the moment the link succeeds.
+            client_name = client.name
             # Only an unassigned job order adopts. An assigned one never
             # changes hands here — that is what the assign route is for.
             if (
@@ -1079,6 +1114,7 @@ async def set_opportunity_client(
     return {
         "id": str(opportunity_id),
         "client_id": str(body.client_id) if body.client_id else None,
+        "client_name": client_name,
         "assigned_user_id": str(adopted) if adopted else None,
         "assignee_name": name,
     }
