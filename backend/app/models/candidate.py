@@ -188,6 +188,14 @@ class Candidate(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
         PgUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL")
     )
 
+    # The recruiter this candidate belongs to. NULL means the claimable queue,
+    # not "hidden" — the same meaning `opportunities.assigned_user_id` carries.
+    #
+    # `created_by` stays what it is: an audit column recording who typed the
+    # row. Ownership moves; authorship does not, and conflating them would
+    # rewrite history every time a candidate changed hands.
+    owner_id: Mapped[uuid.UUID | None] = mapped_column(PgUUID(as_uuid=True), index=True)
+
     __table_args__ = (
         UniqueConstraint("tenant_id", "id", name="uq_candidates_tenant_id_id"),
         # CASCADE, and it is the erasure rule rather than a convenience.
@@ -208,6 +216,18 @@ class Candidate(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
             ["candidates.tenant_id", "candidates.id"],
             name="fk_candidates_merged_into_same_tenant",
             ondelete="CASCADE",
+        ),
+        # Composite, so a share can never reach a user in another agency.
+        #
+        # The column list on SET NULL is not optional: a bare SET NULL on a
+        # COMPOSITE key nulls every referencing column including `tenant_id`,
+        # which is NOT NULL — so deleting a recruiter would fail outright
+        # rather than releasing their candidates to the queue.
+        ForeignKeyConstraint(
+            ["tenant_id", "owner_id"],
+            ["users.tenant_id", "users.id"],
+            name="fk_candidates_owner_same_tenant",
+            ondelete="SET NULL (owner_id)",
         ),
         # Declared here as well as in the migration so autogenerate does not
         # propose dropping them. `merged` is excluded so a merge frees both
