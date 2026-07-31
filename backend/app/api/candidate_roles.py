@@ -301,9 +301,9 @@ async def _load_role(session, candidate_id: uuid.UUID, role_id: uuid.UUID) -> Ca
 
 @router.post("/candidates/{candidate_id}/roles", status_code=201)
 async def create_role(request: Request, candidate_id: uuid.UUID, body: RoleBody) -> dict:
-    user_uuid, tenant_uuid, role = await _require_session_with_role(request)
+    user_uuid, tenant_uuid, user_role = await _require_session_with_role(request)
     async with tenant_session(tenant_uuid) as session:
-        candidate = await load_editable_candidate(session, candidate_id, user_uuid, role)
+        candidate = await load_editable_candidate(session, candidate_id, user_uuid, user_role)
         role = CandidateRole(
             id=uuid.uuid4(),
             tenant_id=tenant_uuid,
@@ -326,9 +326,9 @@ async def create_role(request: Request, candidate_id: uuid.UUID, body: RoleBody)
 async def update_role(
     request: Request, candidate_id: uuid.UUID, role_id: uuid.UUID, body: RolePatchBody
 ) -> dict:
-    user_uuid, tenant_uuid, role = await _require_session_with_role(request)
+    user_uuid, tenant_uuid, user_role = await _require_session_with_role(request)
     async with tenant_session(tenant_uuid) as session:
-        candidate = await load_editable_candidate(session, candidate_id, user_uuid, role)
+        candidate = await load_editable_candidate(session, candidate_id, user_uuid, user_role)
         role = await _load_role(session, candidate_id, role_id)
 
         sent = body.model_fields_set
@@ -386,9 +386,9 @@ async def _set_status(
     Idempotent on purpose: confirming an already-confirmed role is a
     double-click, not an error.
     """
-    user_uuid, tenant_uuid, role = await _require_session_with_role(request)
+    user_uuid, tenant_uuid, user_role = await _require_session_with_role(request)
     async with tenant_session(tenant_uuid) as session:
-        candidate = await load_editable_candidate(session, candidate_id, user_uuid, role)
+        candidate = await load_editable_candidate(session, candidate_id, user_uuid, user_role)
         role = await _load_role(session, candidate_id, role_id)
         role.status = status
         role.updated_by = user_uuid
@@ -418,9 +418,9 @@ async def reject_role(request: Request, candidate_id: uuid.UUID, role_id: uuid.U
 
 @router.delete("/candidates/{candidate_id}/roles/{role_id}", status_code=204)
 async def delete_role(request: Request, candidate_id: uuid.UUID, role_id: uuid.UUID) -> Response:
-    user_uuid, tenant_uuid, role = await _require_session_with_role(request)
+    user_uuid, tenant_uuid, user_role = await _require_session_with_role(request)
     async with tenant_session(tenant_uuid) as session:
-        candidate = await load_editable_candidate(session, candidate_id, user_uuid, role)
+        candidate = await load_editable_candidate(session, candidate_id, user_uuid, user_role)
         role = await _load_role(session, candidate_id, role_id)
         await session.delete(role)
         await session.flush()

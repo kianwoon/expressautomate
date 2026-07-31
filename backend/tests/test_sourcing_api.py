@@ -559,6 +559,59 @@ async def test_another_agency_cannot_delete_a_submission(agency, other_agency) -
     assert response.status_code == 404
 
 
+async def _add_recruiter(tenant_id: uuid.UUID) -> uuid.UUID:
+    """A second, non-owner user in the SAME tenant — the fixture's `agency`
+    only ever seeds a `role='owner'` user, which can edit anything and so
+    cannot exercise the visible-but-not-editable path."""
+    uid = uuid.uuid4()
+    async with AdminSessionLocal() as s:
+        await s.execute(
+            text(
+                "INSERT INTO users (id, tenant_id, email, role)"
+                " VALUES (:i, :t, :e, 'recruiter')"
+            ),
+            {"i": uid, "t": tenant_id, "e": f"u{uid.hex[:6]}@agency.sg"},
+        )
+        await s.commit()
+    return uid
+
+
+async def test_withdraw_requires_edit_rights_not_just_visibility(agency) -> None:
+    """`record_submission` stays on the visibility guard (a share recipient
+    may put a candidate shown to them in front of a client), but withdrawing
+    deletes a colleague's row, so it needs ownership. A recruiter who can only
+    SEE the unowned candidate gets 403; the owner-role user, who can edit
+    anything, gets 200."""
+    tenant_id, owner_id = agency
+    recruiter_id = await _add_recruiter(tenant_id)
+    candidate_id = await _candidate(tenant_id)  # unowned: visible to all, editable by none
+    client_id = await _client(tenant_id, "Acme Health", "acme.sg")
+
+    async with _http(tenant_id, owner_id) as http:
+        submission_id = (
+            await http.post(
+                f"/api/candidates/{candidate_id}/submissions",
+                json={"client_id": str(client_id)},
+            )
+        ).json()["id"]
+
+    async with _http(tenant_id, recruiter_id) as http:
+        # Can see it (unowned candidates are tenant-wide visible)...
+        seen = await http.get(f"/api/candidates/{candidate_id}")
+        assert seen.status_code == 200
+        # ...but cannot withdraw a submission on it: visibility, not edit rights.
+        refused = await http.delete(
+            f"/api/candidates/{candidate_id}/submissions/{submission_id}"
+        )
+        assert refused.status_code == 403, refused.text
+
+    async with _http(tenant_id, owner_id) as http:
+        removed = await http.delete(
+            f"/api/candidates/{candidate_id}/submissions/{submission_id}"
+        )
+        assert removed.status_code == 200, removed.text
+
+
 # --- routing --------------------------------------------------------------
 
 

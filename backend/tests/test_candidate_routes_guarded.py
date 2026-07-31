@@ -115,11 +115,9 @@ EDIT_ONLY_EXEMPT: dict[str, dict[str, str]] = {
             "candidate. A share recipient may put a shared candidate in front "
             "of a client: that is visibility, not edit rights."
         ),
-        "withdraw_submission": (
-            "The other half of `record_submission`, and narrower — it deletes "
-            "only a `candidate_submissions` row. Whoever could create it must "
-            "be able to undo it, or a misclick is permanent."
-        ),
+        # `withdraw_submission` deliberately NOT exempt here: it is on the
+        # edit guard, not the read guard, because deleting a colleague's
+        # submission is destructive in a way recording one is not.
     },
     "candidate_ownership.py": {
         "claim_candidate": (
