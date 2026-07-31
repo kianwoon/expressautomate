@@ -765,3 +765,62 @@ Task 1: complete (aa70765..1504b70, review clean — spec OK, 2 Minor unused imp
   from created_by. 1642 passed, 1 skipped (= baseline 1640 + exactly the 2 new tests).
   NOTE: Task 0 had already put owner_id into conftest's make_candidate, against a column
   that did not exist — latently broken, never called, now valid.
+Task 1 lint: 1504b70..1ad8979 (ruff --fix, 3 unused imports; 25 affected tests pass).
+Task 2: complete (1ad8979..7189cb5, review clean — zero findings).
+  candidate_shares model + migration c1a0d5e7b202 + registered in models/__init__.py.
+  RLS block byte-for-byte identical to opportunity_shares bar the table name; model/migration
+  parity checked name-for-name on every column, 2 CHECKs, 3 composite FKs, 5 indexes.
+  1645 passed, 1 skipped (= 1642 + exactly 3).
+Task 3: complete (7189cb5..c8ff87c, review approved). candidate_access_requests +
+  migration c1a0d5e7b203 + registered. RLS byte-identical; model/migration parity checked
+  incl. server_default 'pending'. 1646 passed, 1 skipped.
+  MINOR CARRIED -> Task 11: the test proves two PENDING rows collide but NOT the
+  decline-then-reask path, which is the entire reason the index is partial. Add it in
+  Task 11 where decline exists and the path is end-to-end testable.
+  Autogenerate drift ix_candidate_activities_candidate_created is genuinely pre-existing
+  (from 20260729_1900_candidate_activities.py) — not ours, left alone.
+Task 4: complete (c8ff87c..2ce2039 impl, ..75ab57d fix round 1; re-review approved).
+  CandidateFieldOverride gains user_id. user_id IS NULL = permanent AGENCY-WIDE tier
+  (import protection); non-NULL = one recruiter's judgement. NO backfill of legacy rows.
+  Widened UNIQUE + a SECOND partial unique index WHERE user_id IS NULL (a NULL never
+  collides in a UNIQUE, so the constraint alone does not bound the tenant-wide tier).
+  FK is CASCADE not SET NULL, so a departed recruiter's opinion can't become agency-wide.
+  *** BRIEF STEP 5 WAS WRONG and the implementer was right to refuse it: writing
+  user_id=caller for EVERY patched field would privatise a corrected full_name and let
+  the next import overwrite the name agency-wide. PATCH now ROUTES by the fact/judgement
+  split in candidate_overrides.py. The NULL branch must infer on the PARTIAL INDEX
+  (index_elements + index_where), NOT ON CONSTRAINT — a NULL never conflicts on the
+  4-col constraint and naming it raises instead of updating. ***
+  Brief's caller list was also wrong: imports/undo.py does NOT call overridden_fields
+  (it counts rows for a warning, all tiers, correctly). Real sites: api/candidates.py:521
+  (signed-in user), api/candidate_roles.py:216 and imports/apply.py:248 (both owner_id).
+  current_title/current_employer classified SHARED because apply_derived writes them from
+  shared role history; a per-user reading would drift. Closest call, revisit if it bites.
+  1654 passed, 1 skipped.
+Task 5: complete (75ab57d..f91c9ed, +lint 8e0f1b1; review approved, 2 Minor).
+  visible_candidates / can_edit_candidate / load_visible_candidate (404) /
+  load_editable_candidate (403) / candidate_shared_with_me_exists, added alongside the
+  opportunity siblings in visibility.py. NO mailbox term — deliberate, candidates never
+  come from the email pipeline. Correlated EXISTS verified sound against the proven
+  opportunity pattern. Tenant boundary stays RLS, no explicit tenant_id term (same as
+  opportunities). 1656 passed, 1 skipped.
+  MINOR CARRIED -> Task 7: no test yet for the 404-vs-403 inversion (invisible => 404,
+  visible-but-not-editable => 403). It is the subtlest rule in the feature. Cover it there.
+Task 6: complete (bf10681..8278769, review approved, 3 Minor). FULL delivery path per the
+  user's pre-flight decision: 6 kinds + CANDIDATE_EVENT_KINDS into ALL_EVENT_KINDS,
+  candidate_events.py, subject_id protocol on BOTH event types (OpportunityEvent.subject_id
+  returns opportunity_id — value unchanged, traced), emit_candidate_event, 6 _HEADLINE/
+  _TEMPLATE_FOR entries + render branches, kind-prefix branch in jobs.py
+  _send_claimed_delivery. E2E test drives a candidate.shared row to STATUS_SENT.
+  1667 passed, 1 skipped (+11).
+  *** SHIPPED BUG FOUND, confirmed by the reviewer, logged as SEPARATE work (chip
+  task_0c8b791d): opportunity.shared and opportunity.assigned ARE emitted
+  (opportunity_shares.py:164, opportunities.py:1104,1337) but are absent from _HEADLINE/
+  _TEMPLATE_FOR -> KeyError in the delivery worker, which retries and stalls the queue. ***
+  *** KOYEB ENV: new setting WHATSAPP_TEMPLATE_CANDIDATE_UPDATE is EMPTY. Per-service env
+  vars are not in this repo (see CLAUDE.md). Must be set on api AND worker before candidate
+  events go out over WhatsApp, or Meta rejects name:"" remotely with no local guard. ***
+  MINOR CARRIED -> Task 11 / final: a share's `note` and `actor_name` are emit-time only;
+  the worker rebuilds from the outbox row and renders them "Not mentioned". The note is
+  REAL data merely unpersisted. Correct fix is persisting it, not changing the render.
+  MINOR: test_a_deleted_candidate asserts "no send" but not that the row reached FAILED.

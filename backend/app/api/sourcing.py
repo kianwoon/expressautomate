@@ -50,16 +50,18 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy import func, select
 
-from app.api.auth import _require_session, _require_session_with_role
+from app.api.auth import _require_session_with_role
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.db.rls import tenant_session
-from app.models.candidate import Candidate
 from app.models.client import Client
 from app.models.sourcing import CandidateSubmission, SourcingRun
 from app.services.sourcing.client_resolution import resolve_client
 from app.services.sourcing.persist import read_matches
-from app.services.visibility import load_visible_opportunity
+from app.services.visibility import (
+    load_visible_candidate,
+    load_visible_opportunity,
+)
 from app.workers.queue import enqueue
 
 log = get_logger(__name__)
@@ -289,11 +291,7 @@ async def record_submission(
     user_uuid, tenant_uuid, role = await _require_session_with_role(request)
 
     async with tenant_session(tenant_uuid) as session:
-        candidate = (
-            await session.execute(select(Candidate).where(Candidate.id == candidate_id))
-        ).scalar_one_or_none()
-        if candidate is None:
-            raise HTTPException(status_code=404, detail="Candidate not found")
+        await load_visible_candidate(session, candidate_id, user_uuid, role)
 
         client = (
             await session.execute(select(Client).where(Client.id == body.client_id))
@@ -367,9 +365,10 @@ async def withdraw_submission(
     carries no status column on purpose, so a withdrawn submission that stayed
     as a row would keep excluding the candidate while claiming not to.
     """
-    _user_uuid, tenant_uuid = _require_session(request)
+    user_uuid, tenant_uuid, role = await _require_session_with_role(request)
 
     async with tenant_session(tenant_uuid) as session:
+        await load_visible_candidate(session, candidate_id, user_uuid, role)
         record = (
             await session.execute(
                 select(CandidateSubmission).where(

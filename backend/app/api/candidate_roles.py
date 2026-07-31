@@ -13,8 +13,7 @@ from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel, model_validator
 from sqlalchemy import select
 
-from app.api.auth import _require_session
-from app.api.candidates import _load
+from app.api.auth import _require_session_with_role
 from app.db.rls import tenant_session
 from app.models.candidate import Candidate, CandidateRole
 from app.models.extraction import ExtractionEvidence
@@ -22,6 +21,7 @@ from app.services.candidate_overrides import overridden_fields
 from app.services.candidate_tenure import derive
 from app.services.client_naming import normalize_company_name
 from app.services.cv.schema import ROLE_FIELDS
+from app.services.visibility import load_editable_candidate
 
 router = APIRouter(tags=["candidate-roles"])
 
@@ -301,9 +301,9 @@ async def _load_role(session, candidate_id: uuid.UUID, role_id: uuid.UUID) -> Ca
 
 @router.post("/candidates/{candidate_id}/roles", status_code=201)
 async def create_role(request: Request, candidate_id: uuid.UUID, body: RoleBody) -> dict:
-    user_uuid, tenant_uuid = _require_session(request)
+    user_uuid, tenant_uuid, role = await _require_session_with_role(request)
     async with tenant_session(tenant_uuid) as session:
-        candidate = await _load(session, candidate_id)
+        candidate = await load_editable_candidate(session, candidate_id, user_uuid, role)
         role = CandidateRole(
             id=uuid.uuid4(),
             tenant_id=tenant_uuid,
@@ -326,9 +326,9 @@ async def create_role(request: Request, candidate_id: uuid.UUID, body: RoleBody)
 async def update_role(
     request: Request, candidate_id: uuid.UUID, role_id: uuid.UUID, body: RolePatchBody
 ) -> dict:
-    user_uuid, tenant_uuid = _require_session(request)
+    user_uuid, tenant_uuid, role = await _require_session_with_role(request)
     async with tenant_session(tenant_uuid) as session:
-        candidate = await _load(session, candidate_id)
+        candidate = await load_editable_candidate(session, candidate_id, user_uuid, role)
         role = await _load_role(session, candidate_id, role_id)
 
         sent = body.model_fields_set
@@ -386,9 +386,9 @@ async def _set_status(
     Idempotent on purpose: confirming an already-confirmed role is a
     double-click, not an error.
     """
-    user_uuid, tenant_uuid = _require_session(request)
+    user_uuid, tenant_uuid, role = await _require_session_with_role(request)
     async with tenant_session(tenant_uuid) as session:
-        candidate = await _load(session, candidate_id)
+        candidate = await load_editable_candidate(session, candidate_id, user_uuid, role)
         role = await _load_role(session, candidate_id, role_id)
         role.status = status
         role.updated_by = user_uuid
@@ -418,9 +418,9 @@ async def reject_role(request: Request, candidate_id: uuid.UUID, role_id: uuid.U
 
 @router.delete("/candidates/{candidate_id}/roles/{role_id}", status_code=204)
 async def delete_role(request: Request, candidate_id: uuid.UUID, role_id: uuid.UUID) -> Response:
-    _user_uuid, tenant_uuid = _require_session(request)
+    user_uuid, tenant_uuid, role = await _require_session_with_role(request)
     async with tenant_session(tenant_uuid) as session:
-        candidate = await _load(session, candidate_id)
+        candidate = await load_editable_candidate(session, candidate_id, user_uuid, role)
         role = await _load_role(session, candidate_id, role_id)
         await session.delete(role)
         await session.flush()

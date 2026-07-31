@@ -502,6 +502,14 @@ async def test_a_recruiter_may_archive_but_not_delete(agency_with_candidates) ->
         await s.execute(
             text("UPDATE users SET role = 'recruiter' WHERE id = :i"), {"i": uid}
         )
+        # The candidate has to be theirs. Once the caller stops being an
+        # owner, an UNOWNED candidate is visible but not editable — claiming
+        # it is what creates edit rights — so archive would be a 403 about
+        # ownership rather than the 200-then-403 this test is asserting.
+        await s.execute(
+            text("UPDATE candidates SET owner_id = :i WHERE id = :c"),
+            {"i": uid, "c": ids["active"]},
+        )
         await s.commit()
     async with await _client_for(tid, uid) as http:
         assert (await http.post(f"/api/candidates/{ids['active']}/archive")).status_code == 200

@@ -42,8 +42,7 @@ from pydantic import BaseModel
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
-from app.api.auth import _require_session
-from app.api.candidates import _load
+from app.api.auth import _require_session_with_role
 from app.api.wa_gateway import _is_current_ack, _load_risk_ack
 from app.core.config import settings
 from app.core.logging import get_logger
@@ -52,6 +51,7 @@ from app.models.candidate import Candidate, CandidateActivity
 from app.models.tenant import Tenant, User
 from app.models.wa_session import WaSession
 from app.services.user_naming import recruiter_name
+from app.services.visibility import load_visible_candidate
 from app.services.wa_gateway import (
     GatewayOutcomeUnknownError,
     GatewayRefusedError,
@@ -166,9 +166,9 @@ async def whatsapp_draft(request: Request, candidate_id: uuid.UUID) -> dict:
     of being duplicated in the frontend. The platform never sends this — see
     `CandidateActivity`.
     """
-    user_uuid, tenant_uuid = _require_session(request)
+    user_uuid, tenant_uuid, role = await _require_session_with_role(request)
     async with tenant_session(tenant_uuid) as session:
-        candidate = await _load(session, candidate_id)
+        candidate = await load_visible_candidate(session, candidate_id, user_uuid, role)
         if candidate.phone_e164 is None:
             # 409, not 404: the candidate exists, but `_identity_phone` stores
             # NULL here for any number that could not identify a person as a
@@ -665,7 +665,7 @@ async def whatsapp_send(
 
     One candidate, one message. There is deliberately no bulk form (plan §9).
     """
-    user_uuid, tenant_uuid = _require_session(request)
+    user_uuid, tenant_uuid, role = await _require_session_with_role(request)
 
     # Before anything else, including the candidate lookup: a replay must be
     # answered identically no matter what has changed since — the candidate's
@@ -700,7 +700,7 @@ async def whatsapp_send(
     async with tenant_session(tenant_uuid) as session:
         # Inside the tenant session, so agency B asking about agency A's
         # candidate gets a 404 before anything else happens (§18).
-        candidate = await _load(session, candidate_id)
+        candidate = await load_visible_candidate(session, candidate_id, user_uuid, role)
         message = body.message or await _draft_for(session, candidate, user_uuid, tenant_uuid)
         phone_e164 = candidate.phone_e164
 

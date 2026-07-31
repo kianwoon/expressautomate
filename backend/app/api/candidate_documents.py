@@ -28,7 +28,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile
 from sqlalchemy import func, select
 
-from app.api.auth import _require_session
+from app.api.auth import _require_session_with_role
 from app.api.candidates import _load
 from app.core.config import settings
 from app.core.logging import get_logger
@@ -36,6 +36,10 @@ from app.db.rls import tenant_session
 from app.models.candidate import CandidateDocument
 from app.services.cv.text import sniff
 from app.services.storage.r2 import BodyStore, R2BodyStore, document_key
+from app.services.visibility import (
+    load_editable_candidate,
+    load_visible_candidate,
+)
 from app.workers.queue import enqueue
 
 log = get_logger(__name__)
@@ -184,10 +188,10 @@ async def upload_document(
     even spend our bandwidth, and an exhausted tenant is refused with nothing
     stored anywhere.
     """
-    _user_uuid, tenant_uuid = _require_session(request)
+    user_uuid, tenant_uuid, role = await _require_session_with_role(request)
 
     async with tenant_session(tenant_uuid) as session:
-        await _load(session, candidate_id)
+        await load_editable_candidate(session, candidate_id, user_uuid, role)
         if not await _within_daily_quota(session):
             raise HTTPException(
                 status_code=429,
@@ -229,7 +233,7 @@ async def upload_document(
             byte_size=len(content),
             object_key=key,
             parse_state=CandidateDocument.PENDING,
-            uploaded_by=_user_uuid,
+            uploaded_by=user_uuid,
         )
         session.add(document)
         await session.commit()
@@ -297,10 +301,10 @@ async def download_document(
     URL would be a capability that outlives the permission it was granted
     under.
     """
-    _user_uuid, tenant_uuid = _require_session(request)
+    user_uuid, tenant_uuid, role = await _require_session_with_role(request)
 
     async with tenant_session(tenant_uuid) as session:
-        await _load(session, candidate_id)
+        await load_visible_candidate(session, candidate_id, user_uuid, role)
         document = await _load_document(session, candidate_id, document_id)
         key = document.object_key
 
@@ -335,10 +339,10 @@ async def delete_document(
     `extractions.candidate_document_id`, since evidence spans index into text
     that no longer exists.
     """
-    _user_uuid, tenant_uuid = _require_session(request)
+    user_uuid, tenant_uuid, role = await _require_session_with_role(request)
 
     async with tenant_session(tenant_uuid) as session:
-        await _load(session, candidate_id)
+        await load_editable_candidate(session, candidate_id, user_uuid, role)
         document = await _load_document(session, candidate_id, document_id)
         keys = [document.object_key]
         if document.text_key:

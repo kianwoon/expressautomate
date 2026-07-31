@@ -44,7 +44,12 @@ from app.services.candidate_overrides import JUDGEMENT_FIELDS, overridden_fields
 from app.services.candidate_tenure import derive
 from app.services.sourcing import eligibility
 from app.services.user_naming import actor_name
-from app.services.visibility import load_visible_opportunity
+from app.services.visibility import (
+    load_editable_candidate,
+    load_visible_candidate,
+    load_visible_opportunity,
+    visible_candidates,
+)
 
 log = get_logger(__name__)
 router = APIRouter(tags=["candidates"])
@@ -281,6 +286,9 @@ async def list_candidates(
         for stage, n in await session.execute(
             select(Candidate.pipeline_stage, func.count())
             .where(Candidate.record_status != Candidate.MERGED)
+            # The chips count what this recruiter may see. Counting the whole
+            # tenant would leak the size of a colleague's book.
+            .where(visible_candidates(user_uuid, role))
             .group_by(Candidate.pipeline_stage)
         ):
             counts["all"] += n
@@ -295,6 +303,7 @@ async def list_candidates(
             base = select(Candidate).where(Candidate.record_status == record_status)
         else:
             base = select(Candidate).where(Candidate.record_status != Candidate.MERGED)
+        base = base.where(visible_candidates(user_uuid, role))
         if pipeline_stage is not None:
             base = base.where(Candidate.pipeline_stage == pipeline_stage)
         if q:
@@ -491,9 +500,9 @@ async def list_candidates(
 
 @router.get("/candidates/{candidate_id}")
 async def get_candidate(request: Request, candidate_id: uuid.UUID) -> dict:
-    user_uuid, tenant_uuid = _require_session(request)
+    user_uuid, tenant_uuid, role = await _require_session_with_role(request)
     async with tenant_session(tenant_uuid) as session:
-        candidate = await _load(session, candidate_id)
+        candidate = await load_visible_candidate(session, candidate_id, user_uuid, role)
         skills = (
             (
                 await session.execute(
@@ -928,9 +937,9 @@ def _comparable(field: str, value: object) -> object:
 async def update_candidate(
     request: Request, candidate_id: uuid.UUID, body: CandidateUpdate
 ) -> dict:
-    user_uuid, tenant_uuid = _require_session(request)
+    user_uuid, tenant_uuid, role = await _require_session_with_role(request)
     async with tenant_session(tenant_uuid) as session:
-        candidate = await _load(session, candidate_id)
+        candidate = await load_editable_candidate(session, candidate_id, user_uuid, role)
         # A merged row is not a person any more; its identity belongs to the
         # target. Editing one writes to a record nothing reads, and worse, it
         # can change the email and phone that `unmerge` has to give back.
@@ -1030,9 +1039,9 @@ async def update_candidate(
 
 @router.post("/candidates/{candidate_id}/archive")
 async def archive_candidate(request: Request, candidate_id: uuid.UUID) -> dict:
-    _user_uuid, tenant_uuid = _require_session(request)
+    user_uuid, tenant_uuid, role = await _require_session_with_role(request)
     async with tenant_session(tenant_uuid) as session:
-        candidate = await _load(session, candidate_id)
+        candidate = await load_editable_candidate(session, candidate_id, user_uuid, role)
         if candidate.record_status == Candidate.MERGED:
             raise HTTPException(status_code=400, detail="Unmerge the candidate first")
         await session.execute(
@@ -1053,9 +1062,9 @@ async def restore_candidate(request: Request, candidate_id: uuid.UUID) -> dict:
     unmerge must come first so `record_status` and
     `merged_into_candidate_id` never disagree about whether the row is live.
     """
-    _user_uuid, tenant_uuid = _require_session(request)
+    user_uuid, tenant_uuid, role = await _require_session_with_role(request)
     async with tenant_session(tenant_uuid) as session:
-        candidate = await _load(session, candidate_id)
+        candidate = await load_editable_candidate(session, candidate_id, user_uuid, role)
         if candidate.record_status == Candidate.MERGED:
             raise HTTPException(status_code=400, detail="Unmerge the candidate first")
         await session.execute(
@@ -1071,7 +1080,7 @@ async def restore_candidate(request: Request, candidate_id: uuid.UUID) -> dict:
 async def merge_candidate(
     request: Request, candidate_id: uuid.UUID, body: MergeRequest
 ) -> dict:
-    _user_uuid, tenant_uuid = _require_session(request)
+    user_uuid, tenant_uuid, role = await _require_session_with_role(request)
     if body.target_id == candidate_id:
         raise HTTPException(status_code=400, detail="A candidate cannot be merged into itself")
 
@@ -1086,7 +1095,8 @@ async def merge_candidate(
         # queue rather than deadlock. The statuses are only read *after* both
         # locks are held, because the pre-lock read is exactly what is stale.
         await _lock_pair(session, candidate_id, body.target_id)
-        loser = await _load(session, candidate_id)
+        # Only this side is guarded here; the target's own check is Task 12.
+        loser = await load_editable_candidate(session, candidate_id, user_uuid, role)
         target = await _load(session, body.target_id)
         if target.record_status == Candidate.MERGED:
             # Chains would need every reader to walk them. Refusing here is
@@ -1202,9 +1212,9 @@ async def unmerge_candidate(request: Request, candidate_id: uuid.UUID) -> dict:
     came from, so it cannot be given back. The identity keys return, which is
     what makes the person findable again.
     """
-    _user_uuid, tenant_uuid = _require_session(request)
+    user_uuid, tenant_uuid, role = await _require_session_with_role(request)
     async with tenant_session(tenant_uuid) as session:
-        candidate = await _load(session, candidate_id)
+        candidate = await load_editable_candidate(session, candidate_id, user_uuid, role)
         if candidate.record_status != Candidate.MERGED:
             raise HTTPException(status_code=400, detail="Candidate is not merged")
 
@@ -1304,9 +1314,12 @@ async def log_activity(request: Request, candidate_id: uuid.UUID, body: Activity
     request body for it, because nothing in this system observes a send
     (§15) and the CHECK constraint would refuse anything else anyway.
     """
-    user_uuid, tenant_uuid = _require_session(request)
+    # The READ guard, deliberately: the row this writes is a
+    # `candidate_activities` row, not the candidate. A share recipient may
+    # record that they opened a WhatsApp chat — a fact about what they did.
+    user_uuid, tenant_uuid, role = await _require_session_with_role(request)
     async with tenant_session(tenant_uuid) as session:
-        await _load(session, candidate_id)
+        await load_visible_candidate(session, candidate_id, user_uuid, role)
         activity_id = uuid.uuid4()
         await session.execute(
             insert(CandidateActivity).values(
@@ -1342,9 +1355,9 @@ async def log_activity(request: Request, candidate_id: uuid.UUID, body: Activity
 
 @router.get("/candidates/{candidate_id}/activities")
 async def list_activities(request: Request, candidate_id: uuid.UUID) -> dict:
-    _user_uuid, tenant_uuid = _require_session(request)
+    user_uuid, tenant_uuid, role = await _require_session_with_role(request)
     async with tenant_session(tenant_uuid) as session:
-        await _load(session, candidate_id)
+        await load_visible_candidate(session, candidate_id, user_uuid, role)
         rows = (
             (
                 await session.execute(

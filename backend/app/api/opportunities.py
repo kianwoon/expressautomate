@@ -53,7 +53,6 @@ from app.api.auth import _require_session_with_role
 from app.core.config import settings
 from app.db.rls import tenant_session
 from app.models import (
-    Candidate,
     Client,
     EmailMessage,
     Opportunity,
@@ -71,6 +70,7 @@ from app.services.sourcing import eligibility
 from app.services.visibility import (
     can_edit,
     load_editable_opportunity,
+    load_visible_candidate,
     load_visible_opportunity,
     shared_with_me_exists,
     visible_opportunities,
@@ -750,11 +750,7 @@ async def get_eligibility(
             session, opportunity_id, user_uuid, role
         )
 
-        candidate = (
-            await session.execute(select(Candidate).where(Candidate.id == candidate_id))
-        ).scalar_one_or_none()
-        if candidate is None:
-            raise HTTPException(status_code=404, detail="No such candidate.")
+        candidate = await load_visible_candidate(session, candidate_id, user_uuid, role)
 
     if opportunity.placement_type is None:
         # The job order has not been classified yet — a different thing from

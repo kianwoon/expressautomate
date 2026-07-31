@@ -30,12 +30,15 @@ from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, 
 from PIL import Image, UnidentifiedImageError
 from sqlalchemy import update
 
-from app.api.auth import _require_session
-from app.api.candidates import _load
+from app.api.auth import _require_session_with_role
 from app.core.config import settings
 from app.db.rls import tenant_session
 from app.models.candidate import Candidate
 from app.services.storage.r2 import BodyStore, R2BodyStore, avatar_key
+from app.services.visibility import (
+    load_editable_candidate,
+    load_visible_candidate,
+)
 
 router = APIRouter(tags=["candidates"])
 
@@ -162,10 +165,10 @@ async def upload_avatar(
     guessing another agency's candidate id cannot even spend our CPU on a
     decode, let alone write an object under their prefix.
     """
-    _user_uuid, tenant_uuid = _require_session(request)
+    user_uuid, tenant_uuid, role = await _require_session_with_role(request)
 
     async with tenant_session(tenant_uuid) as session:
-        await _load(session, candidate_id)
+        await load_editable_candidate(session, candidate_id, user_uuid, role)
 
     content = await _read_within_limit(file)
     encoded = _reencode(content)
@@ -180,7 +183,7 @@ async def upload_avatar(
         # Re-checked inside the second transaction: the candidate could have
         # been deleted while the image was being decoded, and the UPDATE is
         # tenant-scoped by RLS regardless.
-        await _load(session, candidate_id)
+        await load_editable_candidate(session, candidate_id, user_uuid, role)
         await session.execute(
             update(Candidate)
             .where(Candidate.id == candidate_id)
@@ -202,10 +205,10 @@ async def get_avatar(
     URL would be a capability that outlives the permission it was granted
     under, readable by anyone who later saw the row.
     """
-    _user_uuid, tenant_uuid = _require_session(request)
+    user_uuid, tenant_uuid, role = await _require_session_with_role(request)
 
     async with tenant_session(tenant_uuid) as session:
-        candidate = await _load(session, candidate_id)
+        candidate = await load_visible_candidate(session, candidate_id, user_uuid, role)
         has_avatar = candidate.avatar_key is not None
 
     if not has_avatar:
@@ -234,10 +237,10 @@ async def delete_avatar(
     Deleting a candidate who has no photo succeeds — 204 either way, so a
     double-click is not an error.
     """
-    _user_uuid, tenant_uuid = _require_session(request)
+    user_uuid, tenant_uuid, role = await _require_session_with_role(request)
 
     async with tenant_session(tenant_uuid) as session:
-        candidate = await _load(session, candidate_id)
+        candidate = await load_editable_candidate(session, candidate_id, user_uuid, role)
         has_avatar = candidate.avatar_key is not None
 
     if has_avatar:
