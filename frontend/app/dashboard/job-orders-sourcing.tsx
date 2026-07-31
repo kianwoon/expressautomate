@@ -5,6 +5,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { SOURCING_POLL_MS } from "../api";
 import { getClient, type Client } from "./clients";
 import { ClientLogo } from "./clients/client-logo";
+import { HeldByColleague } from "./candidates/candidate-form";
+import type { CandidateCollision } from "./candidates";
 // Only `clients/page.tsx` imported this before — `ClientLogo`'s own classes
 // (`cl-logo-*`) live here, and this screen is the first place outside the
 // clients panel to render that component.
@@ -123,7 +125,16 @@ export function Shortlist({ row }: { row: Opportunity }) {
       const data = await getSourcing(row.id);
       setView({ status: "ready", data });
       if (data.matches.length > 0) {
-        const ids = data.matches.map((match) => match.candidate_id);
+        // A redacted match (`visible: false`) already carries its masked
+        // `full_name` on the match payload — fetching it by id would 404,
+        // since the caller cannot read a candidate record it does not hold,
+        // and that 404 is exactly what used to fall back to a raw UUID on
+        // screen. Only ids the caller can actually read go to `namesFor` and
+        // to the eligibility check, which is the same "must hold the
+        // candidate" read.
+        const ids = data.matches
+          .filter((match) => match.visible !== false)
+          .map((match) => match.candidate_id);
         setNames(await namesFor(ids, known.current));
         setEligibility(await eligibilityFor(row.id, ids, knownEligibility.current));
       }
@@ -438,7 +449,21 @@ function Match({
   error: string | null;
   onSubmit: (clientId: string) => void;
 }) {
-  const who = name ?? match.candidate_id;
+  // A redacted match already carries the name it wants shown — masked and
+  // abbreviated server-side — on the match itself. Fetching it by id would
+  // 404 (the caller does not hold this candidate), which is exactly the 404
+  // that used to leave a raw UUID on screen; `refetch` above no longer even
+  // tries. `full_name` is rendered verbatim, never expanded or prettified.
+  const redacted = match.visible === false;
+  const who = redacted ? (match.full_name ?? match.candidate_id) : (name ?? match.candidate_id);
+
+  const collision: CandidateCollision | null = redacted
+    ? {
+        reason: "already_registered",
+        candidate: { full_name: who, held_by: match.held_by ?? "a colleague", id: match.candidate_id },
+        can_request_access: match.can_request_access === true,
+      }
+    : null;
 
   return (
     <li className="src-row">
@@ -446,7 +471,7 @@ function Match({
         <span className="src-rank" aria-hidden="true">
           {rank}
         </span>
-        <span className={name ? "src-name" : "src-name src-name-unknown"}>{who}</span>
+        <span className={!redacted && name ? "src-name" : "src-name src-name-unknown"}>{who}</span>
         {/* The score verbatim, exactly as the server computed and stored it.
             Rounding it here would collapse distinct scores into apparent ties
             in the one place a recruiter goes to ask why the order is what it
@@ -454,23 +479,49 @@ function Match({
         <span className="src-score">{match.score}</span>
       </div>
 
-      <EligibilityFlags eligibility={eligibility} />
+      {redacted ? (
+        // Everything below this point — eligibility, the score breakdown,
+        // the model's explanation — is exactly what the API withheld for a
+        // candidate this caller cannot see. Rendering any of those blocks
+        // here would either hang forever (eligibility never arrives, since
+        // `refetch` does not fetch it for a redacted id) or show an empty
+        // heading where real content used to be. "Held by" plus the request
+        // affordance is the whole story: "we have someone strong for this,
+        // ask Sarah."
+        <>
+          <p className="body src-held-by">Held by {match.held_by ?? "a colleague"}.</p>
+          {/* Only offered when the server actually said asking is possible.
+              `HeldByColleague` renders a disabled button with an explanatory
+              sentence when the id is missing, which is the right shape for a
+              create-collision reply that names a colleague but not the
+              record; here the server has already made the call, so
+              `can_request_access: false` means no affordance at all rather
+              than a disabled one nobody can act on. */}
+          {match.can_request_access === true && collision && (
+            <HeldByColleague collision={collision} />
+          )}
+        </>
+      ) : (
+        <>
+          <EligibilityFlags eligibility={eligibility} />
 
-      <Breakdown reasons={match.reasons} />
+          <Breakdown reasons={match.reasons} />
 
-      {/* A match with no explanation is normal — only the top few are sent to
-          a model, and a response that could not be verified against the CV is
-          dropped rather than shown. It keeps its score either way, so the
-          absence needs no apology and gets none. */}
-      {match.explanation && <p className="body src-why">{match.explanation}</p>}
-      {match.explanation_evidence && (
-        <p className="body src-quote">
-          <q>{match.explanation_evidence}</q>
-        </p>
+          {/* A match with no explanation is normal — only the top few are sent
+              to a model, and a response that could not be verified against the
+              CV is dropped rather than shown. It keeps its score either way, so
+              the absence needs no apology and gets none. */}
+          {match.explanation && <p className="body src-why">{match.explanation}</p>}
+          {match.explanation_evidence && (
+            <p className="body src-quote">
+              <q>{match.explanation_evidence}</q>
+            </p>
+          )}
+        </>
       )}
 
       <div className="src-row-acts">
-        {submitted ? (
+        {redacted ? null : submitted ? (
           <span className="src-done">Submitted</span>
         ) : clientId ? (
           <button

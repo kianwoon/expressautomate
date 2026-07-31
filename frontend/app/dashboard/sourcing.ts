@@ -74,6 +74,26 @@ export type MatchReason = {
 export type SourcingMatch = {
   candidate_id: string;
   score: string;
+  /**
+   * `false` for a candidate the caller does not own or hold a share on.
+   * Sourcing scores the whole agency's book on purpose — an agency has to be
+   * able to shortlist across its own database — but the API redacts a match
+   * the caller cannot see down to the same tier the create-collision 409
+   * uses: `full_name` arrives already abbreviated and contact-masked, `reasons`,
+   * `explanation` and `explanation_evidence` are absent rather than null, and
+   * `held_by` plus `can_request_access` name the colleague to ask instead.
+   * Absent on an older server response, so treated as visible by default —
+   * the redaction is new behavior, not a field every response is guaranteed
+   * to carry.
+   */
+  visible?: boolean;
+  /** Only present on a redacted match — the abbreviated, contact-masked name
+   *  the server computed. Render verbatim; never expand or prettify it. */
+  full_name?: string | null;
+  /** Only present on a redacted match — who owns it. */
+  held_by?: string | null;
+  /** Only present on a redacted match. */
+  can_request_access?: boolean;
   reasons: MatchReason[] | null;
   explanation: string | null;
   explanation_evidence: string | null;

@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Client } from "./clients";
 import { Shortlist } from "./job-orders-sourcing";
 import type { Opportunity } from "./opportunities";
-import type { SourcingRun, SourcingView } from "./sourcing";
+import type { SourcingMatch, SourcingRun, SourcingView } from "./sourcing";
 
 /**
  * Follows `client-logo.test.tsx`'s pattern: modules the component depends on
@@ -23,13 +23,16 @@ vi.mock("./clients", async () => {
 });
 
 const getSourcing = vi.fn();
+const namesFor = vi.fn<(ids: string[], known: ReadonlyMap<string, string>) => Promise<Map<string, string>>>(
+  async () => new Map(),
+);
 
 vi.mock("./sourcing", async () => {
   const actual = await vi.importActual<typeof import("./sourcing")>("./sourcing");
   return {
     ...actual,
     getSourcing: (...args: unknown[]) => getSourcing(...args),
-    namesFor: async () => new Map(),
+    namesFor: (ids: string[], known: ReadonlyMap<string, string>) => namesFor(ids, known),
     recordSubmission: vi.fn(),
   };
 });
@@ -116,11 +119,24 @@ function view(data: SourcingView): SourcingView {
   return data;
 }
 
+function match(overrides: Partial<SourcingMatch> = {}): SourcingMatch {
+  return {
+    candidate_id: "cand-1",
+    score: "0.8200",
+    reasons: [{ name: "skills", weight: "40", raw: "8", contribution: "32", note: null }],
+    explanation: "Strong match on skills and recent tenure.",
+    explanation_evidence: "5 years as an accountant at a mid-size firm.",
+    ...overrides,
+  };
+}
+
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
   getClient.mockReset();
   getSourcing.mockReset();
+  namesFor.mockReset();
+  namesFor.mockResolvedValue(new Map());
 });
 
 describe("Shortlist client identification", () => {
@@ -151,5 +167,84 @@ describe("Shortlist client identification", () => {
     await screen.findByText("No client mention in this email.");
     expect(getClient).not.toHaveBeenCalled();
     expect(screen.queryByText("Meridian Partners")).toBeNull();
+  });
+});
+
+describe("Shortlist redacted matches", () => {
+  it("renders the masked name and holder for a redacted match, never the raw id", async () => {
+    getSourcing.mockResolvedValue(
+      view({
+        run: run(),
+        matches: [
+          match({
+            candidate_id: "cand-private",
+            visible: false,
+            full_name: "Wei Ming T.",
+            held_by: "Sarah Lim",
+            can_request_access: true,
+            reasons: null,
+            explanation: null,
+            explanation_evidence: null,
+          }),
+        ],
+      }),
+    );
+
+    render(<Shortlist row={opportunity()} />);
+
+    await waitFor(() => expect(screen.getAllByText("Wei Ming T.").length).toBeGreaterThan(0));
+    expect(
+      screen.getByText((_, el) => el?.tagName === "P" && el.textContent === "Held by Sarah Lim."),
+    ).toBeTruthy();
+    expect(screen.queryByText("cand-private")).toBeNull();
+    // The redacted id is never sent to the by-id candidate lookup — that is
+    // exactly the request that used to 404 and fall back to the raw UUID.
+    await waitFor(() => expect(namesFor).toHaveBeenCalled());
+    expect(namesFor.mock.calls[0][0]).toEqual([]);
+  });
+
+  it("still renders explanation and reasons unchanged for a visible match", async () => {
+    getSourcing.mockResolvedValue(
+      view({
+        run: run(),
+        matches: [match({ candidate_id: "cand-visible" })],
+      }),
+    );
+    namesFor.mockResolvedValue(new Map([["cand-visible", "Jane Tan"]]));
+
+    render(<Shortlist row={opportunity()} />);
+
+    await screen.findByText("Jane Tan");
+    expect(screen.getByText("Strong match on skills and recent tenure.")).toBeTruthy();
+    expect(screen.getByText("5 years as an accountant at a mid-size firm.")).toBeTruthy();
+    expect(namesFor.mock.calls[0][0]).toEqual(["cand-visible"]);
+  });
+
+  it("shows the request-access affordance only when can_request_access is true", async () => {
+    getSourcing.mockResolvedValue(
+      view({
+        run: run(),
+        matches: [
+          match({
+            candidate_id: "cand-no-request",
+            visible: false,
+            full_name: "K. Osman",
+            held_by: "Rafi",
+            can_request_access: false,
+            reasons: null,
+            explanation: null,
+            explanation_evidence: null,
+          }),
+        ],
+      }),
+    );
+
+    render(<Shortlist row={opportunity()} />);
+
+    await screen.findByText("K. Osman");
+    expect(
+      screen.getByText((_, el) => el?.tagName === "P" && el.textContent === "Held by Rafi."),
+    ).toBeTruthy();
+    expect(screen.queryByText("Request access")).toBeNull();
   });
 });

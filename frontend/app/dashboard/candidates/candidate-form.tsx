@@ -543,7 +543,7 @@ export function CandidateForm({
  * allow-hardcode: user-facing copy rendered to the page, not a list anything
  * is matched against.
  */
-function HeldByColleague({ collision }: { collision: CandidateCollision }) {
+export function HeldByColleague({ collision }: { collision: CandidateCollision }) {
   const [state, setState] = useState<"idle" | "asking" | "asked" | "failed">("idle");
   const { full_name, held_by, id } = collision.candidate;
 
