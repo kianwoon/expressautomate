@@ -95,6 +95,18 @@ async def test_null_unlinks_and_does_not_touch_the_assignee() -> None:
     ...
 
 
+async def test_adoption_notifies_the_new_owner() -> None:
+    """A job order quietly becoming yours is what the assigned event is for."""
+    # Linking a client whose recruiter is B, on an unassigned job order, emits
+    # EVENT_OPPORTUNITY_ASSIGNED naming only B.
+    ...
+
+
+async def test_linking_without_adoption_notifies_nobody() -> None:
+    # Nothing changed hands, so there is nothing to announce.
+    ...
+
+
 async def test_a_client_from_another_agency_is_refused() -> None:
     # 422 before the composite FK can turn it into a 500 — the same guard
     # `assign_opportunity` puts on its user target.
@@ -155,6 +167,15 @@ async def set_opportunity_client(
                 detail="This job order is shared with you, not assigned to you.",
             )
 
+        # Read off the row while the session is open: after commit a
+        # committed instance's attributes are expired, and the event below
+        # needs these. Same ordering argument as `assign_opportunity`.
+        previous_assignee = opportunity.assigned_user_id
+        subject_title = opportunity.job_title_raw
+        subject_company = opportunity.company_name_raw
+        subject_location = opportunity.location_raw
+        subject_salary = opportunity.salary_raw
+
         adopted: uuid.UUID | None = opportunity.assigned_user_id
         if body.client_id is not None:
             # RLS scopes this to the agency, so a client of another agency is
@@ -190,9 +211,34 @@ async def set_opportunity_client(
         if adopted is not None:
             name = (
                 await session.execute(
-                    select(_assignee_name_expr()).where(User.id == adopted)
+                    select(
+                        func.coalesce(
+                            func.nullif(func.btrim(User.preferred_name), ""),
+                            func.nullif(func.btrim(User.display_name), ""),
+                            func.split_part(User.email, "@", 1),
+                        )
+                    ).where(User.id == adopted)
                 )
             ).scalar_one_or_none()
+
+    # A job order quietly becoming yours is exactly what the assigned event
+    # exists to announce. `assign_opportunity` emits it; this route assigns
+    # too, so it must as well, or adoption is the one way to gain work without
+    # being told. Emitted after the transaction commits, matching the ordering
+    # `opportunity_shares.py` uses and explains.
+    if adopted is not None and adopted != previous_assignee:
+        await emit_and_enqueue(
+            OpportunityEvent(
+                kind=EVENT_OPPORTUNITY_ASSIGNED,
+                tenant_id=tenant_uuid,
+                opportunity_id=opportunity_id,
+                recipient_user_ids=(adopted,),
+                job_title=subject_title,
+                company_name=subject_company,
+                location=subject_location,
+                salary=subject_salary,
+            )
+        )
 
     return {
         "id": str(opportunity_id),
@@ -224,7 +270,9 @@ Expected: 9 passed.
 uv run pytest tests/test_opportunity_routes_guarded.py -v
 ```
 
-Expected: pass. Your route is mutating and by-id, so the guard will check it. It calls `load_visible_opportunity` rather than `load_editable_opportunity`, which the guard may treat as an offender — if it does, add `set_opportunity_client` to that file's per-module `EXEMPT` map **with a comment saying why** (it enforces a wider rule of its own, deliberately, because `can_edit` refuses the unassigned rows this route exists to fix). Do not weaken the test's assertions.
+Expected: **pass, with no change to that file.** This was checked against the test rather than guessed: `tests/test_opportunity_routes_guarded.py:253-266` counts a call to `can_edit` as satisfying the mutating-route assertion (`EDIT_CHECK`), and `load_visible_opportunity` satisfies the read assertion. The planned route calls both, so it passes as written.
+
+**Do not add an `EXEMPT` entry.** If you find yourself reaching for one, something else is wrong — that map is the structural net for every future route, and an entry added to quiet a passing test is the beginning of the leak it exists to prevent.
 
 - [ ] **Step 7: Full suite, lint, size**
 
@@ -331,6 +379,7 @@ git commit -m "Give the client search one home"
 
 **Files:**
 - Modify: `frontend/app/dashboard/detail-panel.tsx`
+- Modify: `frontend/app/dashboard/job-orders.tsx` — **required, and easy to miss.** `detail-panel.tsx:60-69` receives only `row, onReview, onClaim, onAssign, onVanished`; `patchRow` and `setSelected` live in `job-orders.tsx` (around lines 88, 116, 341). Step 4 needs a new `onClientSet` prop threaded through, exactly as `onClaim` already is.
 - Modify: `frontend/app/dashboard/opportunity-actions.ts` (add the mutation)
 - Modify: `frontend/app/api.ts` (add the path helper)
 - Modify: `frontend/app/dashboard/job-orders.css`
@@ -428,4 +477,6 @@ No migration — `opportunities.client_id` already exists in production and is n
 **Two things found while writing:**
 
 1. The route calls `load_visible_opportunity` and then applies a wider rule, so the structural guard test may flag it as a route that reads by id without the edit guard. Task 1 Step 6 handles that explicitly rather than leaving the implementer to discover it and guess whether to weaken the test.
-2. Two import facts I got wrong on the first pass and corrected against the real file: `can_edit` is **not** currently imported into `opportunities.py`, and `_assignee_name_expr` lives in `clients.py`, not there. Following the plan as first written would have produced a `NameError` on the first request. Task 1 Step 4 now states both explicitly, and says to reuse the inline expression already in `opportunities.py` rather than importing across API modules.
+2. Four things a review caught before execution: Task 3 did not list `job-orders.tsx`, though the panel has no `patchRow` prop and one must be threaded; the route snippet called a helper (`_assignee_name_expr`) that exists only in `clients.py` and is built inline here against a query alias, so the expression is now written out against `User` directly; Step 6's guard-test hedge is resolved definitively (the test counts `can_edit`, so no exemption is needed and adding one would be wrong); and adoption assigned a job order **without emitting `EVENT_OPPORTUNITY_ASSIGNED`**, making it the one way to gain work without being told — now emitted, with two tests.
+
+3. Two import facts corrected against the real file: `can_edit` is **not** currently imported into `opportunities.py`, and `_assignee_name_expr` lives in `clients.py`, not there. Following the plan as first written would have produced a `NameError` on the first request. Task 1 Step 4 now states both explicitly, and says to reuse the inline expression already in `opportunities.py` rather than importing across API modules.
