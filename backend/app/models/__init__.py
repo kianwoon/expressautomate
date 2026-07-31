@@ -1,4 +1,5 @@
 from app.models.candidate import Candidate, CandidateFieldOverride, CandidateSkill
+from app.models.candidate_share import CandidateShare
 from app.models.client import Client, ClientMention
 from app.models.email_message import EmailMessage
 from app.models.extraction import (
@@ -29,6 +30,7 @@ from app.models.wa_session import WaSession, WaSessionKey
 __all__ = [
     "Candidate",
     "CandidateFieldOverride",
+    "CandidateShare",
     "CandidateSkill",
     "Client",
     "ClientMention",
