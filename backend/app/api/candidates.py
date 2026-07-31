@@ -32,7 +32,7 @@ from app.models.candidate import (
     CandidateSkill,
 )
 from app.models.tenant import User
-from app.services.candidate_matching import find_candidate, held_by_colleague
+from app.services.candidate_matching import find_candidate, held_by_colleague, patch_collision
 from app.services.candidate_naming import (
     is_matchable_phone,
     normalize_email,
@@ -971,6 +971,10 @@ async def update_candidate(
         ]
 
         values["updated_by"] = user_uuid
+
+        held = await patch_collision(session, tenant_uuid, candidate, values, user_uuid, role)
+        if held is not None:
+            raise HTTPException(status_code=409, detail=held)
 
         try:
             await session.execute(

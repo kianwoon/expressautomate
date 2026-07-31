@@ -67,3 +67,49 @@ async def test_a_conflicting_match_is_not_a_collision(client, admin_session, see
     )
     assert response.status_code == 409
     assert "can_request_access" not in response.text
+
+
+@pytest.mark.asyncio
+async def test_patching_an_email_onto_a_colleagues_candidate_returns_409_not_500(
+    client, admin_session, seeded
+) -> None:
+    make_tenant, _, _ = seeded
+    tenant_id, colleague, _ = await make_tenant("agency-patch-collision")
+    me = await make_user(admin_session, tenant_id, "me2@agency.test")
+    await make_candidate(
+        admin_session,
+        tenant_id,
+        owner_id=colleague,
+        full_name="Wei Ming Tan",
+        email="weiming@example.com",
+    )
+    mine = await make_candidate(
+        admin_session, tenant_id, owner_id=me, full_name="Wei M Tan", email="typo@example.com"
+    )
+    await admin_session.commit()
+
+    sign_in(client, me, tenant_id)
+    response = await client.patch(
+        f"/api/candidates/{mine}", json={"email": "weiming@example.com"}
+    )
+    assert response.status_code == 409
+    assert response.json()["detail"]["reason"] == "already_registered"
+    assert "uq_candidates_tenant_email" not in response.text
+
+
+@pytest.mark.asyncio
+async def test_patching_without_touching_the_email_is_not_a_collision(
+    client, admin_session, seeded
+) -> None:
+    """The row being edited matches itself. That is not a collision, and
+    treating it as one would make every edit impossible."""
+    make_tenant, _, _ = seeded
+    tenant_id, me, _ = await make_tenant("agency-patch-self")
+    mine = await make_candidate(
+        admin_session, tenant_id, owner_id=me, email="self@example.com"
+    )
+    await admin_session.commit()
+
+    sign_in(client, me, tenant_id)
+    response = await client.patch(f"/api/candidates/{mine}", json={"current_title": "CTO"})
+    assert response.status_code == 200

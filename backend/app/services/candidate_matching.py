@@ -216,3 +216,28 @@ async def held_by_colleague(
         "candidate": {"full_name": abbreviate(row.full_name), "held_by": row.holder},
         "can_request_access": True,
     }
+
+
+async def patch_collision(
+    session: AsyncSession,
+    tenant_id: uuid.UUID,
+    candidate: Candidate,
+    values: dict[str, object],
+    user_id: uuid.UUID,
+    role: str,
+) -> dict[str, object] | None:
+    """The 409 body for a PATCH whose new email/phone collides with a row
+    outside the caller's visibility. A PATCH that leaves both keys untouched
+    matches the row being edited, and that is never a collision.
+    """
+    if "email" not in values and "phone_e164" not in values:
+        return None
+    match = await find_candidate(
+        session,
+        tenant_id,
+        values.get("email", candidate.email),
+        values.get("phone_e164", candidate.phone_e164),
+    )
+    if match.candidate_id is None or match.candidate_id == candidate.id:
+        return None
+    return await held_by_colleague(session, match, user_id, role)
