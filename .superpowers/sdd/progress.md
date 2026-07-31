@@ -691,3 +691,33 @@ CL Task 3: complete (ea96809..f781326, review approved, 110 tests / 19 files, bu
   of the unlinked sentence. After remediating the 8 rows nobody could audit what they linked.
   MINORS carried: two `Client` labels co-exist (dialog is aria-modal so AT sees one); the shared
   `moving` flag makes claim and link disable each other.
+CL Task 4: complete (f781326..5a60582, review clean NO findings, backend 1623, frontend 113/19, build passed).
+  client_name on the payload + link response. LEFT composite join MUTATION-VERIFIED (isouter=False
+  fails 2 tests) - an INNER join would have hidden 8 of 11 production rows.
+=== LIVE PRODUCTION BUG FOUND (pre-existing, shipped in the previous feature) ===
+  The backend has NO GET or PATCH on /api/opportunities/{id}. Confirmed against production:
+  GET /api/opportunities/<uuid> -> 404 while GET /api/opportunities -> 401.
+  (1) updateOpportunityPlacement PATCHes that route; PlacementForm (detail-panel.tsx:10) calls it.
+      The placement form is BROKEN in production - and placement_type is the regulatory control
+      that unlocks the lawful sex filter. Backend exposes POST /placement-type and
+      POST /occupational-requirement instead.
+  (2) getOpportunity GETs the same route, swallowed by `catch { next poll }`, so every read-back
+      after claim/assign/link/create silently fails - including the patchRow snap-back fix.
+  WHY NO TEST CAUGHT IT: fixtures stub fetch to answer ANY url, so a call to a nonexistent route
+  looks like success. Same blind spot class as the two cross-recruiter leaks in the last feature.
+  USER DECISION: fix both on this branch + add a contract test over api.ts path helpers.
+CL Task 5: complete (5a60582..4d23459, review approved after 1 minor fix).
+  Placement form now makes TWO calls (each backend route stamps its own audited set_by/set_at;
+  one combined write would record a lawful sex-requirement judgement against someone who only
+  picked a permit type). Sends only the half that changed; refusal shown last; row re-read either way.
+  GET /api/opportunities/{id} added, sharing _row_select with the list - drift caught by a full
+  payload == comparison, not a key list.
+  THIRD BUG the contract test surfaced: _payload never returned placement_type/sex_requirement/
+  sex_requirement_reason though the frontend type declared them, so the form drew "not set" over a
+  SET placement type - the field gating the lawful sex filter. Fixed for list and single read.
+  Contract test: one it.each per api.ts helper vs the backend's emitted route table. Mutation-verified
+  twice (implementer and reviewer, different helpers). Cannot check HTTP verbs - documented.
+  Form now resyncs its selects from the read-back, so a refused value is not left looking saved.
+  MINOR carried: the contract test's skip rule uses text.includes over app/**; a future barrel
+  re-export or computed helper name would silently disable a check.
+=== ALL TASKS COMPLETE ===

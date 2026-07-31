@@ -120,7 +120,11 @@ export function PlacementForm({
   const dirty =
     placementType !== (row.placement_type ?? "") ||
     sexRequirement !== (row.sex_requirement ?? "") ||
-    reason !== (row.sex_requirement_reason ?? "");
+    // Only while a requirement is set. With "None" chosen the reason field is
+    // not even on screen, and there is nothing to save for it — Save skips the
+    // pair, so counting it as a change offered a button that did nothing and
+    // then wiped the typing on the read-back with no explanation.
+    (sexRequirement !== "" && reason !== (row.sex_requirement_reason ?? ""));
 
   return (
     <div className="card jo-placement" id="placement-type">

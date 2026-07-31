@@ -471,3 +471,90 @@ async def test_unlinking_reports_no_client_name() -> None:
         assert response.json()["client_name"] is None
     finally:
         await cleanup_tenant(tenant_id)
+
+
+def _claim_between_read_and_write(monkeypatch, opportunity_id, winner):
+    """Land a claim in the gap between the route's read and its write.
+
+    A true `asyncio.gather` race — the shape `test_opportunity_claim.py` uses —
+    cannot pin the interleaving down, so the losing order would only sometimes
+    be exercised. Here the claim is forced into exactly the gap that matters by
+    wrapping the route's own read: it returns the row the route saw, and by the
+    time the route acts on it the row has genuinely changed underneath, which
+    is what the compare-and-set has to survive.
+    """
+    from app.api import opportunities as module
+
+    original = module.load_visible_opportunity
+
+    async def _load(session, *args, **kwargs):
+        loaded = await original(session, *args, **kwargs)
+        async with AdminSessionLocal() as s:
+            await s.execute(
+                Opportunity.__table__.update()
+                .where(Opportunity.__table__.c.id == opportunity_id)
+                .values(assigned_user_id=winner)
+            )
+            await s.commit()
+        return loaded
+
+    monkeypatch.setattr(module, "load_visible_opportunity", _load)
+
+
+async def test_a_claim_landing_first_survives_the_client_link(
+    monkeypatch, captured_events
+) -> None:
+    """The claim wins; the client link still stands, and says so honestly."""
+    tenant_id, user_id = await seed_tenant_with_user()
+    try:
+        winner = await _second_user(tenant_id, preferred_name="Siti")
+        owner = await _second_user(tenant_id, preferred_name="Wei Kian")
+        client_id = await _client_row(tenant_id, assigned_user_id=owner)
+        opportunity_id = await _opportunity(tenant_id, assigned_user_id=None)
+        _claim_between_read_and_write(monkeypatch, opportunity_id, winner)
+
+        response = await _post(
+            tenant_id, user_id, opportunity_id, {"client_id": str(client_id)}
+        )
+
+        assert response.status_code == 200, response.text
+        row = await _row(opportunity_id)
+        # The claimer keeps the job order; the factual correction lands anyway.
+        assert row.assigned_user_id == winner
+        assert row.client_id == client_id
+        # The response reports the assignee the row has, not the adoption that
+        # lost, so the browser does not paint the wrong name.
+        assert response.json()["assigned_user_id"] == str(winner)
+        assert response.json()["assignee_name"] == "Siti"
+        # And nobody is told they were given work they did not get.
+        assert captured_events == []
+    finally:
+        await cleanup_tenant(tenant_id)
+
+
+async def test_a_claim_landing_first_is_not_undone_without_adoption(
+    monkeypatch, captured_events
+) -> None:
+    """Even with adoption off, the stale read must not be written back."""
+    tenant_id, user_id = await seed_tenant_with_user()
+    try:
+        winner = await _second_user(tenant_id, preferred_name="Siti")
+        client_id = await _client_row(tenant_id)
+        opportunity_id = await _opportunity(tenant_id, assigned_user_id=None)
+        _claim_between_read_and_write(monkeypatch, opportunity_id, winner)
+
+        response = await _post(
+            tenant_id,
+            user_id,
+            opportunity_id,
+            {"client_id": str(client_id), "adopt_client_recruiter": False},
+        )
+
+        assert response.status_code == 200, response.text
+        row = await _row(opportunity_id)
+        assert row.assigned_user_id == winner
+        assert row.client_id == client_id
+        assert response.json()["assigned_user_id"] == str(winner)
+        assert captured_events == []
+    finally:
+        await cleanup_tenant(tenant_id)

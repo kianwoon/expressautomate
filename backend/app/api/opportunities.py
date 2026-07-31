@@ -1136,17 +1136,46 @@ async def set_opportunity_client(
             ):
                 adopted = client.assigned_user_id
 
+        # Which client a job order came from is a fact, not a claim on it, so
+        # it is written unconditionally and on its own. The assignee is *not*
+        # written here: `adopted` came from a row read moments ago, and writing
+        # it back unconditionally would silently overwrite a claim that landed
+        # in between — including when nothing was adopted at all, where the
+        # stale NULL would undo the winner's claim.
         await session.execute(
             update(Opportunity)
             .where(Opportunity.id == opportunity_id)
-            .values(client_id=body.client_id, assigned_user_id=adopted)
+            .values(client_id=body.client_id)
         )
 
+        if adopted != previous_assignee:
+            # Compare-and-set, exactly as `claim_opportunity` does: adoption is
+            # only ever from unassigned, so `WHERE assigned_user_id IS NULL` is
+            # both the precondition and the race guard. No match means someone
+            # claimed it first, and they keep it.
+            await session.execute(
+                update(Opportunity)
+                .where(Opportunity.id == opportunity_id)
+                .where(Opportunity.assigned_user_id.is_(None))
+                .values(assigned_user_id=adopted)
+            )
+
+        # Whatever the row actually says now, which is not necessarily what
+        # this request hoped for. Re-read rather than assume, so the response
+        # never tells the browser about an assignee it does not have.
+        assignee = (
+            await session.execute(
+                select(Opportunity.assigned_user_id).where(
+                    Opportunity.id == opportunity_id
+                )
+            )
+        ).scalar_one()
+
         name = None
-        if adopted is not None:
+        if assignee is not None:
             name = (
                 await session.execute(
-                    select(_assignee_name_expr(User)).where(User.id == adopted)
+                    select(_assignee_name_expr(User)).where(User.id == assignee)
                 )
             ).scalar_one_or_none()
 
@@ -1155,13 +1184,17 @@ async def set_opportunity_client(
     # too, so it must as well, or adoption is the one way to gain work without
     # being told. Emitted after the transaction commits, matching the ordering
     # `opportunity_shares.py` uses and explains.
-    if adopted is not None and adopted != previous_assignee:
+    # `assignee`, not `adopted`: if the compare-and-set lost, telling the
+    # would-be adopter they were given a job order they do not have is worse
+    # than saying nothing, and the winner claimed it themselves and needs no
+    # announcement.
+    if assignee is not None and assignee == adopted and adopted != previous_assignee:
         await emit_and_enqueue(
             OpportunityEvent(
                 kind=EVENT_OPPORTUNITY_ASSIGNED,
                 tenant_id=tenant_uuid,
                 opportunity_id=opportunity_id,
-                recipient_user_ids=(adopted,),
+                recipient_user_ids=(assignee,),
                 job_title=subject_title,
                 company_name=subject_company,
                 location=subject_location,
@@ -1173,7 +1206,7 @@ async def set_opportunity_client(
         "id": str(opportunity_id),
         "client_id": str(body.client_id) if body.client_id else None,
         "client_name": client_name,
-        "assigned_user_id": str(adopted) if adopted else None,
+        "assigned_user_id": str(assignee) if assignee else None,
         "assignee_name": name,
     }
 

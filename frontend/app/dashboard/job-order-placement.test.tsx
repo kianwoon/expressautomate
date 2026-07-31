@@ -228,3 +228,15 @@ describe("the placement form", () => {
     expect(onSaved).not.toHaveBeenCalled();
   });
 });
+
+it("does not offer Save for a reason typed then set back to None", () => {
+  // Save skips the pair when the requirement is None, so a Save button here
+  // would do nothing and then wipe the typing on the read-back.
+  render(<PlacementForm row={row()} onSaved={vi.fn()} />);
+
+  fireEvent.change(screen.getByDisplayValue("None"), { target: { value: "female" } });
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: "Typed." } });
+  fireEvent.change(screen.getByDisplayValue("Female"), { target: { value: "" } });
+
+  expect((screen.getByText("Save") as HTMLButtonElement).disabled).toBe(true);
+});
