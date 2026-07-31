@@ -59,7 +59,7 @@ from app.models.sourcing import CandidateSubmission, SourcingRun
 from app.services.sourcing.client_resolution import resolve_client
 from app.services.sourcing.persist import read_matches
 from app.services.visibility import (
-    load_editable_candidate,
+    can_edit_candidate,
     load_visible_candidate,
     load_visible_opportunity,
 )
@@ -366,16 +366,20 @@ async def withdraw_submission(
     carries no status column on purpose, so a withdrawn submission that stayed
     as a row would keep excluding the candidate while claiming not to.
 
-    Edit rights, not merely visibility — unlike `record_submission` below.
+    Edit rights, not merely visibility — unlike `record_submission` above.
     Recording is additive and follows `start_sourcing`'s precedent: a share
     recipient may shortlist a candidate shown to them, because that is
     visibility, not edit rights. Withdrawing is destructive to whatever a
-    colleague recorded, so it needs ownership.
+    colleague recorded, so it needs ownership — with one exception: whoever
+    created the submission may undo it even without edit rights on the
+    candidate. Otherwise a share recipient could record a submission
+    (`record_submission` allows it) but never take it back, so a misclick
+    would be permanent for them. Everyone else still needs edit rights.
     """
     user_uuid, tenant_uuid, role = await _require_session_with_role(request)
 
     async with tenant_session(tenant_uuid) as session:
-        await load_editable_candidate(session, candidate_id, user_uuid, role)
+        candidate = await load_visible_candidate(session, candidate_id, user_uuid, role)
         record = (
             await session.execute(
                 select(CandidateSubmission).where(
@@ -386,6 +390,16 @@ async def withdraw_submission(
         ).scalar_one_or_none()
         if record is None:
             raise HTTPException(status_code=404, detail="Submission not found")
+
+        allowed = can_edit_candidate(candidate, user_uuid, role) or (
+            record.submitted_by == user_uuid
+        )
+        if not allowed:
+            raise HTTPException(
+                status_code=403,
+                detail="This candidate is shared with you, not assigned to you.",
+            )
+
         body = _serialize_submission(record)
         await session.delete(record)
         await session.commit()

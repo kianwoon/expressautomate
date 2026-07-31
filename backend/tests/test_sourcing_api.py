@@ -612,6 +612,60 @@ async def test_withdraw_requires_edit_rights_not_just_visibility(agency) -> None
         assert removed.status_code == 200, removed.text
 
 
+async def test_the_recorder_can_withdraw_their_own_submission_without_edit_rights(
+    agency,
+) -> None:
+    """A share recipient may record a submission on a candidate merely visible
+    to them (`record_submission` stays on the visibility guard). Without this
+    allowance a misclick would be permanent for them, since they will never
+    hold edit rights on someone else's candidate. Whoever created the row may
+    always undo it."""
+    tenant_id, owner_id = agency
+    recruiter_id = await _add_recruiter(tenant_id)
+    candidate_id = await _candidate(tenant_id)  # unowned: visible to all, editable by none
+    client_id = await _client(tenant_id, "Acme Health", "acme.sg")
+
+    async with _http(tenant_id, recruiter_id) as http:
+        submission_id = (
+            await http.post(
+                f"/api/candidates/{candidate_id}/submissions",
+                json={"client_id": str(client_id)},
+            )
+        ).json()["id"]
+
+        removed = await http.delete(
+            f"/api/candidates/{candidate_id}/submissions/{submission_id}"
+        )
+        assert removed.status_code == 200, removed.text
+
+
+async def test_a_third_recruiter_who_neither_owns_nor_recorded_it_is_refused(
+    agency,
+) -> None:
+    """Visibility plus authorship of the specific row are the only two ways
+    in; a bystander who merely sees the candidate gets 403, same as before
+    this allowance existed."""
+    tenant_id, owner_id = agency
+    recorder_id = await _add_recruiter(tenant_id)
+    bystander_id = await _add_recruiter(tenant_id)
+    candidate_id = await _candidate(tenant_id)  # unowned: visible to all, editable by none
+    client_id = await _client(tenant_id, "Acme Health", "acme.sg")
+
+    async with _http(tenant_id, recorder_id) as http:
+        submission_id = (
+            await http.post(
+                f"/api/candidates/{candidate_id}/submissions",
+                json={"client_id": str(client_id)},
+            )
+        ).json()["id"]
+
+    async with _http(tenant_id, bystander_id) as http:
+        refused = await http.delete(
+            f"/api/candidates/{candidate_id}/submissions/{submission_id}"
+        )
+        assert refused.status_code == 403, refused.text
+
+
 # --- routing --------------------------------------------------------------
 
 
