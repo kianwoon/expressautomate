@@ -139,10 +139,12 @@ def serialize_match(match, *, visible: bool, masked: dict | None = None) -> dict
     return {
         **common,
         # `masked` is None only if the row vanished between the two reads.
-        # Say nothing about it rather than inventing a name.
+        # Say nothing about it rather than inventing a name — and do not offer
+        # to ask for access to a record that is no longer there, which would
+        # send the recruiter to a button that can only ever 404.
         "full_name": masked["full_name"] if masked else None,
         "held_by": masked["held_by"] if masked else None,
-        "can_request_access": True,
+        "can_request_access": masked is not None,
     }
 
 

@@ -1000,3 +1000,19 @@ FINAL WHOLE-BRANCH REVIEW (Fable) — READY WITH FIXES. Two cross-module gaps th
       and 404'd). Now renders the masked name + "held by X" + request access.
 === ALL 16 TASKS COMPLETE. Backend 1730 passed 1 skipped; frontend 221 passed / 24 files;
     ruff clean; tsc clean; migrations round-trip. NOT MERGED. ===
+FABLE RE-REVIEW of the four post-review commits (159ba13..01fc89d): READY TO MERGE.
+  Verified adversarially: masked_candidate() is genuinely ONE implementation shared by the
+  409 path and sourcing (grep-confirmed both call sites, no third); the redacted payload
+  carries no evidence id/timestamp/explanation; BOTH stored-run read paths (latest_sourcing
+  and one_sourcing_run) route through _with_matches and read_matches/serialize_match have
+  no other caller; the collide-drop DELETE requires an equivalent grant to ALREADY exist on
+  the target (EXISTS on the exact partial-index key, IS NOT DISTINCT FROM for the broadcast
+  NULL) so it can never drop the only row granting access; all moves are inside the single
+  merge transaction; the sweep's exemptions each bound disclosure at a named edge and
+  workers are within its reach.
+  Two Minor findings. FIXED: sourcing offered can_request_access=true even when the row had
+  vanished between reads, sending the recruiter to a button that could only 404 — now
+  gated on masked is not None (26 sourcing tests pass, ruff clean).
+  ACCEPTED: a pending request moved to the target can coexist with an existing share for
+  the same requester; granting is idempotent and changes no access.
+=== BRANCH COMPLETE AND FABLE-APPROVED. NOT MERGED. ===
