@@ -96,8 +96,19 @@ export function PlacementForm({
     try {
       // Read back even after a failure: the first write may well have landed,
       // and a panel left showing the values that were typed would be showing
-      // something nobody stored.
-      if (wrote || failure === null) onSaved(await getOpportunity(row.id));
+      // something nobody stored. Also resync this form's own fields to the
+      // read-back row: on a partial save (placement type wrote, requirement
+      // was refused) the selects would otherwise keep showing the refused
+      // value even though the panel above is now correct. This only happens
+      // right after a write, not on every `row` prop change, so it cannot
+      // clobber the recruiter's typing mid-edit from an unrelated poll.
+      if (wrote || failure === null) {
+        const fresh = await getOpportunity(row.id);
+        onSaved(fresh);
+        setPlacementType(fresh.placement_type ?? "");
+        setSexRequirement(fresh.sex_requirement ?? "");
+        setReason(fresh.sex_requirement_reason ?? "");
+      }
     } catch (err) {
       failure ??= err instanceof Error ? err.message : "We could not save this just now.";
     }

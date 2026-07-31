@@ -181,6 +181,37 @@ describe("the placement form", () => {
     expect(onSaved).toHaveBeenCalledWith(partial);
   });
 
+  it("resyncs its own selects to the server's values after a partial save", async () => {
+    // Same refusal as above, but this time assert on the form's own fields,
+    // not just what got handed up to the panel. Before the fix, `useState`
+    // only read `row` on first mount, so these selects kept showing the
+    // refused "female" / "Because." instead of falling back to what the
+    // server actually holds (no sex requirement at all).
+    const partial = row({ placement_type: "mdw_work_permit" });
+    stubFetch({
+      [PLACEMENT]: () => json({ id: "op-1", placement_type: "mdw_work_permit" }),
+      [REQUIREMENT]: () => json({ detail: "A reason has to be on record." }, 422),
+      [READ_BACK]: () => json(partial),
+    });
+    render(<PlacementForm row={row()} onSaved={vi.fn()} />);
+
+    fireEvent.change(screen.getByDisplayValue("Not set"), {
+      target: { value: "mdw_work_permit" },
+    });
+    fireEvent.change(screen.getByDisplayValue("None"), { target: { value: "female" } });
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "Because." } });
+    fireEvent.click(screen.getByText("Save"));
+
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("reason"));
+
+    // The placement type did save, so the select keeps showing it.
+    expect(screen.getByDisplayValue("MDW Work Permit")).toBeTruthy();
+    // The requirement was refused, so the select and reason box must fall
+    // back to the server's values (none), not keep showing what was typed.
+    expect(screen.getByDisplayValue("None")).toBeTruthy();
+    expect(screen.queryByDisplayValue("Because.")).toBe(null);
+  });
+
   it("shows an error when the read-back route is missing", async () => {
     // Everything 404s — the state the form shipped in. A form that reports
     // success here is a form that cannot tell a write from a wrong URL.
