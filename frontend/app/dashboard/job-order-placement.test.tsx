@@ -240,3 +240,61 @@ it("does not offer Save for a reason typed then set back to None", () => {
 
   expect((screen.getByText("Save") as HTMLButtonElement).disabled).toBe(true);
 });
+
+describe("a colleague's change arriving mid-edit", () => {
+  it("names the new value, keeps the recruiter's own choice, and sends theirs on Keep mine", async () => {
+    const saved = row({ placement_type: "employment_pass" });
+    const calls = stubFetch({
+      [PLACEMENT]: () => json({ id: "op-1", placement_type: "employment_pass" }),
+      [READ_BACK]: () => json(saved),
+    });
+    const { rerender } = render(<PlacementForm row={row()} onSaved={vi.fn()} />);
+
+    // Mid-edit: the recruiter has picked Employment Pass and not saved.
+    fireEvent.change(screen.getByDisplayValue("Not set"), {
+      target: { value: "employment_pass" },
+    });
+
+    // A poll brings a colleague's different value.
+    rerender(<PlacementForm row={row({ placement_type: "s_pass" })} onSaved={vi.fn()} />);
+
+    const notice = await screen.findByRole("status");
+    // The whole point: the value is named, not merely reported as changed.
+    expect(notice.textContent).toContain("S Pass");
+    // And their own half-made choice is untouched.
+    expect((screen.getByLabelText("Placement type") as HTMLSelectElement).value).toBe(
+      "employment_pass",
+    );
+
+    fireEvent.click(screen.getByText("Keep mine"));
+    expect(screen.queryByRole("status")).toBe(null);
+    fireEvent.click(screen.getByText("Save"));
+
+    await waitFor(() =>
+      expect(calls.some((c) => c.url.endsWith("/placement-type"))).toBe(true),
+    );
+    expect(calls.find((c) => c.url.endsWith("/placement-type"))?.body).toEqual({
+      placement_type: "employment_pass",
+    });
+  });
+
+  it("takes the colleague's value on Use theirs, and then has nothing to send", async () => {
+    const calls = stubFetch({});
+    const { rerender } = render(<PlacementForm row={row()} onSaved={vi.fn()} />);
+
+    fireEvent.change(screen.getByDisplayValue("Not set"), {
+      target: { value: "employment_pass" },
+    });
+    rerender(<PlacementForm row={row({ placement_type: "s_pass" })} onSaved={vi.fn()} />);
+    await screen.findByRole("status");
+
+    fireEvent.click(screen.getByText("Use theirs"));
+
+    expect((screen.getByLabelText("Placement type") as HTMLSelectElement).value).toBe("s_pass");
+    expect(screen.queryByRole("status")).toBe(null);
+    // Taking theirs means agreeing with what the server already holds, so
+    // there is no write left to make and Save says so.
+    expect((screen.getByText("Save") as HTMLButtonElement).disabled).toBe(true);
+    expect(calls.some((c) => c.method === "POST")).toBe(false);
+  });
+});

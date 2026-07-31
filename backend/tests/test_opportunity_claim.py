@@ -628,3 +628,51 @@ async def test_a_client_deleted_mid_request_is_still_a_refusal(monkeypatch) -> N
         assert linked.json()["detail"] == "That client is not in this agency."
     finally:
         await cleanup_tenant(tenant_id)
+
+
+async def test_an_unrelated_violation_is_not_blamed_on_the_client() -> None:
+    """A refusal must not name a cause that had nothing to do with it.
+
+    The create route can fail its INSERT for reasons that have no client in
+    them at all — a check constraint, or the creating recruiter's account
+    being offboarded between sign-in and the write, which takes out the
+    composite assignee foreign key. Telling that recruiter their client is not
+    in the agency is worse than a 500: a 500 says something unexpected
+    happened, while this asserts a specific falsehood about their data, and
+    the request here does not carry a `client_id` at all.
+
+    `salary_period` is the violation used because it is the cheapest one to
+    provoke and the guard cannot tell the difference: any `IntegrityError` off
+    that flush is what is under test. The route never sets the column, so it
+    is put on the row by a `before_insert` listener — what matters is that a
+    non-client constraint fires on the same statement.
+    """
+    from sqlalchemy import event
+
+    def _break_the_row(_mapper, _connection, target) -> None:
+        target.salary_period = "Month"  # not in the constraint's vocabulary
+
+    tenant_id, user_id = await seed_tenant_with_user()
+    event.listen(Opportunity, "before_insert", _break_the_row)
+    # `raise_app_exceptions=False` so the unhandled error becomes the 500 a
+    # browser would see, rather than being re-raised into the test.
+    http = httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app, raise_app_exceptions=False),
+        base_url="http://testserver",
+        follow_redirects=False,
+    )
+    http.cookies.set(
+        SESSION_COOKIE,
+        _session_serializer.dumps({"uid": str(user_id), "tid": str(tenant_id)}),
+    )
+    try:
+        async with http as c:
+            created = await c.post(
+                "/api/opportunities",
+                json={"company_name_raw": "Acme Pte Ltd"},
+            )
+        assert created.status_code == 500, created.status_code
+        assert "not in this agency" not in created.text
+    finally:
+        event.remove(Opportunity, "before_insert", _break_the_row)
+        await cleanup_tenant(tenant_id)

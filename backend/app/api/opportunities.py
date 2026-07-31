@@ -1146,8 +1146,12 @@ async def _client_link_conflict_becomes_422() -> AsyncIterator[None]:
     they picked is not there — so the composite foreign key's own refusal is
     converted into the same 422 rather than escaping as a 500.
 
-    Wrapped only around writes made *because* a `client_id` was supplied, so a
-    violation of any other constraint on the same row still surfaces loudly.
+    It cannot tell one constraint from another — every `IntegrityError` off
+    the write it wraps comes back as the same sentence — so it is the caller's
+    job to enter it only when a `client_id` was actually supplied. Both call
+    sites do: the link route is reached only with one, and the create route
+    branches on `body.client_id is not None`. Wrapping the create flush
+    unconditionally is what made a bad salary period read as a missing client.
     """
     try:
         yield
@@ -1351,7 +1355,16 @@ async def create_opportunity(body: ManualOpportunityRequest, request: Request) -
         # the block, so a client deleted between the check above and this write
         # is answered with the same 422 instead of escaping as a 500 from a
         # commit nobody is watching.
-        async with _client_link_conflict_becomes_422():
+        if body.client_id is not None:
+            async with _client_link_conflict_becomes_422():
+                await session.flush()
+        else:
+            # Nothing here was written *because* of a client, so nothing here
+            # may be blamed on one. A violation of any other constraint —
+            # or of the assignee foreign key, if this recruiter's account was
+            # offboarded between sign-in and now — escapes as a 500, which
+            # says something unexpected happened rather than asserting a
+            # falsehood about data the request never sent.
             await session.flush()
 
     # No notification: it is already assigned to whoever created it, and they

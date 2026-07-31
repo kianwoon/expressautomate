@@ -56,6 +56,39 @@ export function same(
   );
 }
 
+/** What a colleague changed, in the words the selects use.
+ *
+ * Named values, not "this changed": "someone else set the placement type to
+ * S Pass" is a fact the recruiter can weigh against their own half-made
+ * choice, and a generic notice is not. */
+export function describeChange(
+  previous: ReturnType<typeof placementFields>,
+  next: ReturnType<typeof placementFields>,
+): string {
+  const parts: string[] = [];
+  if (next.placementType !== previous.placementType) {
+    const label =
+      PLACEMENT_TYPES.find((option) => option.value === next.placementType)?.label ?? "not set";
+    parts.push(`the placement type to ${label}`);
+  }
+  if (next.sexRequirement !== previous.sexRequirement) {
+    const label =
+      next.sexRequirement === "female"
+        ? "female"
+        : next.sexRequirement === "male"
+          ? "male"
+          : "none";
+    parts.push(`the sex requirement to ${label}`);
+  }
+  if (
+    next.reason !== previous.reason &&
+    next.sexRequirement === previous.sexRequirement
+  ) {
+    parts.push("the reason for the sex requirement");
+  }
+  return parts.join(" and ");
+}
+
 export function PlacementForm({
   row,
   onSaved,
@@ -87,6 +120,10 @@ export function PlacementForm({
    * has not moved but the refused half has.
    */
   const seen = useRef(placementFields(row));
+  const [incoming, setIncoming] = useState<{
+    fields: ReturnType<typeof placementFields>;
+    note: string;
+  } | null>(null);
   useEffect(() => {
     const next = placementFields(row);
     const previous = seen.current;
@@ -96,10 +133,23 @@ export function PlacementForm({
       { placementType, sexRequirement, reason },
       previous,
     );
-    if (!untouched) return;
-    setPlacementType(next.placementType);
-    setSexRequirement(next.sexRequirement);
-    setReason(next.reason);
+    if (untouched) {
+      setPlacementType(next.placementType);
+      setSexRequirement(next.sexRequirement);
+      setReason(next.reason);
+      setIncoming(null);
+      return;
+    }
+    // Nothing to tell when the poll has simply caught up with what this form
+    // already shows — the usual case a beat after a save.
+    if (same(next, { placementType, sexRequirement, reason })) {
+      setIncoming(null);
+      return;
+    }
+    // Touched: their edit stays, and they are told. Saying nothing is what
+    // made this lossy — the colleague's value was rendered nowhere, so Save
+    // overwrote a regulatory judgement its author never saw.
+    setIncoming({ fields: next, note: describeChange(previous, next) });
   }, [row, placementType, sexRequirement, reason]);
 
   // The one rule this form enforces client-side: a requirement needs its
@@ -165,6 +215,12 @@ export function PlacementForm({
         setPlacementType(fresh.placement_type ?? "");
         setSexRequirement(fresh.sex_requirement ?? "");
         setReason(fresh.sex_requirement_reason ?? "");
+        // The row this form now shows is the server's own, so any notice
+        // about a colleague's change has been answered. The baseline is
+        // deliberately NOT moved: it tracks the `row` prop, which is still a
+        // poll behind, and moving it here made the next render resync the
+        // selects back to that stale row.
+        setIncoming(null);
       }
     } catch (err) {
       failure ??= err instanceof Error ? err.message : "We could not save this just now.";
@@ -236,6 +292,36 @@ export function PlacementForm({
             but never acted on.
           </p>
         </label>
+      )}
+
+      {incoming && (
+        <div className="jo-placement-incoming" role="status">
+          <p className="body">
+            Someone else set {incoming.note} while you were editing. Your own choice is still
+            below, and Save will send it.
+          </p>
+          <div className="jo-placement-incoming-actions">
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => {
+                setPlacementType(incoming.fields.placementType);
+                setSexRequirement(incoming.fields.sexRequirement);
+                setReason(incoming.fields.reason);
+                setIncoming(null);
+              }}
+            >
+              Use theirs
+            </button>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => setIncoming(null)}
+            >
+              Keep mine
+            </button>
+          </div>
+        </div>
       )}
 
       <div className="jo-placement-actions">

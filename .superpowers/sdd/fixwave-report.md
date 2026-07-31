@@ -63,3 +63,48 @@ test modified.
 
 - backend `uv run pytest -q` — 1639 passed (baseline 1636); `uv run ruff check .` clean.
 - frontend `npm test` — 193 passed / 23 files (baseline 190 / 21); `npm run build` passed.
+
+## Second pass: the two reopened findings
+
+**1. The IntegrityError guard was not narrow.** `create_opportunity` wrapped its
+flush in `_client_link_conflict_becomes_422()` unconditionally, so any
+constraint failure on a manual create — including one on a request carrying no
+`client_id` at all — came back as "That client is not in this agency." The
+flush is now inside `if body.client_id is not None:`, with a plain flush
+otherwise, and the context manager's docstring says outright that it cannot
+tell one constraint from another and so is the caller's to enter only when a
+client id was supplied.
+
+Pre-fix failure (`tests/test_opportunity_claim.py::test_an_unrelated_violation_is_not_blamed_on_the_client`):
+
+    assert created.status_code == 500
+    E   AssertionError: 422
+    E   assert 422 == 500
+
+The violation used is `ck_opportunities_salary_period_known`. The route never
+writes `salary_period`, so the test puts an out-of-vocabulary value on the row
+with a `before_insert` listener; what is under test is that *any* non-client
+`IntegrityError` off that flush escapes as a 500 rather than being blamed on a
+client the request never named.
+
+**2. The placement resync fixed the display, not the harm.** A colleague's
+change arriving while the form was dirty was rendered nowhere, the baseline
+advanced silently, and Save overwrote a regulatory judgement its author never
+saw. The recruiter's in-progress edit is still kept — but now they are told.
+`PlacementForm` raises a notice naming the incoming value ("Someone else set
+the placement type to S Pass while you were editing. Your own choice is still
+below, and Save will send it.") with *Use theirs* and *Keep mine*. Keep mine
+dismisses and Save sends their own value; Use theirs loads the colleague's
+values into the selects, after which there is nothing left to write and Save is
+disabled.
+
+Pre-fix failure (`app/dashboard/job-order-placement.test.tsx`):
+
+    × names the new value, keeps the recruiter's own choice, and sends theirs on Keep mine
+      → Unable to find role="status"
+    × takes the colleague's value on Use theirs, and then has nothing to send
+      → Unable to find role="status"
+
+Verified: backend 1640 passed, `ruff check` clean; frontend 195 tests across 22
+files, `npm run build` succeeded. (The previous report's "23 test files" was
+wrong; it is 22.)

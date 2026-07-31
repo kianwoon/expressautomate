@@ -159,6 +159,18 @@
 .jo-placement-field textarea { resize: vertical; }
 .jo-placement-hint { margin-top: 0; font-size: 0.75rem; color: var(--ink-500); max-width: 60ch; }
 .jo-placement-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+/* A colleague's change that arrived mid-edit. Bordered rather than tinted:
+   it is neither an error nor a success, it is a choice waiting to be made. */
+.jo-placement-incoming {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  display: grid;
+  gap: 8px;
+  max-width: 60ch;
+}
+.jo-placement-incoming p { margin: 0; }
+.jo-placement-incoming-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 
 .jo-detail-hint { margin-top: 10px; }
 
