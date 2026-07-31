@@ -96,6 +96,14 @@ it went to rather than changing ownership silently:
 way to take someone else's work — that is what the assign route is for, and it
 has its own permission rule.
 
+**Adoption emits `opportunity.assigned`, naming only the new owner.** This was
+missing from the first draft of this spec and is not optional: `assign_opportunity`
+already announces a handover, and a job order quietly becoming yours is exactly
+what that event exists for. Without it, adoption would be the one way in the
+product to gain work without being told. Linking a client that changes nothing —
+no adoption, or an already-assigned job order — emits nothing, because nothing
+happened.
+
 ### Saying when a job order is unlinked
 
 The detail panel gains a line stating that a job order is not linked to a
@@ -130,6 +138,9 @@ an agency has 3–50 recruiters.
 - `null` unlinks, and does not change the assignee.
 - The panel says a job order is unlinked when `client_id` is NULL, including
   when a company name is present.
+- Adoption emits `opportunity.assigned` naming only the new owner.
+- Linking without adoption, and linking an already-assigned job order, emit
+  nothing.
 
 ## Not in this round
 
