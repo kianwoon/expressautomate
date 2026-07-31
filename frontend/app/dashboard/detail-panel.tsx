@@ -4,6 +4,7 @@ import { useState } from "react";
 
 import { useAuth } from "../auth";
 import { Breakable } from "../breakable";
+import { type ClientMatch, ClientSearch } from "./client-search";
 import { DecodedCodes, ProtectedBadge, flagged } from "./codes";
 import { Salary, Value, day } from "./format";
 import { PlacementForm } from "./job-order-placement";
@@ -34,6 +35,15 @@ import { ShareDialog } from "./share-dialog";
 type Ownership = {
   onClaim: (id: string) => Promise<MutationResult>;
   onAssign: (id: string, userId: string | null) => Promise<MutationResult>;
+  /** Files this job order under a client — and, when `adopt` is set and
+   *  nobody holds it yet, asks the server to pass it to that client's own
+   *  recruiter. Ownership, so it goes through the same read-back the claim and
+   *  assign paths use rather than being a field save. */
+  onClientSet: (
+    id: string,
+    clientId: string | null,
+    adopt: boolean,
+  ) => Promise<MutationResult>;
   /** The row went out from under the open panel — a share withdrawn, or an
    *  owner reassigning. The panel closes itself; the list is told so it can
    *  drop the selection rather than reopen what is gone. */
@@ -62,6 +72,7 @@ export function DetailPanel({
   onReview,
   onClaim,
   onAssign,
+  onClientSet,
   onVanished,
 }: {
   row: Opportunity | null;
@@ -89,6 +100,7 @@ export function DetailPanel({
       onReview={onReview}
       onClaim={onClaim}
       onAssign={onAssign}
+      onClientSet={onClientSet}
       onVanished={onVanished}
     />
   );
@@ -99,6 +111,7 @@ function Detail({
   onReview,
   onClaim,
   onAssign,
+  onClientSet,
   onVanished,
 }: {
   row: Opportunity;
@@ -130,6 +143,20 @@ function Detail({
   // dialog, with the reason showing.
   const [sharing, setSharing] = useState(false);
 
+  // The client the recruiter has picked but not yet sent. Starts empty even on
+  // a row that already has a `client_id`, because the row carries the id and
+  // not the name — and drawing a name we do not have would mean inventing one.
+  // What the linked state is said with instead is the *absence* of the
+  // unlinked line below.
+  const [client, setClient] = useState<ClientMatch | null>(null);
+  // Defaulted on: the whole reason to link a job order to a client is that the
+  // client is somebody's account, and the common case is that the account
+  // holder should be working this one. An unassigned job order is the only
+  // place it can apply, so it is the only place it is offered.
+  const [adopt, setAdopt] = useState(true);
+  // Its own line, not the ownership block's. See `move`.
+  const [clientNotice, setClientNotice] = useState<string | null>(null);
+
   async function toggle() {
     if (saving) return;
     setSaving(true);
@@ -148,11 +175,20 @@ function Detail({
    * The branch is on `result.kind`, never on the sentence. Comparing copy made
    * the wording load-bearing: re-phrasing or translating one string would
    * silently turn "close the panel" into "show a red line", with no type error
-   * and no failing test. */
-  async function move(run: () => Promise<MutationResult>) {
+   * and no failing test.
+   *
+   * `say` is where the sentence lands, because the panel has two ownership
+   * controls in two places on the page. A failure from the client field
+   * belongs under the client field: routing it to the claim block would put a
+   * message about a company under a button about a person, and on a row whose
+   * claim block is not rendered at all it would go nowhere. */
+  async function move(
+    run: () => Promise<MutationResult>,
+    say: (message: string | null) => void = setNotice,
+  ) {
     if (moving) return;
     setMoving(true);
-    setNotice(null);
+    say(null);
     const result = await run();
     // Released on every path, including the one that closes the panel. It is
     // only invisible there because the body unmounts, and a pending flag left
@@ -164,7 +200,7 @@ function Detail({
       onVanished(row.id);
       return;
     }
-    setNotice(result.kind === "forbidden" ? forbiddenMessage(row) : result.message);
+    say(result.kind === "forbidden" ? forbiddenMessage(row) : result.message);
   }
 
   if (gone !== null) {
@@ -222,6 +258,60 @@ function Detail({
         )}
         {row.shared_with_me && <span className="jo-detail-shared">Shared with you</span>}
       </p>
+
+      {/* Directly under the company name the extraction read off the email,
+          because the two are the same question asked twice: that line is what
+          the sender wrote, and this is which client on our books it turned out
+          to be. Nothing joins them automatically — five of the eight unlinked
+          rows in production name six candidate companies between them, which
+          is exactly why a person chooses. */}
+      <div className="jo-detail-client">
+        <ClientSearch
+          value={client}
+          onChange={setClient}
+          label="Client"
+          hint="Search for the company on our books. Leave it empty if they are not on it yet."
+        />
+
+        {/* Only while nobody holds it. An assigned job order never changes
+            hands on a link, so offering the choice here would be offering
+            something that does nothing. */}
+        {row.assigned_user_id === null && (
+          <label className="jo-detail-adopt">
+            <input
+              type="checkbox"
+              checked={adopt}
+              onChange={(event) => setAdopt(event.target.checked)}
+            />
+            <span>Also take on this client&rsquo;s recruiter</span>
+          </label>
+        )}
+
+        <button
+          type="button"
+          className="btn btn-secondary"
+          onClick={() =>
+            void move(() => onClientSet(row.id, client?.id ?? null, adopt), setClientNotice)
+          }
+          disabled={moving || (client === null && row.client_id === null)}
+        >
+          {moving ? "Saving…" : "Link this client"}
+        </button>
+
+        {/* Said out loud, because the company name sits directly above and a
+            blank field under it reads as "linked to that one". */}
+        {row.client_id === null && (
+          <p className="body jo-sub jo-detail-hint">
+            This job order is not linked to a client, so it is not on anyone&rsquo;s account yet.
+          </p>
+        )}
+
+        {clientNotice && (
+          <p className="body jo-detail-error" role="alert">
+            {clientNotice}
+          </p>
+        )}
+      </div>
 
       <QualityNote row={row} />
 

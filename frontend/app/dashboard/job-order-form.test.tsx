@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { Me } from "../auth";
@@ -224,7 +224,11 @@ describe("typing in a job order", () => {
     // Clients are paginated and an agency accumulates hundreds; members are
     // 3-50 and load once. The two pickers are not the same component.
     await openForm();
-    fireEvent.change(screen.getByLabelText("Client"), { target: { value: "sun" } });
+    // Scoped to the dialog: the detail panel behind it has a Client field of
+    // its own now, and it is the same component. An unscoped query would be
+    // asking which of two identical pickers the test meant.
+    const form = within(screen.getByRole("dialog"));
+    fireEvent.change(form.getByLabelText("Client"), { target: { value: "sun" } });
     await waitFor(() => expect(lastUrl(fetchMock)).toContain("q=sun"));
   });
 

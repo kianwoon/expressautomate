@@ -116,6 +116,12 @@ export const opportunityClaimPath = (id: string) =>
 export const opportunityAssignPath = (id: string) =>
   `${OPPORTUNITIES_PATH}/${encodeURIComponent(id)}/assign`;
 
+/** Linking a job order to the client it came from, or — with `client_id:
+ *  null` — unlinking it. 403 when you may see it but not edit it, and 422 when
+ *  the client belongs to another agency. */
+export const opportunityClientPath = (id: string) =>
+  `${OPPORTUNITIES_PATH}/${encodeURIComponent(id)}/client`;
+
 /** Who else can see this job order: GET lists, POST shares it with one
  *  colleague. */
 export const opportunitySharesPath = (id: string) =>

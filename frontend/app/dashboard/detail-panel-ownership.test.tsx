@@ -129,6 +129,7 @@ function panel(
       onReview={async () => null}
       onClaim={handlers.onClaim ?? (async () => ok)}
       onAssign={handlers.onAssign ?? (async () => ok)}
+      onClientSet={async () => ok}
       onVanished={handlers.onVanished ?? (() => {})}
     />
   );

@@ -43,14 +43,27 @@ const CLIENT_SEARCH_LIMIT = 8;
  *  would suggest the rest is available here. */
 export type ClientMatch = { id: string; name: string };
 
+/** The line under the field on the manual job-order form, and the default
+ *  because that is the screen this component was written for. It names the
+ *  form's own Company input, so a screen without one has to say something
+ *  else — see the `hint` prop. */
+const DEFAULT_HINT =
+  "Leave this empty if the company is not on our list yet. The name still goes in Company.";
+
 export function ClientSearch({
   value,
   onChange,
   label,
+  hint = DEFAULT_HINT,
 }: {
   value: ClientMatch | null;
   onChange: (client: ClientMatch | null) => void;
   label: string;
+  /** What the line under the field says. Overridable because the default
+   *  points at the manual form's Company input, and the detail panel has no
+   *  such field — telling a recruiter to type the name somewhere that is not
+   *  on the screen is worse than saying nothing. */
+  hint?: string;
 }) {
   const inputId = useId();
   const listId = useId();
@@ -155,9 +168,7 @@ export function ClientSearch({
           Could not search clients just now. You can still leave this empty.
         </p>
       )}
-      <p className="jo-form-hint">
-        Leave this empty if the company is not on our list yet. The name still goes in Company.
-      </p>
+      <p className="jo-form-hint">{hint}</p>
     </div>
   );
 }

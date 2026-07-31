@@ -1,6 +1,11 @@
 "use client";
 
-import { OPPORTUNITIES_PATH, opportunityAssignPath, opportunityClaimPath } from "../api";
+import {
+  OPPORTUNITIES_PATH,
+  opportunityAssignPath,
+  opportunityClaimPath,
+  opportunityClientPath,
+} from "../api";
 
 /**
  * The writes: claiming, assigning, and typing a job order in by hand.
@@ -102,6 +107,35 @@ export function claimOpportunity(id: string): Promise<MutationResult> {
  *  missing value. */
 export function assignOpportunity(id: string, userId: string | null): Promise<MutationResult> {
   return mutate(opportunityAssignPath(id), { user_id: userId });
+}
+
+/**
+ * Files a job order under the client it came from, or — with `null` — unfiles
+ * it, which is the ordinary state of a company nobody has recorded yet rather
+ * than a missing value.
+ *
+ * `adopt` asks the server to hand an *unassigned* job order to whoever already
+ * looks after that client. It is a request, not an instruction: an already
+ * assigned job order never changes hands, and a client with no recruiter has
+ * nobody to hand it to. Which is why the caller reads the row back afterwards
+ * instead of assuming — the server is the only place that knows whether the
+ * owner moved, and inventing an answer here would be the second place deciding
+ * who is doing the work.
+ *
+ * The response body is deliberately not returned. Everything it carries —
+ * `client_id`, `assigned_user_id`, `assignee_name` — is on the row the caller
+ * re-reads anyway, and a second, thinner copy of the same three fields is a
+ * second thing that can disagree with the list.
+ */
+export function setOpportunityClient(
+  id: string,
+  clientId: string | null,
+  adopt: boolean,
+): Promise<MutationResult> {
+  return mutate(opportunityClientPath(id), {
+    client_id: clientId,
+    adopt_client_recruiter: adopt,
+  });
 }
 /**
  * A job order that never arrived as an email.

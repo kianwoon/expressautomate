@@ -173,6 +173,23 @@
   background: var(--surface-alt); color: var(--ink-500);
 }
 
+/* Which client on our books this job order belongs to. Sits under the company
+   name the extraction read off the email, so it is deliberately narrow: the
+   two lines are the same question asked twice, and a full-width control here
+   would read as a new section rather than as an answer to the line above. */
+.jo-detail-client {
+  display: flex; flex-direction: column; gap: 10px; align-items: flex-start;
+  margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line);
+}
+.jo-detail-client .jo-client-picker { width: 100%; max-width: 320px; }
+/* The checkbox and its words on one line, and the words clickable with it —
+   a 14px target beside a sentence is a target most people miss. */
+.jo-detail-adopt {
+  display: flex; align-items: center; gap: 8px; cursor: pointer;
+  font-size: 0.8125rem; color: var(--ink-700);
+}
+.jo-detail-adopt input { flex: none; }
+
 /* Claim and assign, boxed off from the review toggle below. They answer a
    different question — who works this — and running them together reads as
    one set of buttons where a mis-click costs a colleague their job order. */

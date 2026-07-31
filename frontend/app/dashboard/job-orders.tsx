@@ -13,6 +13,7 @@ import {
   assignOpportunity,
   claimOpportunity,
   getOpportunity,
+  setOpportunityClient,
   useOpportunities,
   type Filter,
   type MutationResult,
@@ -351,6 +352,14 @@ export function JobOrders({ me, heading = "h2" }: { me: Me; heading?: "h1" | "h2
                 onAssign={(id, userId) => {
                   if (!selected && shown) setSelected(shown);
                   return own(id, () => assignOpportunity(id, userId));
+                }}
+                // Through `own` like the other two, and for the same reason:
+                // linking a client can hand an unassigned job order to that
+                // client's recruiter, so the row that comes back may name a
+                // different owner. Only the read-back knows.
+                onClientSet={(id, clientId, adopt) => {
+                  if (!selected && shown) setSelected(shown);
+                  return own(id, () => setOpportunityClient(id, clientId, adopt));
                 }}
                 // The row went out from under the panel. Dropping the pinned
                 // selection is what lets the next poll choose a row that still

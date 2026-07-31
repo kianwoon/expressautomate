@@ -23,6 +23,7 @@ export {
   type ManualOpportunity,
   type MutationFailure,
   type MutationResult,
+  setOpportunityClient,
 } from "./opportunity-actions";
 
 /**
