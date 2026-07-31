@@ -164,11 +164,21 @@ async def held_by_colleague(
     ordinary duplicate the route already handled, and the caller can simply be
     sent to the row.
 
-    The disclosure here is deliberate. The caller learns this person is in the
-    agency's database and who holds them, and nothing else: no contact detail,
-    no salary, no notes, no client history, and not even the candidate id. The
-    alternative is a wall a recruiter cannot act on, and in a three-to-fifty
-    person agency they will walk to that colleague's desk and ask anyway.
+    The disclosure here is deliberate and bounded. The caller learns this
+    person is in the agency's database, who holds them, and the row's id —
+    and nothing else: no contact detail, no salary, no notes, no client
+    history. The alternative is a wall a recruiter cannot act on, and in a
+    three-to-fifty person agency they will walk to that colleague's desk and
+    ask anyway.
+
+    The id is in the payload because `can_request_access` is otherwise a
+    promise the caller cannot keep: `POST /api/candidates/{id}/access-
+    requests` is keyed by candidate id, so withholding it leaves a button
+    with no endpoint to call. Withholding it bought nothing anyway — this
+    body already discloses the two sensitive facts (that the person exists,
+    and who holds them), a UUID is unguessable, and every route behind the id
+    is guarded: `load_visible_candidate` still 404s it for this caller, and
+    `request_candidate_access` 404s an id from another tenant.
     """
     if match.candidate_id is None:
         return None
@@ -213,7 +223,11 @@ async def held_by_colleague(
 
     return {
         "reason": "already_registered",
-        "candidate": {"full_name": abbreviate(row.full_name), "held_by": row.holder},
+        "candidate": {
+            "full_name": abbreviate(row.full_name),
+            "held_by": row.holder,
+            "id": str(match.candidate_id),
+        },
         "can_request_access": True,
     }
 

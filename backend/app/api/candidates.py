@@ -45,6 +45,7 @@ from app.services.candidate_tenure import derive
 from app.services.sourcing import eligibility
 from app.services.user_naming import actor_name
 from app.services.visibility import (
+    can_edit_candidate,
     candidate_scope,
     load_editable_candidate,
     load_visible_candidate,
@@ -183,9 +184,48 @@ def _sorted_initials(found: list[str]) -> list[str]:
 # other, so there is no illegal-source combination to guard against.
 
 
-def _serialize(candidate: Candidate) -> dict:
+# The same coalesce `held_by_colleague` uses, and for the same reason:
+# `users` has no `full_name`, so prefer what the person chose to be called,
+# then what the directory says, then the address they signed in with — never
+# a bare UUID, which tells the recruiter nothing and looks like a bug.
+_OWNER_NAME = func.coalesce(User.preferred_name, User.display_name, User.email)
+
+
+def _with_owner_name(query):
+    """LEFT OUTER, once, onto `users.id`.
+
+    Outer, not inner: an unclaimed candidate has no owner row and an inner
+    join would silently drop the whole unclaimed queue. Once, not per row:
+    the owner's name is fetched by the same statement that fetches the page,
+    so a fifty-row list still costs one query rather than fifty-one.
+
+    Applied only to the statement that fetches rows — never to the COUNT or
+    the initials aggregate, which keep reading the un-joined `base`. It
+    cannot change what those would have said in any case: `users.id` is a
+    primary key, so the join is one-to-one and cannot fan a row out.
+    """
+    return query.add_columns(_OWNER_NAME.label("owner_name")).outerjoin(
+        User, User.id == Candidate.owner_id
+    )
+
+
+def _serialize(
+    candidate: Candidate, owner_name: str | None, user_id: uuid.UUID, role: str
+) -> dict:
     return {
         "id": str(candidate.id),
+        # Who holds this person, and whether THIS reader may change it. Both
+        # are required together: the share recipient's edit control is
+        # disabled rather than hidden, and a disabled control has to say who
+        # to go to. `can_edit` delegates to `can_edit_candidate` rather than
+        # restating "the owner, or the agency owner" — a second copy of that
+        # rule is a second place for it to drift.
+        "owner": (
+            {"id": str(candidate.owner_id), "name": owner_name}
+            if candidate.owner_id
+            else None
+        ),
+        "can_edit": can_edit_candidate(candidate, user_id, role),
         "full_name": candidate.full_name,
         "email": candidate.email,
         "phone_raw": candidate.phone_raw,
@@ -419,16 +459,16 @@ async def list_candidates(
             # discarding it if so.
             scan_limit = settings.CANDIDATES_ELIGIBILITY_SCAN_LIMIT
             scan_rows = (
-                (await session.execute(base.order_by(*order).limit(scan_limit + 1)))
-                .scalars()
-                .all()
-            )
+                await session.execute(
+                    _with_owner_name(base).order_by(*order).limit(scan_limit + 1)
+                )
+            ).all()
             scan_truncated = len(scan_rows) > scan_limit
             all_rows = scan_rows[:scan_limit]
             scanned = len(all_rows)
 
-            kept: list[Candidate] = []
-            for candidate in all_rows:
+            kept: list[tuple[Candidate, str | None]] = []
+            for candidate, _owner_name in all_rows:
                 facts = eligibility.CandidateFacts(
                     sex=candidate.sex,
                     date_of_birth=candidate.date_of_birth,
@@ -447,7 +487,7 @@ async def list_candidates(
                     sex_requirement_reason=opportunity.sex_requirement_reason,
                 )
                 if not eligibility.has_regulatory_not_met(findings):
-                    kept.append(candidate)
+                    kept.append((candidate, _owner_name))
             excluded_ineligible = len(all_rows) - len(kept)
             total = len(kept)
             rows = kept[offset : offset + page_limit]
@@ -456,13 +496,16 @@ async def list_candidates(
                 await session.execute(select(func.count()).select_from(base.subquery()))
             ).scalar_one()
             rows = (
-                (await session.execute(base.order_by(*order).limit(page_limit).offset(offset)))
-                .scalars()
-                .all()
-            )
+                await session.execute(
+                    _with_owner_name(base)
+                    .order_by(*order)
+                    .limit(page_limit)
+                    .offset(offset)
+                )
+            ).all()
 
     payload = {
-        "items": [_serialize(c) for c in rows],
+        "items": [_serialize(c, owner_name, user_uuid, role) for c, owner_name in rows],
         "total": total,
         "limit": page_limit,
         "offset": offset,
@@ -545,8 +588,19 @@ async def get_candidate(request: Request, candidate_id: uuid.UUID) -> dict:
         # the N+1 the rest of this endpoint is careful to avoid.
         evidence = await evidence_for(session, [r.id for r in roles])
         documents = await documents_for(session, candidate_id)
+        # One row, so there is no N+1 to avoid here — the list's join exists
+        # because it serialises a page at a time; this route serialises one.
+        owner_name = (
+            (
+                await session.execute(
+                    select(_OWNER_NAME).where(User.id == candidate.owner_id)
+                )
+            ).scalar_one_or_none()
+            if candidate.owner_id
+            else None
+        )
 
-    payload = _serialize(candidate)
+    payload = _serialize(candidate, owner_name, user_uuid, role)
     # Only on the single-record read, deliberately not on a list row.
     #
     # These exist so a recruiter can fill a MOM form for the person they have
