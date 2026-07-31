@@ -61,6 +61,7 @@ function opportunity(overrides: Partial<Opportunity> = {}): Opportunity {
     assigned_user_id: null,
     assignee_name: null,
     client_id: null,
+    client_name: null,
     source: "pipeline",
     shared_with_me: false,
     ...overrides,
@@ -114,6 +115,7 @@ const MATCHES = { items: [{ id: "c-1", name: "Sunrise Care Pte Ltd" }] };
  *  and the client's own recruiter has taken it on. */
 const LINKED = opportunity({
   client_id: "c-1",
+  client_name: "Sunrise Care Pte Ltd",
   assigned_user_id: "u-2",
   assignee_name: "Wei Kian",
 });
@@ -128,7 +130,9 @@ type FetchMock = ReturnType<typeof vi.fn>;
  * *list* keeps returning the unlinked row, exactly as a page fetched before
  * the click does, so only the single-row read-back knows about the link.
  */
-function mount(options: { row?: Opportunity; clientStatus?: number } = {}): FetchMock {
+function mount(
+  options: { row?: Opportunity; clientStatus?: number; readBackFails?: boolean } = {},
+): FetchMock {
   const row = options.row ?? opportunity();
   const clientStatus = options.clientStatus ?? 200;
   const fetchMock = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
@@ -141,10 +145,16 @@ function mount(options: { row?: Opportunity; clientStatus?: number } = {}): Fetc
         json: async () => ({
           id: "op-1",
           client_id: "c-1",
+          client_name: "Sunrise Care Pte Ltd",
           assigned_user_id: "u-2",
           assignee_name: "Wei Kian",
         }),
       } as Response;
+    }
+    // The single-row read-back refusing, so that whatever the screen still
+    // shows can only have come from the link response itself.
+    if (options.readBackFails && href.includes("/api/opportunities/op-1")) {
+      return { ok: false, status: 500, json: async () => ({}) } as Response;
     }
     const json = href.includes("/auth/me")
       ? me()
@@ -200,9 +210,39 @@ describe("linking a job order to its client", () => {
   });
 
   it("does not say that when a client is linked", async () => {
-    mount({ row: opportunity({ client_id: "c-1" }) });
+    mount({ row: opportunity({ client_id: "c-1", client_name: "Sunrise Care Pte Ltd" }) });
     await screen.findByLabelText("Client");
     expect(screen.queryByText(/not linked to a client/i)).toBeNull();
+  });
+
+  it("shows the client an already-linked job order is filed under", async () => {
+    // Without this the picker is empty on a linked row and on an unlinked one
+    // alike, so the only way to check what was linked is the absence of a
+    // sentence — which is not a way to audit eight rows.
+    mount({ row: opportunity({ client_id: "c-1", client_name: "Sunrise Care Pte Ltd" }) });
+    const input = (await screen.findByLabelText("Client")) as HTMLInputElement;
+    expect(input.value).toBe("Sunrise Care Pte Ltd");
+  });
+
+  it("leaves the picker empty on an unlinked job order", async () => {
+    mount();
+    const input = (await screen.findByLabelText("Client")) as HTMLInputElement;
+    expect(input.value).toBe("");
+    expect(screen.getByText(/not linked to a client/i)).toBeTruthy();
+  });
+
+  it("keeps showing the client after linking, without reading the row back", async () => {
+    // The link response names the client, so the panel can show what it just
+    // did even when the read-back fails.
+    mount({ readBackFails: true });
+    await chooseClient();
+    link();
+
+    await waitFor(() =>
+      expect(screen.queryByText(/not linked to a client/i)).toBeNull(),
+    );
+    const input = screen.getByLabelText("Client") as HTMLInputElement;
+    expect(input.value).toBe("Sunrise Care Pte Ltd");
   });
 
   it("posts the chosen client with adopt defaulted on", async () => {

@@ -655,3 +655,39 @@ MERGED + DEPLOYED 2026-07-31: main 23dafdf -> b864f6e (21 commits, fast-forward)
   No migration was pending, so production stayed on the old build throughout (health 200 the whole time).
   `gh run rerun <id> --failed` succeeded. Verified live: /api/members, ?scope=, ?q= all 401
   (present + authenticating) vs 404 for a nonexistent route.
+
+## Linking a job order to its client
+Plan: docs/superpowers/plans/2026-07-31-linking-a-job-order-to-its-client.md
+Branch: kianwoon/job-order-client-link-b0decc  Base: 827bc0f
+Worktree: .claude/worktrees/job-order-client-link-b0decc (MAIN checkout .env is PROD - never test there)
+Baseline: backend 1606, frontend 97/17. Alembic head 314cc3da9ced. No migration in this plan.
+WHY: 8 of 11 production job orders have client_id IS NULL (5 whose email named SIX clients, 3 that
+named none), so neither ingestion nor client reassignment can ever route them.
+CL Task 1: complete (827bc0f..e634130, review clean after 1 minor fix, 1618 passed). opportunities.py 1142 LOC.
+  POST /api/opportunities/{id}/client. Permission "unassigned OR editable" - MUTATION-VERIFIED
+  (adding `or True` fails the bystander test, which also asserts no client was written).
+  Adoption gate mutation-verified too (removing the unassigned check fails the never-changes-hands test).
+  Emits EVENT_OPPORTUNITY_ASSIGNED after commit, naming only the new owner; no-op link emits nothing.
+  Guard test passed with NO exemption, as the plan predicted.
+  _assignee_name_expr extracted to module level, shared with list_opportunities; whitespace fallback
+  now pinned by a mutation-proven test (plain coalesce fails it).
+CL Task 2: complete (e634130..ea96809, review clean, 102 tests / 18 files, build passed).
+  client-search.tsx (151) extracted; job-order-form.tsx 325 -> 194; its tests passed UNCHANGED.
+  Debounce test now COUNTS requests - a per-keystroke implementation fails it. Useful finding:
+  mutating the delay to 0 does NOT fail it (synchronous fireEvents + cleanup clears a 0ms timer),
+  so future reviews must mutate by REMOVING the timer, not by tweaking the constant.
+  ACCEPTED scope addition: error surfacing on a failed search (the original was silently no-op and
+  left stale matches on screen). Reviewer endorsed; the brief's own 5th test asked for it.
+  FOR TASK 3: the hint copy is hardcoded and names the manual form's field ("The name still goes in
+  Company") - it will read oddly in the panel. Task 3 owns adding a `hint` prop.
+CL Task 3: complete (ea96809..f781326, review approved, 110 tests / 19 files, build passed).
+  patchRow+setSelected both called - MUTATION-VERIFIED (removing patchRow fails 2 tests), so the
+  snap-back bug from the previous feature is not repeated.
+  Test-first caught a real silent bug: a stray setNotice meant 403s in the client field rendered
+  NOTHING while the 404 path still passed. Mutation-verified that the new test is what catches it.
+  hint prop added to ClientSearch, default byte-identical to the old copy.
+  IMPORTANT finding -> CL Task 4: a linked row does not say WHICH client. Opportunity carries
+  client_id but no name, so the picker cannot pre-fill and the only "linked" signal is the ABSENCE
+  of the unlinked sentence. After remediating the 8 rows nobody could audit what they linked.
+  MINORS carried: two `Client` labels co-exist (dialog is aria-modal so AT sees one); the shared
+  `moving` flag makes claim and link disable each other.

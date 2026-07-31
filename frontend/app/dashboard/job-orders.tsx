@@ -358,8 +358,27 @@ export function JobOrders({ me, heading = "h2" }: { me: Me; heading?: "h1" | "h2
                 // client's recruiter, so the row that comes back may name a
                 // different owner. Only the read-back knows.
                 onClientSet={(id, clientId, adopt) => {
+                  const before = selected ?? shown;
                   if (!selected && shown) setSelected(shown);
-                  return own(id, () => setOpportunityClient(id, clientId, adopt));
+                  return own(id, async () => {
+                    const result = await setOpportunityClient(id, clientId, adopt);
+                    // The link itself, applied before the read-back and
+                    // regardless of whether the read-back arrives. It is the
+                    // one thing the response knows and the browser cannot
+                    // work out: the name behind the id it just sent. Without
+                    // this a failed read-back leaves a linked job order
+                    // looking exactly like an unlinked one.
+                    if (result.ok && before && result.clientName !== undefined) {
+                      const linked = {
+                        ...before,
+                        client_id: clientId,
+                        client_name: result.clientName,
+                      };
+                      patchRow(linked);
+                      setSelected(linked);
+                    }
+                    return result;
+                  });
                 }}
                 // The row went out from under the panel. Dropping the pinned
                 // selection is what lets the next poll choose a row that still

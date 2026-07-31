@@ -143,12 +143,15 @@ function Detail({
   // dialog, with the reason showing.
   const [sharing, setSharing] = useState(false);
 
-  // The client the recruiter has picked but not yet sent. Starts empty even on
-  // a row that already has a `client_id`, because the row carries the id and
-  // not the name — and drawing a name we do not have would mean inventing one.
-  // What the linked state is said with instead is the *absence* of the
-  // unlinked line below.
-  const [client, setClient] = useState<ClientMatch | null>(null);
+  // The client this job order is filed under, or the one the recruiter has
+  // picked and not yet sent. Pre-filled from the row, which carries the name
+  // beside the id: without it a linked job order and an unlinked one look
+  // identical here, and the only signal of a link is the absence of a
+  // sentence — which is no way to check eight rows that were just filed.
+  // Reset per row by the `key={row.id}` above, like the fields around it.
+  const [client, setClient] = useState<ClientMatch | null>(
+    row.client_id && row.client_name ? { id: row.client_id, name: row.client_name } : null,
+  );
   // Defaulted on: the whole reason to link a job order to a client is that the
   // client is somebody's account, and the common case is that the account
   // holder should be working this one. An unassigned job order is the only

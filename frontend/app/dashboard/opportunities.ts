@@ -125,6 +125,11 @@ export type Opportunity = {
   /** The confirmed client this job order belongs to, or `null` while the
    *  evidence names more than one company. */
   client_id: string | null;
+  /** That client's name, resolved server-side for the same reason
+   *  `assignee_name` is: the id alone cannot be shown, and a recruiter who has
+   *  just filed a job order needs to see which company they chose. `null`
+   *  exactly when `client_id` is. */
+  client_name: string | null;
   /** Where the row came from: read out of an email, or typed by a recruiter. */
   source: "pipeline" | "manual";
   /** Visible to me because a colleague shared it, rather than because it is

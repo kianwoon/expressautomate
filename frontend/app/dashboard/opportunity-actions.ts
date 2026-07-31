@@ -36,7 +36,12 @@ import {
 export type MutationFailure = "conflict" | "gone" | "forbidden" | "denied" | "failed";
 
 export type MutationResult =
-  | { ok: true }
+  /** `body` is what the endpoint answered with, parsed — and only for the one
+   *  caller that asks for it. A write here reports success and nothing else by
+   *  default: the row is read back afterwards, and a second thinner copy of
+   *  the same fields is a second thing that can disagree with the list. See
+   *  `setOpportunityClient` for the one field that rule does not cover. */
+  | { ok: true; body?: unknown }
   | { ok: false; kind: MutationFailure; message: string };
 
 /**
@@ -75,7 +80,14 @@ const MUTATION_FALLBACK: { kind: MutationFailure; message: string } = {
   message: "We could not save that just now. Nothing has changed.",
 };
 
-async function mutate(url: string, body?: unknown): Promise<MutationResult> {
+async function mutate(
+  url: string,
+  body?: unknown,
+  /** Whether the answer is read. Off for every caller but one, so the shape a
+   *  write reports stays "it worked" rather than becoming a second source for
+   *  fields the read-back already owns. */
+  readBody = false,
+): Promise<MutationResult> {
   try {
     const res = await fetch(url, {
       method: "POST",
@@ -83,7 +95,11 @@ async function mutate(url: string, body?: unknown): Promise<MutationResult> {
       headers: { "Content-Type": "application/json", Accept: "application/json" },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
-    if (res.ok) return { ok: true };
+    if (res.ok) {
+      return readBody
+        ? { ok: true, body: await res.json().catch(() => undefined) }
+        : { ok: true };
+    }
     // Only a 409 is a race. A dropped connection is not one, and reporting it
     // as one would tell a recruiter a colleague took the job order when nobody
     // did — so anything unrecognised is plainly `failed`.
@@ -122,20 +138,37 @@ export function assignOpportunity(id: string, userId: string | null): Promise<Mu
  * owner moved, and inventing an answer here would be the second place deciding
  * who is doing the work.
  *
- * The response body is deliberately not returned. Everything it carries —
- * `client_id`, `assigned_user_id`, `assignee_name` — is on the row the caller
- * re-reads anyway, and a second, thinner copy of the same three fields is a
- * second thing that can disagree with the list.
+ * One field of the response *is* returned: `client_name`. The read-back is the
+ * authority on everything, but it can fail, and the one thing the browser
+ * cannot recover on its own is the name behind the id it just sent — leaving
+ * the picker empty on a row that was linked a moment ago, which is the state
+ * this whole feature exists to end. So the name is carried through and used
+ * until the read-back overwrites it with the same value.
  */
-export function setOpportunityClient(
+export type ClientLinkResult = MutationResult & {
+  /** What the server says the row is now filed under. Present only on
+   *  success, and `null` when the link was cleared. */
+  clientName?: string | null;
+};
+
+export async function setOpportunityClient(
   id: string,
   clientId: string | null,
   adopt: boolean,
-): Promise<MutationResult> {
-  return mutate(opportunityClientPath(id), {
-    client_id: clientId,
-    adopt_client_recruiter: adopt,
-  });
+): Promise<ClientLinkResult> {
+  const result = await mutate(
+    opportunityClientPath(id),
+    { client_id: clientId, adopt_client_recruiter: adopt },
+    true,
+  );
+  if (!result.ok) return result;
+  // Read defensively rather than cast: an older server that does not send the
+  // field yet leaves the name unknown, which the caller renders as "we do not
+  // know" — not as an empty name it would then show as fact.
+  const named = result.body as { client_name?: unknown } | undefined;
+  return typeof named?.client_name === "string" || named?.client_name === null
+    ? { ...result, clientName: named.client_name as string | null }
+    : result;
 }
 /**
  * A job order that never arrived as an email.
