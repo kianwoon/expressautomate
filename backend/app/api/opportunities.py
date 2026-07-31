@@ -938,6 +938,11 @@ async def claim_opportunity(opportunity_id: uuid.UUID, request: Request) -> dict
     to act would reintroduce precisely the gap this clause closes — the second
     reader would see NULL too, and both would be told they had won.
 
+    It runs BEFORE the visibility read, which is the opposite of every other
+    route here and is explained where it happens: the loser of a race has to
+    be told 409, and by the time they ask, the row they lost is invisible to
+    them.
+
     Deliberately not behind `load_editable_opportunity`, and
     `tests/test_opportunity_routes_guarded.py` exempts it for that reason:
     `can_edit` refuses an unassigned job order on purpose, and an unassigned
@@ -947,9 +952,18 @@ async def claim_opportunity(opportunity_id: uuid.UUID, request: Request) -> dict
     user_uuid, tenant_uuid, role = await _require_session_with_role(request)
 
     async with tenant_session(tenant_uuid) as session:
-        # Visible, so an invisible id is 404 rather than 409 — a 409 would
-        # confirm the row exists to someone with no business knowing it does.
-        await load_visible_opportunity(session, opportunity_id, user_uuid, role)
+        # The compare-and-set goes FIRST, before any visibility read, and that
+        # is safe rather than a shortcut: it can only match a row that is in
+        # this tenant (RLS) and has `assigned_user_id IS NULL`, and an
+        # unassigned row is the first disjunct of `visible_opportunities` —
+        # visible to every member of the agency. So there is no row this
+        # statement can touch that the read guard would have refused.
+        #
+        # Doing it the other way round is what made the loser of a race lie.
+        # Once the winner commits, the row is assigned to them: for the loser
+        # it is no longer unassigned, not theirs, and not shared, so the
+        # visibility read raised 404 "No such job order." about a job order
+        # that plainly exists and that they were entitled to try for.
         claimed = (
             await session.execute(
                 update(Opportunity)
@@ -960,10 +974,40 @@ async def claim_opportunity(opportunity_id: uuid.UUID, request: Request) -> dict
             )
         ).scalar_one_or_none()
 
-    if claimed is None:
-        raise HTTPException(
-            status_code=409, detail="Someone else has taken this job order."
-        )
+        if claimed is None:
+            # Nothing matched, which is two different answers. Either the row
+            # is not there at all — wrong id, or another agency's, which RLS
+            # has already hidden — or it is there and somebody holds it.
+            #
+            # `load_visible_opportunity` cannot tell those apart here, because
+            # the row we are asking about is by definition now assigned, and
+            # that is precisely what makes it invisible. So the question asked
+            # is the one this route actually needs: does an ASSIGNED row with
+            # this id exist inside my agency? Deliberately narrower than
+            # dropping the guard: an unassigned row is unreachable by this
+            # branch, RLS still confines it to the tenant, and the only thing
+            # a colleague learns is that a job order id they already held is
+            # taken — which is what they came here to find out.
+            taken = (
+                await session.execute(
+                    select(Opportunity.id)
+                    .where(Opportunity.id == opportunity_id)
+                    .where(Opportunity.assigned_user_id.is_not(None))
+                )
+            ).scalar_one_or_none()
+            if taken is None:
+                # Not assigned, yet the compare-and-set still missed it: the
+                # id names nothing we may touch. `load_visible_opportunity` is
+                # the one author of that 404. In the remaining sliver — the
+                # row was released again between the two statements — it comes
+                # back with a row, and 409 is the closer of the two answers:
+                # something happened to it, try again.
+                await load_visible_opportunity(
+                    session, opportunity_id, user_uuid, role
+                )
+            raise HTTPException(
+                status_code=409, detail="Someone else has taken this job order."
+            )
 
     # Nothing is emitted. You pressed the button; being told what you just did
     # is noise, and the colleagues who lost the race learn it from their 409.

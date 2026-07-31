@@ -11,6 +11,7 @@ check-and-set implementation that is plainly racy.
 """
 
 import asyncio
+import contextlib
 import uuid
 
 import httpx
@@ -138,6 +139,90 @@ async def test_two_recruiters_claiming_at_once_yields_one_winner() -> None:
         await cleanup_tenant(tenant_id)
 
 
+def _claim_landing_before_the_write(monkeypatch, opportunity_id, winner) -> None:
+    """Hand the job order to `winner` after the request starts, before the
+    route's compare-and-set runs.
+
+    `asyncio.gather` above proves the mechanism but cannot name the loser, so
+    for years the losing branch was only sometimes executed — and when another
+    file ran first it produced a 404 nobody had asked for. Wrapping the
+    route's own `tenant_session` puts the competing claim in exactly one
+    place: the session is open, so the loser's request is genuinely underway,
+    and the UPDATE that follows genuinely finds the row already taken.
+    """
+    from app.api import opportunities as module
+
+    original = module.tenant_session
+
+    @contextlib.asynccontextmanager
+    async def _session(tenant_id):
+        async with original(tenant_id) as session:
+            async with AdminSessionLocal() as s:
+                await s.execute(
+                    Opportunity.__table__.update()
+                    .where(Opportunity.__table__.c.id == opportunity_id)
+                    .values(assigned_user_id=winner)
+                )
+                await s.commit()
+            yield session
+
+    monkeypatch.setattr(module, "tenant_session", _session)
+
+
+async def test_losing_the_race_says_someone_took_it_not_that_it_vanished(
+    monkeypatch,
+) -> None:
+    """The loser must be told the truth.
+
+    They saw the job order on the queue a second ago; it is real, and it is
+    gone. A 404 reads as a bug in the list they were just looking at.
+    """
+    tenant_id, loser = await seed_tenant_with_user()
+    winner = await _second_user(tenant_id)
+    opportunity_id = await _opportunity(tenant_id, assigned_user_id=None)
+    try:
+        _claim_landing_before_the_write(monkeypatch, opportunity_id, winner)
+
+        response = await _claim(tenant_id, loser, opportunity_id)
+
+        assert response.status_code == 409, response.text
+        assert response.json()["detail"] == "Someone else has taken this job order."
+        # And the loser took nothing on the way past.
+        assert await _assigned_user_id(opportunity_id) == winner
+    finally:
+        await cleanup_tenant(tenant_id)
+
+
+async def test_an_id_that_names_nothing_is_still_404() -> None:
+    """The other half of the discrimination: 409 must not become the answer
+    to every failed claim, or it turns into an oracle for ids that do not
+    exist."""
+    tenant_id, user_id = await seed_tenant_with_user()
+    try:
+        response = await _claim(tenant_id, user_id, uuid.uuid4())
+        assert response.status_code == 404, response.text
+        assert response.json()["detail"] == "No such job order."
+    finally:
+        await cleanup_tenant(tenant_id)
+
+
+async def test_another_agencys_taken_job_order_is_404_not_409() -> None:
+    """RLS, not the new branch, is what keeps agencies apart — assert it,
+    because the 409 branch reads the row without the visibility guard."""
+    tenant_id, user_id = await seed_tenant_with_user()
+    other_tenant_id, other_user = await seed_tenant_with_user()
+    try:
+        opportunity_id = await _opportunity(
+            other_tenant_id, assigned_user_id=other_user
+        )
+        response = await _claim(tenant_id, user_id, opportunity_id)
+        assert response.status_code == 404, response.text
+        assert response.json()["detail"] == "No such job order."
+    finally:
+        await cleanup_tenant(tenant_id)
+        await cleanup_tenant(other_tenant_id)
+
+
 async def test_claiming_an_unassigned_job_order_succeeds() -> None:
     tenant_id, user_id = await seed_tenant_with_user()
     opportunity_id = await _opportunity(tenant_id, assigned_user_id=None)
@@ -176,15 +261,31 @@ async def test_claiming_an_already_assigned_job_order_is_a_conflict() -> None:
         await cleanup_tenant(tenant_id)
 
 
-async def test_claiming_a_job_order_you_cannot_see_is_a_404() -> None:
-    """404, never 409 — a 409 would confirm the id exists."""
+async def test_claiming_a_colleagues_job_order_is_409_not_404() -> None:
+    """This test used to assert 404, and the reason it no longer can is worth
+    writing down.
+
+    The old rule was "a 409 would confirm the id exists", so a recruiter who
+    asked to claim a job order held by a colleague was told there was no such
+    job order. But *the loser of a race is in exactly that state* — by the
+    time they ask, the winner holds the row — and no query can tell the two
+    apart, because they are the same row in the same condition. Keeping the
+    old rule meant lying to every recruiter who lost a race, which is the
+    common case; changing it discloses one bit, to a signed-in colleague of
+    the same agency, about a job order id they were already holding.
+
+    The boundary that matters is unchanged and is asserted next door:
+    `test_another_agencys_taken_job_order_is_404_not_409`. RLS, not this
+    branch, keeps agencies apart.
+    """
     tenant_id, user_id = await seed_tenant_with_user()
     other = await _second_user(tenant_id)
     opportunity_id = await _opportunity(tenant_id, assigned_user_id=other)
     try:
         response = await _claim(tenant_id, user_id, opportunity_id)
-        assert response.status_code == 404, response.text
-        assert response.json()["detail"] == "No such job order."
+        assert response.status_code == 409, response.text
+        assert response.json()["detail"] == "Someone else has taken this job order."
+        assert await _assigned_user_id(opportunity_id) == other
     finally:
         await cleanup_tenant(tenant_id)
 
