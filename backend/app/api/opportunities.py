@@ -34,7 +34,17 @@ from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, model_validator
-from sqlalchemy import String, and_, case, cast, func, or_, select, update
+from sqlalchemy import (
+    ForeignKeyConstraint,
+    String,
+    and_,
+    case,
+    cast,
+    func,
+    or_,
+    select,
+    update,
+)
 from sqlalchemy import true as true_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import aliased
@@ -1136,6 +1146,44 @@ async def _load_client_in_agency(session: Any, client_id: uuid.UUID) -> Any:
     ).one_or_none()
 
 
+def _client_fk_constraint_name() -> str:
+    """The name Postgres will use when the client link is refused.
+
+    Read off the mapped table, not written out, because two spellings of one
+    name are one rename away from disagreeing — and the disagreement would be
+    silent, turning a helpful 422 back into a 500 with every test still green.
+    """
+    for constraint in Opportunity.__table__.constraints:
+        if isinstance(constraint, ForeignKeyConstraint) and "client_id" in {
+            element.parent.name for element in constraint.elements
+        }:
+            name = constraint.name
+            assert isinstance(name, str)
+            return name
+    raise RuntimeError("opportunities has no client foreign key")
+
+
+_CLIENT_FK_CONSTRAINT = _client_fk_constraint_name()
+
+
+def _constraint_of(exc: IntegrityError) -> str | None:
+    """Which constraint refused the write, as asyncpg reported it.
+
+    asyncpg raises a `PostgresError` carrying `constraint_name`; SQLAlchemy
+    wraps it twice over, so the chain is walked rather than any one layer
+    trusted. `None` when nothing in the chain says — a driver that does not
+    report the name means the failure cannot be attributed, and an
+    unattributable failure is left to surface as itself.
+    """
+    error: BaseException | None = exc.orig
+    while error is not None:
+        name = getattr(error, "constraint_name", None)
+        if isinstance(name, str) and name:
+            return name
+        error = error.__cause__
+    return None
+
+
 @asynccontextmanager
 async def _client_link_conflict_becomes_422() -> AsyncIterator[None]:
     """The half of the guard a pre-check cannot cover.
@@ -1146,16 +1194,25 @@ async def _client_link_conflict_becomes_422() -> AsyncIterator[None]:
     they picked is not there — so the composite foreign key's own refusal is
     converted into the same 422 rather than escaping as a 500.
 
-    It cannot tell one constraint from another — every `IntegrityError` off
-    the write it wraps comes back as the same sentence — so it is the caller's
-    job to enter it only when a `client_id` was actually supplied. Both call
-    sites do: the link route is reached only with one, and the create route
-    branches on `body.client_id is not None`. Wrapping the create flush
-    unconditionally is what made a bad salary period read as a missing client.
+    Only that one constraint. A flush carries every constraint on the row, and
+    the same INSERT can fail over the assignee foreign key or a check — the
+    recruiter offboarded mid-request, a salary period out of vocabulary — with
+    no client involved at all. Reporting those as a missing client is worse
+    than a 500: a 500 says something unexpected happened, while this asserts a
+    specific falsehood about their data. So the failure is inspected and
+    converted only when it names the opportunities→clients foreign key, whose
+    name is read off the model rather than spelled out here, so a rename in
+    `app/models/opportunity.py` cannot leave this silently matching nothing.
+
+    Callers still enter it only when a `client_id` was actually supplied,
+    which is cheap and keeps the intent local. The link route enters it on the
+    unlink path too, where `client_id` is None and the foreign key cannot fire.
     """
     try:
         yield
     except IntegrityError as exc:
+        if _constraint_of(exc) != _CLIENT_FK_CONSTRAINT:
+            raise
         raise HTTPException(
             status_code=422, detail=_CLIENT_NOT_IN_AGENCY
         ) from exc

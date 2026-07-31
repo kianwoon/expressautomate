@@ -119,6 +119,20 @@ export function PlacementForm({
    * this effect's help — deliberately, because after a partial save the row
    * has not moved but the refused half has.
    */
+  /**
+   * Which of this form's two decisions the recruiter has actually made.
+   *
+   * Two, not three: the sex requirement and its reason are one decision. The
+   * backend's check constraint refuses a requirement without a reason, so
+   * merging one of them from a colleague's row while keeping the other could
+   * post a pair that cannot exist — a female requirement with someone else's
+   * reason for a male one, or worse, a requirement with no reason at all.
+   * Editing either therefore marks the pair touched, which is the safe
+   * direction: the recruiter keeps a reason they typed rather than having it
+   * silently swapped, and Save sends both together as it always has.
+   */
+  const touched = useRef({ placement: false, requirement: false });
+
   const seen = useRef(placementFields(row));
   const [incoming, setIncoming] = useState<{
     fields: ReturnType<typeof placementFields>;
@@ -134,6 +148,7 @@ export function PlacementForm({
       previous,
     );
     if (untouched) {
+      touched.current = { placement: false, requirement: false };
       setPlacementType(next.placementType);
       setSexRequirement(next.sexRequirement);
       setReason(next.reason);
@@ -212,6 +227,9 @@ export function PlacementForm({
       if (wrote || failure === null) {
         const fresh = await getOpportunity(row.id);
         onSaved(fresh);
+        // The form now shows the server's own row, so nothing on screen is an
+        // unsent decision any more.
+        touched.current = { placement: false, requirement: false };
         setPlacementType(fresh.placement_type ?? "");
         setSexRequirement(fresh.sex_requirement ?? "");
         setReason(fresh.sex_requirement_reason ?? "");
@@ -252,7 +270,10 @@ export function PlacementForm({
         <span className="row-k">Placement type</span>
         <select
           value={placementType}
-          onChange={(event) => setPlacementType(event.target.value as PlacementType | "")}
+          onChange={(event) => {
+            touched.current.placement = true;
+            setPlacementType(event.target.value as PlacementType | "");
+          }}
         >
           <option value="">Not set</option>
           {PLACEMENT_TYPES.map((option) => (
@@ -267,7 +288,10 @@ export function PlacementForm({
         <span className="row-k">Sex requirement</span>
         <select
           value={sexRequirement}
-          onChange={(event) => setSexRequirement(event.target.value as SexRequirement | "")}
+          onChange={(event) => {
+            touched.current.requirement = true;
+            setSexRequirement(event.target.value as SexRequirement | "");
+          }}
         >
           <option value="">None</option>
           <option value="female">Female</option>
@@ -280,7 +304,10 @@ export function PlacementForm({
           <span className="row-k">Reason</span>
           <textarea
             value={reason}
-            onChange={(event) => setReason(event.target.value)}
+            onChange={(event) => {
+              touched.current.requirement = true;
+              setReason(event.target.value);
+            }}
             placeholder="Why this job genuinely requires this sex — e.g. intimate personal care for an elderly client."
             rows={2}
           />
@@ -305,6 +332,7 @@ export function PlacementForm({
               type="button"
               className="btn btn-secondary"
               onClick={() => {
+                touched.current = { placement: false, requirement: false };
                 setPlacementType(incoming.fields.placementType);
                 setSexRequirement(incoming.fields.sexRequirement);
                 setReason(incoming.fields.reason);
@@ -316,7 +344,22 @@ export function PlacementForm({
             <button
               type="button"
               className="btn btn-secondary"
-              onClick={() => setIncoming(null)}
+              // Keep mine means "keep what I changed", not "send the whole
+              // form as I happen to be looking at it". Every decision the
+              // recruiter did not make is taken from the colleague's row, so
+              // Save writes only what they actually chose — otherwise a
+              // recruiter who picked a permit type reverted a colleague's
+              // sex requirement and was recorded as having decided it.
+              onClick={() => {
+                if (!touched.current.placement) {
+                  setPlacementType(incoming.fields.placementType);
+                }
+                if (!touched.current.requirement) {
+                  setSexRequirement(incoming.fields.sexRequirement);
+                  setReason(incoming.fields.reason);
+                }
+                setIncoming(null);
+              }}
             >
               Keep mine
             </button>

@@ -676,3 +676,56 @@ async def test_an_unrelated_violation_is_not_blamed_on_the_client() -> None:
     finally:
         event.remove(Opportunity, "before_insert", _break_the_row)
         await cleanup_tenant(tenant_id)
+
+
+async def test_a_real_client_does_not_absorb_an_unrelated_violation() -> None:
+    """The same falsehood, through the door the guard is actually open for.
+
+    The sibling test above sends no `client_id`, so the route never enters the
+    guard. This one does send one — a real client, in this tenant — and still
+    breaks the row on a constraint that has nothing to do with clients. The
+    recruiter must be told something unexpected happened, not handed a
+    sentence about their client that is simply untrue.
+    """
+    from sqlalchemy import event
+
+    def _break_the_row(_mapper, _connection, target) -> None:
+        target.salary_period = "Month"  # not in the constraint's vocabulary
+
+    tenant_id, user_id = await seed_tenant_with_user()
+    client_id = uuid.uuid4()
+    async with AdminSessionLocal() as s:
+        s.add(
+            Client(
+                id=client_id,
+                tenant_id=tenant_id,
+                name="Acme Pte Ltd",
+                name_normalized="acme pte ltd",
+            )
+        )
+        await s.commit()
+
+    event.listen(Opportunity, "before_insert", _break_the_row)
+    http = httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app, raise_app_exceptions=False),
+        base_url="http://testserver",
+        follow_redirects=False,
+    )
+    http.cookies.set(
+        SESSION_COOKIE,
+        _session_serializer.dumps({"uid": str(user_id), "tid": str(tenant_id)}),
+    )
+    try:
+        async with http as c:
+            created = await c.post(
+                "/api/opportunities",
+                json={
+                    "company_name_raw": "Acme Pte Ltd",
+                    "client_id": str(client_id),
+                },
+            )
+        assert created.status_code == 500, created.status_code
+        assert "not in this agency" not in created.text
+    finally:
+        event.remove(Opportunity, "before_insert", _break_the_row)
+        await cleanup_tenant(tenant_id)

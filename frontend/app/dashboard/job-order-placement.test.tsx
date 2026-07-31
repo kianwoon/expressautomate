@@ -278,6 +278,78 @@ describe("a colleague's change arriving mid-edit", () => {
     });
   });
 
+  it("keeps only what the recruiter edited, and lets the colleague's other field stand", async () => {
+    // The harm this closes: Keep mine used to mean "send every field as this
+    // form has it", so a recruiter who touched the placement type alone wrote
+    // their stale sex requirement back over a colleague's regulatory one and
+    // got stamped as its author.
+    const theirs = row({
+      sex_requirement: "female",
+      sex_requirement_reason: "Intimate personal care.",
+    });
+    const saved = row({
+      placement_type: "employment_pass",
+      sex_requirement: "female",
+      sex_requirement_reason: "Intimate personal care.",
+    });
+    const calls = stubFetch({
+      [PLACEMENT]: () => json({ id: "op-1" }),
+      [READ_BACK]: () => json(saved),
+    });
+    const { rerender } = render(<PlacementForm row={row()} onSaved={vi.fn()} />);
+
+    fireEvent.change(screen.getByLabelText("Placement type"), {
+      target: { value: "employment_pass" },
+    });
+    rerender(<PlacementForm row={theirs} onSaved={vi.fn()} />);
+    await screen.findByRole("status");
+
+    fireEvent.click(screen.getByText("Keep mine"));
+
+    // Their requirement survived on screen, because the recruiter never
+    // touched that field.
+    expect((screen.getByLabelText("Sex requirement") as HTMLSelectElement).value).toBe("female");
+
+    fireEvent.click(screen.getByText("Save"));
+    await waitFor(() => expect(calls.some((c) => c.url.endsWith("/placement-type"))).toBe(true));
+    expect(calls.some((c) => c.url.endsWith("/occupational-requirement"))).toBe(false);
+  });
+
+  it("keeps the requirement pair the recruiter edited and takes the colleague's placement type", async () => {
+    const theirs = row({ placement_type: "s_pass" });
+    const saved = row({
+      placement_type: "s_pass",
+      sex_requirement: "female",
+      sex_requirement_reason: "Intimate personal care.",
+    });
+    const calls = stubFetch({
+      [REQUIREMENT]: () => json({ id: "op-1" }),
+      [READ_BACK]: () => json(saved),
+    });
+    const { rerender } = render(<PlacementForm row={row()} onSaved={vi.fn()} />);
+
+    fireEvent.change(screen.getByLabelText("Sex requirement"), { target: { value: "female" } });
+    fireEvent.change(screen.getByRole("textbox"), {
+      target: { value: "Intimate personal care." },
+    });
+    rerender(<PlacementForm row={theirs} onSaved={vi.fn()} />);
+    await screen.findByRole("status");
+
+    fireEvent.click(screen.getByText("Keep mine"));
+
+    expect((screen.getByLabelText("Placement type") as HTMLSelectElement).value).toBe("s_pass");
+
+    fireEvent.click(screen.getByText("Save"));
+    await waitFor(() =>
+      expect(calls.some((c) => c.url.endsWith("/occupational-requirement"))).toBe(true),
+    );
+    expect(calls.some((c) => c.url.endsWith("/placement-type"))).toBe(false);
+    expect(calls.find((c) => c.url.endsWith("/occupational-requirement"))?.body).toEqual({
+      sex_requirement: "female",
+      sex_requirement_reason: "Intimate personal care.",
+    });
+  });
+
   it("takes the colleague's value on Use theirs, and then has nothing to send", async () => {
     const calls = stubFetch({});
     const { rerender } = render(<PlacementForm row={row()} onSaved={vi.fn()} />);
@@ -294,6 +366,32 @@ describe("a colleague's change arriving mid-edit", () => {
     expect(screen.queryByRole("status")).toBe(null);
     // Taking theirs means agreeing with what the server already holds, so
     // there is no write left to make and Save says so.
+    expect((screen.getByText("Save") as HTMLButtonElement).disabled).toBe(true);
+    expect(calls.some((c) => c.method === "POST")).toBe(false);
+  });
+
+  it("loads all three fields on Use theirs, and leaves nothing to save", async () => {
+    const theirs = row({
+      placement_type: "s_pass",
+      sex_requirement: "female",
+      sex_requirement_reason: "Intimate personal care.",
+    });
+    const calls = stubFetch({});
+    const { rerender } = render(<PlacementForm row={row()} onSaved={vi.fn()} />);
+
+    fireEvent.change(screen.getByLabelText("Placement type"), {
+      target: { value: "employment_pass" },
+    });
+    rerender(<PlacementForm row={theirs} onSaved={vi.fn()} />);
+    await screen.findByRole("status");
+
+    fireEvent.click(screen.getByText("Use theirs"));
+
+    expect((screen.getByLabelText("Placement type") as HTMLSelectElement).value).toBe("s_pass");
+    expect((screen.getByLabelText("Sex requirement") as HTMLSelectElement).value).toBe("female");
+    expect((screen.getByRole("textbox") as HTMLTextAreaElement).value).toBe(
+      "Intimate personal care.",
+    );
     expect((screen.getByText("Save") as HTMLButtonElement).disabled).toBe(true);
     expect(calls.some((c) => c.method === "POST")).toBe(false);
   });
