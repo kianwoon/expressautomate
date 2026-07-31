@@ -917,3 +917,28 @@ FABLE EXTRACTION DECISION (candidates.py is at 1500/1500, Task 12 must modify me
   them) and are imported FROM it — no circularity, candidates.py never imports the new
   module. main.py needs the router; route-manifest and the guard test need NO change
   (paths unchanged; _modules() globs api/*.py so the new file is auto-covered).
+Task 11 follow-ups (2507a07..6efd408..09229c9):
+  6efd408 — 5 tests: tenant-broadcast happy path + all four share-delete arms, incl. the
+    load-bearing denial that a recipient cannot delete ANOTHER recipient's row. Denials
+    proven by temporarily loosening the production check, then reverting. No prod bug.
+  09229c9 — Fable's extraction, verbatim move: candidate_merge.py (222 LOC) takes
+    merge_candidate, unmerge_candidate, MergeRequest, _lock_pair. _load/_serialize stayed
+    in candidates.py and are imported FROM it. candidates.py 1500 -> 1302, so Task 12 has
+    room. route-manifest regenerated with ZERO diff and the guard test needed no change,
+    both exactly as Fable predicted.
+  1703 passed, 1 skipped.
+Task 12: complete (09229c9..15e1bc0 impl, ..1ca270e fix 1; review approved).
+  merge_candidate now loads BOTH sides through load_editable_candidate and operates on the
+  GUARDED result (previously a recruiter could merge INTO a colleague's candidate,
+  destroying one record and enriching one they were never shown). unmerge deliberately does
+  NOT write owner_id — it survives the merge, so reviving restores the original owner by
+  doing nothing. Reviewer confirmed the extraction commit was a genuinely PURE move and
+  that _lock_pair still sorts by uuid.bytes BEFORE the guard loads, so A->B and B->A queue
+  rather than deadlock.
+  *** MY PLAN'S TEST WAS WRONG: test_unmerge_restores_the_original_owner seeded the merged
+  row with owner_id=me, so the presser WAS the original owner and owner_id=user_uuid would
+  still have satisfied it. It passed whether or not the bug existed — worse than no test,
+  because it read as coverage. Now the row is owned by a colleague and the caller uses
+  role='owner'. Proven by injecting owner_id=user_uuid: test failed, reverted, passed. ***
+  Sibling merge tests checked for the same shape of weakness — none found.
+  1705 passed, 1 skipped.

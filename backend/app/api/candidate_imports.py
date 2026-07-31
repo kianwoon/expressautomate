@@ -112,6 +112,7 @@ def serialize(record: CandidateImport) -> dict:
         "candidates_updated": record.candidates_updated,
         "roles_created": record.roles_created,
         "roles_updated": record.roles_updated,
+        "held_by_colleagues": record.held_by_colleagues,
         "rows_failed": record.rows_failed,
         "has_errors": record.error_report_key is not None,
         "created_at": record.created_at.isoformat() if record.created_at else None,

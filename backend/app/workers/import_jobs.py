@@ -301,6 +301,7 @@ async def run_candidate_import(ctx, *, tenant_id: str, import_id: str) -> None:
         row.candidates_updated = outcome.candidates_updated
         row.roles_created = outcome.roles_created
         row.roles_updated = outcome.roles_updated
+        row.held_by_colleagues = outcome.held_by_colleagues
         row.rows_failed = len(problems)
         row.error_report_key = key
         row.state = CandidateImport.DONE
@@ -320,6 +321,7 @@ async def run_candidate_import(ctx, *, tenant_id: str, import_id: str) -> None:
         candidates_updated=outcome.candidates_updated,
         roles_created=outcome.roles_created,
         roles_updated=outcome.roles_updated,
+        held_by_colleagues=outcome.held_by_colleagues,
         rows_failed=len(problems),
     )
 

@@ -415,13 +415,37 @@ async def run_import():
                 )
             )
             await session.flush()
-            return await apply_import(
+            outcome = await apply_import(
                 session,
                 tenant_id=tenant_id,
                 import_id=import_id,
-                candidates=[CandidateRecord(**row) for row in rows],
+                # `CandidateRecord` has no defaults — every field is required —
+                # so a test naming only the columns it cares about would fail
+                # on the constructor rather than on what it set out to assert.
+                candidates=[
+                    CandidateRecord(
+                        **{
+                            "line": line,
+                            "full_name": "",
+                            "email": None,
+                            "phone_raw": None,
+                            "phone_e164": None,
+                            "current_title": None,
+                            "current_employer": None,
+                            "location": None,
+                            **row,
+                        }
+                    )
+                    for line, row in enumerate(rows, start=2)
+                ],
                 roles=[],
                 today=dt.date(2026, 7, 31),
             )
+            # `apply_import` never commits — the worker owns that (§
+            # `import_jobs.py`). Without it here the rows exist only inside
+            # this session, and a test that checks them through `admin_session`
+            # sees nothing.
+            await session.commit()
+            return outcome
 
     return _run

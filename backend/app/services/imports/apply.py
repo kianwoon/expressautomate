@@ -81,7 +81,9 @@ _ROLE_FIELDS = (
 # left alone.
 _WHOLE_ROW = "*"
 
-_IMPORT_TENANT = text("SELECT tenant_id FROM candidate_imports WHERE id = :id")
+_IMPORT_OWNER = text(
+    "SELECT tenant_id, uploaded_by FROM candidate_imports WHERE id = :id"
+)
 
 
 @dataclass
@@ -92,6 +94,10 @@ class ImportOutcome:
     candidates_updated: int = 0
     roles_created: int = 0
     roles_updated: int = 0
+    # Rows this import found but was not allowed to touch. Named for what the
+    # importer sees, not for the mechanism: whether the row is invisible or
+    # merely shared is a distinction they cannot act on either way.
+    held_by_colleagues: int = 0
     problems: list[RowProblem] = field(default_factory=list)
 
 
@@ -156,8 +162,16 @@ def _disagreement(first: CandidateRecord, second: CandidateRecord) -> str | None
     return None
 
 
-async def _import_tenant(session, import_id: uuid.UUID) -> uuid.UUID:
-    """The tenant that owns this import, refusing anything that is not ours.
+async def _import_owner(
+    session, import_id: uuid.UUID
+) -> tuple[uuid.UUID, uuid.UUID | None]:
+    """The tenant that owns this import and the user who ran it.
+
+    Both come off the same row and in the same round trip: `uploaded_by` is
+    what every candidate this run creates is owned by, so fetching it
+    separately would be a second query for a column already in hand.
+
+    Refuses anything that is not ours.
 
     `Candidate.import_id` and `CandidateRole.import_id` are plain foreign
     keys, not the composite `(tenant_id, id)` idiom the rest of the schema
@@ -169,10 +183,10 @@ async def _import_tenant(session, import_id: uuid.UUID) -> uuid.UUID:
     missing row; an unscoped session would still see it and be refused by the
     comparison.
     """
-    row = (await session.execute(_IMPORT_TENANT, {"id": import_id})).first()
+    row = (await session.execute(_IMPORT_OWNER, {"id": import_id})).first()
     if row is None:
         raise ValueError(f"import {import_id} does not exist for this tenant")
-    return row.tenant_id
+    return row.tenant_id, row.uploaded_by
 
 
 async def _holder(
@@ -292,6 +306,7 @@ async def _apply_candidates(
     *,
     tenant_id: uuid.UUID,
     import_id: uuid.UUID,
+    uploaded_by: uuid.UUID | None,
     records: list[CandidateRecord],
     outcome: ImportOutcome,
 ) -> dict[tuple[str, str], _Applied]:
@@ -347,6 +362,19 @@ async def _apply_candidates(
                     select(Candidate).where(Candidate.id == match.candidate_id)
                 )
             ).scalars().one()
+            # Import matching runs against the WHOLE tenant, ignoring
+            # visibility, and must: the unique index spans the tenant, so a
+            # visibility-filtered lookup would miss an invisible row and then
+            # fail on the constraint at flush time with an error nobody can
+            # act on.
+            #
+            # Having found it, an import may still not edit it. An import is a
+            # bulk edit, and a row the importer does not own is not theirs to
+            # change — whether they cannot see it at all, or can see it only
+            # through a share.
+            if candidate.owner_id not in (None, uploaded_by):
+                outcome.held_by_colleagues += 1
+                continue
             if await _update_candidate(
                 session,
                 tenant_id=tenant_id,
@@ -368,6 +396,10 @@ async def _apply_candidates(
                 current_title=record.current_title,
                 current_employer=record.current_employer,
                 location=record.location,
+                # `CandidateImport.uploaded_by` already records who ran this.
+                # Leaving it out would put a recruiter's whole uploaded
+                # contact list into the shared queue.
+                owner_id=uploaded_by,
                 # Only a created row carries the import. An update leaves it
                 # alone deliberately: overwriting it would be a change with no
                 # change row behind it, and undoing an import would then have
@@ -680,7 +712,7 @@ async def apply_import(
     Any other order makes a single-file migration — the ordinary case, a
     roster and a career history in one workbook — impossible.
     """
-    owner = await _import_tenant(session, import_id)
+    owner, uploaded_by = await _import_owner(session, import_id)
     if owner != tenant_id:
         raise ValueError(f"import {import_id} belongs to tenant {owner}, not {tenant_id}")
 
@@ -689,6 +721,7 @@ async def apply_import(
         session,
         tenant_id=tenant_id,
         import_id=import_id,
+        uploaded_by=uploaded_by,
         records=candidates,
         outcome=outcome,
     )

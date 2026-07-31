@@ -783,6 +783,13 @@ class CandidateImport(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
     roles_updated: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     rows_failed: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
+    # Rows matched to somebody a colleague owns, which this import was not
+    # allowed to edit. Reported rather than dropped silently: an import that
+    # applied fewer rows than the file held looks like a bug otherwise.
+    held_by_colleagues: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+
     # How many times a worker has picked this import up. Counted at pickup
     # rather than at completion, because the run this bounds is the one that
     # never completes: a file that crashes `apply_import` leaves the row
