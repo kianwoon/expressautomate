@@ -80,3 +80,26 @@ async def test_a_share_cannot_reach_another_agency(admin_session, seeded) -> Non
     )
     with pytest.raises(IntegrityError):
         await admin_session.flush()
+
+
+@pytest.mark.asyncio
+async def test_only_one_pending_request_per_person(admin_session, seeded) -> None:
+    """A recruiter clicking twice must not spam the owner."""
+    from app.models.candidate_access_request import CandidateAccessRequest
+
+    make_tenant, _, _ = seeded
+    tenant_id, owner, _ = await make_tenant("agency-request-dedupe")
+    asker = await make_user(admin_session, tenant_id, "asker@agency.test")
+    candidate_id = await make_candidate(admin_session, tenant_id, owner_id=owner)
+    for _ in range(2):
+        admin_session.add(
+            CandidateAccessRequest(
+                id=uuid.uuid4(),
+                tenant_id=tenant_id,
+                candidate_id=candidate_id,
+                requested_by_user_id=asker,
+                status=CandidateAccessRequest.STATUS_PENDING,
+            )
+        )
+    with pytest.raises(IntegrityError):
+        await admin_session.flush()
