@@ -1,12 +1,11 @@
 """Who, inside one agency, may see and edit a candidate."""
 
-import uuid
 
 import pytest
 from sqlalchemy import select, text
 
 from app.models.candidate import Candidate
-from tests.conftest import make_candidate, make_user
+from tests.conftest import make_candidate
 
 
 @pytest.mark.asyncio

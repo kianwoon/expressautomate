@@ -733,3 +733,35 @@ CL Task 6: complete (4d23459..5979947). LOST-CLAIM RACE fixed then the 409 resto
   blanket 404 rule, and the loser and a bystander are the same DB state, so no query honours both.
   test_claiming_a_job_order_you_cannot_see_is_a_404 rewritten; cross-agency still 404 and pinned.
 === ALL COMPLETE. Final: backend 1636, frontend 190/21. ===
+
+## Piece 3 — Candidate ownership and sharing
+Plan: docs/superpowers/plans/2026-07-31-candidate-ownership-and-sharing.md
+Spec: docs/superpowers/specs/2026-07-31-candidate-ownership-and-sharing-design.md
+Branch: kianwoon/recruiter-candidate-sharing-083e1e  Base: 5a9c865
+Pre-flight decisions (user, batched before execution):
+  - Task 6: FULL delivery path. Teach deliver_notification + render.py about candidate
+    events; add the six kinds to ALL_EVENT_KINDS. NOT emit-only.
+  - Task 7: COPY test_opportunity_routes_guarded.py verbatim. Duplication is deliberate —
+    two independent copies cannot both drift on one bug. Tell reviewers this.
+Tasks: 0..15 (16 total).
+Task 0: complete (5a9c865..aa70765, review clean — spec OK, 3 Minor only).
+  Moved client/seeded/sign_in to conftest + make_candidate/make_user/run_import.
+  Also fixed 7 opportunity test files that aliased the fixtures off the module (necessary,
+  imports only, no behaviour change — reviewer confirmed).
+  Brief was WRONG twice, implementer used source: CandidateRecord is in
+  imports/rows.py (not records.py); sign_in is a plain function so it needs an explicit
+  import. apply_import signature confirmed (session, *, tenant_id, import_id, candidates,
+  roles, today).
+  ENVIRONMENT — the implementer's "63 failures" were its own env, not the code.
+  Suite cannot run off repo-root .env (points at Koyeb; conftest refuses remote).
+  Wrote .superpowers/sdd/test-env.sh — SOURCE IT IN EVERY IMPLEMENTER DISPATCH.
+  The role split is load-bearing: DATABASE_ADMIN_URL=postgres superuser (bypasses RLS),
+  DATABASE_URL=expressautomate_app (obeys it). Both as superuser => 138 spurious RLS
+  failures on correct code. alembic upgrade head must run first; it creates the role.
+  VERIFIED GREEN BASELINE at aa70765: 1640 passed, 1 skipped.
+  Migration head independently confirmed = 314cc3da9ced, as the plan states.
+Task 1: complete (aa70765..1504b70, review clean — spec OK, 2 Minor unused imports).
+  candidates.owner_id + composite FK with column-qualified SET NULL (owner_id) + backfill
+  from created_by. 1642 passed, 1 skipped (= baseline 1640 + exactly the 2 new tests).
+  NOTE: Task 0 had already put owner_id into conftest's make_candidate, against a column
+  that did not exist — latently broken, never called, now valid.

@@ -24,7 +24,7 @@ from app.services.notify.events import (
     EVENT_OPPORTUNITY_ASSIGNED,
     EVENT_OPPORTUNITY_NEW,
 )
-from tests.conftest import AdminSessionLocal, cleanup_tenant, seed_tenant_with_user, sign_in
+from tests.conftest import AdminSessionLocal, cleanup_tenant, seed_tenant_with_user
 
 
 def _signed_in_client(user_id: uuid.UUID, tenant_id: uuid.UUID) -> httpx.AsyncClient:
