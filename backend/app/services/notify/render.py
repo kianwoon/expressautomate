@@ -21,8 +21,10 @@ from app.services.notify.events import (
     CANDIDATE_EVENT_KINDS,
     CANDIDATE_SHARED,
     CANDIDATE_UNCLAIMED,
+    EVENT_OPPORTUNITY_ASSIGNED,
     EVENT_OPPORTUNITY_NEEDS_REVIEW,
     EVENT_OPPORTUNITY_NEW,
+    EVENT_OPPORTUNITY_SHARED,
     MISSING,
     OpportunityEvent,
 )
@@ -44,6 +46,12 @@ class WhatsAppContent:
 _TEMPLATE_FOR = {
     EVENT_OPPORTUNITY_NEW: lambda: settings.WHATSAPP_TEMPLATE_OPPORTUNITY_NEW,
     EVENT_OPPORTUNITY_NEEDS_REVIEW: lambda: settings.WHATSAPP_TEMPLATE_OPPORTUNITY_REVIEW,
+    # Share and assignment carry exactly the four job-order parameters the
+    # `OPPORTUNITY_NEW` template is already approved for, so they reuse it
+    # rather than adding a second approval — and, more to the point, rather
+    # than adding a setting that would ship EMPTY and fail every send.
+    EVENT_OPPORTUNITY_SHARED: lambda: settings.WHATSAPP_TEMPLATE_OPPORTUNITY_NEW,
+    EVENT_OPPORTUNITY_ASSIGNED: lambda: settings.WHATSAPP_TEMPLATE_OPPORTUNITY_NEW,
     # All six candidate kinds share one approved template — same four
     # parameters, and six near-identical templates would be six approvals to
     # keep in step. Built from the kind tuple rather than listed twice, so a
@@ -59,6 +67,8 @@ _TEMPLATE_FOR = {
 _HEADLINE = {
     EVENT_OPPORTUNITY_NEW: "New job order",
     EVENT_OPPORTUNITY_NEEDS_REVIEW: "Job order needs review",
+    EVENT_OPPORTUNITY_SHARED: "Job order shared with you",
+    EVENT_OPPORTUNITY_ASSIGNED: "Job order assigned to you",
     CANDIDATE_SHARED: "Candidate shared with you",
     CANDIDATE_ASSIGNED: "Candidate handed over to you",
     CANDIDATE_UNCLAIMED: "Candidate released to the queue",
