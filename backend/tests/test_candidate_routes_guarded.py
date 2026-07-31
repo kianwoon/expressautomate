@@ -26,8 +26,6 @@ somebody later adds in another file.
 import ast
 import pathlib
 
-import pytest
-
 API_DIR = pathlib.Path(__file__).parent.parent / "app" / "api"
 
 READ_GUARD = "load_visible_candidate"
@@ -314,10 +312,6 @@ def test_every_mutating_by_id_route_uses_the_edit_guard() -> None:
     )
 
 
-@pytest.mark.xfail(
-    reason="candidate_shares.py and candidate_ownership.py land in Tasks 8 and 11",
-    strict=True,
-)
 def test_the_guard_covers_more_than_one_module() -> None:
     """The regression this file exists to prevent a second time.
 
@@ -339,10 +333,6 @@ def test_list_filters_by_the_predicate() -> None:
     )
 
 
-@pytest.mark.xfail(
-    reason="candidate_shares.py and candidate_ownership.py land in Tasks 8 and 11",
-    strict=True,
-)
 def test_every_exemption_names_a_route_that_exists() -> None:
     """An exemption for a route that has gone is a hole waiting for a name.
 
