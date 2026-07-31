@@ -16,10 +16,13 @@ unique indexes as the backstop against a race rather than the mechanism.
 import uuid
 from dataclasses import dataclass
 
-from sqlalchemy import text
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.candidate import Candidate
+from app.models.tenant import User
 from app.services.candidate_naming import is_matchable_phone, normalize_email
+from app.services.visibility import visible_candidates
 
 # `merged` rows are excluded: their identity now belongs to the target. Archived
 # rows are NOT excluded — they still hold the unique key, so skipping one would
@@ -111,3 +114,67 @@ async def find_candidate(
     if by_phone:
         return MatchResult(candidate_id=by_phone, matched_on="phone")
     return MatchResult()
+
+
+def abbreviate(full_name: str) -> str:
+    """"Wei Ming Tan" -> "Wei Ming T." — enough to recognise a person you have
+    met, not enough to be a directory of who the agency holds."""
+    parts = full_name.split()
+    if len(parts) < 2:
+        return full_name
+    return " ".join([*parts[:-1], f"{parts[-1][0]}."])
+
+
+async def held_by_colleague(
+    session: AsyncSession,
+    match: MatchResult,
+    user_id: uuid.UUID,
+    role: str,
+) -> dict[str, object] | None:
+    """The 409 body for a candidate that exists but is not ours to see.
+
+    Returns None when the match is visible to the caller — that is the
+    ordinary duplicate the route already handled, and the caller can simply be
+    sent to the row.
+
+    The disclosure here is deliberate. The caller learns this person is in the
+    agency's database and who holds them, and nothing else: no contact detail,
+    no salary, no notes, no client history, and not even the candidate id. The
+    alternative is a wall a recruiter cannot act on, and in a three-to-fifty
+    person agency they will walk to that colleague's desk and ask anyway.
+    """
+    if match.candidate_id is None:
+        return None
+
+    visible = (
+        await session.execute(
+            select(Candidate.id)
+            .where(Candidate.id == match.candidate_id)
+            .where(visible_candidates(user_id, role))
+        )
+    ).scalar_one_or_none()
+    if visible is not None:
+        return None
+
+    row = (
+        await session.execute(
+            select(
+                Candidate.full_name,
+                # `users` has no `full_name`. Prefer what the person chose to
+                # be called, then what the directory says, then the address
+                # they signed in with — never a bare UUID, which tells the
+                # recruiter nothing and looks like a bug.
+                func.coalesce(User.preferred_name, User.display_name, User.email).label(
+                    "holder"
+                ),
+            )
+            .join(User, User.id == Candidate.owner_id, isouter=True)
+            .where(Candidate.id == match.candidate_id)
+        )
+    ).one()
+
+    return {
+        "reason": "already_registered",
+        "candidate": {"full_name": abbreviate(row.full_name), "held_by": row.holder},
+        "can_request_access": True,
+    }

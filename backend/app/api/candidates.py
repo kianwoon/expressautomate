@@ -32,7 +32,7 @@ from app.models.candidate import (
     CandidateSkill,
 )
 from app.models.tenant import User
-from app.services.candidate_matching import find_candidate
+from app.services.candidate_matching import find_candidate, held_by_colleague
 from app.services.candidate_naming import (
     is_matchable_phone,
     normalize_email,
@@ -857,7 +857,7 @@ _OVERRIDABLE = (
 
 @router.post("/candidates", status_code=201)
 async def create_candidate(request: Request, body: CandidateIn) -> dict:
-    user_uuid, tenant_uuid = _require_session(request)
+    user_uuid, tenant_uuid, role = await _require_session_with_role(request)
     async with tenant_session(tenant_uuid) as session:
         phone_e164 = _identity_phone(body.phone_raw)
         email = normalize_email(body.email)
@@ -874,6 +874,9 @@ async def create_candidate(request: Request, body: CandidateIn) -> dict:
                     "Merge them first, or correct the details."
                 ),
             )
+        held = await held_by_colleague(session, match, user_uuid, role)
+        if held is not None:
+            raise HTTPException(status_code=409, detail=held)
         if match.candidate_id is not None:
             raise HTTPException(
                 status_code=409,
@@ -889,6 +892,8 @@ async def create_candidate(request: Request, body: CandidateIn) -> dict:
             phone_e164=phone_e164,
             pipeline_stage=body.pipeline_stage or "new",
             record_status=Candidate.ACTIVE,
+            # You typed it in, it is yours.
+            owner_id=user_uuid,
             created_by=user_uuid,
             updated_by=user_uuid,
         )
