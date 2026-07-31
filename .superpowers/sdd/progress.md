@@ -721,3 +721,15 @@ CL Task 5: complete (5a60582..4d23459, review approved after 1 minor fix).
   MINOR carried: the contract test's skip rule uses text.includes over app/**; a future barrel
   re-export or computed helper name would silently disable a check.
 === ALL TASKS COMPLETE ===
+CL Task 6: complete (4d23459..5979947). LOST-CLAIM RACE fixed then the 409 restored.
+  (a) set_opportunity_client wrote assigned_user_id unconditionally off a stale read, so linking a
+      client could silently overwrite a colleague's claim - even with adopt=false. Now client_id is
+      written on its own and adoption is a separate CAS (WHERE assigned_user_id IS NULL).
+  (b) The claim loser was getting 404, not 409: load_visible_opportunity ran FIRST, and the winner's
+      claim makes the row invisible to the loser. Reordered to CAS-first. Fable verified the reorder
+      is safe (unassigned is the FIRST disjunct of the predicate, and RLS gates UPDATE row selection).
+  ACCEPTED TRADEOFF, Fable-reviewed: a same-agency colleague holding an id now learns an assigned row
+  exists (409 not 404). The SPEC CONTRADICTED ITSELF - it mandates 409 for the claim loser AND a
+  blanket 404 rule, and the loser and a bystander are the same DB state, so no query honours both.
+  test_claiming_a_job_order_you_cannot_see_is_a_404 rewritten; cross-agency still 404 and pinned.
+=== ALL COMPLETE. Final: backend 1636, frontend 190/21. ===
