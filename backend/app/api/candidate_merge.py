@@ -16,7 +16,6 @@ from pydantic import BaseModel
 from sqlalchemy import select, text, update
 
 from app.api.auth import _require_session_with_role
-from app.api.candidates import _load
 from app.db.rls import tenant_session
 from app.models.candidate import Candidate
 from app.services.visibility import load_editable_candidate
@@ -35,7 +34,7 @@ async def _lock_pair(session, first: uuid.UUID, second: uuid.UUID) -> None:
     in which Postgres locks the rows of a single statement is a property of the
     chosen plan, not of the ORDER BY, so only separate statements make the
     ordering something this code actually decides. A missing row simply locks
-    nothing — the 404 comes from `_load` afterwards.
+    nothing — the 404 comes from `load_editable_candidate` afterwards.
     """
     for candidate_id in sorted((first, second), key=lambda value: value.bytes):
         await session.execute(
@@ -62,9 +61,14 @@ async def merge_candidate(
         # queue rather than deadlock. The statuses are only read *after* both
         # locks are held, because the pre-lock read is exactly what is stale.
         await _lock_pair(session, candidate_id, body.target_id)
-        # Only this side is guarded here; the target's own check is Task 12.
+        # Merging is destructive on one side and additive on the other, so the
+        # caller must hold both. The realistic case — B discovers, after being
+        # granted access, that they and A hold the same person — is not a
+        # merge B performs. Until a cross-owner merge request exists,
+        # `role='owner'` is the escape hatch, which is workable in an agency
+        # where the boss is one desk away.
         loser = await load_editable_candidate(session, candidate_id, user_uuid, role)
-        target = await _load(session, body.target_id)
+        target = await load_editable_candidate(session, body.target_id, user_uuid, role)
         if target.record_status == Candidate.MERGED:
             # Chains would need every reader to walk them. Refusing here is
             # what keeps the graph one hop deep.
@@ -213,6 +217,10 @@ async def unmerge_candidate(request: Request, candidate_id: uuid.UUID) -> dict:
                 ),
             )
 
+        # `owner_id` is deliberately not written here. It survived the merge on
+        # this row, so reviving the row restores its original owner. If that
+        # recruiter has since been deleted the column is already NULL and the
+        # row lands in the queue — the same outcome every other path gives.
         await session.execute(
             update(Candidate)
             .where(Candidate.id == candidate_id)
