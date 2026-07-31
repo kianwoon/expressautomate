@@ -171,6 +171,30 @@ break by accident:
   else — plus a request-access path. `masked_candidate()` in
   `app/services/candidate_matching.py` is the single implementation of that
   boundary; the collision path and redacted sourcing matches both call it.
+**There is an unfinished rollout step, and it is the kind that gets forgotten.**
+Migration `c1a0d5e7b206` gave every candidate existing at deploy time a
+`scope='tenant'` share with `shared_by_user_id = NULL`, so the database stayed
+exactly as visible as it was and nobody lost sight of anything mid-week. **The
+feature's actual privacy does not take effect until those rows are deleted.**
+Once the agency has been told, run this as the migration/superuser role — the
+app role is under `FORCE ROW LEVEL SECURITY` and would only delete its own
+tenant:
+
+```sql
+DELETE FROM candidate_shares WHERE scope = 'tenant' AND shared_by_user_id IS NULL;
+```
+
+To see whether it is still outstanding:
+
+```sql
+SELECT count(*) FROM candidate_shares WHERE scope = 'tenant' AND shared_by_user_id IS NULL;
+```
+
+A deliberate broadcast whose author was later deleted also matches that
+predicate (the FK is `SET NULL`) and would be swept up. It is a read grant any
+recruiter can simply re-make, which is why the residual was accepted rather
+than designed around.
+
 - **Match tenant-wide, disclose at the edge.** Import matching and sourcing
   both scan the whole agency on purpose — a visibility-filtered lookup would
   miss an invisible row and then die on the unique index. Redaction happens at
