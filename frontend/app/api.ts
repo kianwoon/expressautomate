@@ -95,11 +95,29 @@ export function opportunitySourcingPath(id: string): string {
   return `${OPPORTUNITIES_PATH}/${encodeURIComponent(id)}/sourcing`;
 }
 
-/** One job order, for PATCH — setting `placement_type` or the sex requirement
- *  and its reason. Same id-in-path, same encoding, as the other single-row
- *  paths on this page. */
+/** One job order, for GET — the whole row, in the shape one row of the list
+ *  comes back in. Read after every write, because each write route answers
+ *  with only the fields it changed. Same id-in-path, same encoding, as the
+ *  other single-row paths on this page. */
 export function opportunityPath(id: string): string {
   return `${OPPORTUNITIES_PATH}/${encodeURIComponent(id)}`;
+}
+
+/**
+ * The two halves of the placement form, which are two routes and not one.
+ *
+ * They are separate on the server because they are separate decisions, each
+ * with its own audit columns: `placement_type` decides which Work Permit rules
+ * the eligibility check runs, and the sex requirement is a lawful judgement
+ * about the job itself. POST, not PATCH — there is no combined write, and the
+ * form sends only the half that changed.
+ */
+export function opportunityPlacementTypePath(id: string): string {
+  return `${OPPORTUNITIES_PATH}/${encodeURIComponent(id)}/placement-type`;
+}
+
+export function opportunityOccupationalRequirementPath(id: string): string {
+  return `${OPPORTUNITIES_PATH}/${encodeURIComponent(id)}/occupational-requirement`;
 }
 
 /**

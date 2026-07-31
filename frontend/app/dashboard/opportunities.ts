@@ -5,7 +5,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   OPPORTUNITIES_PAGE_SIZE,
   OPPORTUNITIES_PATH,
+  opportunityOccupationalRequirementPath,
   opportunityPath,
+  opportunityPlacementTypePath,
   opportunityReviewPath,
 } from "../api";
 import { useLive } from "../events";
@@ -560,22 +562,40 @@ export async function getOpportunity(id: string): Promise<Opportunity> {
   return (await res.json()) as Opportunity;
 }
 
-/** Sets a job order's placement type and/or sex requirement. Same PATCH
- *  pattern as `updateCandidate` in `candidates.ts`: partial body, JSON in and
- *  out, `ApiError` carrying whatever sentence the server worded — including
- *  the "a reason is required" refusal the backend enforces on this pair. */
-export async function updateOpportunityPlacement(
-  id: string,
-  body: PlacementUpdate,
-): Promise<Opportunity> {
-  const res = await fetch(opportunityPath(id), {
-    method: "PATCH",
+/**
+ * The two placement writes, one per server route.
+ *
+ * There is no combined PATCH and there should not be: each route stamps its
+ * own `set_by`/`set_at`, so one write carrying both would record a lawful
+ * judgement against a recruiter who only changed the permit type. Both throw
+ * `ApiError` carrying whatever sentence the server worded — including the "a
+ * reason is required" refusal the second one enforces on its pair.
+ *
+ * Neither returns the row: each answers with the fields it wrote, and the
+ * caller re-reads through `getOpportunity` for the rest.
+ */
+async function post(url: string, body: unknown): Promise<void> {
+  const res = await fetch(url, {
+    method: "POST",
     credentials: "include",
     headers: { "Content-Type": "application/json", Accept: "application/json" },
     body: JSON.stringify(body),
   });
   if (!res.ok) throw new ApiError(await readError(res));
-  return (await res.json()) as Opportunity;
+}
+
+export function setOpportunityPlacementType(
+  id: string,
+  placement_type: PlacementType | null,
+): Promise<void> {
+  return post(opportunityPlacementTypePath(id), { placement_type });
+}
+
+export function setOpportunityOccupationalRequirement(
+  id: string,
+  requirement: Pick<PlacementUpdate, "sex_requirement" | "sex_requirement_reason">,
+): Promise<void> {
+  return post(opportunityOccupationalRequirementPath(id), requirement);
 }
 
 

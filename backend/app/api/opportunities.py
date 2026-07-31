@@ -182,6 +182,68 @@ class OccupationalRequirementRequest(BaseModel):
         return self
 
 
+def _row_select(user_uuid: uuid.UUID):
+    """Everything one rendered job order is made of, in one select.
+
+    Shared by the list and by `get_opportunity` rather than written twice, and
+    that is the point: the panel replaces a list row with what the single-row
+    read returns, so two selects that drift by one join produce a row that
+    changes appearance the moment it is re-read.
+
+    `email_messages` carries the two message ids, so this joins it rather than
+    denormalising them onto the opportunity: they exist to let a recruiter open
+    the original mail, and a copy that drifts from the source is worse than a
+    join.
+    """
+    email = aliased(EmailMessage)
+    assignee = aliased(User)
+    linked_client = aliased(Client)
+    return (
+        select(
+            Opportunity,
+            email.internet_message_id,
+            email.graph_message_id,
+            _assignee_name_expr(assignee).label("assignee_name"),
+            linked_client.name.label("client_name"),
+            shared_with_me_exists(user_uuid).label("shared_with_me"),
+        )
+        # OUTER, and that matters: `email_message_id` is nullable — a job
+        # order typed in by hand has no email at all, and a retention purge
+        # sets the column NULL on one that did. An inner join drops both
+        # from the list while the chip counts (which do not join)
+        # still count them, so the page would say twelve and show eleven.
+        .join(email, email.id == Opportunity.email_message_id, isouter=True)
+        # Composite, not just `id`: every user reference in this codebase
+        # carries the tenant predicate alongside the id so tenant safety
+        # never rests on RLS alone (see the composite FKs on
+        # clients.assigned_user_id, opportunities.assigned_user_id and
+        # opportunity_shares.shared_with_user_id). OUTER — an inner join
+        # would drop every unassigned job order, the entire queue.
+        .join(
+            assignee,
+            and_(
+                assignee.id == Opportunity.assigned_user_id,
+                assignee.tenant_id == Opportunity.tenant_id,
+            ),
+            isouter=True,
+        )
+        # The client the job order is filed under, resolved here rather
+        # than a lookup per row. Composite and OUTER for the same two
+        # reasons as the assignee join above — and OUTER matters more
+        # here: most job orders are not linked to a client at all (eight
+        # of eleven in production when this was written), so an inner join
+        # would drop the majority of the list.
+        .join(
+            linked_client,
+            and_(
+                linked_client.id == Opportunity.client_id,
+                linked_client.tenant_id == Opportunity.tenant_id,
+            ),
+            isouter=True,
+        )
+    )
+
+
 @router.get("/opportunities")
 async def list_opportunities(
     request: Request,
@@ -246,60 +308,7 @@ async def list_opportunities(
             if stored in _STORED_TO_FILTER:
                 counts[_STORED_TO_FILTER[stored]] += n
 
-        # `email_messages` carries the two message ids, so the list joins it
-        # rather than denormalising them onto the opportunity: they exist to
-        # let a recruiter open the original mail, and a copy that drifts from
-        # the source is worse than a join.
-        email = aliased(EmailMessage)
-        assignee = aliased(User)
-        linked_client = aliased(Client)
-        shared_with_me_expr = shared_with_me_exists(user_uuid)
-        base = (
-            select(
-                Opportunity,
-                email.internet_message_id,
-                email.graph_message_id,
-                _assignee_name_expr(assignee).label("assignee_name"),
-                linked_client.name.label("client_name"),
-                shared_with_me_expr.label("shared_with_me"),
-            )
-            # OUTER, and that matters: `email_message_id` is nullable — a job
-            # order typed in by hand has no email at all, and a retention purge
-            # sets the column NULL on one that did. An inner join drops both
-            # from the list while the chip counts above (which do not join)
-            # still count them, so the page would say twelve and show eleven.
-            .join(email, email.id == Opportunity.email_message_id, isouter=True)
-            # Composite, not just `id`: every user reference in this codebase
-            # carries the tenant predicate alongside the id so tenant safety
-            # never rests on RLS alone (see the composite FKs on
-            # clients.assigned_user_id, opportunities.assigned_user_id and
-            # opportunity_shares.shared_with_user_id). OUTER — an inner join
-            # would drop every unassigned job order, the entire queue.
-            .join(
-                assignee,
-                and_(
-                    assignee.id == Opportunity.assigned_user_id,
-                    assignee.tenant_id == Opportunity.tenant_id,
-                ),
-                isouter=True,
-            )
-            # The client the job order is filed under, resolved here rather
-            # than a lookup per row. Composite and OUTER for the same two
-            # reasons as the assignee join above — and OUTER matters more
-            # here: most job orders are not linked to a client at all (eight
-            # of eleven in production when this was written), so an inner join
-            # would drop the majority of the list.
-            .join(
-                linked_client,
-                and_(
-                    linked_client.id == Opportunity.client_id,
-                    linked_client.tenant_id == Opportunity.tenant_id,
-                ),
-                isouter=True,
-            )
-            .where(visible)
-            .where(scope_clause)
-        )
+        base = _row_select(user_uuid).where(visible).where(scope_clause)
         if status is not None:
             base = base.where(Opportunity.review_status == _FILTER_TO_STORED[status])
 
@@ -517,6 +526,45 @@ async def _decoded_codes(session, opportunity_ids: list[uuid.UUID]) -> dict:
     for code in result.scalars():
         grouped.setdefault(code.opportunity_id, []).append(code)
     return grouped
+
+
+@router.get("/opportunities/{opportunity_id}")
+async def get_opportunity(opportunity_id: uuid.UUID, request: Request) -> dict:
+    """One job order, in exactly the shape the list gives one.
+
+    Every write in the panel answers with only the fields it changed, so the
+    panel re-reads the row afterwards and swaps it into the list. Without this
+    the re-read 404s, the browser swallows the failure, and the screen catches
+    up only on the next poll — which is what production did.
+
+    Not visible is 404, never 403: a 403 would confirm the row exists, and
+    whether another agency holds a given id is not this route's to tell.
+    """
+    user_uuid, tenant_uuid, role = await _require_session_with_role(request)
+
+    async with tenant_session(tenant_uuid) as session:
+        await load_visible_opportunity(session, opportunity_id, user_uuid, role)
+        row = (
+            await session.execute(
+                _row_select(user_uuid).where(Opportunity.id == opportunity_id)
+            )
+        ).one_or_none()
+        if row is None:
+            raise HTTPException(status_code=404, detail="No such job order.")
+        evidence = await _evidence_counts(session, [opportunity_id])
+        codes = await _decoded_codes(session, [opportunity_id])
+
+    opportunity, internet_id, graph_id, assignee_name, client_name, shared = row
+    return _payload(
+        opportunity,
+        internet_id,
+        graph_id,
+        evidence.get(opportunity.id, (0, 0)),
+        codes.get(opportunity.id, []),
+        assignee_name,
+        client_name,
+        shared,
+    )
 
 
 @router.post("/opportunities/{opportunity_id}/review")
@@ -824,6 +872,16 @@ def _payload(
         "duration_raw": row.duration_raw,
         "location_raw": row.location_raw,
         "quality_state": row.quality_state,
+        # The two human decisions on the row, returned wherever the row is.
+        # The panel's placement form reads its initial values straight off
+        # whatever row it was handed, so a payload without them draws "not
+        # set" over a placement type somebody set — and `placement_type` is
+        # what unlocks the lawful sex filter, so drawing it wrong is not a
+        # cosmetic loss. `_set_by`/`_set_at` stay out: they are the audit
+        # trail, not something the form renders.
+        "placement_type": row.placement_type,
+        "sex_requirement": row.sex_requirement,
+        "sex_requirement_reason": row.sex_requirement_reason,
         # Translated, not passed through: the chips, the `status` parameter and
         # this field have to be the same vocabulary or a client cannot filter
         # on what it just rendered. `ready` becomes `new`; anything the

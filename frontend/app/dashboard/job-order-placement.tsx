@@ -4,7 +4,9 @@ import { useState } from "react";
 
 import {
   PLACEMENT_TYPES,
-  updateOpportunityPlacement,
+  getOpportunity,
+  setOpportunityOccupationalRequirement,
+  setOpportunityPlacementType,
   type Opportunity,
   type PlacementType,
   type SexRequirement,
@@ -49,22 +51,59 @@ export function PlacementForm({
   // guards, not the only one.
   const reasonMissing = sexRequirement !== "" && reason.trim().length === 0;
 
+  /**
+   * Two writes, not one, and only for the half that changed.
+   *
+   * The server keeps these apart deliberately: each route stamps its own
+   * `set_by`/`set_at`, so writing both on every save would record a lawful
+   * sex-requirement judgement against a recruiter who only picked a permit
+   * type. Sending only what moved also halves the chance of a partial save.
+   *
+   * The placement type goes first and the requirement second, so a refusal of
+   * the regulated half — the one the backend can still reject over its reason
+   * — is the last thing to happen and is what the recruiter is told about.
+   * Neither route can be rolled back from here, so instead of pretending the
+   * save was atomic the form re-reads the row afterwards, whether or not
+   * anything failed, and hands the panel the state the server actually holds.
+   */
   async function save() {
     if (saving || reasonMissing) return;
     setSaving(true);
     setError(null);
+    const nextPlacement = placementType === "" ? null : placementType;
+    const nextRequirement = sexRequirement === "" ? null : sexRequirement;
+    let failure: string | null = null;
+    let wrote = false;
     try {
-      const updated = await updateOpportunityPlacement(row.id, {
-        placement_type: placementType === "" ? null : placementType,
-        sex_requirement: sexRequirement === "" ? null : sexRequirement,
-        sex_requirement_reason: sexRequirement === "" ? null : reason.trim(),
-      });
-      onSaved(updated);
+      if (nextPlacement !== (row.placement_type ?? null)) {
+        await setOpportunityPlacementType(row.id, nextPlacement);
+        wrote = true;
+      }
+      if (
+        nextRequirement !== (row.sex_requirement ?? null) ||
+        (nextRequirement !== null && reason.trim() !== (row.sex_requirement_reason ?? ""))
+      ) {
+        await setOpportunityOccupationalRequirement(row.id, {
+          sex_requirement: nextRequirement,
+          sex_requirement_reason: nextRequirement === null ? null : reason.trim(),
+        });
+        wrote = true;
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "We could not save this just now.");
-    } finally {
-      setSaving(false);
+      failure = err instanceof Error ? err.message : "We could not save this just now.";
     }
+
+    try {
+      // Read back even after a failure: the first write may well have landed,
+      // and a panel left showing the values that were typed would be showing
+      // something nobody stored.
+      if (wrote || failure === null) onSaved(await getOpportunity(row.id));
+    } catch (err) {
+      failure ??= err instanceof Error ? err.message : "We could not save this just now.";
+    }
+
+    setError(failure);
+    setSaving(false);
   }
 
   const dirty =
