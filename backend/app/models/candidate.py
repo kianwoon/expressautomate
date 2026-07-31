@@ -609,6 +609,14 @@ class CandidateFieldOverride(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
     changed_by: Mapped[uuid.UUID | None] = mapped_column(
         PgUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL")
     )
+    # Whose reading this is. NULL is a distinct, permanent tier meaning
+    # "agency-wide import protection" — the meaning every row written before
+    # candidates had owners carries, and the meaning a shared base fact keeps.
+    #
+    # `changed_by` is not this column and cannot be: it is a nullable SET NULL
+    # audit trail, so it empties when the account is deleted, and an identity
+    # key that vanishes is not an identity key.
+    user_id: Mapped[uuid.UUID | None] = mapped_column(PgUUID(as_uuid=True), index=True)
 
     __table_args__ = (
         ForeignKeyConstraint(
@@ -620,8 +628,34 @@ class CandidateFieldOverride(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
         UniqueConstraint(
             "tenant_id",
             "candidate_id",
+            "user_id",
             "field_name",
-            name="uq_candidate_overrides_one_per_field",
+            name="uq_candidate_overrides_one_per_field_per_user",
+        ),
+        # A NULL does not collide with another NULL in a Postgres UNIQUE
+        # constraint, so the constraint above does not bound the tenant-wide
+        # tier. This does.
+        #
+        # Postgres 15+ offers `UNIQUE NULLS NOT DISTINCT` as an alternative.
+        # It is not used here: the partial index states the tenant-wide tier
+        # explicitly, and the two rules — "one per user per field" and "one
+        # agency-wide per field" — read as two rules because they are two.
+        Index(
+            "uq_candidate_overrides_one_tenant_wide_per_field",
+            "tenant_id",
+            "candidate_id",
+            "field_name",
+            unique=True,
+            postgresql_where=text("user_id IS NULL"),
+        ),
+        # CASCADE, not SET NULL: a departed recruiter's private opinion must
+        # not silently become agency-wide import protection, which is exactly
+        # what SET NULL would do here.
+        ForeignKeyConstraint(
+            ["tenant_id", "user_id"],
+            ["users.tenant_id", "users.id"],
+            name="fk_candidate_overrides_user_same_tenant",
+            ondelete="CASCADE",
         ),
     )
 

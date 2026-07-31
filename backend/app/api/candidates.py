@@ -40,7 +40,7 @@ from app.services.candidate_naming import (
     normalize_phone,
     normalize_skill,
 )
-from app.services.candidate_overrides import overridden_fields
+from app.services.candidate_overrides import JUDGEMENT_FIELDS, overridden_fields
 from app.services.candidate_tenure import derive
 from app.services.sourcing import eligibility
 from app.services.user_naming import actor_name
@@ -491,7 +491,7 @@ async def list_candidates(
 
 @router.get("/candidates/{candidate_id}")
 async def get_candidate(request: Request, candidate_id: uuid.UUID) -> dict:
-    _user_uuid, tenant_uuid = _require_session(request)
+    user_uuid, tenant_uuid = _require_session(request)
     async with tenant_session(tenant_uuid) as session:
         candidate = await _load(session, candidate_id)
         skills = (
@@ -516,7 +516,9 @@ async def get_candidate(request: Request, candidate_id: uuid.UUID) -> dict:
             .scalars()
             .all()
         )
-        overrides = await overridden_fields(session, candidate_id)
+        # The signed-in reader, not the candidate's owner: this route renders
+        # what THIS recruiter asserted plus what the agency asserted.
+        overrides = await overridden_fields(session, candidate_id, user_uuid)
         # Imported here rather than at module scope: `candidate_roles` imports
         # `_load` from this module, and a top-level import each way would not
         # resolve. The detail panel is the only reader, so the cost is one
@@ -978,26 +980,42 @@ async def update_candidate(
         # correction, and nothing in the data afterwards could say it
         # happened.
         for field in changed_fields:
-            await session.execute(
-                pg_insert(CandidateFieldOverride)
-                .values(
-                    id=uuid.uuid4(),
-                    tenant_id=tenant_uuid,
-                    candidate_id=candidate_id,
-                    field_name=field,
-                    human_value=None if values[field] is None else str(values[field]),
-                    changed_by=user_uuid,
-                )
-                .on_conflict_do_update(
-                    constraint="uq_candidate_overrides_one_per_field",
-                    set_={
-                        "human_value": (
-                            None if values[field] is None else str(values[field])
-                        ),
-                        "changed_by": user_uuid,
-                    },
-                )
+            human_value = None if values[field] is None else str(values[field])
+            # Which tier the correction lands in. A fact corrected by hand is
+            # corrected for the whole agency (`user_id` NULL); a judgement is
+            # this recruiter's reading and nobody else's. The split itself
+            # lives in `candidate_overrides` and a test fails when a new
+            # column belongs to neither set.
+            is_judgement = field in JUDGEMENT_FIELDS
+            override_user_id = user_uuid if is_judgement else None
+            insert = pg_insert(CandidateFieldOverride).values(
+                id=uuid.uuid4(),
+                tenant_id=tenant_uuid,
+                candidate_id=candidate_id,
+                user_id=override_user_id,
+                field_name=field,
+                human_value=human_value,
+                changed_by=user_uuid,
             )
+            set_ = {"human_value": human_value, "changed_by": user_uuid}
+            if is_judgement:
+                stmt = insert.on_conflict_do_update(
+                    constraint="uq_candidate_overrides_one_per_field_per_user",
+                    set_=set_,
+                )
+            else:
+                # ON CONFLICT cannot use the unique CONSTRAINT for this row:
+                # its `user_id` is NULL and a NULL never collides there. The
+                # partial unique index is what actually bounds the tenant-wide
+                # tier, so it has to be the inference target too — naming the
+                # constraint here would let the insert reach the index and
+                # raise instead of updating.
+                stmt = insert.on_conflict_do_update(
+                    index_elements=["tenant_id", "candidate_id", "field_name"],
+                    index_where=text("user_id IS NULL"),
+                    set_=set_,
+                )
+            await session.execute(stmt)
         if body.skills is not None:
             await _replace_skills(session, tenant_uuid, candidate_id, body.skills)
         # Replace-on-write, exactly like skills: sending the list replaces it,

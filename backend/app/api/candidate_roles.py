@@ -209,7 +209,11 @@ async def apply_derived(session, candidate: Candidate) -> None:
     exists to prevent.
     """
     roles = await roles_for(session, candidate.id)
-    overridden = await overridden_fields(session, candidate.id)
+    # Derivation writes the SHARED candidate row, so the reader here is the
+    # owner, not whoever happens to be editing roles: a colleague's private
+    # reading must not stop the base row being re-derived, and the owner's
+    # must.
+    overridden = await overridden_fields(session, candidate.id, candidate.owner_id)
     # `derive` itself drops rejected roles, so a candidate whose every role is
     # rejected has nothing for it to work from. Checking the raw list here
     # would take the "has roles" branch anyway and derive from an empty set —

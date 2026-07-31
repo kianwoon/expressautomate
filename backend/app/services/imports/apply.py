@@ -241,7 +241,11 @@ async def _update_candidate(
     equals what the import wrote, and that comparison is undecidable without
     the second half.
     """
-    protected = await overridden_fields(session, candidate.id)
+    # An import must respect the agency-wide tier plus the row owner's own
+    # tier. It writes the shared base row, so the owner is the reader whose
+    # assertions bind it; a colleague's private reading of a judgement field
+    # lives in their own override row and is untouched either way.
+    protected = await overridden_fields(session, candidate.id, candidate.owner_id)
     changed = False
 
     for name in _CANDIDATE_FIELDS:
