@@ -28,7 +28,7 @@ here, and a test asserts that it never starts to.
 
 import uuid
 from datetime import UTC, date, datetime
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, model_validator
@@ -66,7 +66,7 @@ from app.services.visibility import (
 router = APIRouter(tags=["opportunities"])
 
 
-def _assignee_name_expr(user):
+def _assignee_name_expr(user: Any) -> Any:
     """How a colleague is named, wherever this module names one.
 
     NULLIF over each candidate rather than a bare COALESCE, and the email's

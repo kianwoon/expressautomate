@@ -380,6 +380,39 @@ async def test_linking_without_adoption_notifies_nobody(captured_events) -> None
         await cleanup_tenant(tenant_id)
 
 
+async def test_assignee_name_falls_back_to_email_local_part() -> None:
+    """A whitespace-only `preferred_name` must fall through, not win.
+
+    `_assignee_name_expr` wraps each candidate in `nullif(btrim(...), '')`
+    precisely so this happens; a plain `COALESCE` over the raw columns would
+    return the blank string instead of reaching the email fallback.
+    """
+    tenant_id, user_id = await seed_tenant_with_user()
+    try:
+        wei_kian = await _second_user(
+            tenant_id, preferred_name="   ", display_name=None
+        )
+        async with AdminSessionLocal() as s:
+            row = (
+                await s.execute(
+                    User.__table__.select().where(User.__table__.c.id == wei_kian)
+                )
+            ).one()
+        local_part = row.email.split("@", 1)[0]
+
+        client_id = await _client_row(tenant_id, assigned_user_id=wei_kian)
+        opportunity_id = await _opportunity(tenant_id, assigned_user_id=None)
+
+        response = await _post(
+            tenant_id, user_id, opportunity_id, {"client_id": str(client_id)}
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["assignee_name"] == local_part
+    finally:
+        await cleanup_tenant(tenant_id)
+
+
 async def test_a_client_from_another_agency_is_refused() -> None:
     # 422 before the composite FK can turn it into a 500 — the same guard
     # `assign_opportunity` puts on its user target.
