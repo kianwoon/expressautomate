@@ -164,6 +164,85 @@ async def merge_candidate(
             ),
             {"loser": candidate_id, "target": body.target_id},
         )
+        # Access moves too, or the feature loses its last step: B collides
+        # with A's candidate, asks, A grants, they discover it is one person,
+        # A merges — and B silently stops being able to see them.
+        #
+        # Both tables are guarded by PARTIAL unique indexes, so a plain
+        # re-point collides whenever the same grant already exists on the
+        # target. The semantics that resolves it: A SHARE ON EITHER ROW IS A
+        # SHARE ON THE SURVIVOR. The two rows are one human being, so holding
+        # sight of either is holding sight of them — which makes the colliding
+        # loser row carry nothing the target row does not already say. Move
+        # what does not collide, drop what does; access is preserved either
+        # way, and it is never widened.
+        #
+        # `scope='user'` collides on the same recipient; `scope='tenant'` is at
+        # most one broadcast per candidate, so it collides whenever the target
+        # already has one. One statement covers both: the pair
+        # (scope, shared_with_user_id) is exactly the index key, with NULL
+        # standing for the broadcast — hence IS NOT DISTINCT FROM.
+        await session.execute(
+            text(
+                """
+                DELETE FROM candidate_shares loser
+                WHERE loser.candidate_id = :loser
+                  AND EXISTS (
+                      SELECT 1 FROM candidate_shares t
+                      WHERE t.candidate_id = :target
+                        AND t.scope = loser.scope
+                        AND t.shared_with_user_id
+                            IS NOT DISTINCT FROM loser.shared_with_user_id
+                  )
+                """
+            ),
+            {"loser": candidate_id, "target": body.target_id},
+        )
+        await session.execute(
+            text(
+                "UPDATE candidate_shares SET candidate_id = :target "
+                "WHERE candidate_id = :loser"
+            ),
+            {"loser": candidate_id, "target": body.target_id},
+        )
+
+        # Pending requests move for the same reason: left behind, one points at
+        # a tombstone nobody will ever open, so the asker waits forever. Same
+        # collision rule — the same person cannot have two open requests
+        # against one candidate, and one open request is what they wanted.
+        #
+        # RESOLVED requests (granted/declined) deliberately stay on the loser.
+        # They are the history of a decision someone made about a specific
+        # record at a specific time; re-pointing them would rewrite that
+        # history to claim the decision was made about a candidate it was
+        # never made about. Nothing reads them for permission — the share is
+        # the grant, and the share has already moved — so leaving them costs
+        # no access. They are also outside the partial index, so they could
+        # not collide even if we moved them.
+        await session.execute(
+            text(
+                """
+                DELETE FROM candidate_access_requests loser
+                WHERE loser.candidate_id = :loser
+                  AND loser.status = 'pending'
+                  AND EXISTS (
+                      SELECT 1 FROM candidate_access_requests t
+                      WHERE t.candidate_id = :target
+                        AND t.status = 'pending'
+                        AND t.requested_by_user_id = loser.requested_by_user_id
+                  )
+                """
+            ),
+            {"loser": candidate_id, "target": body.target_id},
+        )
+        await session.execute(
+            text(
+                "UPDATE candidate_access_requests SET candidate_id = :target "
+                "WHERE candidate_id = :loser AND status = 'pending'"
+            ),
+            {"loser": candidate_id, "target": body.target_id},
+        )
+
         # Status and target in one statement — a CHECK enforces that a merged
         # row names its target and a live row does not.
         await session.execute(
@@ -184,6 +263,15 @@ async def unmerge_candidate(request: Request, candidate_id: uuid.UUID) -> dict:
     Deliberately partial: a moved row carries no record of which candidate it
     came from, so it cannot be given back. The identity keys return, which is
     what makes the person findable again.
+
+    Shares and pending access requests moved by the merge stay on the target,
+    and that is a decision rather than an oversight. Under the rule the merge
+    applies — a share on either row is a share on the survivor — the colleague
+    was granted sight of a person, not of a row. Sending the share back would
+    take sight away from the record that kept every skill, language and
+    override the merge moved; leaving it there is the outcome that matches
+    what was actually granted. It is also the only reversible one, since the
+    collision handling drops rows and cannot un-drop them.
     """
     user_uuid, tenant_uuid, role = await _require_session_with_role(request)
     async with tenant_session(tenant_uuid) as session:
