@@ -878,3 +878,42 @@ Task 9: complete (71f627a..352903d, review approved). patch_collision() in
   come FIRST. Consult Fable on where to extract before dispatching Task 12. ***
   MINOR for final: the non-colliding PATCH test uses current_title, so the self-match arm
   (an unchanged email on an editable row) is never independently exercised.
+Task 10: complete (352903d..8a68dbf, review approved, 1 Minor). claim/assign in the new
+  candidate_ownership.py; scope= filter via candidate_scope() in visibility.py (kept
+  candidates.py from breaching — it is now EXACTLY 1500/1500, THE NEXT LINE BREACHES).
+  *** SAME LESSON AS THE JOB-ORDER CLAIM, RELEARNED: guard-first gives the race LOSER 404,
+  not 409, because losing makes the row invisible to them. The atomic UPDATE must come
+  FIRST, then rowcount==0 disambiguates absent(404) vs taken(409). Reviewer confirmed it
+  matches opportunities.py:952-1022 statement for statement, and that it leaks nothing:
+  every row the UPDATE can match is unowned, and unowned is the FIRST OR term of
+  visible_candidates for every role. ***
+  Brief invented a notification_outbox table; the real one is notification_deliveries
+  (event_kind, tenant_id, subject_id, destination_id), and emit_candidate_event lives in
+  notify/dispatch.py not candidate_events.py. Test seeds a verified destination + active
+  subscription, else the assertion is vacuous.
+  Neither xfail removed — both also need candidate_shares.py (Task 11). Correct.
+  frontend/route-manifest.json regenerated (legitimate: two new routes).
+  1692 passed, 1 skipped, 2 xfailed.
+  MINOR for final: claim does not reject record_status == MERGED, unlike archive/unmerge —
+  a merged tombstone with a NULL owner is claimable and returns 200.
+Task 11: complete (8a68dbf..2507a07, review approved, 2 Minor). candidate_shares.py — share
+  create/list/delete, request_candidate_access (never calls load_visible_candidate, by
+  design and by exemption), owner-scoped inbox, grant/decline sharing one _resolve that
+  writes share + resolution columns in ONE transaction. Router registered ABOVE
+  candidates.router so /candidates/access-requests is not eaten as a UUID.
+  BOTH xfail(strict=True) marks REMOVED — they went XPASS the moment the module existed,
+  which is the mark doing its job. candidates.py gained ZERO lines (still 1500).
+  Carried Task 3 finding CLOSED: decline-then-reask proven (new 200, different id, table
+  ends ["declined","pending"]) — the whole reason the index is partial.
+  Improvement over brief: recipient_user_ids=() not None for an unowned candidate, since
+  None means "everyone".
+  1698 passed, 1 skipped.
+  MINOR carried: no happy-path test for the scope='tenant' INSERT, and none for the four
+  delete-authorisation arms (esp. that a recipient cannot delete ANOTHER recipient's row).
+FABLE EXTRACTION DECISION (candidates.py is at 1500/1500, Task 12 must modify merge):
+  Extract merge_candidate + unmerge_candidate + MergeRequest + _lock_pair to a new
+  app/api/candidate_merge.py, as ITS OWN COMMIT before Task 12. Frees ~185 net lines.
+  _load and _serialize STAY in candidates.py (export_candidate and candidate_roles use
+  them) and are imported FROM it — no circularity, candidates.py never imports the new
+  module. main.py needs the router; route-manifest and the guard test need NO change
+  (paths unchanged; _modules() globs api/*.py so the new file is auto-covered).

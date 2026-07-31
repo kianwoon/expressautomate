@@ -314,3 +314,208 @@ async def test_a_declined_request_may_be_asked_again(
         )
     ).scalars().all()
     assert sorted(rows) == ["declined", "pending"], rows
+
+
+@pytest.mark.asyncio
+async def test_the_owner_may_broadcast_and_the_whole_agency_then_sees_it(
+    client, admin_session, seeded
+) -> None:
+    """The happy half of the broadcast. The 403 half — a recipient may not
+    broadcast — is covered above; this proves the permitted case writes exactly
+    one recipient-less row and that it is what makes a colleague with no
+    individual share able to read the record."""
+    make_tenant, _, _ = seeded
+    tenant_id, owner, _ = await make_tenant("agency-broadcast")
+    colleague = await make_user(admin_session, tenant_id, "bystander@agency.test")
+    candidate_id = await make_candidate(admin_session, tenant_id, owner_id=owner)
+    await admin_session.commit()
+
+    # Before: no share of any kind, so the colleague cannot see the row.
+    sign_in(client, colleague, tenant_id)
+    assert (await client.get(f"/api/candidates/{candidate_id}")).status_code == 404
+
+    sign_in(client, owner, tenant_id)
+    broadcast = await client.post(
+        f"/api/candidates/{candidate_id}/shares",
+        json={"scope": "tenant", "note": "open to the desk"},
+    )
+    assert broadcast.status_code == 201
+
+    rows = (
+        await admin_session.execute(
+            text(
+                "SELECT scope, shared_with_user_id, shared_by_user_id, note "
+                "FROM candidate_shares WHERE candidate_id = :c"
+            ),
+            {"c": candidate_id},
+        )
+    ).all()
+    assert len(rows) == 1, rows
+    assert rows[0].scope == CandidateShare.SCOPE_TENANT
+    assert rows[0].shared_with_user_id is None, "a broadcast names nobody"
+    assert rows[0].shared_by_user_id == owner
+    assert rows[0].note == "open to the desk"
+
+    # After: the same colleague, holding no individual share, can now read it.
+    sign_in(client, colleague, tenant_id)
+    assert (await client.get(f"/api/candidates/{candidate_id}")).status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_the_owner_may_withdraw_a_share(client, admin_session, seeded) -> None:
+    make_tenant, _, _ = seeded
+    tenant_id, owner, _ = await make_tenant("agency-del-owner")
+    recipient = await make_user(admin_session, tenant_id, "del-r@agency.test")
+    candidate_id = await make_candidate(admin_session, tenant_id, owner_id=owner)
+    share_id = uuid.uuid4()
+    admin_session.add(
+        CandidateShare(
+            id=share_id,
+            tenant_id=tenant_id,
+            candidate_id=candidate_id,
+            scope=CandidateShare.SCOPE_USER,
+            shared_with_user_id=recipient,
+            # Deliberately NOT the owner: this proves the owner arm, not the
+            # sharer arm that would otherwise also let the call through.
+            shared_by_user_id=recipient,
+        )
+    )
+    await admin_session.commit()
+
+    sign_in(client, owner, tenant_id)
+    gone = await client.delete(f"/api/candidates/{candidate_id}/shares/{share_id}")
+    assert gone.status_code == 204
+
+    left = (
+        await admin_session.execute(
+            text("SELECT count(*) AS n FROM candidate_shares WHERE candidate_id = :c"),
+            {"c": candidate_id},
+        )
+    ).one()
+    assert left.n == 0
+    # And the recipient loses sight of the row with it.
+    sign_in(client, recipient, tenant_id)
+    assert (await client.get(f"/api/candidates/{candidate_id}")).status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_whoever_passed_it_on_may_withdraw_it(
+    client, admin_session, seeded
+) -> None:
+    """The sharer arm. A recruiter who forwarded a candidate down the chain can
+    take that forward back without being the owner."""
+    make_tenant, _, _ = seeded
+    tenant_id, owner, _ = await make_tenant("agency-del-sharer")
+    sharer = await make_user(admin_session, tenant_id, "chain-a@agency.test")
+    third = await make_user(admin_session, tenant_id, "chain-b@agency.test")
+    candidate_id = await make_candidate(admin_session, tenant_id, owner_id=owner)
+    admin_session.add(
+        CandidateShare(
+            id=uuid.uuid4(),
+            tenant_id=tenant_id,
+            candidate_id=candidate_id,
+            scope=CandidateShare.SCOPE_USER,
+            shared_with_user_id=sharer,
+            shared_by_user_id=owner,
+        )
+    )
+    await admin_session.commit()
+
+    sign_in(client, sharer, tenant_id)
+    onward = await client.post(
+        f"/api/candidates/{candidate_id}/shares",
+        json={"scope": "user", "user_ids": [str(third)]},
+    )
+    assert onward.status_code == 201
+
+    onward_share = (
+        await admin_session.execute(
+            text(
+                "SELECT id FROM candidate_shares "
+                "WHERE candidate_id = :c AND shared_with_user_id = :u"
+            ),
+            {"c": candidate_id, "u": third},
+        )
+    ).one()
+
+    gone = await client.delete(
+        f"/api/candidates/{candidate_id}/shares/{onward_share.id}"
+    )
+    assert gone.status_code == 204
+
+    sign_in(client, third, tenant_id)
+    assert (await client.get(f"/api/candidates/{candidate_id}")).status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_a_recipient_may_take_themselves_off(
+    client, admin_session, seeded
+) -> None:
+    make_tenant, _, _ = seeded
+    tenant_id, owner, _ = await make_tenant("agency-del-self")
+    recipient = await make_user(admin_session, tenant_id, "self-off@agency.test")
+    candidate_id = await make_candidate(admin_session, tenant_id, owner_id=owner)
+    share_id = uuid.uuid4()
+    admin_session.add(
+        CandidateShare(
+            id=share_id,
+            tenant_id=tenant_id,
+            candidate_id=candidate_id,
+            scope=CandidateShare.SCOPE_USER,
+            shared_with_user_id=recipient,
+            shared_by_user_id=owner,
+        )
+    )
+    await admin_session.commit()
+
+    sign_in(client, recipient, tenant_id)
+    gone = await client.delete(f"/api/candidates/{candidate_id}/shares/{share_id}")
+    assert gone.status_code == 204
+    assert (await client.get(f"/api/candidates/{candidate_id}")).status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_a_recipient_may_not_withdraw_somebody_elses_share(
+    client, admin_session, seeded
+) -> None:
+    """The load-bearing one. Both people can SEE the candidate, so the read
+    guard lets the request through; only the four-arm check stops it. Without
+    that check a recipient could quietly cut a colleague out of a candidate
+    that belongs to neither of them."""
+    make_tenant, _, _ = seeded
+    tenant_id, owner, _ = await make_tenant("agency-del-other")
+    meddler = await make_user(admin_session, tenant_id, "meddler@agency.test")
+    victim = await make_user(admin_session, tenant_id, "victim@agency.test")
+    candidate_id = await make_candidate(admin_session, tenant_id, owner_id=owner)
+    victim_share_id = uuid.uuid4()
+    for share_id, target in ((uuid.uuid4(), meddler), (victim_share_id, victim)):
+        admin_session.add(
+            CandidateShare(
+                id=share_id,
+                tenant_id=tenant_id,
+                candidate_id=candidate_id,
+                scope=CandidateShare.SCOPE_USER,
+                shared_with_user_id=target,
+                shared_by_user_id=owner,
+            )
+        )
+    await admin_session.commit()
+
+    sign_in(client, meddler, tenant_id)
+    # It is visible to the meddler — so this is not the read guard talking.
+    assert (await client.get(f"/api/candidates/{candidate_id}")).status_code == 200
+
+    refused = await client.delete(
+        f"/api/candidates/{candidate_id}/shares/{victim_share_id}"
+    )
+    assert refused.status_code == 403, refused.text
+
+    still_there = (
+        await admin_session.execute(
+            text("SELECT count(*) AS n FROM candidate_shares WHERE id = :i"),
+            {"i": victim_share_id},
+        )
+    ).one()
+    assert still_there.n == 1
+    sign_in(client, victim, tenant_id)
+    assert (await client.get(f"/api/candidates/{candidate_id}")).status_code == 200
