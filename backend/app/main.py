@@ -16,6 +16,7 @@ from app.api import (
     auth,
     candidate_documents,
     candidate_imports,
+    candidate_merge,
     candidate_ownership,
     candidate_roles,
     candidate_shares,
@@ -162,6 +163,12 @@ api.include_router(candidate_ownership.router)
 # "not a valid UUID", which reads as a broken inbox rather than a routing
 # order. `tests/test_candidate_shares_api.py` asserts the inbox resolves.
 api.include_router(candidate_shares.router)
+# Before `candidates`, for the same shadowing reason as its siblings above:
+# `/candidates/{id}/merge` and `/candidates/{id}/unmerge` are narrower than
+# `/candidates/{candidate_id}`. It carries no literal path of its own, so
+# this is tidiness rather than a live bug — but it keeps every candidate
+# sub-router in one place, declared before the generic one.
+api.include_router(candidate_merge.router)
 api.include_router(candidates.router)
 api.include_router(candidate_roles.router)
 api.include_router(candidates_avatar.router)
