@@ -26,7 +26,8 @@ somebody later adds in another file.
 import ast
 import pathlib
 
-API_DIR = pathlib.Path(__file__).parent.parent / "app" / "api"
+APP_DIR = pathlib.Path(__file__).parent.parent / "app"
+API_DIR = APP_DIR / "api"
 
 READ_GUARD = "load_visible_candidate"
 EDIT_GUARD = "load_editable_candidate"
@@ -350,3 +351,133 @@ def test_every_exemption_names_a_route_that_exists() -> None:
             if name not in present:
                 stale.append(f"{module_name}::{name}")
     assert stale == [], f"Exemptions for routes that no longer exist: {stale}"
+
+
+# ---------------------------------------------------------------------------
+# The set-shaped path. Everything above this line reasons about routes that
+# name a candidate BY ID, and that is exactly where sourcing slipped through:
+# it never names one. `persist.py` scores the whole tenant and stores the run,
+# and the API handed those matches — explanations and verbatim CV quotes
+# included — to anyone who could open the shortlist. No assertion above could
+# have caught it, because there is no candidate id in any signature.
+#
+# So the second shape is guarded too: reaching candidates by SET MEMBERSHIP.
+# A module outside `app/api/` that runs `select(Candidate...)` is reading rows
+# nobody's route guard filtered, and must say in writing why that is allowed
+# and where the disclosure is bounded instead.
+#
+# Modules under `app/api/` are deliberately NOT swept: they are already in
+# `_modules()` above and answer to the by-id assertions. Sweeping them here
+# would be a second, weaker statement of the same rule.
+
+SELECT_VERB = "select"
+
+# {module path relative to `app/`: why it may read candidates unfiltered}
+#
+# Per-module with a reason each, in the same style as `EXEMPT` above and for
+# the same reason: "this is fine" is a claim about one file and must not
+# travel to the next one.
+#
+# allow-hardcode: the values are prose for a human reading a failure, not
+# logic — only the keys are matched on, and
+# `test_every_set_sweep_exemption_names_a_file_that_exists` fails if a key
+# stops naming a real module.
+SET_SWEEP_EXEMPT: dict[str, str] = {
+    "services/visibility.py": (
+        "Defines the predicate. It is the thing every other reader is "
+        "measured against; filtering it by itself is circular."
+    ),
+    "services/candidate_matching.py": (
+        "Matches on the unique keys across the WHOLE tenant on purpose — the "
+        "unique indexes span the tenant, so a visibility-filtered match would "
+        "let an insert fail on a constraint instead of returning the 409. It "
+        "discloses at the edge, not at the query: `held_by_colleague` checks "
+        "`visible_candidates` and `masked_candidate` bounds what a colleague "
+        "learns to an abbreviated name and who holds the person."
+    ),
+    "services/sourcing/persist.py": (
+        "Scoring is agency-wide by design: an agency that cannot shortlist "
+        "across its own book has no reason to run sourcing. A run is scored "
+        "and stored once, and who may see what changes afterwards, so "
+        "redaction is per-viewer at READ — `_with_matches` in "
+        "`app/api/sourcing.py`, asserted by "
+        "`tests/test_sourcing_match_redaction.py`."
+    ),
+    "services/imports/apply.py": (
+        "The import path matches tenant-wide for the same reason the matcher "
+        "does — a duplicate is a duplicate whoever holds it — and discloses "
+        "at the edge rather than in the query."
+    ),
+}
+
+
+def _selects_the_model(tree: ast.AST) -> bool:
+    """`select(Candidate)` or `select(Candidate.anything)`, anywhere.
+
+    Column form counts: `select(Candidate.id).where(...)` reads a row just as
+    squarely as the entity form, and the leak this guards against started
+    life as an id list.
+    """
+    for call in ast.walk(tree):
+        if not isinstance(call, ast.Call):
+            continue
+        target = call.func
+        name = (
+            target.id
+            if isinstance(target, ast.Name)
+            else target.attr
+            if isinstance(target, ast.Attribute)
+            else None
+        )
+        if name != SELECT_VERB:
+            continue
+        for arg in call.args:
+            if isinstance(arg, ast.Name) and arg.id == "Candidate":
+                return True
+            if (
+                isinstance(arg, ast.Attribute)
+                and isinstance(arg.value, ast.Name)
+                and arg.value.id == "Candidate"
+            ):
+                return True
+    return False
+
+
+def _set_shaped_readers() -> list[str]:
+    found = []
+    for path in sorted(APP_DIR.rglob("*.py")):
+        if API_DIR in path.parents:
+            continue
+        if _selects_the_model(ast.parse(path.read_text())):
+            found.append(str(path.relative_to(APP_DIR)))
+    return found
+
+
+def test_no_unlisted_module_reads_candidates_by_set_membership() -> None:
+    offenders = [p for p in _set_shaped_readers() if p not in SET_SWEEP_EXEMPT]
+    assert offenders == [], (
+        "These modules read candidates without any route's visibility guard. "
+        "Either filter by `visible_candidates`, or add an entry to "
+        f"`SET_SWEEP_EXEMPT` saying where the disclosure is bounded: {offenders}"
+    )
+
+
+def test_the_set_sweep_actually_finds_something() -> None:
+    """A sweep that matches nothing passes forever.
+
+    If an import rename or a package move emptied `_set_shaped_readers`, the
+    assertion above would report success over zero files — the same failure
+    mode `_modules()` asserts against for the by-id half.
+    """
+    assert _set_shaped_readers(), "the set-membership sweep matched no module"
+
+
+def test_every_set_sweep_exemption_names_a_file_that_exists() -> None:
+    """An exemption for a module that has gone is a hole waiting for a name.
+
+    Delete the file, leave the entry, and the next module to take that path
+    is excused before it is written.
+    """
+    for relative, reason in SET_SWEEP_EXEMPT.items():
+        assert (APP_DIR / relative).exists(), relative
+        assert reason.strip(), f"{relative} is exempt with no reason"

@@ -54,14 +54,17 @@ from app.api.auth import _require_session_with_role
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.db.rls import tenant_session
+from app.models.candidate import Candidate
 from app.models.client import Client
 from app.models.sourcing import CandidateSubmission, SourcingRun
+from app.services.candidate_matching import masked_candidate
 from app.services.sourcing.client_resolution import resolve_client
 from app.services.sourcing.persist import read_matches
 from app.services.visibility import (
     can_edit_candidate,
     load_visible_candidate,
     load_visible_opportunity,
+    visible_candidates,
 )
 from app.workers.queue import enqueue
 
@@ -98,17 +101,48 @@ def serialize_run(run: SourcingRun) -> dict:
     }
 
 
-def serialize_match(match) -> dict:
-    return {
+def serialize_match(match, *, visible: bool, masked: dict | None = None) -> dict:
+    """One match, disclosed to exactly the tier this viewer is entitled to.
+
+    Sourcing scores the whole agency on purpose — an agency that cannot
+    shortlist across its own book has no reason to run sourcing at all — so a
+    shortlist routinely names people the viewer may not see. Filtering them
+    out would gut the product; returning them in full would make the 409
+    collision path's masking theatre. So the match stays and the *content*
+    goes, down to the tier `held_by_colleague` already defines for the 409:
+    an abbreviated, contact-masked name, who holds the person, the id, and a
+    way to ask. `explanation`, `explanation_evidence` (verbatim CV quotes)
+    and `reasons` are withheld entirely rather than trimmed — each is free
+    text about a person this viewer has no claim on.
+
+    **The score stays, and that was considered.** It reveals how well the
+    person fits this job order, not anything about them: no name beyond the
+    abbreviation, no history, no quote. Withholding it would leave a row that
+    cannot be ranked or reasoned about, which is the same as dropping it.
+    """
+    common = {
         "candidate_id": str(match.candidate_id),
         # A string, not a float: the column is NUMERIC(6, 4) and binary
         # floating point cannot hold every value it stores exactly. The four
         # places are the whole reason the column was widened, so rounding them
         # away on the way out would undo that in the last step.
         "score": str(match.score),
-        "reasons": match.reasons,
-        "explanation": match.explanation,
-        "explanation_evidence": match.explanation_evidence,
+        "visible": visible,
+    }
+    if visible:
+        return {
+            **common,
+            "reasons": match.reasons,
+            "explanation": match.explanation,
+            "explanation_evidence": match.explanation_evidence,
+        }
+    return {
+        **common,
+        # `masked` is None only if the row vanished between the two reads.
+        # Say nothing about it rather than inventing a name.
+        "full_name": masked["full_name"] if masked else None,
+        "held_by": masked["held_by"] if masked else None,
+        "can_request_access": True,
     }
 
 
@@ -232,7 +266,7 @@ async def latest_sourcing(request: Request, opportunity_id: uuid.UUID) -> dict:
         ).scalar_one_or_none()
         if run is None:
             return {"run": None, "matches": []}
-        return await _with_matches(session, tenant_uuid, run)
+        return await _with_matches(session, tenant_uuid, run, user_uuid, role)
 
 
 @router.get("/opportunities/{opportunity_id}/sourcing/{run_id}")
@@ -262,15 +296,51 @@ async def one_sourcing_run(
         ).scalar_one_or_none()
         if run is None:
             raise HTTPException(status_code=404, detail="Shortlist not found")
-        return await _with_matches(session, tenant_uuid, run)
+        return await _with_matches(session, tenant_uuid, run, user_uuid, role)
 
 
-async def _with_matches(session, tenant_uuid: uuid.UUID, run: SourcingRun) -> dict:
+async def _with_matches(
+    session, tenant_uuid: uuid.UUID, run: SourcingRun, user_id: uuid.UUID, role: str
+) -> dict:
     """One run and its matches, best first and stable — `read_matches` orders
     by score descending then `candidate_id`, so two readers of the same stored
-    run see the same list even where scores tie."""
+    run see the same list even where scores tie.
+
+    Redaction happens HERE, at read, and not in `persist.py` or `eligible.py`.
+    A run is scored once and stored once; who may see what changes afterwards,
+    every time a candidate is shared or claimed. Baking one viewer's
+    entitlement into the stored run would freeze it at the moment of scoring
+    and would have to be recomputed for the next reader anyway.
+
+    One query decides the whole page: `visible_candidates` over the ids this
+    run actually names. The per-candidate `masked_candidate` calls that follow
+    run only for the ones being redacted, and a shortlist is tens of rows, not
+    thousands.
+    """
     matches = await read_matches(session, tenant_id=tenant_uuid, run_id=run.id)
-    return {"run": serialize_run(run), "matches": [serialize_match(m) for m in matches]}
+    ids = [m.candidate_id for m in matches]
+    visible_ids: set[uuid.UUID] = set()
+    if ids:
+        visible_ids = set(
+            (
+                await session.execute(
+                    select(Candidate.id)
+                    .where(Candidate.id.in_(ids))
+                    .where(visible_candidates(user_id, role))
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+    serialized = []
+    for match in matches:
+        visible = match.candidate_id in visible_ids
+        masked = (
+            None if visible else await masked_candidate(session, match.candidate_id)
+        )
+        serialized.append(serialize_match(match, visible=visible, masked=masked))
+    return {"run": serialize_run(run), "matches": serialized}
 
 
 @router.post("/candidates/{candidate_id}/submissions", status_code=201)

@@ -193,7 +193,37 @@ async def held_by_colleague(
     if visible is not None:
         return None
 
-    # Inner join, not outer: a match this function reaches is always owned —
+    masked = await masked_candidate(session, match.candidate_id)
+    if masked is None:
+        # The row that matched a moment ago was merged or deleted before we
+        # could read it. There is nothing to disclose and no colleague to
+        # name; fall through to the caller's generic "already recorded" 409.
+        return None
+
+    return {
+        "reason": "already_registered",
+        "candidate": masked,
+        "can_request_access": True,
+    }
+
+
+async def masked_candidate(
+    session: AsyncSession, candidate_id: uuid.UUID
+) -> dict[str, object] | None:
+    """The bounded disclosure tier, in one place so it cannot drift.
+
+    `held_by_colleague` above defines it for the 409 collision path, and
+    `app/api/sourcing.py` applies the same tier to a shortlist match the
+    viewer may not see. Two implementations of "how much may a colleague
+    learn" would eventually disagree, and the more generous one would win by
+    accident.
+
+    Returns None when the row has gone (merged or deleted between the query
+    that named it and this one) — there is then nothing to disclose and no
+    colleague to name.
+    """
+    # Inner join, not outer: a candidate this function is called about is
+    # always owned —
     # `visible_candidates` already ruled out the NULL-owner case above (it
     # admits `owner_id IS NULL` for an ordinary recruiter, and is `true_()`
     # for an owner, so either way a NULL-owner row is caught by the `visible
@@ -212,23 +242,16 @@ async def held_by_colleague(
                 ),
             )
             .join(User, User.id == Candidate.owner_id)
-            .where(Candidate.id == match.candidate_id)
+            .where(Candidate.id == candidate_id)
         )
     ).one_or_none()
     if row is None:
-        # The row that matched a moment ago was merged or deleted before we
-        # could read it. There is nothing to disclose and no colleague to
-        # name; fall through to the caller's generic "already recorded" 409.
         return None
 
     return {
-        "reason": "already_registered",
-        "candidate": {
-            "full_name": abbreviate(row.full_name),
-            "held_by": row.holder,
-            "id": str(match.candidate_id),
-        },
-        "can_request_access": True,
+        "full_name": abbreviate(row.full_name),
+        "held_by": row.holder,
+        "id": str(candidate_id),
     }
 
 

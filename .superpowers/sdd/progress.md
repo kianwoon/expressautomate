@@ -942,3 +942,20 @@ Task 12: complete (09229c9..15e1bc0 impl, ..1ca270e fix 1; review approved).
   role='owner'. Proven by injecting owner_id=user_uuid: test failed, reverted, passed. ***
   Sibling merge tests checked for the same shape of weakness — none found.
   1705 passed, 1 skipped.
+Task 13: complete (1ca270e..d5c64db impl, ..6a18dbc fix 1; review approved).
+  _import_tenant -> _import_owner returns (tenant_id, uploaded_by); owner_id=uploaded_by on
+  create; update branch skips + counts when candidate.owner_id not in (None, uploaded_by).
+  Matching stays TENANT-WIDE (a visibility-filtered lookup would miss an invisible row then
+  die on the unique index at flush). SCOPE RULING: the new candidate_imports.held_by_colleagues
+  COLUMN (migration c1a0d5e7b205) is NECESSARY, not creep — the import UI never sees
+  ImportOutcome; every counter is read back off the row via serialize() in candidate_imports.py.
+  *** HOLE THE GUARD MISSED, found in review: a skipped candidate never entered `seen`, so
+  _candidate_for fell back to tenant-wide find_candidate and _apply_roles wrote a
+  CandidateRole onto the HELD candidate — the same bulk edit by a different path. Fixed by
+  recording skipped ids in a `held` set at the single ownership test, passed to the roles
+  path, rather than duplicating the rule. Not folded into held_by_colleagues (that counter
+  means candidates, and inflating it would make the number lie) — a RowProblem instead. ***
+  MINOR pinned: uploaded_by NULL degrades conservatively (skips every owned row, gains no
+  permission) but creates land unowned. Now tested and commented rather than accidental.
+  1709 passed, 1 skipped.
+=== BACKEND COMPLETE (Tasks 0-13). Remaining: 14 frontend, 15 verification. ===
