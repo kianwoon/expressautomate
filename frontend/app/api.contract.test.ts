@@ -55,9 +55,9 @@ const ARGS = ["contract-id-1", "contract-id-2", "contract-id-3"];
  * waved through the missing `/api/opportunities/{id}` this file was written
  * to catch.
  */
-function namesUsedOutsideApiTs(): Set<string> {
+function sourcesOutsideApiTs(): { file: string; text: string }[] {
   const root = resolve(process.cwd(), "app");
-  const sources: string[] = [];
+  const sources: { file: string; text: string }[] = [];
   const walk = (dir: string) => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       const path = join(dir, entry.name);
@@ -70,12 +70,18 @@ function namesUsedOutsideApiTs(): Set<string> {
         !/\.test\.tsx?$/.test(entry.name) &&
         path !== resolve(root, "api.ts")
       ) {
-        sources.push(readFileSync(path, "utf8"));
+        sources.push({ file: path, text: readFileSync(path, "utf8") });
       }
     }
   };
   walk(root);
-  const text = sources.join("\n");
+  return sources;
+}
+
+function namesUsedOutsideApiTs(): Set<string> {
+  const text = sourcesOutsideApiTs()
+    .map((s) => s.text)
+    .join("\n");
   return new Set(Object.keys(api).filter((name) => text.includes(name)));
 }
 
@@ -115,6 +121,51 @@ function matches(path: string, template: string): boolean {
   );
 }
 
+/**
+ * The other way to reach the API: a literal in a component.
+ *
+ * Going through a helper is the convention, not a rule the compiler enforces,
+ * and a `fetch("/api/whatever")` written inline was invisible to the check
+ * above — the same blind spot, reached by a different road.
+ *
+ * The two false positives this has to survive are handled by construction
+ * rather than by a list of exceptions, which would rot the first time somebody
+ * renamed a route:
+ *
+ *  - *A path in prose.* Comments are stripped before scanning, so a route
+ *    named in a docstring or a `// TODO` is not a call. That is the only place
+ *    an example path can live, so it is the only place that needs excusing.
+ *  - *A path built from a variable.* `${…}` inside a template literal stands
+ *    for an id, so it is substituted with the same placeholder the helpers get
+ *    and matched against the route templates the same way.
+ *
+ * What it still cannot see, stated plainly rather than skipped quietly: a path
+ * assembled from pieces that are not one literal — `` `${base}/review` `` with
+ * `base` from elsewhere. Nothing short of following the value would catch
+ * that, and the fragment does not start with `/api`, so it never reaches here.
+ */
+export function literalApiPaths(source: string): string[] {
+  const code = source
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/(^|[^:])\/\/[^\n]*/g, "$1");
+  return [...code.matchAll(/["'`](\/api\/[^"'`\n]*)["'`]/g)].map(([, literal]) =>
+    literal
+      .replace(/\$\{[^}]*\}/g, ARGS[0])
+      .split("?")[0]
+      .replace(/\/$/, ""),
+  );
+}
+
+function inlineApiPaths(): { where: string; path: string }[] {
+  const found: { where: string; path: string }[] = [];
+  for (const { file, text } of sourcesOutsideApiTs()) {
+    for (const path of literalApiPaths(text)) {
+      found.push({ where: `${file.split("/app/")[1]} -> ${path}`, path });
+    }
+  }
+  return found;
+}
+
 describe("every path helper names a route the backend serves", () => {
   it("finds the helpers at all", () => {
     // Without this, a change that stopped the walk seeing anything would make
@@ -126,6 +177,30 @@ describe("every path helper names a route the backend serves", () => {
   });
 
   it.each(apiPaths())("$name -> $path", ({ path }) => {
+    const template = Object.keys(MANIFEST.paths).find((t) => matches(path, t));
+    expect(template, `${path} is not a route the API serves`).toBeDefined();
+  });
+
+  it("still recognises an inline path when it sees one", () => {
+    // Today nothing outside `api.ts` writes one, so the list below is empty
+    // and `it.each` over it would assert nothing at all — the same "passes
+    // over an empty list" trap the helpers are guarded against. This checks
+    // the extractor itself instead, on a source that stands in for the
+    // component somebody will write next.
+    const sample = [
+      'await fetch("/api/candidates");',
+      "await fetch(`/api/opportunities/${id}/review`);",
+      '// see /api/nowhere for the shape',
+      '/* GET /api/also-nowhere */',
+      'href.endsWith("/client")',
+    ].join("\n");
+    expect(literalApiPaths(sample)).toEqual([
+      "/api/candidates",
+      `/api/opportunities/${ARGS[0]}/review`,
+    ]);
+  });
+
+  it.each(inlineApiPaths())("$where", ({ path }) => {
     const template = Object.keys(MANIFEST.paths).find((t) => matches(path, t));
     expect(template, `${path} is not a route the API serves`).toBeDefined();
   });
