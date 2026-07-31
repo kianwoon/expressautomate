@@ -1,4 +1,4 @@
-"""Who, inside one agency, may see and edit a job order.
+"""Who, inside one agency, may see and edit a job order or a candidate.
 
 RLS enforces the boundary between agencies and always will: that boundary is
 hard, permanent, and belongs in the database. The boundary between two
@@ -19,6 +19,8 @@ from sqlalchemy import ColumnElement, and_, or_, select
 from sqlalchemy import true as true_
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.candidate import Candidate
+from app.models.candidate_share import CandidateShare
 from app.models.email_message import EmailMessage
 from app.models.mailbox import Mailbox
 from app.models.opportunity import Opportunity
@@ -123,5 +125,90 @@ async def load_editable_opportunity(
     if not can_edit(row, user_id, role):
         raise HTTPException(
             status_code=403, detail="This job order is shared with you, not assigned to you."
+        )
+    return row
+
+
+def candidate_shared_with_me_exists(user_id: uuid.UUID) -> ColumnElement[bool]:
+    """A share that reaches `user_id` — a named share or a tenant broadcast.
+
+    The single source of truth for "shared with me" on candidates, for the
+    same reason the opportunity version is: the predicate, the list payload's
+    row badge and the `scope=shared_with_me` filter all call this, so none of
+    them can drift from the others.
+    """
+    return (
+        select(CandidateShare.id)
+        .where(CandidateShare.candidate_id == Candidate.id)
+        .where(
+            or_(
+                CandidateShare.scope == CandidateShare.SCOPE_TENANT,
+                and_(
+                    CandidateShare.scope == CandidateShare.SCOPE_USER,
+                    CandidateShare.shared_with_user_id == user_id,
+                ),
+            )
+        )
+        .exists()
+    )
+
+
+def visible_candidates(user_id: uuid.UUID, role: str) -> ColumnElement[bool]:
+    """A WHERE clause, not a query.
+
+    There is no mailbox term, unlike `visible_opportunities`. Candidates never
+    arrive from the email pipeline, so no recipient has a prior claim on one.
+    """
+    if role == OWNER_ROLE:
+        return true_()
+
+    return or_(
+        Candidate.owner_id.is_(None),  # the unclaimed queue
+        Candidate.owner_id == user_id,
+        candidate_shared_with_me_exists(user_id),
+    )
+
+
+def can_edit_candidate(candidate: Candidate, user_id: uuid.UUID, role: str) -> bool:
+    """An unowned candidate is visible and claimable but NOT editable.
+
+    Claiming it is the act that makes it editable. A row nobody has taken
+    responsibility for is where a wrong edit is least likely to be noticed.
+    """
+    if role == OWNER_ROLE:
+        return True
+    return candidate.owner_id == user_id
+
+
+async def load_visible_candidate(
+    session: AsyncSession, candidate_id: uuid.UUID, user_id: uuid.UUID, role: str
+) -> Candidate:
+    """404, never 403 — a 403 would confirm the row exists."""
+    row = (
+        await session.execute(
+            select(Candidate)
+            .where(Candidate.id == candidate_id)
+            .where(visible_candidates(user_id, role))
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(status_code=404, detail="No such candidate.")
+    return row
+
+
+async def load_editable_candidate(
+    session: AsyncSession, candidate_id: uuid.UUID, user_id: uuid.UUID, role: str
+) -> Candidate:
+    """403 when visible but not editable.
+
+    The caller can already see this candidate, so concealing its existence
+    would be theatre, and a 404 would tell a recruiter that a colleague's
+    shared candidate had vanished.
+    """
+    row = await load_visible_candidate(session, candidate_id, user_id, role)
+    if not can_edit_candidate(row, user_id, role):
+        raise HTTPException(
+            status_code=403,
+            detail="This candidate is shared with you, not assigned to you.",
         )
     return row
