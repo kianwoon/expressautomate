@@ -9,12 +9,8 @@ import uuid
 
 import pytest
 
-from tests import test_opportunities_api as _api
+from tests.conftest import sign_in
 from tests.test_opportunity_visibility_routes import _colleague
-
-client = _api.client
-seeded = _api.seeded
-sign_in = _api.sign_in
 
 
 @pytest.fixture

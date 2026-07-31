@@ -15,18 +15,13 @@ property:
 import uuid
 from datetime import UTC, datetime, timedelta
 
-import httpx
 import pytest
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 
-from app.api.auth import SESSION_COOKIE, _session_serializer
 from app.core.config import settings
 from app.db.rls import tenant_session
-from app.main import app
-from app.models import Opportunity, User
-from app.models.extraction import Extraction, ExtractionEvidence
-from tests.conftest import AdminSessionLocal
+from tests.conftest import AdminSessionLocal, sign_in
 
 NOW = datetime(2026, 7, 27, 9, 0, tzinfo=UTC)
 
@@ -39,159 +34,6 @@ def settings_the_suite_supplies(monkeypatch) -> None:
     `.env` for the limit would test a different number locally than in CI.
     """
     monkeypatch.setattr(settings, "OPPORTUNITIES_PAGE_LIMIT", 200)
-
-
-@pytest.fixture
-async def client() -> httpx.AsyncClient:
-    """ASGI transport, not TestClient: TestClient drives its own event loop and
-    the engine in app.db.session is pinned to the session-scoped one."""
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(
-        transport=transport, base_url="http://testserver", follow_redirects=False
-    ) as c:
-        yield c
-
-
-@pytest.fixture
-async def seeded():
-    """Two agencies, each with one mailbox, and a factory for their vacancies.
-
-    Seeded through the admin role because RLS is the thing under test: fixtures
-    written through the restricted role would prove isolation by never having
-    inserted the other tenant's rows in the first place.
-    """
-    tenants: list[uuid.UUID] = []
-
-    async def make_tenant(slug: str) -> tuple[uuid.UUID, uuid.UUID, uuid.UUID]:
-        tenant_id, user_id, mailbox_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
-        async with AdminSessionLocal() as s:
-            await s.execute(
-                text("INSERT INTO tenants (id, name, slug) VALUES (:i, :n, :s)"),
-                {"i": tenant_id, "n": slug, "s": f"{slug}-{tenant_id.hex[:8]}"},
-            )
-            # The ORM here, not raw SQL: `users.role` is NOT NULL with a
-            # Python-side default, which a hand-written INSERT never fires —
-            # and naming a role literally would freeze this fixture to a value
-            # the model owns.
-            s.add(User(id=user_id, tenant_id=tenant_id, email=f"{tenant_id.hex[:8]}@{slug}.sg"))
-            # Flushed before the mailbox INSERT: raw SQL does not autoflush, so
-            # without this the FK sees a user that has not been written yet.
-            await s.flush()
-            await s.execute(
-                text(
-                    "INSERT INTO mailboxes"
-                    " (id, tenant_id, user_id, ms_user_id, scope, folder_id, retention_months)"
-                    " VALUES (:i, :t, :u, :m, 'user', 'inbox', :r)"
-                ),
-                {
-                    "i": mailbox_id,
-                    "t": tenant_id,
-                    "u": user_id,
-                    "m": f"oid-{tenant_id.hex[:8]}",
-                    "r": settings.DEFAULT_RETENTION_MONTHS,
-                },
-            )
-            await s.commit()
-        tenants.append(tenant_id)
-        return tenant_id, user_id, mailbox_id
-
-    async def make_opportunity(
-        tenant_id: uuid.UUID, mailbox_id: uuid.UUID, **fields
-    ) -> uuid.UUID:
-        email_id, opportunity_id = uuid.uuid4(), uuid.uuid4()
-        received = fields.pop("received_datetime", NOW)
-        async with AdminSessionLocal() as s:
-            await s.execute(
-                text(
-                    "INSERT INTO email_messages"
-                    " (id, tenant_id, mailbox_id, graph_message_id,"
-                    " internet_message_id, received_datetime)"
-                    " VALUES (:i, :t, :m, :g, :n, :r)"
-                ),
-                {
-                    "i": email_id,
-                    "t": tenant_id,
-                    "m": mailbox_id,
-                    "g": f"graph-{email_id.hex}",
-                    "n": f"<{email_id.hex}@example.sg>",
-                    "r": received,
-                },
-            )
-            # The ORM again, for `review_status` and `quality_state`: both are
-            # NOT NULL with Python-side defaults, and a fixture that named them
-            # would be asserting against values it had chosen itself.
-            s.add(
-                Opportunity(
-                    id=opportunity_id,
-                    tenant_id=tenant_id,
-                    email_message_id=email_id,
-                    received_datetime=received,
-                    **fields,
-                )
-            )
-            await s.commit()
-        return opportunity_id
-
-    async def make_evidence(
-        tenant_id: uuid.UUID, opportunity_id: uuid.UUID, *, valid: int, invalid: int
-    ) -> None:
-        """`valid` verified evidence rows and `invalid` unverified ones.
-
-        The extraction row is looked up from the opportunity rather than passed
-        in, so a test can say "this vacancy has 2 of 3 fields verified" without
-        also having to know about the email it came from — which is exactly the
-        detail the endpoint is supposed to be hiding.
-        """
-        async with AdminSessionLocal() as s:
-            email_id = (
-                await s.execute(
-                    text("SELECT email_message_id FROM opportunities WHERE id = :i"),
-                    {"i": opportunity_id},
-                )
-            ).scalar_one()
-            extraction_id = uuid.uuid4()
-            s.add(
-                Extraction(
-                    id=extraction_id,
-                    tenant_id=tenant_id,
-                    email_message_id=email_id,
-                    model_name="test-model",
-                    prompt_version="v0",
-                )
-            )
-            await s.flush()
-            for n in range(valid + invalid):
-                s.add(
-                    ExtractionEvidence(
-                        tenant_id=tenant_id,
-                        extraction_id=extraction_id,
-                        opportunity_id=opportunity_id,
-                        field_name=f"field_{n}",
-                        # A real confidence, so a payload that leaked it would
-                        # be caught rather than passing on a column of nulls.
-                        model_confidence=0.42,
-                        evidence_valid=n < valid,
-                    )
-                )
-            await s.commit()
-
-    yield make_tenant, make_opportunity, make_evidence
-
-    for tid in tenants:
-        async with tenant_session(tid) as s:
-            await s.execute(text("DELETE FROM opportunities"))
-            await s.execute(text("DELETE FROM email_messages"))
-            await s.execute(text("DELETE FROM mailboxes"))
-            await s.execute(text("DELETE FROM users"))
-            await s.execute(text("DELETE FROM tenants"))
-
-
-def sign_in(client: httpx.AsyncClient, user_id: uuid.UUID, tenant_id: uuid.UUID) -> None:
-    """The cookie the OAuth callback would have set, without the OAuth."""
-    client.cookies.set(
-        SESSION_COOKIE,
-        _session_serializer.dumps({"uid": str(user_id), "tid": str(tenant_id)}),
-    )
 
 
 async def test_one_agency_never_sees_another_agencys_vacancies(client, seeded) -> None:

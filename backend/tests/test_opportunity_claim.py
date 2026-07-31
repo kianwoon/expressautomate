@@ -24,12 +24,7 @@ from app.services.notify.events import (
     EVENT_OPPORTUNITY_ASSIGNED,
     EVENT_OPPORTUNITY_NEW,
 )
-from tests import test_opportunities_api as _api
-from tests.conftest import AdminSessionLocal, cleanup_tenant, seed_tenant_with_user
-
-# The same client/sign-in helpers the rest of the job-order suite uses.
-client = _api.client
-sign_in = _api.sign_in
+from tests.conftest import AdminSessionLocal, cleanup_tenant, seed_tenant_with_user, sign_in
 
 
 def _signed_in_client(user_id: uuid.UUID, tenant_id: uuid.UUID) -> httpx.AsyncClient:

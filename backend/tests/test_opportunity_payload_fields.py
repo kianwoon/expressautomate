@@ -6,11 +6,7 @@ import pytest
 
 from app.models import Opportunity, User
 from app.models.opportunity_share import OpportunityShare
-from tests import test_opportunities_api as _api
-from tests.conftest import AdminSessionLocal, cleanup_tenant, seed_tenant_with_user
-
-client = _api.client
-sign_in = _api.sign_in
+from tests.conftest import AdminSessionLocal, cleanup_tenant, seed_tenant_with_user, sign_in
 
 
 async def _opportunity(

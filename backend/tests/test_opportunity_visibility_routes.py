@@ -13,14 +13,7 @@ from sqlalchemy import text
 
 from app.models import User
 from app.models.opportunity_share import OpportunityShare
-from tests import test_opportunities_api as _api
-from tests.conftest import AdminSessionLocal
-
-# Re-used rather than re-written: these are the same two agencies and the same
-# vacancy factory the list endpoint's own tests run against.
-client = _api.client
-seeded = _api.seeded
-sign_in = _api.sign_in
+from tests.conftest import AdminSessionLocal, sign_in
 
 
 async def _colleague(tenant_id: uuid.UUID) -> uuid.UUID:
