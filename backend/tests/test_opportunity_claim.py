@@ -528,3 +528,103 @@ async def test_a_hand_typed_job_order_keeps_the_client_it_was_given() -> None:
         assert response.json()["client_id"] == str(client_id)
     finally:
         await cleanup_tenant(tenant_id)
+
+
+async def test_a_hand_typed_job_order_refuses_a_client_that_does_not_exist() -> None:
+    """A picked client that was deleted or merged before Save is pressed.
+
+    The composite foreign key would refuse the insert either way; what this
+    pins is that the recruiter is told which field is wrong, in the same
+    sentence the link route uses, instead of being shown a 500.
+    """
+    tenant_id, user_id = await seed_tenant_with_user()
+    try:
+        async with _signed_in_client(user_id, tenant_id) as c:
+            response = await c.post(
+                "/api/opportunities",
+                json={
+                    "company_name_raw": "Acme Pte Ltd",
+                    "client_id": str(uuid.uuid4()),
+                },
+            )
+        assert response.status_code == 422, response.text
+        assert response.json()["detail"] == "That client is not in this agency."
+    finally:
+        await cleanup_tenant(tenant_id)
+
+
+async def test_a_hand_typed_job_order_refuses_another_agencys_client() -> None:
+    """RLS makes the neighbour's client simply not found, so it reads as the
+    same refusal — and never as a 500 that would confirm the id exists."""
+    tenant_id, user_id = await seed_tenant_with_user()
+    other_tenant_id, _other_user = await seed_tenant_with_user()
+    client_id = uuid.uuid4()
+    try:
+        async with AdminSessionLocal() as s:
+            s.add(
+                Client(
+                    id=client_id,
+                    tenant_id=other_tenant_id,
+                    name="Neighbour Pte Ltd",
+                    name_normalized="neighbour pte ltd",
+                )
+            )
+            await s.commit()
+
+        async with _signed_in_client(user_id, tenant_id) as c:
+            response = await c.post(
+                "/api/opportunities",
+                json={
+                    "company_name_raw": "Acme Pte Ltd",
+                    "client_id": str(client_id),
+                },
+            )
+        assert response.status_code == 422, response.text
+        assert response.json()["detail"] == "That client is not in this agency."
+    finally:
+        await cleanup_tenant(tenant_id)
+        await cleanup_tenant(other_tenant_id)
+
+
+async def test_a_client_deleted_mid_request_is_still_a_refusal(monkeypatch) -> None:
+    """The race the pre-check cannot win.
+
+    A pre-check and the write that follows it are two statements, so a client
+    deleted in between still reaches the database as a foreign key violation.
+    Neutering the pre-check is how that window is made reliably reproducible:
+    what is left is exactly the state of the world where the delete landed
+    after the check, and the caller must still be told the client is gone
+    rather than shown a 500.
+    """
+    from types import SimpleNamespace
+
+    from app.api import opportunities as routes
+
+    async def _still_there(_session, client_id):
+        """What the pre-check saw a moment before the delete landed."""
+        return SimpleNamespace(id=client_id, name="Acme Pte Ltd", assigned_user_id=None)
+
+    monkeypatch.setattr(routes, "_load_client_in_agency", _still_there)
+
+    tenant_id, user_id = await seed_tenant_with_user()
+    try:
+        async with _signed_in_client(user_id, tenant_id) as c:
+            created = await c.post(
+                "/api/opportunities",
+                json={
+                    "company_name_raw": "Acme Pte Ltd",
+                    "client_id": str(uuid.uuid4()),
+                },
+            )
+            assert created.status_code == 422, created.text
+            assert created.json()["detail"] == "That client is not in this agency."
+
+            opportunity_id = await _opportunity(tenant_id, assigned_user_id=user_id)
+            linked = await c.post(
+                f"/api/opportunities/{opportunity_id}/client",
+                json={"client_id": str(uuid.uuid4())},
+            )
+        assert linked.status_code == 422, linked.text
+        assert linked.json()["detail"] == "That client is not in this agency."
+    finally:
+        await cleanup_tenant(tenant_id)

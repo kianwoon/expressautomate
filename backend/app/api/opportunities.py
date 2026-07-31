@@ -27,6 +27,8 @@ here, and a test asserts that it never starts to.
 """
 
 import uuid
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import UTC, date, datetime
 from typing import Annotated, Any, Literal
 
@@ -34,6 +36,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, model_validator
 from sqlalchemy import String, and_, case, cast, func, or_, select, update
 from sqlalchemy import true as true_
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import aliased
 
 from app.api.auth import _require_session_with_role
@@ -1114,6 +1117,46 @@ async def assign_opportunity(
     }
 
 
+_CLIENT_NOT_IN_AGENCY = "That client is not in this agency."
+
+
+async def _load_client_in_agency(session: Any, client_id: uuid.UUID) -> Any:
+    """The client row, or `None` when this agency cannot see it.
+
+    RLS scopes the SELECT to the agency, so another agency's client is simply
+    not found and reads as the same refusal — which is also the only answer
+    that does not confirm the id exists somewhere.
+    """
+    return (
+        await session.execute(
+            select(Client.id, Client.name, Client.assigned_user_id).where(
+                Client.id == client_id
+            )
+        )
+    ).one_or_none()
+
+
+@asynccontextmanager
+async def _client_link_conflict_becomes_422() -> AsyncIterator[None]:
+    """The half of the guard a pre-check cannot cover.
+
+    A check and the write that follows it are two statements, and no amount of
+    checking closes the window where the client is deleted in between. The
+    outcome the recruiter needs to hear is identical either way — the client
+    they picked is not there — so the composite foreign key's own refusal is
+    converted into the same 422 rather than escaping as a 500.
+
+    Wrapped only around writes made *because* a `client_id` was supplied, so a
+    violation of any other constraint on the same row still surfaces loudly.
+    """
+    try:
+        yield
+    except IntegrityError as exc:
+        raise HTTPException(
+            status_code=422, detail=_CLIENT_NOT_IN_AGENCY
+        ) from exc
+
+
 @router.post("/opportunities/{opportunity_id}/client")
 async def set_opportunity_client(
     opportunity_id: uuid.UUID, body: ClientLinkRequest, request: Request
@@ -1156,16 +1199,10 @@ async def set_opportunity_client(
             # RLS scopes this to the agency, so a client of another agency is
             # simply not found — refused here rather than as a 500 from the
             # composite foreign key.
-            client = (
-                await session.execute(
-                    select(Client.id, Client.name, Client.assigned_user_id).where(
-                        Client.id == body.client_id
-                    )
-                )
-            ).one_or_none()
+            client = await _load_client_in_agency(session, body.client_id)
             if client is None:
                 raise HTTPException(
-                    status_code=422, detail="That client is not in this agency."
+                    status_code=422, detail=_CLIENT_NOT_IN_AGENCY
                 )
             # Named in the response for the same reason `assignee_name` is:
             # the browser sent an id and holds no name, so without this the
@@ -1186,11 +1223,12 @@ async def set_opportunity_client(
         # it back unconditionally would silently overwrite a claim that landed
         # in between — including when nothing was adopted at all, where the
         # stale NULL would undo the winner's claim.
-        await session.execute(
-            update(Opportunity)
-            .where(Opportunity.id == opportunity_id)
-            .values(client_id=body.client_id)
-        )
+        async with _client_link_conflict_becomes_422():
+            await session.execute(
+                update(Opportunity)
+                .where(Opportunity.id == opportunity_id)
+                .values(client_id=body.client_id)
+            )
 
         if adopted != previous_assignee:
             # Compare-and-set, exactly as `claim_opportunity` does: adoption is
@@ -1272,6 +1310,15 @@ async def create_opportunity(body: ManualOpportunityRequest, request: Request) -
 
     opportunity_id = uuid.uuid4()
     async with tenant_session(tenant_uuid) as session:
+        # Refused here, before the insert, for the reason the link route gives:
+        # a client picked from the list and deleted or merged before Save is
+        # pressed would otherwise reach the composite foreign key and come back
+        # as a 500. Same sentence as that route, because it is the same fact.
+        if body.client_id is not None:
+            if await _load_client_in_agency(session, body.client_id) is None:
+                raise HTTPException(
+                    status_code=422, detail=_CLIENT_NOT_IN_AGENCY
+                )
         session.add(
             Opportunity(
                 id=opportunity_id,
@@ -1300,6 +1347,12 @@ async def create_opportunity(body: ManualOpportunityRequest, request: Request) -
                 quality_state="likely",
             )
         )
+        # Flushed inside the guard rather than left to the commit at the end of
+        # the block, so a client deleted between the check above and this write
+        # is answered with the same 422 instead of escaping as a 500 from a
+        # commit nobody is watching.
+        async with _client_link_conflict_becomes_422():
+            await session.flush()
 
     # No notification: it is already assigned to whoever created it, and they
     # are the only person it concerns.
