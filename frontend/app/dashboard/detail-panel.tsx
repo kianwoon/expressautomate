@@ -1,13 +1,13 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { useAuth } from "../auth";
 import { Breakable } from "../breakable";
 import { type ClientMatch, ClientSearch } from "./client-search";
 import { DecodedCodes, ProtectedBadge, flagged } from "./codes";
 import { Salary, Value, day } from "./format";
-import { PlacementForm } from "./job-order-placement";
+import { PlacementForm, placementFields, same } from "./job-order-placement";
 import { Shortlist } from "./job-orders-sourcing";
 import { MemberSelect } from "./member-picker";
 import { type MutationResult, type Opportunity } from "./opportunities";
@@ -136,6 +136,24 @@ function Detail({
   // around. Reset by the `key={row.id}` this component is mounted under, the
   // same trick `saving`/`error` above rely on.
   const [placement, setPlacement] = useState(row);
+  // The list polls, so a colleague's change to this same row's placement
+  // fields arrives here as a fresh `row` — and used to stop there, leaving the
+  // recruiter reading values nobody holds any more.
+  //
+  // Synced off the row's own placement VALUES, never off the object: every
+  // poll hands this component a new object with identical fields, and
+  // resyncing on identity would wipe whatever is being typed a few times a
+  // minute. The last values seen are remembered rather than compared against
+  // local state, because a save leaves this copy fresher than the list for a
+  // poll or two — comparing against local state would flip it back to the
+  // stale row and then forward again.
+  const seenPlacement = useRef(placementFields(row));
+  useEffect(() => {
+    const next = placementFields(row);
+    if (same(next, seenPlacement.current)) return;
+    seenPlacement.current = next;
+    setPlacement(row);
+  }, [row]);
   // Sharing is offered to everyone who can see the row, not only to whoever
   // holds it: seeing a job order is the right to pass it to a named colleague,
   // and that chain is how a vacancy reaches the desk that can fill it. What a

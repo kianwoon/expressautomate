@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import {
   PLACEMENT_TYPES,
@@ -30,6 +30,32 @@ import {
  * anything is matched against.
  */
 
+/** The three fields this form owns, as the empty-string form the selects use.
+ *  Shared with the panel above so both decide "did this row's placement change"
+ *  by the same rule. */
+export function placementFields(row: Opportunity): {
+  placementType: PlacementType | "";
+  sexRequirement: SexRequirement | "";
+  reason: string;
+} {
+  return {
+    placementType: row.placement_type ?? "",
+    sexRequirement: row.sex_requirement ?? "",
+    reason: row.sex_requirement_reason ?? "",
+  };
+}
+
+export function same(
+  a: ReturnType<typeof placementFields>,
+  b: ReturnType<typeof placementFields>,
+): boolean {
+  return (
+    a.placementType === b.placementType &&
+    a.sexRequirement === b.sexRequirement &&
+    a.reason === b.reason
+  );
+}
+
 export function PlacementForm({
   row,
   onSaved,
@@ -44,6 +70,37 @@ export function PlacementForm({
   const [reason, setReason] = useState(row.sex_requirement_reason ?? "");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  /**
+   * A colleague's change to this row, once the panel above has passed it down.
+   *
+   * Two rules, and both matter. The trigger is the row's values changing, not
+   * the row object changing — the object is new on every poll, and resyncing
+   * on it would discard a half-made choice several times a minute. And an edit
+   * in progress is never overwritten: silently swapping a recruiter's own
+   * selection for someone else's is the same lost decision this exists to
+   * prevent, only pointed the other way. Their choice stays on screen and Save
+   * still sends it; the server holds whichever write lands last either way.
+   *
+   * The read-back inside `save` sets these fields too, and does so without
+   * this effect's help — deliberately, because after a partial save the row
+   * has not moved but the refused half has.
+   */
+  const seen = useRef(placementFields(row));
+  useEffect(() => {
+    const next = placementFields(row);
+    const previous = seen.current;
+    if (same(next, previous)) return;
+    seen.current = next;
+    const untouched = same(
+      { placementType, sexRequirement, reason },
+      previous,
+    );
+    if (!untouched) return;
+    setPlacementType(next.placementType);
+    setSexRequirement(next.sexRequirement);
+    setReason(next.reason);
+  }, [row, placementType, sexRequirement, reason]);
 
   // The one rule this form enforces client-side: a requirement needs its
   // reason before the request is even sent. The backend enforces the same
