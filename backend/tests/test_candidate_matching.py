@@ -6,14 +6,17 @@ is what makes the same function usable from a manual POST and, later, from a
 bulk import that must record an outcome per row.
 """
 
+import re
 import uuid
 
 import pytest
 from sqlalchemy import text
 
 from app.db.rls import tenant_session
-from app.services.candidate_matching import find_candidate
+from app.services.candidate_matching import abbreviate, find_candidate
 from tests.conftest import AdminSessionLocal
+
+_LONG_DIGIT_RUN = re.compile(r"\d{4,}")
 
 _INSERT = text(
     "INSERT INTO candidates (id, tenant_id, full_name, email, phone_e164, "
@@ -134,3 +137,38 @@ async def test_a_merged_candidate_is_not_returned(agency) -> None:
     async with tenant_session(agency) as s:
         result = await find_candidate(s, agency, "loser@acme.sg", None)
     assert result.candidate_id is None
+
+
+class TestAbbreviate:
+    """The bound must be structural: no `@`, no 4+ digit run, ever — the
+    content is untrusted even though the shape is safe by construction."""
+
+    def _assert_safe(self, result: str) -> None:
+        assert result != ""
+        assert "@" not in result
+        assert not _LONG_DIGIT_RUN.search(result)
+
+    def test_an_ordinary_multi_token_name(self) -> None:
+        result = abbreviate("Wei Ming Tan")
+        assert result == "Wei Ming T."
+        self._assert_safe(result)
+
+    def test_a_single_token_ordinary_name(self) -> None:
+        result = abbreviate("Cher")
+        self._assert_safe(result)
+
+    def test_a_single_token_name_that_is_an_email_address(self) -> None:
+        result = abbreviate("weiming@example.com")
+        self._assert_safe(result)
+
+    def test_a_name_containing_a_phone_number(self) -> None:
+        result = abbreviate("John Tan 9123 4567")
+        self._assert_safe(result)
+
+    def test_a_very_long_many_token_name(self) -> None:
+        result = abbreviate(" ".join(f"Token{i}" for i in range(50)))
+        self._assert_safe(result)
+
+    def test_whitespace_only(self) -> None:
+        result = abbreviate("   ")
+        self._assert_safe(result)

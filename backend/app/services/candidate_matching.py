@@ -13,6 +13,7 @@ violation the statement cannot absorb. So this is select-then-write, with the
 unique indexes as the backstop against a race rather than the mechanism.
 """
 
+import re
 import uuid
 from dataclasses import dataclass
 
@@ -116,13 +117,39 @@ async def find_candidate(
     return MatchResult()
 
 
+_CONTACT_LIKE = re.compile(r"@|\d{4,}")
+_MAX_TOKENS = 3
+
+
 def abbreviate(full_name: str) -> str:
     """"Wei Ming Tan" -> "Wei Ming T." — enough to recognise a person you have
-    met, not enough to be a directory of who the agency holds."""
-    parts = full_name.split()
-    if len(parts) < 2:
-        return full_name
-    return " ".join([*parts[:-1], f"{parts[-1][0]}."])
+    met, not enough to be a directory of who the agency holds.
+
+    The bound is structural, not incidental: at most `_MAX_TOKENS` leading
+    tokens are kept (long names are truncated, not spelled out in full), the
+    last kept token is initialised, and any token that looks like contact
+    data — containing "@" or a run of 4+ digits, i.e. `_CONTACT_LIKE` — is
+    replaced with "•" rather than passed through. A name that is entirely
+    contact data (a pasted email, a bare phone number) still yields a
+    non-empty, non-misleading placeholder instead of leaking verbatim.
+    """
+    parts = full_name.split()[:_MAX_TOKENS]
+
+    def _clean(token: str) -> str:
+        return "•" if _CONTACT_LIKE.search(token) else token
+
+    if not parts:
+        return "•"
+    if len(parts) == 1:
+        token = parts[0]
+        if _CONTACT_LIKE.search(token):
+            return "•"
+        return f"{token[0]}." if len(token) > 1 else token
+
+    cleaned = [_clean(p) for p in parts[:-1]]
+    last = parts[-1]
+    last_initial = "•" if _CONTACT_LIKE.search(last) else f"{last[0]}."
+    return " ".join([*cleaned, last_initial])
 
 
 async def held_by_colleague(
@@ -156,6 +183,12 @@ async def held_by_colleague(
     if visible is not None:
         return None
 
+    # Inner join, not outer: a match this function reaches is always owned —
+    # `visible_candidates` already ruled out the NULL-owner case above (it
+    # admits `owner_id IS NULL` for an ordinary recruiter, and is `true_()`
+    # for an owner, so either way a NULL-owner row is caught by the `visible
+    # is not None` return before this query runs). An outer join here would
+    # be a branch that can never execute.
     row = (
         await session.execute(
             select(
@@ -168,10 +201,15 @@ async def held_by_colleague(
                     "holder"
                 ),
             )
-            .join(User, User.id == Candidate.owner_id, isouter=True)
+            .join(User, User.id == Candidate.owner_id)
             .where(Candidate.id == match.candidate_id)
         )
-    ).one()
+    ).one_or_none()
+    if row is None:
+        # The row that matched a moment ago was merged or deleted before we
+        # could read it. There is nothing to disclose and no colleague to
+        # name; fall through to the caller's generic "already recorded" 409.
+        return None
 
     return {
         "reason": "already_registered",
