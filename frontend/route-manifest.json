@@ -1,0 +1,277 @@
+{
+  "paths": {
+    "/api/auth/logout": [
+      "POST"
+    ],
+    "/api/auth/me": [
+      "GET",
+      "PATCH"
+    ],
+    "/api/auth/microsoft/callback": [
+      "GET"
+    ],
+    "/api/auth/microsoft/connect-mailbox": [
+      "GET"
+    ],
+    "/api/auth/microsoft/login": [
+      "GET"
+    ],
+    "/api/candidates": [
+      "GET",
+      "POST"
+    ],
+    "/api/candidates/imports": [
+      "GET",
+      "POST"
+    ],
+    "/api/candidates/imports/template": [
+      "GET"
+    ],
+    "/api/candidates/imports/{import_id}/errors": [
+      "GET"
+    ],
+    "/api/candidates/imports/{import_id}/undo": [
+      "POST"
+    ],
+    "/api/candidates/{candidate_id}": [
+      "DELETE",
+      "GET",
+      "PATCH"
+    ],
+    "/api/candidates/{candidate_id}/activities": [
+      "GET",
+      "POST"
+    ],
+    "/api/candidates/{candidate_id}/archive": [
+      "POST"
+    ],
+    "/api/candidates/{candidate_id}/avatar": [
+      "DELETE",
+      "GET",
+      "POST"
+    ],
+    "/api/candidates/{candidate_id}/documents": [
+      "POST"
+    ],
+    "/api/candidates/{candidate_id}/documents/{document_id}": [
+      "DELETE"
+    ],
+    "/api/candidates/{candidate_id}/documents/{document_id}/download": [
+      "GET"
+    ],
+    "/api/candidates/{candidate_id}/export": [
+      "GET"
+    ],
+    "/api/candidates/{candidate_id}/merge": [
+      "POST"
+    ],
+    "/api/candidates/{candidate_id}/restore": [
+      "POST"
+    ],
+    "/api/candidates/{candidate_id}/roles": [
+      "POST"
+    ],
+    "/api/candidates/{candidate_id}/roles/{role_id}": [
+      "DELETE",
+      "PATCH"
+    ],
+    "/api/candidates/{candidate_id}/roles/{role_id}/confirm": [
+      "POST"
+    ],
+    "/api/candidates/{candidate_id}/roles/{role_id}/reject": [
+      "POST"
+    ],
+    "/api/candidates/{candidate_id}/submissions": [
+      "POST"
+    ],
+    "/api/candidates/{candidate_id}/submissions/{submission_id}": [
+      "DELETE"
+    ],
+    "/api/candidates/{candidate_id}/unmerge": [
+      "POST"
+    ],
+    "/api/candidates/{candidate_id}/whatsapp-draft": [
+      "GET"
+    ],
+    "/api/candidates/{candidate_id}/whatsapp-send": [
+      "POST"
+    ],
+    "/api/clients": [
+      "GET",
+      "POST"
+    ],
+    "/api/clients/{client_id}": [
+      "GET",
+      "PATCH"
+    ],
+    "/api/clients/{client_id}/archive": [
+      "POST"
+    ],
+    "/api/clients/{client_id}/assignee": [
+      "PUT"
+    ],
+    "/api/clients/{client_id}/collaborators": [
+      "POST"
+    ],
+    "/api/clients/{client_id}/collaborators/{user_id}": [
+      "DELETE"
+    ],
+    "/api/clients/{client_id}/confirm": [
+      "POST"
+    ],
+    "/api/clients/{client_id}/contacts": [
+      "POST"
+    ],
+    "/api/clients/{client_id}/contacts/{contact_id}": [
+      "DELETE",
+      "PATCH"
+    ],
+    "/api/clients/{client_id}/logo": [
+      "DELETE",
+      "GET",
+      "POST"
+    ],
+    "/api/clients/{client_id}/merge": [
+      "POST"
+    ],
+    "/api/clients/{client_id}/restore": [
+      "POST"
+    ],
+    "/api/clients/{client_id}/suspend": [
+      "POST"
+    ],
+    "/api/clients/{client_id}/unmerge": [
+      "POST"
+    ],
+    "/api/clients/{client_id}/unsuspend": [
+      "POST"
+    ],
+    "/api/early-access": [
+      "POST"
+    ],
+    "/api/events": [
+      "GET"
+    ],
+    "/api/glossary": [
+      "GET",
+      "POST"
+    ],
+    "/api/glossary/{code_id}": [
+      "DELETE",
+      "PATCH"
+    ],
+    "/api/graph/lifecycle": [
+      "POST"
+    ],
+    "/api/graph/notifications": [
+      "POST"
+    ],
+    "/api/health": [
+      "GET"
+    ],
+    "/api/health/db": [
+      "GET"
+    ],
+    "/api/mailbox/activity": [
+      "GET"
+    ],
+    "/api/mailbox/ingest": [
+      "POST"
+    ],
+    "/api/mailbox/preview": [
+      "GET"
+    ],
+    "/api/mailbox/settings": [
+      "GET"
+    ],
+    "/api/mailbox/settings/lookback": [
+      "POST"
+    ],
+    "/api/members": [
+      "GET"
+    ],
+    "/api/notifications/destinations/telegram/link": [
+      "POST"
+    ],
+    "/api/notifications/destinations/whatsapp/opt-in": [
+      "POST"
+    ],
+    "/api/notifications/destinations/whatsapp/verify": [
+      "POST"
+    ],
+    "/api/notifications/destinations/{destination_id}": [
+      "DELETE"
+    ],
+    "/api/notifications/destinations/{destination_id}/scope": [
+      "PUT"
+    ],
+    "/api/notifications/settings": [
+      "GET"
+    ],
+    "/api/notifications/subscriptions": [
+      "PUT"
+    ],
+    "/api/opportunities": [
+      "GET",
+      "POST"
+    ],
+    "/api/opportunities/{opportunity_id}": [
+      "GET"
+    ],
+    "/api/opportunities/{opportunity_id}/assign": [
+      "POST"
+    ],
+    "/api/opportunities/{opportunity_id}/candidates/{candidate_id}/eligibility": [
+      "GET"
+    ],
+    "/api/opportunities/{opportunity_id}/claim": [
+      "POST"
+    ],
+    "/api/opportunities/{opportunity_id}/client": [
+      "POST"
+    ],
+    "/api/opportunities/{opportunity_id}/occupational-requirement": [
+      "POST"
+    ],
+    "/api/opportunities/{opportunity_id}/placement-type": [
+      "POST"
+    ],
+    "/api/opportunities/{opportunity_id}/review": [
+      "POST"
+    ],
+    "/api/opportunities/{opportunity_id}/shares": [
+      "GET",
+      "POST"
+    ],
+    "/api/opportunities/{opportunity_id}/shares/{share_id}": [
+      "DELETE"
+    ],
+    "/api/opportunities/{opportunity_id}/sourcing": [
+      "GET",
+      "POST"
+    ],
+    "/api/opportunities/{opportunity_id}/sourcing/{run_id}": [
+      "GET"
+    ],
+    "/api/wa/consent": [
+      "POST"
+    ],
+    "/api/wa/internal/status": [
+      "POST"
+    ],
+    "/api/wa/session": [
+      "GET",
+      "POST"
+    ],
+    "/api/wa/session/disconnect": [
+      "POST"
+    ],
+    "/api/webhooks/telegram": [
+      "POST"
+    ],
+    "/api/webhooks/whatsapp": [
+      "GET",
+      "POST"
+    ]
+  }
+}

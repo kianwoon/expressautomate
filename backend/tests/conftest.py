@@ -23,6 +23,22 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from app.core.config import settings
 from app.db.session import engine
 
+
+def pytest_addoption(parser) -> None:
+    """`--regenerate` rewrites the checked-in route manifest.
+
+    Opt-in rather than automatic: a test that silently repaired the artefact it
+    is asserting on could never fail, and that manifest is the only thing
+    telling the frontend which URLs exist (see `test_route_manifest.py`).
+    """
+    parser.addoption(
+        "--regenerate",
+        action="store_true",
+        default=False,
+        help="rewrite checked-in fixtures (the route manifest) instead of asserting on them",
+    )
+
+
 # Hosts a test run is allowed to write to. Anything else is assumed to be real.
 _LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", "postgres", "db"}
 
