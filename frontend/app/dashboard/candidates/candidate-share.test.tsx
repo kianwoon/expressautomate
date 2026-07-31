@@ -31,6 +31,16 @@ const COLLISION = {
   },
 };
 
+// Real shape since 2c6051f: `candidate.id` is now sent with the collision, so
+// "Request access" has something to call.
+const COLLISION_WITH_ID = {
+  detail: {
+    reason: "already_registered",
+    candidate: { full_name: "Wei Ming T.", held_by: "Sarah Lim", id: "cand-123" },
+    can_request_access: true,
+  },
+};
+
 function conflict(body: unknown): Response {
   return {
     ok: false,
@@ -102,5 +112,41 @@ describe("a candidate a colleague already holds", () => {
 
     await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("Already recorded"));
     expect(screen.queryByRole("button", { name: /request access/i })).toBeNull();
+  });
+
+  it("sends the request and says the owner was asked, once the id is present", async () => {
+    const fetchMock = vi
+      .fn()
+      // First call: the collision itself.
+      .mockResolvedValueOnce(conflict(COLLISION_WITH_ID))
+      // Second call: POST /api/candidates/cand-123/access-requests.
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ id: "req-1" }),
+      } as Response);
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<CandidateForm row={null} onDone={() => {}} onCancel={() => {}} />);
+
+    fireEvent.change(screen.getByLabelText(/full name/i), {
+      target: { value: "Wei Ming Tan" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /add candidate/i }));
+
+    const button = await screen.findByRole("button", { name: /request access/i });
+    expect(button.hasAttribute("disabled")).toBe(false);
+
+    fireEvent.click(button);
+
+    await waitFor(() => expect(screen.getByText(/has been asked/i)).toBeTruthy());
+    // A second click must not upsert a second pending row — the control that
+    // sent the request is now the control saying it already did.
+    const after = screen.getByRole("button", { name: /access requested/i });
+    expect(after.hasAttribute("disabled")).toBe(true);
+
+    const [, requestCall] = fetchMock.mock.calls;
+    expect(String(requestCall[0])).toContain("cand-123");
+    expect(String(requestCall[0])).toContain("access-requests");
   });
 });

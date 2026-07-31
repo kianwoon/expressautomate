@@ -159,18 +159,24 @@ export type Candidate = {
   record_status: "active" | "archived" | "merged";
   updated_at: string;
   /**
-   * The recruiter who holds this candidate — `null` for the unclaimed queue.
+   * The recruiter who holds this candidate, resolved server-side —
+   * `null` for the unclaimed queue.
    *
-   * OPTIONAL, and that is a statement about the server rather than about the
-   * data: `_serialize` in `backend/app/api/candidates.py` does not emit it
-   * yet, though `Candidate.owner_id` is the column every ownership rule in
-   * `app/services/visibility.py` turns on. So `undefined` here means "the
-   * server did not say", which is not the same as `null` ("nobody holds it"),
-   * and nothing may collapse the two: `canEditCandidate` below treats a
-   * silent server as no reason to lock the record, and treats an explicit
-   * `null` as the queue.
+   * `name` is `_OWNER_NAME` in `backend/app/api/candidates.py` — preferred
+   * name, then display name, then the email signed in with — the same
+   * coalesce `held_by_colleague` uses for the 409. Read it as given; do not
+   * resolve it a second time through `useMembers()`, which is a second place
+   * for the name to disagree with the server's.
    */
-  owner_id?: string | null;
+  owner: { id: string; name: string | null } | null;
+  /**
+   * Whether THIS reader may edit THIS candidate — `can_edit_candidate` on the
+   * server (the owner, or an agency owner), published rather than
+   * re-derived. Every candidate payload carries it since 2c6051f, on both
+   * the list and the single-record read. See `canEditCandidate` below for
+   * why a caller must read this field and nothing else.
+   */
+  can_edit: boolean;
   merged_into_candidate_id?: string | null;
   /** Only present on the single-record GET, not on a list row. */
   skills?: string[];
@@ -508,11 +514,13 @@ export type CandidateCollision = {
     full_name: string;
     held_by: string;
     /**
-     * NOT sent by the shipped server — `held_by_colleague` says so in prose
-     * ("not even the candidate id") — and it is the one thing the access
-     * request needs, since the route is `POST /candidates/{id}/access-requests`.
-     * Read optionally so the button wires itself up the day the server starts
-     * sending one, and says why it cannot until then.
+     * Sent by the server since 2c6051f — `held_by_colleague` in
+     * `candidate_matching.py` now includes it deliberately: it is the one
+     * thing `POST /candidates/{id}/access-requests` needs, and withholding
+     * it left `can_request_access: true` a promise the caller could not act
+     * on. Still read optionally rather than required: an older server
+     * response (or a test fixture pinned to the old shape) sends none, and
+     * the button falls back to disabled-with-a-reason rather than crashing.
      */
     id?: string | null;
   };
@@ -1317,24 +1325,24 @@ export async function assignCandidate(id: string, userId: string | null): Promis
 }
 
 /**
- * Whether this reader may edit this candidate — the server's rule, mirrored.
+ * Whether this reader may edit this candidate — the server's rule, PUBLISHED,
+ * not re-derived.
  *
- * `can_edit_candidate` on the server is: the `owner` role, or you are the
- * owner. An UNOWNED candidate is visible and claimable but explicitly NOT
- * editable, because a row nobody has taken responsibility for is where a wrong
- * edit is least likely to be noticed.
+ * `can_edit` on the payload already is `can_edit_candidate` on the server:
+ * the `owner` role, or you are the owner. Nothing here recomputes that from
+ * `owner.id === me.id` or a role check — a second copy of "who may edit" is
+ * exactly how the two drift apart, and the UI has no better information than
+ * the server that answered this request in the first place.
  *
- * The `undefined` branch is not the same question. The server does not
- * serialize `owner_id` at all today, so `undefined` means "not told", and
- * answering `false` to that would grey out the edit button on every candidate
- * in the app. Absent evidence, nothing is refused here — the server still
- * refuses, with a 403 the panel surfaces.
+ * Fails CLOSED on a missing value, unlike the version of this function that
+ * shipped before `can_edit` existed on the wire. That version's `undefined`
+ * branch answered `true` because the field genuinely did not exist yet, and
+ * refusing on its absence would have greyed out every Edit button in the app.
+ * `can_edit` is on every candidate payload now (2c6051f) — list rows and the
+ * single-record read alike — so a row without it is not the server staying
+ * silent by design; it is stale or malformed data, and guessing "editable"
+ * for a permission flag is the wrong default to guess.
  */
-export function canEditCandidate(
-  row: Pick<Candidate, "owner_id">,
-  me: { id: string; role: string },
-): boolean {
-  if (me.role === "owner") return true;
-  if (row.owner_id === undefined) return true;
-  return row.owner_id !== null && row.owner_id === me.id;
+export function canEditCandidate(row: Pick<Candidate, "can_edit">): boolean {
+  return row.can_edit === true;
 }

@@ -1,7 +1,7 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { useCandidates, type CandidatePage } from "./candidates";
+import { canEditCandidate, useCandidates, type CandidatePage } from "./candidates";
 
 /**
  * Pins the near-miss this test harness exists for (see frontend/CLAUDE.md
@@ -200,5 +200,30 @@ describe("whose candidates", () => {
     act(() => result.current.setScope("queue"));
     await waitFor(() => expect(result.current.offset).toBe(0));
     expect(lastUrl(fetchMock)).toContain("offset=0");
+  });
+});
+
+/**
+ * `can_edit` now ships on every candidate row (2c6051f), computed server-side
+ * by `can_edit_candidate` — the owner, or an agency owner. The UI must not
+ * re-derive that rule from `owner` + a role check: a second copy of "who may
+ * edit" is a second place for it to drift from the server's. So this reads
+ * `row.can_edit` and nothing else — no `me`, no role, no owner id comparison.
+ *
+ * Fails CLOSED on a missing value. The old version treated `undefined` as
+ * "the server did not say" and refused nothing, because the field genuinely
+ * did not exist yet. It exists on every row now, so a candidate object
+ * without it is not the server being silent by design — it is stale or
+ * malformed data, and guessing "editable" for a permission flag is the wrong
+ * default to guess.
+ */
+describe("canEditCandidate", () => {
+  it("is exactly what the server says, true or false", () => {
+    expect(canEditCandidate({ can_edit: true })).toBe(true);
+    expect(canEditCandidate({ can_edit: false })).toBe(false);
+  });
+
+  it("fails closed when the server did not send a value", () => {
+    expect(canEditCandidate({} as { can_edit: boolean })).toBe(false);
   });
 });

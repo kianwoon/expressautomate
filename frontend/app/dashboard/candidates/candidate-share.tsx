@@ -104,10 +104,11 @@ export function CandidateShareDialog({
   }, [members.members]);
 
   const signedIn = auth.status === "signed-in" ? auth.me.user : null;
-  // The server's rule, mirrored rather than discovered by 403: the broadcast
-  // is the owner's call, and `can_edit_candidate` is what the route checks.
-  const iMayBroadcast = signedIn !== null && canEditCandidate(row, signedIn);
-  const unclaimed = row.owner_id === null;
+  // The server's rule, published on `row.can_edit` rather than discovered by
+  // 403 or re-derived here: the broadcast is the owner's call, and
+  // `can_edit_candidate` is exactly what the route checks.
+  const iMayBroadcast = signedIn !== null && canEditCandidate(row);
+  const unclaimed = row.owner === null;
 
   const canSubmit = !busy && (broadcast ? iMayBroadcast : selected.length > 0);
 

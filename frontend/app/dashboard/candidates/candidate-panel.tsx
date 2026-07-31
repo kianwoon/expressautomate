@@ -8,7 +8,6 @@ import { useAuth } from "../../auth";
 import type { Candidate, CandidatePage } from "../candidates";
 import { canEditCandidate, claimCandidate, mergeCandidate, unmergeCandidate } from "../candidates";
 import { Value, day } from "../format";
-import { useMembers } from "../members";
 import { CandidateAvatar } from "./candidate-avatar";
 import { CandidateCv } from "./candidate-cv";
 import { CandidateHistory } from "./candidate-history";
@@ -111,7 +110,6 @@ function Detail({
   onDetailChanged: () => void;
 }) {
   const auth = useAuth();
-  const members = useMembers();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [sharing, setSharing] = useState(false);
@@ -120,15 +118,15 @@ function Detail({
   const [activityVersion, setActivityVersion] = useState(0);
 
   const signedIn = auth.status === "signed-in" ? auth.me.user : null;
-  // The server's rule, mirrored. A signed-out reader cannot be here at all —
-  // the page redirects — so `null` is the momentary gap before the session
-  // resolves, and locking the record for it would flicker the button.
-  const canEdit = signedIn === null || canEditCandidate(row, signedIn);
-  const unclaimed = row.owner_id === null;
-  const ownerName =
-    row.owner_id == null
-      ? null
-      : (members.members.find((member) => member.id === row.owner_id)?.name ?? "A colleague");
+  // The server's rule, published on the row — not re-derived from `owner`
+  // and a role check, which is a second place for the two to drift. A
+  // signed-out reader cannot be here at all — the page redirects — so `null`
+  // is the momentary gap before the session resolves; `can_edit` on `row`
+  // already answers the question for whoever the server authenticated this
+  // fetch as, so there is nothing further to gate on `signedIn` here.
+  const canEdit = signedIn === null || canEditCandidate(row);
+  const unclaimed = row.owner === null;
+  const ownerName = row.owner === null ? null : (row.owner.name ?? "A colleague");
 
   async function claim() {
     if (busy) return;
@@ -229,17 +227,15 @@ function Detail({
             {/* First, above every other field. Who holds this record decides
                 whether the rest of the panel is something you can act on, and
                 a reader who learns it only by pressing a greyed-out button has
-                already been confused once. `undefined` — the server not saying
-                — draws nothing rather than guessing "unclaimed", which would
-                put a Claim button on rows somebody already holds. */}
-            {row.owner_id !== undefined && (
-              <div className="row">
-                <span className="row-k">Owner</span>
-                <span className={ownerName ? undefined : "muted"}>
-                  {ownerName ?? "Unclaimed — anyone at the agency can take this one"}
-                </span>
-              </div>
-            )}
+                already been confused once. `owner` ships on every payload
+                (2c6051f), so this always draws — a share recipient reads
+                "Unclaimed" in words, never an empty row. */}
+            <div className="row">
+              <span className="row-k">Owner</span>
+              <span className={ownerName ? undefined : "muted"}>
+                {ownerName ?? "Unclaimed — anyone at the agency can take this one"}
+              </span>
+            </div>
             <OverrideRow row={row} field="email" k="Email" v={row.email} />
             <OverrideRow row={row} field="phone_raw" k="Phone" v={row.phone_raw} />
             <OverrideRow row={row} field="location" k="Location" v={row.location} />
