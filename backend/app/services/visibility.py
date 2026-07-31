@@ -169,6 +169,28 @@ def visible_candidates(user_id: uuid.UUID, role: str) -> ColumnElement[bool]:
     )
 
 
+def candidate_scope(scope: str, user_id: uuid.UUID) -> ColumnElement[bool]:
+    """A filter WITHIN what `visible_candidates` already allows.
+
+    It lives here, beside the predicate, rather than in `app/api/candidates.py`
+    for two reasons. That module is at the repo's 1500-line ceiling; and
+    `scope=shared_with_me` must be the *same* expression the predicate uses,
+    so it calls `candidate_shared_with_me_exists` rather than restating the OR.
+
+    Every caller ANDs this onto the predicate with a further `.where`, never
+    substituting it — which is what makes "a scope cannot widen visibility"
+    true by construction rather than by review. An unknown scope returns
+    `true_()`, so the predicate alone still decides.
+    """
+    if scope == "mine":
+        return Candidate.owner_id == user_id
+    if scope == "queue":
+        return Candidate.owner_id.is_(None)
+    if scope == "shared_with_me":
+        return candidate_shared_with_me_exists(user_id)
+    return true_()
+
+
 def can_edit_candidate(candidate: Candidate, user_id: uuid.UUID, role: str) -> bool:
     """An unowned candidate is visible and claimable but NOT editable.
 

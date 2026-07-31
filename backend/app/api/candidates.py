@@ -45,6 +45,7 @@ from app.services.candidate_tenure import derive
 from app.services.sourcing import eligibility
 from app.services.user_naming import actor_name
 from app.services.visibility import (
+    candidate_scope,
     load_editable_candidate,
     load_visible_candidate,
     load_visible_opportunity,
@@ -246,6 +247,7 @@ async def list_candidates(
     record_status: RecordStatusFilter | None = None,
     q: str | None = None,
     initial: str | None = InitialFilter,
+    scope: Literal["mine", "queue", "shared_with_me", "all"] = "all",
     # A recruiter narrowing a shortlist to who a placement's regulatory rules
     # (MOM's, not the job's own occupational sex requirement — see
     # `eligibility.has_regulatory_not_met`) do not definitely disqualify.
@@ -288,7 +290,7 @@ async def list_candidates(
             .where(Candidate.record_status != Candidate.MERGED)
             # The chips count what this recruiter may see. Counting the whole
             # tenant would leak the size of a colleague's book.
-            .where(visible_candidates(user_uuid, role))
+            .where(visible_candidates(user_uuid, role), candidate_scope(scope, user_uuid))
             .group_by(Candidate.pipeline_stage)
         ):
             counts["all"] += n
@@ -303,7 +305,7 @@ async def list_candidates(
             base = select(Candidate).where(Candidate.record_status == record_status)
         else:
             base = select(Candidate).where(Candidate.record_status != Candidate.MERGED)
-        base = base.where(visible_candidates(user_uuid, role))
+        base = base.where(visible_candidates(user_uuid, role), candidate_scope(scope, user_uuid))
         if pipeline_stage is not None:
             base = base.where(Candidate.pipeline_stage == pipeline_stage)
         if q:

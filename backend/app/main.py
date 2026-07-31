@@ -16,6 +16,7 @@ from app.api import (
     auth,
     candidate_documents,
     candidate_imports,
+    candidate_ownership,
     candidate_roles,
     candidate_whatsapp,
     candidates,
@@ -148,6 +149,11 @@ api.include_router(candidate_imports.router)
 # owns `/candidates/{candidate_id}`, and `/candidates/{id}/whatsapp-send`
 # would be shadowed if that generic route were declared first.
 api.include_router(candidate_whatsapp.router)
+# Before `candidates`, for the same reason: `/candidates/{id}/claim` and
+# `/candidates/{id}/assign` are narrower than anything `candidates` owns
+# today, and declaring them first keeps them so if it ever grows a
+# `{candidate_id}/{something}` route.
+api.include_router(candidate_ownership.router)
 api.include_router(candidates.router)
 api.include_router(candidate_roles.router)
 api.include_router(candidates_avatar.router)

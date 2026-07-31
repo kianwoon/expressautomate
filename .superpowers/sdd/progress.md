@@ -824,3 +824,57 @@ Task 6: complete (bf10681..8278769, review approved, 3 Minor). FULL delivery pat
   the worker rebuilds from the outbox row and renders them "Not mentioned". The note is
   REAL data merely unpersisted. Correct fix is persisting it, not changing the render.
   MINOR: test_a_deleted_candidate asserts "no send" but not that the row reached FAILED.
+Task 7: complete (8278769..c3776d3 impl, ..6f788df fix 1; review approved).
+  THE STRUCTURAL TEST EARNED ITS KEEP IMMEDIATELY: brief scoped it to candidates.py, but
+  the test follows the MODEL not the filename and surfaced 25 unguarded by-id routes
+  across 6 modules — candidates.py(10), candidate_roles(5), candidate_documents(3),
+  candidates_avatar(3), candidate_whatsapp(2), sourcing(2), opportunities::get_eligibility.
+  REAL PRE-EXISTING LEAKS FIXED: sourcing withdraw_submission had NO candidate load at all;
+  get_eligibility + record_submission read Candidate under RLS alone; list_candidates'
+  stage-count counted the WHOLE TENANT, leaking the size of a colleague's book.
+  DEVIATION UPHELD: brief's single EXEMPT dict drops a route from BOTH assertions, so
+  claim_candidate/log_activity would have silently lost READ coverage. Added
+  EDIT_ONLY_EXEMPT filtering only the mutating test. (The reference file has the same
+  latent flaw for start_sourcing.) AST machinery copied byte-for-byte, untouched.
+  Only ONE pre-existing test adjusted (owner_id on its fixture), reviewer confirmed.
+  1673 passed, 1 skipped, 2 xfailed.
+  *** PROCESS CORRECTION (user, mid-turn): I took the sourcing guard question to the USER
+  when it was a DESIGN call with a codebase precedent. It should have gone to FABLE first;
+  only genuine product/business decisions go to the user. Applied for the rest of this run. ***
+  Fable UPHELD the decision (withdraw=edit, record=visibility) — real axis is "whose record
+  does it constrain", and a recipient's submission blocks only THAT ONE client, not the
+  owner elsewhere. AMENDMENT FABLE FOUND: a recipient who mis-records now cannot self-undo.
+  candidates.py is at 1489/1500 LOC — Task 12 must not add to it.
+Task 7 fix 2 (6f788df..f388012, Fable's amendment): withdraw_submission now succeeds on
+  EDIT rights OR own-row (the recorder can undo their own misclick), matching
+  opportunity_shares' delete idiom. Uses can_edit_candidate (EDIT_CHECK), which the
+  structural test treats as equivalent to EDIT_GUARD — no re-exemption needed.
+  1675 passed, 1 skipped, 2 xfailed.
+Task 8: complete (f388012..3eaa3fa impl, ..71f627a fix 1). Thin 409 on a colliding create.
+  Helpers went to candidate_matching.py NOT candidates.py (which was 1489/1500; now 1494).
+  *** PRIVACY HOLE CAUGHT IN REVIEW: abbreviate() only initialled the LAST token, so a
+  full_name that IS an email ("weiming@example.com" — recruiters paste emails into name
+  fields) was returned verbatim, and "John Tan 9123 4567" -> "John Tan 9123 4.". The
+  payload SHAPE was safe by construction but its CONTENT was not; the original test only
+  passed because its fixture kept the phone in another column. Rule now: <=3 leading
+  tokens, initial the last, mask any token matching @|\d{4,} with a bullet, never empty. ***
+  Also .one() -> .one_or_none() (a row merged between find_candidate and the holder read
+  was a 500), and isouter -> inner join to make the invariant structural.
+  1683 passed, 1 skipped, 2 xfailed.
+  Fix 1 re-reviewed and APPROVED. Masking runs on ORIGINAL tokens before truncation and
+  initialling, so a contact-like last token is replaced outright, never re-exposed.
+  MINOR RESIDUAL for final review: a spaced NRIC-like name ("S12 34 56 A") leaks a leading
+  fragment, since no single token hits \d{4,}. Truncation to 3 tokens caps the exposure.
+Task 9: complete (71f627a..352903d, review approved). patch_collision() in
+  candidate_matching.py (composes find_candidate + held_by_colleague, no duplication),
+  3-line call site in update_candidate. Covers BOTH email and phone changes.
+  PLAN PREMISE WAS WRONG, recorded for honesty: the plan claimed a colliding PATCH gave a
+  500 leaking uq_candidates_tenant_email. It did not — a pre-existing IntegrityError catch
+  already returned 409 with a plain STRING detail and never leaked the constraint name.
+  The real improvement is disclosure SHAPE (thin payload shared with the create path), not
+  a leak fix. 1685 passed, 1 skipped, 2 xfailed.
+  *** IMPORTANT FOR TASK 12: app/api/candidates.py is now 1498/1500 LOC. Task 12 must
+  modify merge_candidate in that file and has ~2 lines of headroom. An extraction has to
+  come FIRST. Consult Fable on where to extract before dispatching Task 12. ***
+  MINOR for final: the non-colliding PATCH test uses current_title, so the self-match arm
+  (an unchanged email on an editable row) is never independently exercised.

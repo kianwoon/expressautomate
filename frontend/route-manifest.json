@@ -45,9 +45,15 @@
     "/api/candidates/{candidate_id}/archive": [
       "POST"
     ],
+    "/api/candidates/{candidate_id}/assign": [
+      "POST"
+    ],
     "/api/candidates/{candidate_id}/avatar": [
       "DELETE",
       "GET",
+      "POST"
+    ],
+    "/api/candidates/{candidate_id}/claim": [
       "POST"
     ],
     "/api/candidates/{candidate_id}/documents": [
