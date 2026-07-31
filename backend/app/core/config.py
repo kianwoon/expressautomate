@@ -649,6 +649,11 @@ class Settings(BaseSettings):
     WHATSAPP_TEMPLATE_OPPORTUNITY_NEW: str = ""
     WHATSAPP_TEMPLATE_OPPORTUNITY_REVIEW: str = ""
     WHATSAPP_TEMPLATE_LINK_CODE: str = ""
+    # One approved template covers all six candidate events: they carry the
+    # same four parameters (what happened, who, by whom, note), and six
+    # near-identical templates would be six things to get approved and six
+    # things to drift.
+    WHATSAPP_TEMPLATE_CANDIDATE_UPDATE: str = ""
     WHATSAPP_TEMPLATE_LANG: str = "en"
 
     # A forty-vacancy morning is forty billable WhatsApp messages otherwise.

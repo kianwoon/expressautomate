@@ -54,9 +54,10 @@ from app.services.graph.client import (
 )
 from app.services.graph.subscriptions import create_subscription, renew_subscription
 from app.services.ms_auth import MailboxNotAuthorised, access_token_for_mailbox
+from app.services.notify.candidate_events import CandidateEvent
 from app.services.notify.channels import channel_for
 from app.services.notify.channels.base import SendOutcome
-from app.services.notify.events import OpportunityEvent
+from app.services.notify.events import CANDIDATE_KIND_PREFIX, OpportunityEvent
 from app.services.notify.render import render
 from app.services.storage.r2 import BodyStoreMisconfigured, R2BodyStore, body_key
 from app.workers.queue import enqueue
@@ -256,6 +257,20 @@ _DELIVERY_SUBJECT = text(
     """
     SELECT job_title_raw, company_name_raw, location_raw, salary_raw
     FROM opportunities WHERE id = :opportunity_id
+    """
+)
+
+# The candidate half of the same read. A `candidate.*` row's subject lives in
+# a different table entirely, so the delivery job branches on the kind before
+# it queries — pointing the opportunity query at a candidate id finds nothing
+# and would fail the row as "subject no longer exists" on every share.
+#
+# `actor_name` and `note` are not re-read: they describe an act, not the
+# candidate, and nothing stores them on a row this job can see. They are
+# denormalised into the message only when the emitter renders inline.
+_DELIVERY_CANDIDATE_SUBJECT = text(
+    """
+    SELECT full_name FROM candidates WHERE id = :candidate_id
     """
 )
 
@@ -1235,9 +1250,17 @@ async def _send_claimed_delivery(tenant: uuid.UUID, delivery_id: str, claimed) -
             )
             return
 
+        is_candidate = claimed.event_kind.startswith(CANDIDATE_KIND_PREFIX)
         subject = (
             await session.execute(
-                _DELIVERY_SUBJECT, {"opportunity_id": claimed.subject_id}
+                _DELIVERY_CANDIDATE_SUBJECT
+                if is_candidate
+                else _DELIVERY_SUBJECT,
+                {
+                    ("candidate_id" if is_candidate else "opportunity_id"): (
+                        claimed.subject_id
+                    )
+                },
             )
         ).one_or_none()
 
@@ -1279,15 +1302,24 @@ async def _send_claimed_delivery(tenant: uuid.UUID, delivery_id: str, claimed) -
             )
         return
 
-    event = OpportunityEvent(
-        kind=claimed.event_kind,
-        tenant_id=tenant,
-        opportunity_id=claimed.subject_id,
-        job_title=subject.job_title_raw,
-        company_name=subject.company_name_raw,
-        location=subject.location_raw,
-        salary=subject.salary_raw,
-    )
+    event: OpportunityEvent | CandidateEvent
+    if is_candidate:
+        event = CandidateEvent(
+            kind=claimed.event_kind,
+            tenant_id=tenant,
+            candidate_id=claimed.subject_id,
+            candidate_name=subject.full_name,
+        )
+    else:
+        event = OpportunityEvent(
+            kind=claimed.event_kind,
+            tenant_id=tenant,
+            opportunity_id=claimed.subject_id,
+            job_title=subject.job_title_raw,
+            company_name=subject.company_name_raw,
+            location=subject.location_raw,
+            salary=subject.salary_raw,
+        )
     content = render(event, target.channel, rollup=len(rollup_ids))
     address = decrypt(target.address_encrypted)
 

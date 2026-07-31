@@ -12,7 +12,15 @@ from dataclasses import dataclass
 
 from app.core.config import settings
 from app.models.notification import CHANNEL_TELEGRAM, CHANNEL_WHATSAPP
+from app.services.notify.candidate_events import CandidateEvent
 from app.services.notify.events import (
+    CANDIDATE_ACCESS_DECLINED,
+    CANDIDATE_ACCESS_GRANTED,
+    CANDIDATE_ACCESS_REQUESTED,
+    CANDIDATE_ASSIGNED,
+    CANDIDATE_EVENT_KINDS,
+    CANDIDATE_SHARED,
+    CANDIDATE_UNCLAIMED,
     EVENT_OPPORTUNITY_NEEDS_REVIEW,
     EVENT_OPPORTUNITY_NEW,
     MISSING,
@@ -36,12 +44,27 @@ class WhatsAppContent:
 _TEMPLATE_FOR = {
     EVENT_OPPORTUNITY_NEW: lambda: settings.WHATSAPP_TEMPLATE_OPPORTUNITY_NEW,
     EVENT_OPPORTUNITY_NEEDS_REVIEW: lambda: settings.WHATSAPP_TEMPLATE_OPPORTUNITY_REVIEW,
+    # All six candidate kinds share one approved template — same four
+    # parameters, and six near-identical templates would be six approvals to
+    # keep in step. Built from the kind tuple rather than listed twice, so a
+    # kind added to `events.py` cannot be left out of this dict and become a
+    # KeyError in the delivery worker.
+    **{
+        kind: (lambda: settings.WHATSAPP_TEMPLATE_CANDIDATE_UPDATE)
+        for kind in CANDIDATE_EVENT_KINDS
+    },
 }
 
 # allow-hardcode: user-facing copy, not matching logic.
 _HEADLINE = {
     EVENT_OPPORTUNITY_NEW: "New job order",
     EVENT_OPPORTUNITY_NEEDS_REVIEW: "Job order needs review",
+    CANDIDATE_SHARED: "Candidate shared with you",
+    CANDIDATE_ASSIGNED: "Candidate handed over to you",
+    CANDIDATE_UNCLAIMED: "Candidate released to the queue",
+    CANDIDATE_ACCESS_REQUESTED: "Candidate access requested",
+    CANDIDATE_ACCESS_GRANTED: "Candidate access granted",
+    CANDIDATE_ACCESS_DECLINED: "Candidate access declined",
 }
 
 
@@ -50,7 +73,7 @@ def _or_missing(value: str | None) -> str:
 
 
 def render(
-    event: OpportunityEvent, channel: str, rollup: int = 0
+    event: OpportunityEvent | CandidateEvent, channel: str, rollup: int = 0
 ) -> TelegramContent | WhatsAppContent:
     """Content for one event on one channel.
 
@@ -59,11 +82,52 @@ def render(
     approved with a fixed parameter count, so adding one would make every
     capped send fail — which is the send that matters most.
     """
+    if isinstance(event, CandidateEvent):
+        if channel == CHANNEL_TELEGRAM:
+            return _candidate_telegram(event, rollup)
+        if channel == CHANNEL_WHATSAPP:
+            return _candidate_whatsapp(event)
+        raise ValueError(f"Unknown notification channel: {channel!r}")
     if channel == CHANNEL_TELEGRAM:
         return _telegram(event, rollup)
     if channel == CHANNEL_WHATSAPP:
         return _whatsapp(event)
     raise ValueError(f"Unknown notification channel: {channel!r}")
+
+
+def _candidate_telegram(event: CandidateEvent, rollup: int) -> TelegramContent:
+    """Who did what to which person. No salary, no company — a candidate has
+    neither, and inventing the fields to reuse the job-order shape is what
+    the separate event type exists to avoid."""
+    lines = [
+        f"*{_HEADLINE[event.kind]}*",
+        _or_missing(event.candidate_name),
+    ]
+    if event.actor_name:
+        lines.append(f"By: {event.actor_name}")
+    if event.note:
+        lines.append(f"Note: {event.note}")
+    if rollup:
+        lines.append(f"_and {rollup} more while notifications were rate-limited_")
+    return TelegramContent(text="\n".join(lines))
+
+
+def _candidate_whatsapp(event: CandidateEvent) -> WhatsAppContent:
+    return WhatsAppContent(
+        template_name=_TEMPLATE_FOR[event.kind](),
+        language=settings.WHATSAPP_TEMPLATE_LANG,
+        # Fixed count and order, as with the job-order template above. Every
+        # parameter goes through `_or_missing`: a blank parameter is rejected
+        # by Meta outright, and `actor_name`/`note` are legitimately absent on
+        # a row the delivery worker rebuilt from the database.
+        body_params=[
+            _HEADLINE[event.kind],
+            _or_missing(event.candidate_name),
+            _or_missing(event.actor_name),
+            _or_missing(event.note),
+        ],
+        button_param=str(event.candidate_id),
+    )
 
 
 def _telegram(event: OpportunityEvent, rollup: int) -> TelegramContent:

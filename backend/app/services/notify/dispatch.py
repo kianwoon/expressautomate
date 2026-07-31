@@ -27,10 +27,16 @@ from app.models.notification import (
     STATUS_SENT,
     STATUS_SUPPRESSED,
 )
+from app.services.notify.candidate_events import CandidateEvent
 from app.services.notify.events import OpportunityEvent
 from app.workers.queue import enqueue
 
 log = get_logger(__name__)
+
+# Everything below works on either event type through one narrow protocol:
+# `kind`, `tenant_id`, `recipient_user_ids`, `subject_id`. Deliberately a
+# union rather than a widened `OpportunityEvent` — see `candidate_events.py`.
+Event = OpportunityEvent | CandidateEvent
 
 # allow-hardcode: SQL statements, not a phrase list.
 
@@ -145,7 +151,7 @@ async def rate_capped(
 
 
 async def _write_rows(
-    event: OpportunityEvent, session: AsyncSession
+    event: Event, session: AsyncSession
 ) -> list[tuple[uuid.UUID, bool]]:
     """Insert one row per subscriber. Returns (delivery_id, capped) pairs for
     every row actually written — suppressed rows included, since a caller
@@ -174,7 +180,7 @@ async def _write_rows(
                     "tenant_id": event.tenant_id,
                     "destination_id": row.destination_id,
                     "event_kind": event.kind,
-                    "subject_id": event.opportunity_id,
+                    "subject_id": event.subject_id,
                     "status": STATUS_SUPPRESSED if capped else STATUS_PENDING,
                 },
             )
@@ -265,6 +271,20 @@ async def emit_and_enqueue(event: OpportunityEvent) -> int:
     Only the non-suppressed ids go to the queue — a suppressed row has nothing
     to send yet, so queuing it would just make a worker fetch it and no-op.
     """
+    return await _emit_and_enqueue(event)
+
+
+async def emit_candidate_event(event: CandidateEvent) -> int:
+    """The candidate counterpart of `emit_and_enqueue`.
+
+    Same body, separate name: the two event types are deliberately distinct
+    at the call site (a caller holding a candidate must not be able to pass
+    it somewhere that expects a job title), and identical from here down.
+    """
+    return await _emit_and_enqueue(event)
+
+
+async def _emit_and_enqueue(event: Event) -> int:
     async with tenant_session(event.tenant_id) as session:
         written = await _write_rows(event, session)
     to_enqueue = [delivery_id for delivery_id, capped in written if not capped]
