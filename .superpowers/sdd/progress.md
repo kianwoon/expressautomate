@@ -959,3 +959,44 @@ Task 13: complete (1ca270e..d5c64db impl, ..6a18dbc fix 1; review approved).
   permission) but creates land unowned. Now tested and commented rather than accidental.
   1709 passed, 1 skipped.
 === BACKEND COMPLETE (Tasks 0-13). Remaining: 14 frontend, 15 verification. ===
+Task 14: complete (6a18dbc..ef23e7f UI, ..2c6051f backend gaps, ..159ba13 wiring).
+  The frontend found TWO REAL BACKEND GAPS the backend reviews could not:
+  (1) the 409 carried NO candidate id, but POST /candidates/{id}/access-requests is keyed
+      by id and the 409 is the only way B learns the row exists — so can_request_access
+      was unactionable and the button rendered disabled.
+      *** FABLE RULED MY SPEC LINE "not even the candidate id" WAS SECURITY THEATRE: the
+      409 already discloses the maximal facts (existence + holder); a UUID is unguessable,
+      tenant-scoped, and every route behind it is guarded. Struck. ***
+  (2) _serialize never emitted owner_id or a can-edit flag, so the panel could not show the
+      owner or DISABLE the edit control. Now emits owner {id,name}|null + can_edit — the
+      server's rule PUBLISHED, so the UI never re-derives owner==me||role==owner.
+      Owner name joined ONCE (LEFT OUTER on row queries only, not the count/aggregates).
+  Also fixed en route: readError returned FastAPI's detail even when it was an OBJECT,
+  handing React an object to render — a colliding create was likely CRASHING the dialog.
+Task 15 verification: all 5 migrations round-trip downgrade 314cc3da9ced -> upgrade head.
+  Largest touched file 1356/1500. Zero xfail left in the guard test.
+FINAL WHOLE-BRANCH REVIEW (Fable) — READY WITH FIXES. Two cross-module gaps that no
+  per-task review could have caught, both now closed:
+  (a) b6ecd07 — MERGE STRANDED SHARES. candidate_shares and pending access requests were
+      never moved from loser to target, so a colleague granted access lost it silently the
+      moment someone merged the person — the last step of the story the feature exists for.
+      Semantics: a share on either row is a share on the survivor; move what does not
+      collide, drop what does (three partial indexes make a naive UPDATE raise). Resolved
+      requests STAY on the loser as history. Unmerge does NOT give shares back — the grant
+      was sight of a PERSON, and the survivor kept the data.
+  (b) 6aa93b8 — SOURCING LEAKED PRIVATE CANDIDATES, and it was the structural guard's exact
+      blind spot: the guard covers by-id reads, sourcing reaches candidates by SET
+      MEMBERSHIP and returned explanation, reasons and CV evidence QUOTES for colleagues'
+      private rows — far more than the 409 ever discloses.
+      *** FABLE'S RULING, and it is the good third option: keep scoring agency-wide (an
+      agency that cannot shortlist its own book has no reason to run sourcing) and REDACT
+      AT READ to exactly the 409 tier. Not a new tier — the existing one on one more
+      surface, mirroring the import rule "match tenant-wide, disclose at the edge". Score
+      kept: it reveals fit, not content. masked_candidate() extracted so the 409 path and
+      sourcing share ONE masking implementation and cannot drift. ***
+      Guard test extended with a sweep that fails on select(Candidate) in any app/ module
+      outside app/api/, with a written exemption per legitimate case. Verified it bites.
+  (c) 610f8ee — the redacted match rendered a RAW UUID in the UI (namesFor fetched by id
+      and 404'd). Now renders the masked name + "held by X" + request access.
+=== ALL 16 TASKS COMPLETE. Backend 1730 passed 1 skipped; frontend 221 passed / 24 files;
+    ruff clean; tsc clean; migrations round-trip. NOT MERGED. ===

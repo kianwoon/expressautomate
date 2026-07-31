@@ -155,9 +155,28 @@ Live: https://expressautomate.app · repo: `kianwoon/expressautomate` (private)
 migrations, RLS, logging, health endpoints, worker skeleton, CI/CD.
 
 **Shipped since:** OAuth sign-in, mailbox ingestion, AI extraction, clients,
-candidates, sourcing, the WhatsApp gateway, and job order assignment and
+candidates, sourcing, the WhatsApp gateway, job order assignment and
 sharing (2026-07-31 — see
-[the design](docs/superpowers/specs/2026-07-30-job-order-assignment-and-sharing-design.md)).
+[the design](docs/superpowers/specs/2026-07-30-job-order-assignment-and-sharing-design.md)),
+and candidate ownership and sharing (2026-07-31 — see
+[the design](docs/superpowers/specs/2026-07-31-candidate-ownership-and-sharing-design.md)).
+
+**Candidates are private to their owning recruiter**, shared read-only to a
+named colleague or the whole agency. Two rules follow from it that are easy to
+break by accident:
+
+- **Per-tenant email/phone uniqueness is deliberately kept**, so one person is
+  one row. A recruiter who enters someone a colleague privately holds gets a
+  409 disclosing an abbreviated, contact-masked name and the holder — nothing
+  else — plus a request-access path. `masked_candidate()` in
+  `app/services/candidate_matching.py` is the single implementation of that
+  boundary; the collision path and redacted sourcing matches both call it.
+- **Match tenant-wide, disclose at the edge.** Import matching and sourcing
+  both scan the whole agency on purpose — a visibility-filtered lookup would
+  miss an invisible row and then die on the unique index. Redaction happens at
+  read, per viewer. `tests/test_candidate_routes_guarded.py` enforces both
+  halves: every by-id read goes through a guard, and no module outside the
+  named exemptions may `select(Candidate)` at all.
 
 **`frontend/` is not empty** — Next.js static export with `/dashboard` (job
 orders), `/dashboard/clients`, `/dashboard/candidates` and `/settings`. Plain
