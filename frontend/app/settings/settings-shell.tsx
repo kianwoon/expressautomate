@@ -5,6 +5,7 @@ import { useEffect } from "react";
 import {
   LANDING_PATH,
   SETTINGS_ACCOUNT_PATH,
+  SETTINGS_CLIENT_DISCOVERY_PATH,
   SETTINGS_GLOSSARY_PATH,
   SETTINGS_NOTIFICATIONS_PATH,
   SETTINGS_PATH,
@@ -29,10 +30,11 @@ import { SiteNav } from "../site-nav";
  * not a list anything is matched against.
  */
 
-type Tab = "inbox" | "glossary" | "notifications" | "account" | "whatsapp";
+type Tab = "inbox" | "glossary" | "notifications" | "account" | "whatsapp" | "discovery";
 
 const TABS: { key: Tab; label: string; href: string }[] = [
   { key: "inbox", label: "Inbox", href: SETTINGS_PATH },
+  { key: "discovery", label: "Client discovery", href: SETTINGS_CLIENT_DISCOVERY_PATH },
   { key: "glossary", label: "Shorthand", href: SETTINGS_GLOSSARY_PATH },
   { key: "notifications", label: "Notifications", href: SETTINGS_NOTIFICATIONS_PATH },
   { key: "whatsapp", label: "WhatsApp", href: SETTINGS_WHATSAPP_PATH },

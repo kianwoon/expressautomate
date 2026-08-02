@@ -2,6 +2,7 @@ from app.models.candidate import Candidate, CandidateFieldOverride, CandidateSki
 from app.models.candidate_access_request import CandidateAccessRequest
 from app.models.candidate_share import CandidateShare
 from app.models.client import Client, ClientMention
+from app.models.client_discovery import ClientDiscoveryRun
 from app.models.email_message import EmailMessage
 from app.models.extraction import (
     Extraction,
@@ -35,6 +36,7 @@ __all__ = [
     "CandidateShare",
     "CandidateSkill",
     "Client",
+    "ClientDiscoveryRun",
     "ClientMention",
     "EarlyAccessSignup",
     "EmailMessage",

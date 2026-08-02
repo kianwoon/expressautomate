@@ -23,6 +23,7 @@ from app.api import (
     candidate_whatsapp,
     candidates,
     candidates_avatar,
+    client_discovery,
     clients,
     clients_logo,
     events,
@@ -173,6 +174,9 @@ api.include_router(candidates.router)
 api.include_router(candidate_roles.router)
 api.include_router(candidates_avatar.router)
 api.include_router(candidate_documents.router)
+# `/client-discovery` shares no prefix with `/clients/{client_id}`, so order
+# next to the client routers is tidiness, not shadowing-avoidance.
+api.include_router(client_discovery.router)
 api.include_router(clients.router)
 api.include_router(clients_logo.router)
 api.include_router(notifications.router)
