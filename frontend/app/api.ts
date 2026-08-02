@@ -248,6 +248,28 @@ export const SETTINGS_GLOSSARY_PATH = "/settings/glossary";
 export const SETTINGS_NOTIFICATIONS_PATH = "/settings/notifications";
 export const SETTINGS_ACCOUNT_PATH = "/settings/account";
 export const SETTINGS_WHATSAPP_PATH = "/settings/whatsapp";
+export const SETTINGS_CLIENT_DISCOVERY_PATH = "/settings/client-discovery";
+
+/**
+ * Client auto-discovery: a header-only scan of the signed-in recruiter's own
+ * mailbox that backfills contacts onto existing clients and offers the ranked
+ * new domains for one-click creation.
+ *
+ * GET reads the latest run back (null when none has been started); the two
+ * POSTs start a scan and create the selected domains as confirmed clients.
+ */
+export const CLIENT_DISCOVERY_PATH = `${API_BASE}/api/client-discovery`;
+export const CLIENT_DISCOVERY_SCAN_PATH = `${CLIENT_DISCOVERY_PATH}/scan`;
+export const CLIENT_DISCOVERY_CREATE_PATH = `${CLIENT_DISCOVERY_PATH}/clients`;
+
+/**
+ * How often the panel asks again while a scan is still working. A poll, not
+ * an event, for the reason `SOURCING_POLL_MS` is one — and with the same
+ * `|| 4000` guard: an unset variable parses to `NaN`, and `setInterval(NaN)`
+ * fires as fast as the browser allows.
+ */
+export const CLIENT_DISCOVERY_POLL_MS =
+  Number(process.env.NEXT_PUBLIC_CLIENT_DISCOVERY_POLL_MS) || 4000;
 
 /**
  * The recruiter's own WhatsApp link — the "WA gateway" (Baileys), a separate

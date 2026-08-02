@@ -477,6 +477,83 @@ class Settings(BaseSettings):
             if part.strip()
         )
 
+    # --- Client auto-discovery (spec 2026-08-02) ---
+    # A header-only scan of the signed-in recruiter's own mailbox. Every knob
+    # lives here rather than in the service because each one is a deployment
+    # judgement — how far back a "current" client relationship reaches, what a
+    # page of Graph headers costs, which senders are machines — not a fact
+    # about the code.
+    CLIENT_DISCOVERY_LOOKBACK_DAYS: int = Field(default=90, gt=0)
+    # `$top` per Graph page. 100 is universally accepted on the messages
+    # endpoints; raising it is a deployment experiment, which is why it is a
+    # setting and not a literal.
+    CLIENT_DISCOVERY_PAGE_SIZE: int = Field(default=100, gt=0, le=1000)
+    # Headers the whole scan (inbox + sent together) may read before stopping.
+    # The cap is consulted per whole page, like the delta walk, so it can
+    # overshoot by at most one page rather than silently skip mid-page.
+    CLIENT_DISCOVERY_MAX_MESSAGES: int = Field(default=10_000, gt=0)
+    # How many ranked new domains one run stores and shows. Past this the run
+    # says `domains_truncated` rather than pretending the list was complete.
+    CLIENT_DISCOVERY_MAX_DOMAINS: int = Field(default=200, gt=0)
+    # How many contacts discovery will add to any one client in one
+    # application — a bound on additions, not on the client's contact list.
+    CLIENT_DISCOVERY_MAX_CONTACTS_PER_CLIENT: int = Field(default=10, gt=0)
+    # Relationship score weights (source plan, "Relationship Score"). Only the
+    # ratios matter; they are settings because which signal an agency trusts —
+    # mail received, mail sent, breadth of contacts — is theirs to tune.
+    CLIENT_DISCOVERY_WEIGHT_RECEIVED: float = Field(default=1.0, ge=0)
+    CLIENT_DISCOVERY_WEIGHT_SENT: float = Field(default=2.0, ge=0)
+    CLIENT_DISCOVERY_WEIGHT_UNIQUE_CONTACTS: float = Field(default=5.0, ge=0)
+    # The recent-activity bonus and the window that earns it.
+    CLIENT_DISCOVERY_RECENCY_BONUS: float = Field(default=10.0, ge=0)
+    CLIENT_DISCOVERY_RECENCY_DAYS: int = Field(default=14, gt=0)
+    # A run left `running` longer than this was abandoned by a dead worker —
+    # nothing sweeps discovery runs, so the next scan supersedes it instead.
+    CLIENT_DISCOVERY_STALE_RUNNING_MINUTES: int = Field(default=15, gt=0)
+    # The wall clock one scan may occupy an arq worker for. Headers are cheap
+    # but a large mailbox is many pages, and a job this cuts short is simply a
+    # failed run the user re-starts with one click.
+    CLIENT_DISCOVERY_JOB_TIMEOUT_SECONDS: float = Field(default=600.0, gt=0)
+    # Local parts that identify machinery rather than a person. An entry
+    # matches the lowercased local part (with any `+tag` stripped) exactly, or
+    # as a prefix whose next character is not a letter — so `noreply1` and
+    # `newsletter-team` match while a surname like `alertan` does not.
+    CLIENT_DISCOVERY_SYSTEM_LOCALPARTS_RAW: str = Field(
+        default="noreply,no-reply,donotreply,do-not-reply,notification,"
+        "notifications,mailer-daemon,postmaster,bounce,bounces,newsletter,"
+        "newsletters,alert,alerts,updates,digest",
+        alias="CLIENT_DISCOVERY_SYSTEM_LOCALPARTS",
+    )
+
+    @property
+    def CLIENT_DISCOVERY_SYSTEM_LOCALPARTS(self) -> frozenset[str]:
+        return frozenset(
+            part.strip().lower()
+            for part in self.CLIENT_DISCOVERY_SYSTEM_LOCALPARTS_RAW.split(",")
+            if part.strip()
+        )
+
+    # Domains that are mail *about* recruitment rather than mail *from* a
+    # client — job boards and bulk-mail infrastructure. Suffix-matched, so
+    # `bounce.linkedin.com` is covered by `linkedin.com`. Deliberately minimal:
+    # a noisy row costs the user an unticked checkbox, while an over-broad
+    # exclusion hides a real client with nothing anywhere to say so.
+    CLIENT_DISCOVERY_EXCLUDED_DOMAINS_RAW: str = Field(
+        default="linkedin.com,indeed.com,glassdoor.com,jobstreet.com,"
+        "jobsdb.com,mycareersfuture.gov.sg,efinancialcareers.com,"
+        "facebookmail.com,amazonses.com,sendgrid.net,mailchimp.com,"
+        "mailgun.org,mandrillapp.com,sparkpostmail.com",
+        alias="CLIENT_DISCOVERY_EXCLUDED_DOMAINS",
+    )
+
+    @property
+    def CLIENT_DISCOVERY_EXCLUDED_DOMAINS(self) -> frozenset[str]:
+        return frozenset(
+            part.strip().lower()
+            for part in self.CLIENT_DISCOVERY_EXCLUDED_DOMAINS_RAW.split(",")
+            if part.strip()
+        )
+
     # --- Client shorthand glossary ---
     # Whether a tenant reading its glossary for the first time is offered the
     # shipped starter codes. On by default, because an empty glossary on day

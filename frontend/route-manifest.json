@@ -121,6 +121,15 @@
     "/api/candidates/{candidate_id}/whatsapp-send": [
       "POST"
     ],
+    "/api/client-discovery": [
+      "GET"
+    ],
+    "/api/client-discovery/clients": [
+      "POST"
+    ],
+    "/api/client-discovery/scan": [
+      "POST"
+    ],
     "/api/clients": [
       "GET",
       "POST"
