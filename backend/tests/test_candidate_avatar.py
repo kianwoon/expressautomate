@@ -405,6 +405,37 @@ async def test_the_stored_content_type_matches_the_stored_format(agency, store):
     assert content_type == Image.MIME[fmt]
 
 
+async def test_the_stored_object_carries_a_caching_directive(agency, store):
+    """Without one, R2 answers with no `Cache-Control` at all.
+
+    That is what made a photo already on screen a moment ago download again in
+    full every time the panel opened: nothing ever told the browser it was
+    allowed to keep the bytes.
+    """
+    tid, uid, cid = agency
+    async with _client_for(tid, uid) as http:
+        await _upload(http, cid, _png_bytes())
+    cache_control = store.cache_control[avatar_key(tid, cid)]
+    assert f"max-age={settings.AVATAR_CACHE_MAX_AGE_SECONDS}" in cache_control
+    # `private`: the object is one candidate's photo behind a signed URL, so
+    # no shared proxy has any business holding a copy of it.
+    assert "private" in cache_control
+
+
+async def test_the_signed_url_carries_the_same_directive(agency, store):
+    """The header has to travel on the *read*, not only on the stored object.
+
+    R2 only returns `Cache-Control` on a presigned GET when the URL asks for
+    it, and because it is part of the signature a caller cannot lengthen it by
+    editing the query string.
+    """
+    tid, uid, cid = agency
+    async with _client_for(tid, uid) as http:
+        await _upload(http, cid, _png_bytes())
+        url = (await http.get(f"/api/candidates/{cid}/avatar")).json()["url"]
+    assert f"max-age={settings.AVATAR_CACHE_MAX_AGE_SECONDS}" in url
+
+
 async def test_the_row_records_the_key_and_the_time(agency, store):
     tid, uid, cid = agency
     async with _client_for(tid, uid) as http:

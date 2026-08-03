@@ -100,9 +100,19 @@ export function CandidateAvatar({
       shownFor.current = row.id;
       setPhoto({ status: "loading" });
     }
+    // `avatar_key` is already on the candidate record, so a candidate known to
+    // have no photo does not need a round trip to learn that — it would be a
+    // 404 spent confirming what the record already said, and most candidates
+    // have no photo. `client-logo.tsx` has always done this; the avatar did
+    // not, so the common case paid for a request and sat on "(loading)" until
+    // it came back.
+    if (!row.avatar_key) {
+      setPhoto({ status: "none" });
+      return;
+    }
     (async () => {
       try {
-        const avatar = await getCandidateAvatar(row.id);
+        const avatar = await getCandidateAvatar(row.id, row.avatar_updated_at);
         if (cancelled) return;
         setPhoto(avatar ? { status: "ready", url: avatar.url } : { status: "none" });
       } catch {
@@ -122,8 +132,11 @@ export function CandidateAvatar({
     setBusy(true);
     setError(null);
     try {
-      await uploadCandidateAvatar(row.id, file);
-      const avatar = await getCandidateAvatar(row.id);
+      // The version the upload just returned, not the stale one on `row` —
+      // it is what the URL cache keys on, so passing the old one would look
+      // like a hit and show the photo that was replaced.
+      const uploaded = await uploadCandidateAvatar(row.id, file);
+      const avatar = await getCandidateAvatar(row.id, uploaded.avatar_updated_at);
       if (avatar) setPhoto({ status: "ready", url: avatar.url });
       onChanged();
     } catch (err) {
@@ -195,8 +208,17 @@ export function CandidateAvatar({
           {hasPhoto ? (
             // A short-lived presigned URL, not an asset `next/image` can
             // optimise or cache — same tradeoff as `telegram-link-panel.tsx`.
+            // `decoding="async"` keeps the decode off the main thread, so a
+            // large photo cannot stall the panel's first paint.
             // eslint-disable-next-line @next/next/no-img-element
-            <img className="ca-photo" src={photo.url} alt={alt} width={56} height={56} />
+            <img
+              className="ca-photo"
+              src={photo.url}
+              alt={alt}
+              width={56}
+              height={56}
+              decoding="async"
+            />
           ) : (
             <span
               className="ca-initials"
