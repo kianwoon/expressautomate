@@ -252,6 +252,20 @@ def _serialize(
             if candidate.merged_into_candidate_id
             else None
         ),
+        # Both are read by `candidate-avatar.tsx` and neither is decoration.
+        # `avatar_key` is how the panel knows there is a photo to ask for at
+        # all — absent it, the component cannot tell "no photo" from "photo it
+        # has not fetched yet", and skipping the request on a falsy value
+        # silently skips it for everyone. `avatar_updated_at` is the version
+        # its URL cache keys on, so without it a replaced photo keeps the key
+        # the old one was cached under. `clients.py` has always sent the
+        # equivalent pair; this is the same contract, not a new one.
+        "avatar_key": candidate.avatar_key,
+        "avatar_updated_at": (
+            candidate.avatar_updated_at.isoformat()
+            if candidate.avatar_updated_at
+            else None
+        ),
         "created_at": candidate.created_at.isoformat(),
         "updated_at": candidate.updated_at.isoformat(),
     }

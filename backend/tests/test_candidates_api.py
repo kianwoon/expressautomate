@@ -116,6 +116,45 @@ async def test_a_merged_candidate_is_still_reachable_by_id(agency_with_candidate
     assert r.json()["record_status"] == "merged"
 
 
+async def test_list_and_detail_both_carry_the_avatar_fields(agency_with_candidates) -> None:
+    """`candidate-avatar.tsx` reads `row.avatar_key` to decide whether to ask
+    for a photo at all, and keys its URL cache on `row.avatar_updated_at`. A
+    `_serialize()` that drops either field disables avatars silently, with no
+    other test noticing, because every other assertion here only checks the
+    fields it happens to care about.
+    """
+    tid, uid, ids = agency_with_candidates
+    async with await _client_for(tid, uid) as http:
+        list_body = (await http.get("/api/candidates")).json()
+        detail_before = await http.get(f"/api/candidates/{ids['active']}")
+
+        row = next(r for r in list_body["items"] if r["id"] == str(ids["active"]))
+        assert row["avatar_key"] is None
+        assert row["avatar_updated_at"] is None
+        assert detail_before.json()["avatar_key"] is None
+        assert detail_before.json()["avatar_updated_at"] is None
+
+        async with AdminSessionLocal() as s:
+            await s.execute(
+                text(
+                    "UPDATE candidates SET avatar_key = :k, "
+                    "avatar_updated_at = now() WHERE id = :i"
+                ),
+                {"k": f"tenants/{tid}/candidates/{ids['active']}/avatar.jpg", "i": ids["active"]},
+            )
+            await s.commit()
+
+        list_body = (await http.get("/api/candidates")).json()
+        detail_after = await http.get(f"/api/candidates/{ids['active']}")
+
+    row = next(r for r in list_body["items"] if r["id"] == str(ids["active"]))
+    assert row["avatar_key"] == f"tenants/{tid}/candidates/{ids['active']}/avatar.jpg"
+    assert isinstance(row["avatar_updated_at"], str) and row["avatar_updated_at"]
+    detail_json = detail_after.json()
+    assert detail_json["avatar_key"] == f"tenants/{tid}/candidates/{ids['active']}/avatar.jpg"
+    assert isinstance(detail_json["avatar_updated_at"], str) and detail_json["avatar_updated_at"]
+
+
 async def test_another_agencys_candidate_is_a_404_not_a_403(agency_with_candidates) -> None:
     """403 would confirm the id exists, which is itself a disclosure."""
     _tid, _uid, ids = agency_with_candidates
