@@ -190,6 +190,14 @@ async def notification_settings(request: Request) -> dict:
                 "channel": row.channel,
                 # Null means the agency's shared feed rather than one person's.
                 "scope": "tenant" if row.user_id is None else "user",
+                # `scope == "user"` only says the row is *somebody's* personal
+                # destination, not the caller's — a colleague's own paired
+                # WhatsApp or linked Telegram chat is `scope: "user"` too. The
+                # setup-nudge checklist (`frontend/app/setup-tasks.ts`) needs
+                # to tell "I personally have alerts on" apart from "someone in
+                # my agency does", so it is spelled out here rather than
+                # derived from `scope` a second time on the frontend.
+                "mine": row.user_id == user_id,
                 "verified": row.verified_at is not None,
                 "disabled": row.disabled_at is not None,
                 "event_kinds": list(row.event_kinds),

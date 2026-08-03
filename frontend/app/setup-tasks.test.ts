@@ -11,7 +11,7 @@ import { fetchOutstandingSetupTasks, outstandingTasks } from "./setup-tasks";
  * one path that only checks the first response.
  */
 describe("outstandingTasks", () => {
-  function notifications(destinations: { disabled: boolean }[]) {
+  function notifications(destinations: { disabled: boolean; mine: boolean }[]) {
     return { destinations };
   }
 
@@ -20,16 +20,49 @@ describe("outstandingTasks", () => {
     expect(tasks.map((t) => t.id)).toEqual(["notifications", "client-discovery"]);
   });
 
-  it("drops the notifications item once any destination is enabled", () => {
+  it("drops the notifications item once the caller's own destination is enabled", () => {
     const tasks = outstandingTasks(
-      notifications([{ disabled: true }, { disabled: false }]),
+      notifications([
+        { disabled: true, mine: true },
+        { disabled: false, mine: true },
+      ]),
       { run: null },
     );
     expect(tasks.map((t) => t.id)).toEqual(["client-discovery"]);
   });
 
   it("counts an all-disabled destination list as not configured", () => {
-    const tasks = outstandingTasks(notifications([{ disabled: true }]), { run: null });
+    const tasks = outstandingTasks(notifications([{ disabled: true, mine: true }]), {
+      run: null,
+    });
+    expect(tasks.map((t) => t.id)).toContain("notifications");
+  });
+
+  it("stays outstanding when only a tenant-scoped destination is enabled", () => {
+    const tasks = outstandingTasks(notifications([{ disabled: false, mine: false }]), {
+      run: null,
+    });
+    expect(tasks.map((t) => t.id)).toContain("notifications");
+  });
+
+  it("stays outstanding when only a colleague's personal destination is enabled", () => {
+    const tasks = outstandingTasks(notifications([{ disabled: false, mine: false }]), {
+      run: null,
+    });
+    expect(tasks.map((t) => t.id)).toContain("notifications");
+  });
+
+  it("is done once the caller's own destination is enabled", () => {
+    const tasks = outstandingTasks(notifications([{ disabled: false, mine: true }]), {
+      run: null,
+    });
+    expect(tasks.map((t) => t.id)).not.toContain("notifications");
+  });
+
+  it("stays outstanding when the caller's own destination is disabled", () => {
+    const tasks = outstandingTasks(notifications([{ disabled: true, mine: true }]), {
+      run: null,
+    });
     expect(tasks.map((t) => t.id)).toContain("notifications");
   });
 
@@ -41,7 +74,7 @@ describe("outstandingTasks", () => {
   });
 
   it("is empty once both are configured", () => {
-    const tasks = outstandingTasks(notifications([{ disabled: false }]), {
+    const tasks = outstandingTasks(notifications([{ disabled: false, mine: true }]), {
       run: { status: "done" },
     });
     expect(tasks).toEqual([]);

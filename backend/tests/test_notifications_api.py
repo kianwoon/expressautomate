@@ -373,6 +373,96 @@ def _fake_pool(fake: _FakeRedis):
     return _create
 
 
+async def test_mine_is_true_for_the_callers_own_destination(
+    client, signed_in, admin_session
+) -> None:
+    """`scope: "user"` alone can't tell the caller's own device from a
+    colleague's — `mine` is the field the setup-nudge checklist keys off."""
+    tenant_id, user_id = signed_in
+    dest_id = uuid.uuid4()
+    await admin_session.execute(
+        text(
+            "INSERT INTO notification_destinations "
+            "(id, tenant_id, user_id, channel, address_encrypted, address_hash, verified_at) "
+            "VALUES (:id, :tid, :uid, :ch, 'x', :hash, now())"
+        ),
+        {
+            "id": dest_id,
+            "tid": tenant_id,
+            "uid": user_id,
+            "ch": CHANNEL_TELEGRAM,
+            "hash": address_digest("12345"),
+        },
+    )
+    await admin_session.commit()
+
+    response = await client.get("/api/notifications/settings")
+    destination = response.json()["destinations"][0]
+    assert destination["scope"] == "user"
+    assert destination["mine"] is True
+
+
+async def test_mine_is_false_for_a_tenant_scoped_destination(
+    client, signed_in, admin_session
+) -> None:
+    tenant_id, _user_id = signed_in
+    dest_id = uuid.uuid4()
+    await admin_session.execute(
+        text(
+            "INSERT INTO notification_destinations "
+            "(id, tenant_id, channel, address_encrypted, address_hash, verified_at) "
+            "VALUES (:id, :tid, :ch, 'x', :hash, now())"
+        ),
+        {
+            "id": dest_id,
+            "tid": tenant_id,
+            "ch": CHANNEL_TELEGRAM,
+            "hash": address_digest("12345"),
+        },
+    )
+    await admin_session.commit()
+
+    response = await client.get("/api/notifications/settings")
+    destination = response.json()["destinations"][0]
+    assert destination["scope"] == "tenant"
+    assert destination["mine"] is False
+
+
+async def test_mine_is_false_for_a_colleagues_personal_destination(
+    client, signed_in, admin_session
+) -> None:
+    tenant_id, _user_id = signed_in
+    colleague_id = uuid.uuid4()
+    dest_id = uuid.uuid4()
+    await admin_session.execute(
+        text(
+            "INSERT INTO users (id, tenant_id, email, role) "
+            "VALUES (:id, :tid, 'colleague@a.sg', 'recruiter')"
+        ),
+        {"id": colleague_id, "tid": tenant_id},
+    )
+    await admin_session.execute(
+        text(
+            "INSERT INTO notification_destinations "
+            "(id, tenant_id, user_id, channel, address_encrypted, address_hash, verified_at) "
+            "VALUES (:id, :tid, :uid, :ch, 'x', :hash, now())"
+        ),
+        {
+            "id": dest_id,
+            "tid": tenant_id,
+            "uid": colleague_id,
+            "ch": CHANNEL_TELEGRAM,
+            "hash": address_digest("54321"),
+        },
+    )
+    await admin_session.commit()
+
+    response = await client.get("/api/notifications/settings")
+    destination = response.json()["destinations"][0]
+    assert destination["scope"] == "user"
+    assert destination["mine"] is False
+
+
 async def test_a_destination_can_be_promoted_to_the_whole_agency(
     client, signed_in, admin_session
 ) -> None:

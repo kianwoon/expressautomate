@@ -50,7 +50,7 @@ afterEach(() => {
 describe("SetupBell", () => {
   it("renders no button while both settings are configured", async () => {
     stubFetch({
-      notifications: { destinations: [{ disabled: false }] },
+      notifications: { destinations: [{ disabled: false, mine: true }] },
       discovery: { run: { status: "done" } },
     });
     render(<SetupBell />);
@@ -78,7 +78,7 @@ describe("SetupBell", () => {
 
   it("singularizes the count when only one item is outstanding", async () => {
     stubFetch({
-      notifications: { destinations: [{ disabled: false }] },
+      notifications: { destinations: [{ disabled: false, mine: true }] },
       discovery: { run: null },
     });
     render(<SetupBell />);

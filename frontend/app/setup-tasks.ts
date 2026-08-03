@@ -38,7 +38,7 @@ export type SetupTask = {
  * for the sake of a handful of fields.
  */
 type NotificationsSettingsResponse = {
-  destinations: { disabled: boolean }[];
+  destinations: { disabled: boolean; mine: boolean }[];
 };
 
 /** Only the slice of `GET /api/client-discovery` this file needs — see
@@ -48,15 +48,28 @@ type ClientDiscoveryResponse = {
 };
 
 /**
- * Item 1 is done once at least one destination — WhatsApp (either channel) or
- * Telegram, they are interchangeable for this checklist — is not disabled.
- * `notifications.py::notification_settings` (backend/app/api/notifications.py)
- * only ever creates a `notification_destinations` row for one of those three
- * channels, so "any enabled destination exists" already means "WhatsApp or
- * Telegram is set up" without this file needing to name the channels itself.
+ * Item 1 is done only when the signed-in recruiter personally has an enabled
+ * destination — their own paired WhatsApp device, or a Telegram chat they
+ * themselves linked. It is deliberately per-user, not per-tenant: the nudge
+ * exists to get *this* recruiter receiving alerts, and an agency-wide feed a
+ * colleague set up (or a colleague's own personal destination) does nothing
+ * for someone who has personally set up nothing. Before this field existed,
+ * "any enabled destination in the tenant" was used instead, which meant a
+ * recruiter joining an agency with an existing Telegram feed saw this item as
+ * already done. `mine` (backend/app/api/notifications.py) is the caller-scoped
+ * answer `scope` alone can't give — `scope: "user"` only says the row belongs
+ * to *somebody*, not to this caller.
+ *
+ * One known edge, accepted rather than solved: promoting your own Telegram
+ * chat to the agency feed nulls its `user_id` (`set_scope` in
+ * notifications.py), so `mine` goes false and this nudge comes back even
+ * though alerts still arrive on that same chat. The address is stored hashed,
+ * so who originally linked it is genuinely unrecoverable — the alternative is
+ * a second column recording it, which is more machinery than a re-appearing
+ * checklist row that demoting or re-linking clears.
  */
 function notificationsConfigured(response: NotificationsSettingsResponse): boolean {
-  return response.destinations.some((destination) => !destination.disabled);
+  return response.destinations.some((destination) => destination.mine && !destination.disabled);
 }
 
 /**
