@@ -311,6 +311,15 @@ export const NOTIFICATIONS_SUBSCRIPTIONS_PATH = `${API_BASE}/api/notifications/s
 /** Mints a single-use `t.me` deep link. The response carries its own expiry. */
 export const TELEGRAM_LINK_PATH = `${API_BASE}/api/notifications/destinations/telegram/link`;
 
+/**
+ * Turns the recruiter's already-paired WhatsApp device (see `WA_SESSION_PATH`)
+ * into a notification destination. POST-only and idempotent — a second call
+ * returns the existing destination rather than a duplicate. 409 means no
+ * connected device is paired yet, which the caller sends the recruiter to
+ * Settings -> WhatsApp to fix.
+ */
+export const WHATSAPP_LINKED_DESTINATION_PATH = `${API_BASE}/api/notifications/destinations/whatsapp-linked`;
+
 /** One destination, for DELETE. Encoded, so an id that is not the uuid we
  *  expect cannot walk out of its own path segment. */
 export function notificationDestinationPath(id: string): string {

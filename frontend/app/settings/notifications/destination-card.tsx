@@ -19,7 +19,15 @@ import { eventLabel, type Destination, type NotificationEvent } from "./notifica
  * is matched against.
  */
 
-const CHANNEL_LABELS: Record<string, string> = { telegram: "Telegram", whatsapp: "WhatsApp" };
+// "whatsapp_linked" is the Baileys-paired channel added here (see
+// `whatsapp-link-panel.tsx`); the bare "whatsapp" key is the separate, still
+// unshipped Meta Cloud API channel. Both read as "WhatsApp" to the recruiter
+// — a destination card never needs to say which transport carries it.
+const CHANNEL_LABELS: Record<string, string> = {
+  telegram: "Telegram",
+  whatsapp: "WhatsApp",
+  whatsapp_linked: "WhatsApp",
+};
 
 export function DestinationCard({
   destination,

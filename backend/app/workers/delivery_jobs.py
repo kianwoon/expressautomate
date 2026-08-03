@@ -12,6 +12,7 @@ import from here.
 """
 
 import uuid
+from datetime import UTC, datetime, timedelta
 
 from arq import Retry
 from sqlalchemy import text
@@ -22,6 +23,7 @@ from app.core.logging import get_logger
 from app.db.rls import tenant_session
 from app.models.notification import (
     CHANNEL_WHATSAPP,
+    CHANNEL_WHATSAPP_LINKED,
     STATUS_FAILED,
     STATUS_PENDING,
     STATUS_SENDING,
@@ -31,9 +33,10 @@ from app.models.notification import (
 )
 from app.services.notify.candidate_events import CandidateEvent
 from app.services.notify.channels import channel_for
-from app.services.notify.channels.base import SendOutcome
+from app.services.notify.channels.base import PermanentReason, SendOutcome
 from app.services.notify.events import CANDIDATE_KIND_PREFIX, OpportunityEvent
 from app.services.notify.render import render
+from app.workers.queue import enqueue
 
 log = get_logger(__name__)
 
@@ -75,13 +78,28 @@ _CLAIM_DELIVERY = text(
     UPDATE notification_deliveries
     SET status = :sending, attempts = attempts + 1
     WHERE id = :id AND status = :pending
-    RETURNING id, destination_id, event_kind, subject_id, attempts
+    RETURNING id, destination_id, event_kind, subject_id, attempts, created_at
+    """
+)
+
+# The backpressure re-queue: back to `pending` and the claim's own increment
+# handed back. Undoing it here rather than not incrementing in the claim is
+# deliberate — the claim cannot know yet whether the send will be a failure or
+# a "not yet", and it must increment for every path that *is* a failure,
+# including the ones that never return (a SIGKILLed worker, which is exactly
+# what the attempt count exists to bound). GREATEST keeps a double-refund
+# (this row re-queued by two racing paths) from producing a negative count.
+_REQUEUE_UNCHARGED = text(
+    """
+    UPDATE notification_deliveries
+    SET status = :pending, error = :error, attempts = GREATEST(attempts - 1, 0)
+    WHERE id = :id
     """
 )
 
 _DELIVERY_TARGET = text(
     """
-    SELECT d.channel, d.address_encrypted, d.failure_count
+    SELECT d.channel, d.address_encrypted, d.failure_count, d.user_id
     FROM notification_destinations d
     WHERE d.id = :destination_id AND d.disabled_at IS NULL
     """
@@ -407,7 +425,15 @@ async def _send_claimed_delivery(tenant: uuid.UUID, delivery_id: str, claimed) -
                 )
             return
 
-    result = await channel_for(target.channel).send(address, content)
+    if target.channel == CHANNEL_WHATSAPP_LINKED:
+        # The only channel that sends on a *person's* socket rather than an
+        # agency-wide account, so it is the only one that has to be told whose.
+        channel = channel_for(
+            target.channel, tenant_id=tenant, user_id=target.user_id
+        )
+    else:
+        channel = channel_for(target.channel)
+    result = await channel.send(address, content)
 
     if result.outcome is SendOutcome.SENT:
         async with tenant_session(tenant) as session:
@@ -473,23 +499,59 @@ async def _send_claimed_delivery(tenant: uuid.UUID, delivery_id: str, claimed) -
                 error=result.error,
             )
         else:
-            # A configuration problem (e.g. an unapproved WhatsApp template),
-            # not a dead address — every send on this channel is failing the
-            # same way, so `log.error` is what makes an operator notice
-            # before it reads as "every destination happened to go quiet".
-            # The destination is deliberately left enabled: retrying won't
-            # help until the config is fixed, but the address itself is
-            # fine, and disabling it would make every recruiter re-link
-            # their number once the template lands.
-            log.error(
-                "delivery_permanently_failed_config",
-                delivery_id=delivery_id,
-                channel=target.channel,
-                error=result.error,
-            )
+            # Three different truths share this branch, and an operator can
+            # only act on them if the log says which. What they have in common
+            # is only that the address is fine, so the destination stays
+            # enabled — disabling it would make a recruiter re-pair a device
+            # that was never broken.
+            _log_permanent_without_disable(delivery_id, target.channel, result)
         return
 
-    # Transient.
+    # Transient, and the provider is only asking us to slow down. That is the
+    # system working, not a delivery that failed, so it must not spend the
+    # attempt budget: the WA gateway's spacing floor is tens of seconds, and an
+    # evening batch of six enqueues at once means the last row would otherwise
+    # burn all five attempts being told "not yet" and then report a real job
+    # order as undeliverable. See SendResult.backpressure.
+    if result.backpressure:
+        age = datetime.now(UTC) - claimed.created_at
+        deadline = timedelta(minutes=settings.NOTIFY_BACKPRESSURE_DEADLINE_MINUTES)
+        if age < deadline:
+            await _requeue_for_backpressure(tenant, delivery_id, claimed, result)
+            return
+        # Past the deadline the news is too stale to be worth sending, so this
+        # does become a terminal failure — but deliberately WITHOUT
+        # `_RECORD_FAILURE`. A provider that spaced us for half an hour says
+        # nothing about this recruiter's address, and disabling their WhatsApp
+        # because the gateway was busy would make them re-pair a device that
+        # was never broken.
+        async with tenant_session(tenant) as session:
+            await session.execute(
+                _FINISH_DELIVERY,
+                {
+                    "id": delivery_id,
+                    "status": STATUS_FAILED,
+                    "provider_message_id": None,
+                    "error": (
+                        "gave up after "
+                        f"{int(age.total_seconds() // 60)} minutes of "
+                        f"provider backpressure: {result.error}"
+                    ),
+                    "is_sent": False,
+                },
+            )
+        # `error`, not warning: nothing retried its way out of this and a
+        # recruiter is missing a notification, which is the same severity as a
+        # channel-wide misconfiguration and needs the same operator attention.
+        log.error(
+            "delivery_backpressure_deadline_exceeded",
+            delivery_id=delivery_id,
+            channel=target.channel,
+            age_seconds=int(age.total_seconds()),
+            error=result.error,
+        )
+        return
+
     if claimed.attempts >= settings.NOTIFY_MAX_ATTEMPTS:
         async with tenant_session(tenant) as session:
             await session.execute(
@@ -532,3 +594,103 @@ async def _send_claimed_delivery(tenant: uuid.UUID, delivery_id: str, claimed) -
         f"Transient notification failure: {result.error}",
         retry_after=result.retry_after,
     )
+
+
+def _log_permanent_without_disable(delivery_id: str, channel: str, result) -> None:
+    """One line per kind of "permanent, but the address is fine".
+
+    Split by `permanent_reason` because the operator's next move differs, and a
+    single event name asserting a configuration problem would be a claim we
+    cannot support for two of the three — the plan's §15 "never invent" applies
+    to log lines as much as to extracted fields.
+    """
+    if result.permanent_reason is PermanentReason.UNKNOWN:
+        # The row now reads `failed`, and that status may simply be untrue —
+        # the message may well have landed. Retrying is worse (a duplicate
+        # nobody can un-send), so this is the best status available, but it is
+        # the one outcome here where the database and reality can disagree.
+        # `error` so it is countable: a rising rate means the gateway is losing
+        # send confirmations, and nobody discovers that from `failed` rows.
+        log.error(
+            "delivery_outcome_unknown",
+            delivery_id=delivery_id,
+            channel=channel,
+            error=result.error,
+        )
+        return
+    if result.permanent_reason is PermanentReason.REJECTED:
+        # The provider refused this one message on a healthy connection —
+        # nothing is misconfigured and nothing is down, so there is no
+        # operator action beyond noticing. `warning`, not `error`: paging
+        # somebody for one rejected message would train them to ignore the
+        # channel-wide case below.
+        log.warning(
+            "delivery_rejected_by_provider",
+            delivery_id=delivery_id,
+            channel=channel,
+            error=result.error,
+        )
+        return
+    # A configuration problem (e.g. an unapproved WhatsApp template). Every
+    # send on this channel is failing the same way, so `log.error` is what
+    # makes an operator notice before it reads as "every destination happened
+    # to go quiet". Retrying will not help until the config is fixed.
+    log.error(
+        "delivery_permanently_failed_config",
+        delivery_id=delivery_id,
+        channel=channel,
+        error=result.error,
+    )
+
+
+async def _requeue_for_backpressure(
+    tenant: uuid.UUID, delivery_id: str, claimed, result
+) -> None:
+    """Hand the row back and book a fresh job for after the provider's wait.
+
+    A *new* job rather than `_TransientDeliveryFailure`, which is the one place
+    this path deliberately diverges from every other retry here. arq's retry
+    keeps the job's identity and is capped by `ARQ_MAX_TRIES`, so re-queueing
+    through it would swap the attempts ceiling this fix removes for arq's — the
+    tail of a burst would stop failing and start stalling instead, waiting for
+    `flush_notifications` to notice it minutes later. A fresh enqueue starts at
+    try one, which is honest: nothing has been attempted yet.
+
+    Returning normally (no exception) is the other half of that: arq must count
+    this job as finished, not retried.
+    """
+    async with tenant_session(tenant) as session:
+        await session.execute(
+            _REQUEUE_UNCHARGED,
+            {
+                "id": delivery_id,
+                "pending": STATUS_PENDING,
+                "error": result.error,
+            },
+        )
+
+    log.info(
+        "delivery_deferred_for_backpressure",
+        delivery_id=delivery_id,
+        attempts=claimed.attempts - 1,
+        retry_after=result.retry_after,
+    )
+
+    if not await enqueue(
+        "deliver_notification",
+        delivery_id=str(delivery_id),
+        tenant_id=str(tenant),
+        # arq accepts seconds here. `None` (the provider gave no hint) would be
+        # "run it now", which is the one thing we know not to do, so fall back
+        # to the sweep's own patience rather than hammering the provider.
+        _defer_by=(
+            result.retry_after
+            if result.retry_after is not None
+            else settings.NOTIFY_SWEEP_INTERVAL_SECONDS
+        ),
+    ):
+        # The row is durable and `pending`, so `flush_notifications` is the net
+        # — the same soft failure every other producer here relies on. Worth a
+        # line because it is the difference between "sends in thirty seconds"
+        # and "sends when the sweep gets to it".
+        log.warning("delivery_backpressure_requeue_lost", delivery_id=delivery_id)

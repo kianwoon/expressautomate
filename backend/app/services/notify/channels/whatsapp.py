@@ -10,7 +10,11 @@ import httpx
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.services.notify.channels._response import _json_object
-from app.services.notify.channels.base import SendOutcome, SendResult
+from app.services.notify.channels.base import (
+    PermanentReason,
+    SendOutcome,
+    SendResult,
+)
 from app.services.notify.render import WhatsAppContent
 
 log = get_logger(__name__)
@@ -153,11 +157,25 @@ def _interpret(response: httpx.Response) -> SendResult:
         # address alone. `log.error` at the call site (not here) is what
         # makes the misconfiguration loud; this module only classifies.
         return SendResult(
-            outcome=SendOutcome.PERMANENT, error=detail, disable_destination=False
+            outcome=SendOutcome.PERMANENT,
+            error=detail,
+            disable_destination=False,
+            permanent_reason=PermanentReason.CONFIG,
         )
     if code in PERMANENT_ADDRESS_ERROR_CODES:
         return SendResult(outcome=SendOutcome.PERMANENT, error=detail)
-    if response.status_code == 429 or response.status_code >= 500:
+    if response.status_code == 429:
+        # Split from the 5xx case below because the two are different facts.
+        # A 429 dispatched nothing and asks us to slow down, so it must not
+        # spend the row's attempt budget (`backpressure`, see base.py); a 5xx
+        # is a real failure whose repetition should eventually give up.
+        return SendResult(
+            outcome=SendOutcome.TRANSIENT,
+            error=detail,
+            retry_after=_retry_after(response),
+            backpressure=True,
+        )
+    if response.status_code >= 500:
         return SendResult(
             outcome=SendOutcome.TRANSIENT, error=detail, retry_after=_retry_after(response)
         )

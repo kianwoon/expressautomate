@@ -4,21 +4,28 @@ import { SettingsShell } from "../settings-shell";
 import { DestinationCard } from "./destination-card";
 import { useNotifications } from "./notifications-data";
 import { TelegramLinkPanel } from "./telegram-link-panel";
+import { WhatsAppLinkPanel } from "./whatsapp-link-panel";
 
 /**
  * Where job orders get sent.
  *
- * WhatsApp is rendered whether or not it is configured, greyed with a reason
- * when it is not: the API reports `channels.whatsapp`, and hiding the block
- * would leave nothing on screen to say the channel is coming. When the flag
- * flips true the block becomes live with no change here.
+ * Two, unrelated things are both called "WhatsApp" here and must not be
+ * confused: `WhatsAppLinkPanel` turns the recruiter's own paired device (see
+ * Settings -> WhatsApp) into a destination, live today. The card below it,
+ * "WhatsApp Business", is the still-unshipped Meta Cloud API channel — it is
+ * rendered whether or not it is configured, greyed with a reason when it is
+ * not, so hiding it would leave nothing on screen to say that channel is
+ * coming. When its flag flips true the block becomes live with no change
+ * here. The retitle to "WhatsApp Business" is what keeps a recruiter from
+ * reading two cards both called plain "WhatsApp" on one screen.
  *
  * allow-hardcode: user-facing copy rendered to the page, not a list anything
  * is matched against.
  */
 
 export default function NotificationsSettings() {
-  const { state, setEvents, unlink, requestTelegramLink, reload } = useNotifications();
+  const { state, setEvents, unlink, requestTelegramLink, addWhatsAppLinkedDestination, reload } =
+    useNotifications();
 
   return (
     <SettingsShell heading="Notifications." active="notifications">
@@ -66,17 +73,24 @@ export default function NotificationsSettings() {
             destinationIds={state.settings.destinations.map((d) => d.id)}
           />
 
+          <WhatsAppLinkPanel
+            linked={state.settings.channels.whatsapp_linked}
+            linkedNumber={state.settings.whatsapp_linked_number}
+            destinations={state.settings.destinations}
+            onAdd={addWhatsAppLinkedDestination}
+          />
+
           <div className={`nt-card ${!state.settings.channels.whatsapp ? "nt-card-muted" : ""}`}>
             <div className="nt-card-head">
-              <span className="nt-card-title">WhatsApp</span>
+              <span className="nt-card-title">WhatsApp Business</span>
               <span className={`nt-badge ${!state.settings.channels.whatsapp ? "nt-badge-off" : ""}`}>
                 {state.settings.channels.whatsapp ? "Available" : "Not yet available"}
               </span>
             </div>
             {!state.settings.channels.whatsapp && (
               <p className="nt-note">
-                WhatsApp needs a verified business account, which is still being approved. Telegram
-                works today.
+                WhatsApp Business needs a verified Meta business account, which is still being
+                approved. Telegram, and your own linked WhatsApp above, work today.
               </p>
             )}
           </div>

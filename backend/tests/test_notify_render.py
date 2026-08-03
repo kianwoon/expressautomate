@@ -5,7 +5,12 @@ import uuid
 import pytest
 
 from app.core.config import settings
-from app.models.notification import CHANNEL_TELEGRAM, CHANNEL_WHATSAPP
+from app.models.notification import (
+    CHANNEL_TELEGRAM,
+    CHANNEL_WHATSAPP,
+    CHANNEL_WHATSAPP_LINKED,
+)
+from app.services.notify import render as render_module
 from app.services.notify.events import (
     EVENT_OPPORTUNITY_NEEDS_REVIEW,
     EVENT_OPPORTUNITY_NEW,
@@ -94,3 +99,30 @@ def test_rollup_does_not_change_whatsapp_param_count() -> None:
 def test_unknown_channel_is_an_error() -> None:
     with pytest.raises(ValueError):
         render(_event(), "carrier-pigeon")
+
+
+def test_whatsapp_linked_gets_free_form_prose_not_a_template() -> None:
+    """The recruiter's own device has no template regime and no 24-hour
+    window — it gets the same prose Telegram does."""
+    content = render(_event(), CHANNEL_WHATSAPP_LINKED)
+    assert hasattr(content, "text")
+    assert "Senior Backend Engineer" in content.text
+    assert "Acme Pte Ltd" in content.text
+
+
+def test_whatsapp_linked_never_consults_the_template_table(monkeypatch) -> None:
+    """`_TEMPLATE_FOR` is the WABA's approved-template map; whatsapp_linked
+    must never look a kind up in it, because that map only defines the four
+    kinds `_whatsapp`/`_candidate_whatsapp` handle, and would KeyError or
+    silently reuse a template for any kind that only the free-form channels
+    render. A dict that raises on every access proves the free-form path
+    never touches it."""
+
+    class _ExplodingTemplateMap(dict):
+        def __getitem__(self, key):
+            raise AssertionError("whatsapp_linked must not consult _TEMPLATE_FOR")
+
+    monkeypatch.setattr(render_module, "_TEMPLATE_FOR", _ExplodingTemplateMap())
+
+    content = render(_event(), CHANNEL_WHATSAPP_LINKED)
+    assert "Senior Backend Engineer" in content.text

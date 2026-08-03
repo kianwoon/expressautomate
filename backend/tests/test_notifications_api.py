@@ -14,7 +14,15 @@ import pytest
 from sqlalchemy import text
 
 from app.core.config import settings
-from app.models.notification import CHANNEL_TELEGRAM, address_digest
+from app.db.rls import tenant_session
+from app.models.notification import CHANNEL_TELEGRAM, CHANNEL_WHATSAPP_LINKED, address_digest
+from app.models.wa_session import (
+    STATUS_CONNECTED,
+    STATUS_DISCONNECTED,
+    STATUS_LOGGED_OUT,
+    STATUS_PAIRING,
+    STATUS_RECONNECTING,
+)
 from app.services.notify.events import ALL_EVENT_KINDS, EVENT_OPPORTUNITY_NEW
 from app.workers import queue
 
@@ -428,3 +436,227 @@ async def test_scope_cannot_reach_another_tenants_destination(
             text("DELETE FROM tenants WHERE id = :id"), {"id": other_tenant}
         )
         await admin_session.commit()
+
+
+async def _insert_wa_session(
+    admin_session, tenant_id, user_id, status: str, phone_e164: str | None = None
+) -> None:
+    await admin_session.execute(
+        text(
+            "INSERT INTO wa_sessions (id, tenant_id, user_id, status, phone_e164) "
+            "VALUES (:id, :tid, :uid, :status, :phone)"
+        ),
+        {
+            "id": uuid.uuid4(),
+            "tid": tenant_id,
+            "uid": user_id,
+            "status": status,
+            "phone": phone_e164,
+        },
+    )
+    await admin_session.commit()
+
+
+async def test_whatsapp_linked_is_true_only_when_connected(
+    client, signed_in, admin_session
+) -> None:
+    tenant_id, user_id = signed_in
+    await _insert_wa_session(
+        admin_session, tenant_id, user_id, STATUS_CONNECTED, "+6591234567"
+    )
+
+    response = await client.get("/api/notifications/settings")
+    body = response.json()
+    assert body["channels"][CHANNEL_WHATSAPP_LINKED] is True
+    assert body["whatsapp_linked_number"] == "+6591234567"
+
+
+@pytest.mark.parametrize(
+    "status", [STATUS_PAIRING, STATUS_RECONNECTING, STATUS_DISCONNECTED, STATUS_LOGGED_OUT]
+)
+async def test_whatsapp_linked_is_false_when_not_connected(
+    client, signed_in, admin_session, status
+) -> None:
+    tenant_id, user_id = signed_in
+    await _insert_wa_session(admin_session, tenant_id, user_id, status, "+6591234567")
+
+    response = await client.get("/api/notifications/settings")
+    body = response.json()
+    assert body["channels"][CHANNEL_WHATSAPP_LINKED] is False
+    assert body["whatsapp_linked_number"] is None
+
+
+async def test_whatsapp_linked_is_false_with_no_session_row(client, signed_in) -> None:
+    response = await client.get("/api/notifications/settings")
+    body = response.json()
+    assert body["channels"][CHANNEL_WHATSAPP_LINKED] is False
+    assert body["whatsapp_linked_number"] is None
+
+
+async def test_a_colleagues_connected_session_does_not_flip_it_for_the_caller(
+    client, signed_in, admin_session
+) -> None:
+    """Per-user flag on a tenant-scoped read — exactly the thing that gets
+    written wrong: a query that forgets the `user_id` predicate would show
+    every recruiter in the agency as connected the moment any one of them is."""
+    tenant_id, _user_id = signed_in
+    colleague_id = uuid.uuid4()
+    await admin_session.execute(
+        text(
+            "INSERT INTO users (id, tenant_id, email, role) "
+            "VALUES (:id, :tid, 'colleague@a.sg', 'recruiter')"
+        ),
+        {"id": colleague_id, "tid": tenant_id},
+    )
+    await admin_session.commit()
+    await _insert_wa_session(
+        admin_session, tenant_id, colleague_id, STATUS_CONNECTED, "+6598765432"
+    )
+
+    response = await client.get("/api/notifications/settings")
+    body = response.json()
+    assert body["channels"][CHANNEL_WHATSAPP_LINKED] is False
+    assert body["whatsapp_linked_number"] is None
+
+
+async def test_whatsapp_linked_link_succeeds_when_connected(
+    client, signed_in, admin_session
+) -> None:
+    tenant_id, user_id = signed_in
+    await _insert_wa_session(
+        admin_session, tenant_id, user_id, STATUS_CONNECTED, "+6591234567"
+    )
+
+    response = await client.post("/api/notifications/destinations/whatsapp-linked")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "linked"
+    dest_id = body["destination_id"]
+
+    row = (
+        await admin_session.execute(
+            text(
+                "SELECT channel, user_id, verified_at, address_hash "
+                "FROM notification_destinations WHERE id = :id"
+            ),
+            {"id": dest_id},
+        )
+    ).one()
+    assert row.channel == CHANNEL_WHATSAPP_LINKED
+    assert row.user_id == user_id
+    assert row.verified_at is not None
+    assert row.address_hash == address_digest("+6591234567")
+
+
+async def test_whatsapp_linked_link_400_when_no_session(client, signed_in) -> None:
+    response = await client.post("/api/notifications/destinations/whatsapp-linked")
+    assert response.status_code == 400
+
+
+@pytest.mark.parametrize(
+    "status", [STATUS_PAIRING, STATUS_RECONNECTING, STATUS_DISCONNECTED, STATUS_LOGGED_OUT]
+)
+async def test_whatsapp_linked_link_400_when_not_connected(
+    client, signed_in, admin_session, status
+) -> None:
+    tenant_id, user_id = signed_in
+    await _insert_wa_session(admin_session, tenant_id, user_id, status, "+6591234567")
+
+    response = await client.post("/api/notifications/destinations/whatsapp-linked")
+    assert response.status_code == 400
+
+
+async def test_whatsapp_linked_link_is_idempotent(
+    client, signed_in, admin_session
+) -> None:
+    tenant_id, user_id = signed_in
+    await _insert_wa_session(
+        admin_session, tenant_id, user_id, STATUS_CONNECTED, "+6591234567"
+    )
+
+    first = await client.post("/api/notifications/destinations/whatsapp-linked")
+    second = await client.post("/api/notifications/destinations/whatsapp-linked")
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json()["destination_id"] == second.json()["destination_id"]
+
+    count = (
+        await admin_session.execute(
+            text(
+                "SELECT count(*) FROM notification_destinations "
+                "WHERE tenant_id = :tid AND channel = :ch"
+            ),
+            {"tid": tenant_id, "ch": CHANNEL_WHATSAPP_LINKED},
+        )
+    ).scalar_one()
+    assert count == 1
+
+
+async def test_the_unique_index_backing_idempotency_exists(admin_session) -> None:
+    """The 200-on-retry behaviour above relies on an upsert against
+    `uq_destination_address` (tenant_id, channel, address_hash) in
+    `create_destination` — this pins that the index the implementation is
+    actually built on is really there, not just that the observable behaviour
+    happens to look idempotent for some other accidental reason."""
+    row = (
+        await admin_session.execute(
+            text(
+                "SELECT indexdef FROM pg_indexes "
+                "WHERE indexname = 'uq_destination_address'"
+            )
+        )
+    ).one_or_none()
+    assert row is not None
+    assert "tenant_id" in row.indexdef
+    assert "channel" in row.indexdef
+    assert "address_hash" in row.indexdef
+
+
+async def test_whatsapp_linked_destination_is_invisible_to_another_tenant(
+    client, signed_in, admin_session
+) -> None:
+    tenant_id, user_id = signed_in
+    await _insert_wa_session(
+        admin_session, tenant_id, user_id, STATUS_CONNECTED, "+6591234567"
+    )
+    response = await client.post("/api/notifications/destinations/whatsapp-linked")
+    dest_id = response.json()["destination_id"]
+
+    other_tenant = uuid.uuid4()
+    await admin_session.execute(
+        text("INSERT INTO tenants (id, name, slug) VALUES (:id, 'other', :slug)"),
+        {"id": other_tenant, "slug": f"other-{other_tenant.hex[:8]}"},
+    )
+    await admin_session.commit()
+    try:
+        async with tenant_session(other_tenant) as session:
+            row = (
+                await session.execute(
+                    text("SELECT id FROM notification_destinations WHERE id = :id"),
+                    {"id": dest_id},
+                )
+            ).one_or_none()
+        assert row is None
+    finally:
+        await admin_session.execute(
+            text("DELETE FROM tenants WHERE id = :id"), {"id": other_tenant}
+        )
+        await admin_session.commit()
+
+
+async def test_scope_400s_for_a_whatsapp_linked_destination(
+    client, signed_in, admin_session
+) -> None:
+    """Promoting a linked device to the agency would null the `user_id` the
+    send path needs to find whose socket to use."""
+    tenant_id, user_id = signed_in
+    await _insert_wa_session(
+        admin_session, tenant_id, user_id, STATUS_CONNECTED, "+6591234567"
+    )
+    response = await client.post("/api/notifications/destinations/whatsapp-linked")
+    dest_id = response.json()["destination_id"]
+
+    scope_response = await client.put(
+        f"/api/notifications/destinations/{dest_id}/scope", json={"scope": "tenant"}
+    )
+    assert scope_response.status_code == 400
