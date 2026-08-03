@@ -1,6 +1,15 @@
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { ApiError, createClient, suspendClient, updateClient, type Client } from "./clients";
+import {
+  ApiError,
+  createClient,
+  suspendClient,
+  updateClient,
+  useClients,
+  type Client,
+  type ClientPage,
+} from "./clients";
 
 function jsonResponse(body: unknown, init?: { status?: number }): Response {
   return {
@@ -8,6 +17,17 @@ function jsonResponse(body: unknown, init?: { status?: number }): Response {
     status: init?.status ?? 200,
     json: async () => body,
   } as Response;
+}
+
+function page(overrides: Partial<ClientPage> = {}): ClientPage {
+  return {
+    items: [],
+    total: 0,
+    limit: 50,
+    offset: 0,
+    counts: { all: 0 },
+    ...overrides,
+  };
 }
 
 function client(overrides: Partial<Client> = {}): Client {
@@ -111,5 +131,54 @@ describe("suspendClient", () => {
     // of these into one generic message.
     expect(suspendDetail).not.toBe("This client is already suspended.");
     expect(suspendDetail).not.toBe("This candidate was already submitted to this client.");
+  });
+});
+
+describe("rows per page", () => {
+  function lastUrl(fetchMock: ReturnType<typeof vi.fn>): string {
+    const calls = fetchMock.mock.calls;
+    return String(calls[calls.length - 1][0]);
+  }
+
+  it("sends the default limit until the reader asks for a different one", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(page()));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { result } = renderHook(() => useClients());
+    await waitFor(() => expect(result.current.state.status).toBe("ready"));
+
+    // 50 is `CLIENTS_PAGE_SIZE` — the list's hardcoded limit before this
+    // control existed, kept as the default so nobody's page changed size
+    // the moment the selector shipped.
+    expect(result.current.limit).toBe(50);
+    expect(lastUrl(fetchMock)).toContain("limit=50");
+
+    const callsBeforeResize = fetchMock.mock.calls.length;
+    act(() => result.current.setLimit(100));
+    await waitFor(() => expect(lastUrl(fetchMock)).toContain("limit=100"));
+    expect(result.current.limit).toBe(100);
+    // One fetch for the size change, not two — see the identical assertion
+    // in `candidates.test.ts`: a future refactor that split the limit change
+    // and the offset reset into two effects would double-fetch here and
+    // still pass a check of only the final URL.
+    expect(fetchMock.mock.calls.length).toBe(callsBeforeResize + 1);
+  });
+
+  it("resets the page, so a larger page size cannot land on an offset past the end", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(page({ total: 400 })));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { result } = renderHook(() => useClients());
+    await waitFor(() => expect(result.current.state.status).toBe("ready"));
+
+    act(() => result.current.setOffset(150));
+    await waitFor(() => expect(result.current.offset).toBe(150));
+
+    const callsBeforeResize = fetchMock.mock.calls.length;
+    act(() => result.current.setLimit(100));
+    await waitFor(() => expect(result.current.offset).toBe(0));
+    expect(lastUrl(fetchMock)).toContain("offset=0");
+    expect(lastUrl(fetchMock)).toContain("limit=100");
+    expect(fetchMock.mock.calls.length).toBe(callsBeforeResize + 1);
   });
 });

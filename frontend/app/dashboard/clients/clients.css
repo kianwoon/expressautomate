@@ -10,6 +10,18 @@
  * Imported once, from `page.tsx`, which is the root every component using
  * these classes renders under.
  */
+/* The clients list column: the table and its pager together, as one grid
+   child of `.jo-split`, so the pager sits directly under the last row rather
+   than under the whole split. The candidates page solves the same problem
+   with its own `.cand-list` in `app.css`; this is the clients screen's own
+   copy rather than a shared class, for the same reason `.cand-list`'s own
+   comment gives — this stylesheet is scoped to clients, so a shared name
+   would make the candidates page depend on CSS that is not about it.
+   `min-width: 0` is what actually matters: without it a grid item defaults to
+   the intrinsic width of its content, and a fixed-layout table would push
+   this column wider than the 1.85fr `.jo-split` gives it. */
+.cl-list { min-width: 0; }
+
 /* ── Clients: status, suspension, contacts ───────────────────────────────
    Added with the manual-administration work. The chips row gained a button
    at its right end, so the row has to be a two-part flex rather than the

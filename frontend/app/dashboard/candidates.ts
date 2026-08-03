@@ -274,9 +274,10 @@ function listUrl(
   initial: string | null,
   eligibleFor: string | null,
   scope: Scope,
+  limit: number,
 ): string {
   const params = new URLSearchParams({
-    limit: String(CANDIDATES_PAGE_SIZE),
+    limit: String(limit),
     offset: String(offset),
   });
   if (filter === "merged") params.set("record_status", "merged");
@@ -329,6 +330,12 @@ export type Candidates = {
    *  `filter`: "mine, at the submitted stage" is one question, and a recruiter
    *  must not have to choose which half of it to ask. */
   scope: Scope;
+  /** What is being asked for — distinct from `state.page.limit`, which is what
+   *  the server actually used and clamps. Mirrors `limit`/`OPPORTUNITIES_PAGE_SIZE`
+   *  in `opportunities.ts`: the select the page-size control renders must show
+   *  what was asked, because a select whose value disagrees with its options
+   *  renders blank. */
+  limit: number;
   /** The last counts we were told, kept across a reload so the chips do not
    *  blink back to nothing every time a filter changes. `null` while the
    *  eligibility filter is on — and the stickiness is exactly why that has to
@@ -353,6 +360,11 @@ export type Candidates = {
   setInitial: (initial: string | null) => void;
   setEligibleFor: (eligibleFor: string | null) => void;
   setScope: (scope: Scope) => void;
+  /** Back to the first page for the same reason `setScope` does: offset 150
+   *  of a 10-row page is page sixteen, and of a 50-row page it is past the end
+   *  of a 200-row list. Growing the page while standing deep in the list would
+   *  land on nothing. */
+  setLimit: (limit: number) => void;
   reload: () => void;
 };
 
@@ -367,6 +379,7 @@ export function useCandidates(initialEligibleFor: string | null = null): Candida
   const [q, setQRaw] = useState("");
   const [initial, setInitialRaw] = useState<string | null>(null);
   const [eligibleFor, setEligibleForRaw] = useState<string | null>(initialEligibleFor);
+  const [limit, setLimitRaw] = useState(CANDIDATES_PAGE_SIZE);
   const [counts, setCounts] = useState<Record<string, number> | null>(ZERO_COUNTS);
   const [initials, setInitials] = useState<string[] | null>(NO_INITIALS);
   const [scope, setScopeRaw] = useState<Scope>("all");
@@ -383,7 +396,7 @@ export function useCandidates(initialEligibleFor: string | null = null): Candida
     setRefreshing(true);
     (async () => {
       try {
-        const res = await fetch(listUrl(filter, offset, q, initial, eligibleFor, scope), {
+        const res = await fetch(listUrl(filter, offset, q, initial, eligibleFor, scope, limit), {
           credentials: "include",
           headers: { Accept: "application/json" },
           signal: controller.signal,
@@ -420,7 +433,7 @@ export function useCandidates(initialEligibleFor: string | null = null): Candida
       }
     })();
     return () => controller.abort();
-  }, [filter, offset, q, initial, eligibleFor, scope, nonce]);
+  }, [filter, offset, q, initial, eligibleFor, scope, limit, nonce]);
 
   // Changing the filter or the search must reset the page, for the same
   // reason as job orders: staying on offset 150 of five matching rows reads
@@ -455,6 +468,13 @@ export function useCandidates(initialEligibleFor: string | null = null): Candida
     setScopeRaw(next);
     setOffset(0);
   }, []);
+  // A page-size change is a filter like any other for the purposes of the
+  // offset, and more sharply than most: standing on offset 150 when the page
+  // grows to 50 rows is standing past the end of a 200-row list.
+  const setLimit = useCallback((next: number) => {
+    setLimitRaw(next);
+    setOffset(0);
+  }, []);
   const reload = useCallback(() => setNonce((n) => n + 1), []);
 
   return {
@@ -465,6 +485,7 @@ export function useCandidates(initialEligibleFor: string | null = null): Candida
     initial,
     eligibleFor,
     scope,
+    limit,
     counts,
     initials,
     refreshing,
@@ -474,6 +495,7 @@ export function useCandidates(initialEligibleFor: string | null = null): Candida
     setInitial,
     setEligibleFor,
     setScope,
+    setLimit,
     reload,
   };
 }

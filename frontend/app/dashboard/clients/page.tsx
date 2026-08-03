@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-import { LANDING_PATH } from "../../api";
+import { CLIENTS_PAGE_SIZES, LANDING_PATH } from "../../api";
 import { useAuth } from "../../auth";
 import { SiteFooter } from "../../site-footer";
 import { SiteNav } from "../../site-nav";
@@ -97,7 +97,17 @@ function Notice({ heading, body }: { heading: string; body: string }) {
 }
 
 function Workspace() {
-  const { state, filter, offset, counts, setFilter, setOffset, reload } = useClients();
+  const {
+    state,
+    filter,
+    offset,
+    limit: pageSize,
+    counts,
+    setFilter,
+    setOffset,
+    setLimit,
+    reload,
+  } = useClients();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<Client | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
@@ -105,7 +115,31 @@ function Workspace() {
 
   const items = state.status === "ready" ? state.page.items : EMPTY;
   const total = state.status === "ready" ? state.page.total : 0;
-  const limit = state.status === "ready" ? state.page.limit : 50;
+  const limit = state.status === "ready" ? state.page.limit : pageSize;
+
+  // Built once and rendered in one of two places, exactly as `job-orders.tsx`
+  // and the candidates page do: under the table when there are rows, and on
+  // its own when the page turned out to be empty — which a poll, an archive
+  // or a merge can produce out from under whoever is standing on a later
+  // page, and the pager is the only way back.
+  const pager = (
+    <Pager
+      total={total}
+      limit={limit}
+      offset={offset}
+      pageSize={pageSize}
+      onOffset={(next) => {
+        setOffset(next);
+        setSelectedId(null);
+      }}
+      onPageSize={(next) => {
+        setLimit(next);
+        // Same reason as paging: resizing the page goes back to the first
+        // one, so the open row is very likely not on it.
+        setSelectedId(null);
+      }}
+    />
+  );
 
   // Open on the first row once the page loads, same fallback as candidates:
   // a panel that starts blank spends the first screenful asking to be
@@ -249,16 +283,35 @@ function Workspace() {
           {state.message}
         </p>
       ) : items.length === 0 ? (
-        <p className="body jo-note" aria-live="polite">
-          {emptyLine(filter)}
-        </p>
+        <>
+          <p className="body jo-note" aria-live="polite">
+            {offset > 0
+              ? // Not "there are none" — there are, on an earlier page. The
+                // list shrank while this page was open, the same case
+                // `job-orders.tsx` and the candidates page handle the same
+                // way.
+                "This page is empty now. The list changed while you were reading it."
+              : emptyLine(filter)}
+          </p>
+          {/* An empty page that is not the first one. The pager is how a
+              recruiter standing on it gets back — see the note on `pager`
+              above. */}
+          {offset > 0 && pager}
+        </>
       ) : (
         <>
           <p className="body jo-note" aria-live="polite">
             Showing {offset + 1}–{offset + items.length} of {total.toLocaleString()}.
           </p>
           <div className="jo-split">
-            <ClientsTable rows={items} selectedId={selectedId} onSelect={setSelectedId} />
+            {/* The pager lives in this column, directly under the table it
+                steps through — the same placement job orders and candidates
+                use in `.jo-list` / `.cand-list`. Below the whole split it sat
+                under the detail panel too, which is unrelated to paging. */}
+            <div className="cl-list">
+              <ClientsTable rows={items} selectedId={selectedId} onSelect={setSelectedId} />
+              {pager}
+            </div>
             <ClientPanel
               row={detailError ? null : detail}
               onConfirm={doConfirm}
@@ -274,15 +327,6 @@ function Workspace() {
               {detailError}
             </p>
           )}
-          <Pager
-            total={total}
-            limit={limit}
-            offset={offset}
-            onOffset={(next) => {
-              setOffset(next);
-              setSelectedId(null);
-            }}
-          />
         </>
       )}
     </>
@@ -299,42 +343,84 @@ function emptyLine(filter: Filter): string {
   return "No clients yet. They appear automatically as job-order emails are ingested — or add the first one yourself.";
 }
 
+/** `limit` is what the server used and is what the arithmetic must run on —
+ *  it clamps, so it is not always what was asked for. `pageSize` is what was
+ *  asked for, and is the only thing the control may show: a select whose
+ *  value disagrees with its options renders blank. Mirrors `Pager` in
+ *  `job-orders.tsx` and `dashboard/candidates/page.tsx` exactly, down to this
+ *  comment — same distinction, same reason.
+ *
+ *  The size control stays even when everything fits on one page — that is
+ *  exactly when someone might want a smaller one — so only Previous/Next and
+ *  the page count are conditional. This is the one place clients used to
+ *  diverge from the other two screens: the old `Pager` returned `null`
+ *  entirely below one page, which is also what hid the size control from
+ *  someone who never needed Previous or Next in the first place. */
 function Pager({
   total,
   limit,
   offset,
+  pageSize,
   onOffset,
+  onPageSize,
 }: {
   total: number;
   limit: number;
   offset: number;
+  pageSize: number;
   onOffset: (offset: number) => void;
+  onPageSize: (limit: number) => void;
 }) {
-  if (total <= limit) return null;
   const page = Math.floor(offset / limit) + 1;
-  const pages = Math.max(1, Math.ceil(total / limit));
+  // `page` is in the max because the two can disagree: a list that shrank
+  // under a reload leaves someone standing on page 2 of a set that now fits
+  // on page 1, and "Page 2 of 1" is not a thing to show anyone.
+  const pages = Math.max(1, Math.ceil(total / limit), page);
+  // `offset > 0` and not only `total > limit`: in that same case there is one
+  // page's worth of rows and the reader is past it, so the steps are the only
+  // way back — hiding them because everything now fits is what would strand
+  // them.
+  const paged = total > limit || offset > 0;
 
   return (
-    <nav className="jo-pager" aria-label="Client pages">
-      <button
-        type="button"
-        className="btn btn-secondary"
-        disabled={offset === 0}
-        onClick={() => onOffset(Math.max(0, offset - limit))}
-      >
-        Previous
-      </button>
-      <span className="body jo-sub" aria-live="polite">
-        Page {page} of {pages}
-      </span>
-      <button
-        type="button"
-        className="btn btn-secondary"
-        disabled={offset + limit >= total}
-        onClick={() => onOffset(offset + limit)}
-      >
-        Next
-      </button>
+    <nav className="jo-pager" aria-label="Client pages and page size">
+      {paged && (
+        <>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            disabled={offset === 0}
+            onClick={() => onOffset(Math.max(0, offset - limit))}
+          >
+            Previous
+          </button>
+          <span className="body jo-sub" aria-live="polite">
+            Page {page} of {pages}
+          </span>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            disabled={offset + limit >= total}
+            onClick={() => onOffset(offset + limit)}
+          >
+            Next
+          </button>
+        </>
+      )}
+      <label className="jo-perpage">
+        Rows per page
+        <select
+          className="jo-perpage-select"
+          value={pageSize}
+          onChange={(event) => onPageSize(Number(event.target.value))}
+        >
+          {CLIENTS_PAGE_SIZES.map((n) => (
+            <option key={n} value={n}>
+              {n}
+            </option>
+          ))}
+        </select>
+      </label>
     </nav>
   );
 }

@@ -203,6 +203,62 @@ describe("whose candidates", () => {
   });
 });
 
+describe("rows per page", () => {
+  function lastUrl(fetchMock: ReturnType<typeof vi.fn>): string {
+    const calls = fetchMock.mock.calls;
+    return String(calls[calls.length - 1][0]);
+  }
+
+  it("sends the default limit until the reader asks for a different one", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(page()));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { result } = renderHook(() => useCandidates());
+    await waitFor(() => expect(result.current.state.status).toBe("ready"));
+
+    // 10 is `CANDIDATES_PAGE_SIZE`, today's default — dropping it from the
+    // control would silently change what every existing user sees.
+    expect(result.current.limit).toBe(10);
+    expect(lastUrl(fetchMock)).toContain("limit=10");
+
+    const callsBeforeResize = fetchMock.mock.calls.length;
+    act(() => result.current.setLimit(40));
+    await waitFor(() => expect(lastUrl(fetchMock)).toContain("limit=40"));
+    expect(result.current.limit).toBe(40);
+    // One fetch for the size change, not two. `setLimit` also resets the
+    // offset — if a future refactor split that into two effects instead of
+    // one state update, this would double-fetch on every size change and the
+    // URL assertion above would still pass, since the second call would
+    // eventually settle on the same `limit=40`.
+    expect(fetchMock.mock.calls.length).toBe(callsBeforeResize + 1);
+  });
+
+  it("resets the page, so a larger page size cannot land on an offset past the end", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(page({ total: 400 })));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { result } = renderHook(() => useCandidates());
+    await waitFor(() => expect(result.current.state.status).toBe("ready"));
+
+    act(() => result.current.setOffset(150));
+    await waitFor(() => expect(result.current.offset).toBe(150));
+
+    // Shrinking the page while standing deep in the list is the same
+    // stranding the scope test above guards against, from the other
+    // direction — offset 150 of a 20-row page is page eight.
+    const callsBeforeResize = fetchMock.mock.calls.length;
+    act(() => result.current.setLimit(20));
+    await waitFor(() => expect(result.current.offset).toBe(0));
+    expect(lastUrl(fetchMock)).toContain("offset=0");
+    expect(lastUrl(fetchMock)).toContain("limit=20");
+    // One fetch, not two — see the same assertion above. `limit` and `offset`
+    // change together in one state update; two effects firing separately
+    // would fetch once at `limit=20, offset=150` and again at
+    // `limit=20, offset=0`, and only the final URL assertion would catch it.
+    expect(fetchMock.mock.calls.length).toBe(callsBeforeResize + 1);
+  });
+});
+
 /**
  * `can_edit` now ships on every candidate row (2c6051f), computed server-side
  * by `can_edit_candidate` — the owner, or an agency owner. The UI must not
