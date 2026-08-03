@@ -92,10 +92,16 @@
    orphan, which read as two unrelated groups.
    `nowrap` needs somewhere to give when the panel is narrow, so the padding
    on the text buttons is what compresses, down to a floor that keeps the
-   labels legible. The icon button is exempt: it is already square. */
+   labels legible. The icon buttons are exempt: they are already square. */
 .jo-action-row { display: flex; gap: 8px; flex-wrap: nowrap; }
 .jo-action-row .btn { min-width: 0; padding-inline: clamp(10px, 2.2vw, 20px); }
-.jo-action-row .btn-icon { padding-inline: 0; }
+/* The exemption zeroes the horizontal padding, which was safe while `.wa-btn`
+   was the only icon button here — it states its own `width`. Once Share,
+   Archive and Delete became icons too they inherited the zero and collapsed to
+   the width of the glyph, 20px against a 42px height. The square is now given
+   to every icon button in the row rather than restated per button, so the next
+   one added is square by joining the row. */
+.jo-action-row .btn-icon { padding-inline: 0; width: var(--btn-h); height: var(--btn-h); }
 /* Below this the panel is the full width of a phone, and four buttons no
    longer fit even at the tightest padding — `nowrap` would push the labels
    out of their own boxes and across the gaps. Two tidy lines beat one line
