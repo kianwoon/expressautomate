@@ -43,8 +43,8 @@ const PILLARS = [
     tone: "teal",
   },
   {
-    title: "Get market insight",
-    body: "Which skills are in demand, what clients are hiring for and how salaries are moving — read from your own data, not a benchmark report.",
+    title: "Search the whole desk",
+    body: "Roles, clients and candidates in one searchable record — find a rate, a requirement or a person without opening a second tool, or asking the colleague who remembers it.",
     icon: "trend",
     figure: CardInsights,
     tone: "indigo",
@@ -80,7 +80,7 @@ const IMPACT = [
     icon: "trend",
     title: "Decide with data",
     lead: "not with memory",
-    body: "Understand demand, salary movement and the skills that keep recurring.",
+    body: "Stop relying on whoever remembers it. The record is there for everyone, the same for each person who opens it.",
   },
   {
     icon: "smile",
@@ -110,7 +110,7 @@ const STEPS = [
   },
   {
     title: "Act on one consolidated view",
-    body: "Search across everything at once, see what the numbers say about your market, correct the handful of things that need a human, and export when you need to.",
+    body: "Search across everything at once, see what came in and what needs you, correct the handful of things that need a human, and export when you need to.",
   },
 ] as const;
 
@@ -128,6 +128,35 @@ const CONNECTORS = [
   { name: "Documents", detail: "PDF and Word attachments", state: "planned" },
   { name: "Excel trackers", detail: "The sheets you keep today", state: "planned" },
   { name: "Your ATS", detail: "Where placements are recorded", state: "planned" },
+] as const;
+
+/**
+ * The candidate side of the desk. Every card carries the friction it has today,
+ * the same way the connector list marks what is live and what is not — a card
+ * that hid the OCR gap, or implied the AI invents candidate profiles, would be
+ * the kind of claim a recruiter discovers on day one and then stops trusting.
+ */
+const CAPABILITIES = [
+  {
+    icon: "users",
+    title: "Candidates, in one pipeline",
+    body: "Manual entry or a spreadsheet import; stages, owners and the Singapore work-permit fields you need. Only the people you actually know — the platform invents no profiles.",
+  },
+  {
+    icon: "inbox",
+    title: "Read a CV in seconds",
+    body: "Upload a PDF or Word CV and the work history lands as roles you confirm or reject, each tied to the line it came from. Scanned image CVs are not read yet.",
+  },
+  {
+    icon: "check",
+    title: "Shortlist with the AI, fairly",
+    body: "Score and rank your own candidates against a job order. Protected attributes — sex, age, education, nationality — are redacted before the model sees them, and never move the score.",
+  },
+  {
+    icon: "bolt",
+    title: "Reach out on WhatsApp",
+    body: "Message a candidate from your own paired WhatsApp number, with rate limits that protect it. One at a time — no bulk blasts.",
+  },
 ] as const;
 
 const EXTRACTED = [
@@ -323,6 +352,32 @@ export default function Home() {
                 <Icon name="shield" />
                 Ready for review
               </div>
+            </div>
+          </div>
+        </section>
+
+        <section id="candidates">
+          <div className="wrap">
+            <div className="head-center">
+              <h2>Beyond the job order</h2>
+              <p className="body" style={{ marginTop: 12 }}>
+                The mail comes in as job orders, but recruitment is also the people who fill them.
+                expressautomate keeps the candidate side on the same desk.
+              </p>
+            </div>
+
+            <div className="grid-4" style={{ marginTop: 36 }}>
+              {CAPABILITIES.map((c) => (
+                <div className="card" key={c.title}>
+                  <div className="icon">
+                    <Icon name={c.icon} />
+                  </div>
+                  <h3>{c.title}</h3>
+                  <p className="body" style={{ marginTop: 8, fontSize: "0.9375rem" }}>
+                    {c.body}
+                  </p>
+                </div>
+              ))}
             </div>
           </div>
         </section>

@@ -51,7 +51,7 @@ export function SiteFooter() {
               express<span className="gradient-text">automate</span>.app
             </span>
           </span>
-          <p>AI automation and intelligence for recruitment operations.</p>
+          <p>AI recruitment operations.</p>
         </div>
 
         {COLUMNS.map((c) => (
