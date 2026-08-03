@@ -16,7 +16,12 @@ from app.api.auth import _require_session
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.db.rls import tenant_session
-from app.models.notification import CHANNEL_TELEGRAM, CHANNEL_WHATSAPP
+from app.models.notification import (
+    CHANNEL_TELEGRAM,
+    CHANNEL_WHATSAPP,
+    CHANNEL_WHATSAPP_LINKED,
+)
+from app.models.wa_session import STATUS_CONNECTED as WA_STATUS_CONNECTED
 from app.services.notify.channels import channel_for
 from app.services.notify.channels.base import SendOutcome
 from app.services.notify.events import ALL_EVENT_KINDS
@@ -34,21 +39,41 @@ log = get_logger(__name__)
 router = APIRouter(tags=["notifications"])
 
 # allow-hardcode: SQL statements, not a phrase list.
+
+# The ownership rule, in one fragment reused by every statement in this module
+# that resolves a destination for the caller.
+#
+# RLS narrows a destination to the agency; this narrows a *paired device* to
+# the one recruiter who paired it. Every other channel is an account the agency
+# holds — a Telegram chat or the shared WABA number — so a colleague seeing it,
+# ticking events onto it, or unlinking it is ordinary shared-settings work. A
+# `whatsapp_linked` destination is somebody's personal handset, reached over a
+# Baileys socket that only their own session can open: it is not an agency feed
+# and there is no agency-wide form of it. Left tenant-scoped it went wrong in
+# both directions at once — a colleague could subscribe their own job orders to
+# your phone, and the settings screen, seeing a linked destination already
+# present, hid the pairing panel so they could never add their own device.
+# Outside its owner the row therefore reads as absent, which is the same answer
+# RLS gives across tenants and the same 404 this module already returns for it.
+_OWN_DEVICE_ONLY = "(d.channel <> :linked_channel OR d.user_id = :user_id)"
+
 _LIST_DESTINATIONS = text(
-    """
+    f"""
     SELECT d.id, d.channel, d.user_id, d.verified_at, d.disabled_at,
            coalesce(
                array_agg(s.event_kind) FILTER (WHERE s.active), ARRAY[]::text[]
            ) AS event_kinds
     FROM notification_destinations d
     LEFT JOIN notification_subscriptions s ON s.destination_id = d.id
+    WHERE {_OWN_DEVICE_ONLY}
     GROUP BY d.id
     ORDER BY d.created_at
     """
 )
 
 _DESTINATION_EXISTS = text(
-    "SELECT id FROM notification_destinations WHERE id = :id"
+    f"SELECT d.id FROM notification_destinations d "
+    f"WHERE d.id = :id AND {_OWN_DEVICE_ONLY}"
 )
 
 _CLEAR_SUBSCRIPTIONS = text(
@@ -64,17 +89,40 @@ _ADD_SUBSCRIPTION = text(
 )
 
 _DELETE_DESTINATION = text(
-    "DELETE FROM notification_destinations WHERE id = :id RETURNING id"
+    f"DELETE FROM notification_destinations AS d "
+    f"WHERE d.id = :id AND {_OWN_DEVICE_ONLY} RETURNING d.id"
+)
+
+# The caller's own paired device. `wa_sessions.user_id` is globally unique
+# (one device, one recruiter), so this is at most one row.
+_MY_WA_SESSION = text(
+    """
+    SELECT status, phone_e164 FROM wa_sessions WHERE user_id = :user_id
+    """
+)
+
+# Scoped the same way, and the order matters: a colleague's paired device must
+# read as absent *before* the channel check below can answer 400 and tell them
+# it exists.
+_DESTINATION_CHANNEL = text(
+    f"SELECT d.channel FROM notification_destinations d "
+    f"WHERE d.id = :id AND {_OWN_DEVICE_ONLY}"
 )
 
 _SET_SCOPE = text(
-    """
-    UPDATE notification_destinations
-    SET user_id = :user_id
-    WHERE id = :id
-    RETURNING id
+    f"""
+    UPDATE notification_destinations AS d
+    SET user_id = :new_user_id
+    WHERE d.id = :id AND {_OWN_DEVICE_ONLY}
+    RETURNING d.id
     """
 )
+
+
+def _mine(user_id: uuid.UUID) -> dict:
+    """The binds `_OWN_DEVICE_ONLY` needs. One helper so a statement cannot be
+    executed with the predicate compiled in and the caller left out."""
+    return {"user_id": user_id, "linked_channel": CHANNEL_WHATSAPP_LINKED}
 
 
 class SubscriptionUpdate(BaseModel):
@@ -114,16 +162,28 @@ class ScopeUpdate(BaseModel):
 @router.get("/notifications/settings")
 async def notification_settings(request: Request) -> dict:
     """Everything the settings screen needs in one read."""
-    _user_id, tenant_id = _require_session(request)
+    user_id, tenant_id = _require_session(request)
     async with tenant_session(tenant_id) as session:
-        rows = (await session.execute(_LIST_DESTINATIONS)).all()
+        rows = (await session.execute(_LIST_DESTINATIONS, _mine(user_id))).all()
+        wa = (
+            await session.execute(_MY_WA_SESSION, {"user_id": user_id})
+        ).one_or_none()
+
+    # Availability here is per-caller, not per-deployment, unlike the other two
+    # channels: what makes this one usable is *this* recruiter having a device
+    # paired right now, and only a connected session can send.
+    wa_connected = wa is not None and wa.status == WA_STATUS_CONNECTED
 
     return {
         "events": [{"kind": kind} for kind in ALL_EVENT_KINDS],
         "channels": {
             CHANNEL_TELEGRAM: settings.telegram_configured(),
             CHANNEL_WHATSAPP: settings.whatsapp_configured(),
+            CHANNEL_WHATSAPP_LINKED: wa_connected,
         },
+        # Which device, so the screen can name the number rather than saying
+        # "your WhatsApp" and leaving the recruiter to guess.
+        "whatsapp_linked_number": wa.phone_e164 if wa_connected else None,
         "destinations": [
             {
                 "id": str(row.id),
@@ -146,16 +206,19 @@ async def set_subscriptions(request: Request, payload: SubscriptionUpdate) -> di
     Replace rather than merge: the screen sends the full set of ticked boxes,
     and a merge would make unticking one impossible.
     """
-    _user_id, tenant_id = _require_session(request)
+    user_id, tenant_id = _require_session(request)
     async with tenant_session(tenant_id) as session:
         exists = (
             await session.execute(
-                _DESTINATION_EXISTS, {"id": payload.destination_id}
+                _DESTINATION_EXISTS,
+                {"id": payload.destination_id, **_mine(user_id)},
             )
         ).one_or_none()
         if exists is None:
             # Under RLS another tenant's destination reads as absent, which is
-            # the honest answer: it does not exist for this caller.
+            # the honest answer: it does not exist for this caller. A
+            # colleague's paired device is absent for the same reason — see
+            # `_OWN_DEVICE_ONLY`.
             raise HTTPException(status_code=404, detail="Destination not found.")
 
         await session.execute(
@@ -276,6 +339,46 @@ async def whatsapp_verify(request: Request, payload: VerifyRequest) -> dict:
     return {"status": "verified", "destination_id": str(destination_id)}
 
 
+@router.post("/notifications/destinations/whatsapp-linked")
+async def whatsapp_linked_link(request: Request) -> dict:
+    """Add the caller's own paired WhatsApp device as a destination.
+
+    No code and no verification step, which is the whole difference from the
+    Meta path above: scanning the QR to pair the device already proved
+    possession of the number, and the number is not typed here at all — it is
+    read from the session the gateway recorded.
+
+    Idempotent. `create_destination` upserts on
+    `(tenant_id, channel, address_hash)`, so asking twice returns the same row
+    rather than violating that index — and re-linking after an unlink or a
+    disable revives it.
+    """
+    user_id, tenant_id = _require_session(request)
+    async with tenant_session(tenant_id) as session:
+        wa = (
+            await session.execute(_MY_WA_SESSION, {"user_id": user_id})
+        ).one_or_none()
+        if wa is None or wa.status != WA_STATUS_CONNECTED or not wa.phone_e164:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "No connected WhatsApp device. Pair your phone in "
+                    "Settings → WhatsApp first."
+                ),
+            )
+        destination_id = await create_destination(
+            session,
+            tenant_id,
+            # Never null: the session is one recruiter's device, so there is no
+            # agency-wide form of this destination for `set_scope` to make.
+            user_id,
+            CHANNEL_WHATSAPP_LINKED,
+            wa.phone_e164,
+        )
+
+    return {"status": "linked", "destination_id": str(destination_id)}
+
+
 @router.put("/notifications/destinations/{destination_id}/scope")
 async def set_scope(
     request: Request, destination_id: uuid.UUID, payload: ScopeUpdate
@@ -288,12 +391,26 @@ async def set_scope(
     """
     user_id, tenant_id = _require_session(request)
     async with tenant_session(tenant_id) as session:
+        existing = (
+            await session.execute(
+                _DESTINATION_CHANNEL, {"id": destination_id, **_mine(user_id)}
+            )
+        ).one_or_none()
+        if existing is not None and existing.channel == CHANNEL_WHATSAPP_LINKED:
+            # A paired device belongs to one recruiter, so promoting it would
+            # null out the `user_id` the send path needs to find the socket —
+            # a destination that looks shared and can never send.
+            raise HTTPException(
+                status_code=400,
+                detail="A linked WhatsApp device cannot be shared with the agency.",
+            )
         updated = (
             await session.execute(
                 _SET_SCOPE,
                 {
                     "id": destination_id,
-                    "user_id": None if payload.scope == "tenant" else user_id,
+                    "new_user_id": None if payload.scope == "tenant" else user_id,
+                    **_mine(user_id),
                 },
             )
         ).one_or_none()
@@ -305,10 +422,12 @@ async def set_scope(
 @router.delete("/notifications/destinations/{destination_id}", status_code=204)
 async def delete_destination(request: Request, destination_id: uuid.UUID) -> None:
     """Unlink. Subscriptions cascade with the destination."""
-    _user_id, tenant_id = _require_session(request)
+    user_id, tenant_id = _require_session(request)
     async with tenant_session(tenant_id) as session:
         deleted = (
-            await session.execute(_DELETE_DESTINATION, {"id": destination_id})
+            await session.execute(
+                _DELETE_DESTINATION, {"id": destination_id, **_mine(user_id)}
+            )
         ).one_or_none()
     if deleted is None:
         raise HTTPException(status_code=404, detail="Destination not found.")

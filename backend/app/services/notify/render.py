@@ -11,7 +11,11 @@ would fit neither.
 from dataclasses import dataclass
 
 from app.core.config import settings
-from app.models.notification import CHANNEL_TELEGRAM, CHANNEL_WHATSAPP
+from app.models.notification import (
+    CHANNEL_TELEGRAM,
+    CHANNEL_WHATSAPP,
+    CHANNEL_WHATSAPP_LINKED,
+)
 from app.services.notify.candidate_events import CandidateEvent
 from app.services.notify.events import (
     CANDIDATE_ACCESS_DECLINED,
@@ -78,6 +82,13 @@ _HEADLINE = {
 }
 
 
+# The channels that take prose. `whatsapp_linked` goes out on the recruiter's
+# own device, where Meta's template regime does not apply at all, so it gets the
+# same text Telegram does — the rollup line included. Nothing about the shared
+# WABA's `_TEMPLATE_FOR` changes.
+_FREE_FORM_CHANNELS = frozenset({CHANNEL_TELEGRAM, CHANNEL_WHATSAPP_LINKED})
+
+
 def _or_missing(value: str | None) -> str:
     return value if value else MISSING
 
@@ -88,17 +99,17 @@ def render(
     """Content for one event on one channel.
 
     `rollup` is the count of sends suppressed by the rate cap since the last
-    delivery. It is mentioned only on Telegram: the WhatsApp template is
-    approved with a fixed parameter count, so adding one would make every
-    capped send fail — which is the send that matters most.
+    delivery. It is mentioned only on the free-form channels: the WhatsApp
+    template is approved with a fixed parameter count, so adding one would make
+    every capped send fail — which is the send that matters most.
     """
     if isinstance(event, CandidateEvent):
-        if channel == CHANNEL_TELEGRAM:
+        if channel in _FREE_FORM_CHANNELS:
             return _candidate_telegram(event, rollup)
         if channel == CHANNEL_WHATSAPP:
             return _candidate_whatsapp(event)
         raise ValueError(f"Unknown notification channel: {channel!r}")
-    if channel == CHANNEL_TELEGRAM:
+    if channel in _FREE_FORM_CHANNELS:
         return _telegram(event, rollup)
     if channel == CHANNEL_WHATSAPP:
         return _whatsapp(event)

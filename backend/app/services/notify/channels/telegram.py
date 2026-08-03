@@ -80,8 +80,18 @@ def _interpret(response: httpx.Response) -> SendResult:
     detail = _describe(response)
 
     if response.status_code == 429:
+        # `backpressure=True` for the same reason as the WA gateway's spacing
+        # refusal (see base.py): Telegram dispatched nothing and is only
+        # telling us to slow down, so this must not spend the row's attempt
+        # budget. Telegram's per-chat limit is far above our own hourly cap,
+        # so this is the rarer of the two paths — but the defect is the same
+        # one, and a channel that only mostly cannot hit it is not a reason
+        # to leave it able to drop a notification.
         return SendResult(
-            outcome=SendOutcome.TRANSIENT, error=detail, retry_after=_retry_after(response)
+            outcome=SendOutcome.TRANSIENT,
+            error=detail,
+            retry_after=_retry_after(response),
+            backpressure=True,
         )
     if response.status_code >= 500:
         return SendResult(outcome=SendOutcome.TRANSIENT, error=detail)

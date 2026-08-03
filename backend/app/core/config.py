@@ -761,6 +761,17 @@ class Settings(BaseSettings):
     NOTIFY_LINK_TOKEN_TTL_MINUTES: int = Field(default=15, gt=0)
     NOTIFY_MAX_ATTEMPTS: int = Field(default=5, gt=0)
     NOTIFY_MAX_FAILURES: int = Field(default=3, gt=0)
+    # The bound on backpressure re-queues, which deliberately do NOT consume
+    # NOTIFY_MAX_ATTEMPTS (see SendResult.backpressure). A wall clock rather
+    # than a second attempt count, because the thing that actually stops being
+    # worth doing is sending *late* news: a count would mean whatever the
+    # provider's current spacing happens to make it mean — five refusals is
+    # two minutes at a 30-second floor and half an hour at a five-minute one —
+    # so the same number would silently change policy every time the gateway
+    # was tuned. Thirty minutes drains roughly sixty spaced sends, far more
+    # than one recruiter's evening, while a job order that surfaces half an
+    # hour late is still news.
+    NOTIFY_BACKPRESSURE_DEADLINE_MINUTES: int = Field(default=30, gt=0)
     # Sending an authentication template to any number a user types is an
     # OTP pump aimed at our WABA's reputation. This is the ceiling per user.
     NOTIFY_OPT_IN_MAX_PER_HOUR: int = Field(default=5, gt=0)

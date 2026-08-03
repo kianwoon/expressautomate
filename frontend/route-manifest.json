@@ -233,6 +233,9 @@
     "/api/notifications/destinations/telegram/link": [
       "POST"
     ],
+    "/api/notifications/destinations/whatsapp-linked": [
+      "POST"
+    ],
     "/api/notifications/destinations/whatsapp/opt-in": [
       "POST"
     ],

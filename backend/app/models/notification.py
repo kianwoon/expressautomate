@@ -17,6 +17,7 @@ from datetime import datetime
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     DateTime,
     ForeignKey,
     Index,
@@ -33,6 +34,12 @@ from app.db.base import Base, TenantScoped, Timestamps, UUIDPrimaryKey
 
 CHANNEL_TELEGRAM = "telegram"
 CHANNEL_WHATSAPP = "whatsapp"
+# WhatsApp over the recruiter's *own* paired device (`wa_sessions`), not the
+# shared WABA. A separate channel rather than a flag on the one above: the two
+# share no client, no message shape and no reputation, and `whatsapp_linked`
+# can only ever be one person's number, so a tenant-wide destination on it is
+# impossible by construction.
+CHANNEL_WHATSAPP_LINKED = "whatsapp_linked"
 
 STATUS_PENDING = "pending"
 # Claimed by a worker. The gap between claim and send is why this exists: two
@@ -84,6 +91,17 @@ class NotificationDestination(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
         # second link fail with nothing to explain it.
         UniqueConstraint(
             "tenant_id", "channel", "address_hash", name="uq_destination_address"
+        ),
+        # A paired device always has an owner. `user_id IS NULL` is how every
+        # other channel says "the agency's shared feed", and that reading is
+        # incoherent here: the send path opens the socket belonging to
+        # `user_id`, and the settings API hides a linked destination from
+        # everyone but its owner. An ownerless row would therefore be a
+        # destination nobody can see and nothing can send — so the database
+        # refuses it rather than trusting each write path to remember.
+        CheckConstraint(
+            f"channel <> '{CHANNEL_WHATSAPP_LINKED}' OR user_id IS NOT NULL",
+            name="ck_destination_linked_has_owner",
         ),
     )
 

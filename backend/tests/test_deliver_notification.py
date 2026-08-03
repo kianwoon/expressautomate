@@ -504,3 +504,146 @@ async def test_a_whatsapp_template_error_does_not_disable_the_destination(
             )
         ).scalar_one()
     assert disabled is None
+
+
+async def test_whatsapp_linked_send_carries_the_destinations_own_user(
+    delivery, admin_session, monkeypatch
+) -> None:
+    """The only channel that sends on a person's own socket. The worker must
+    pass the destination's own `user_id` through to `channel_for`, and the
+    resulting channel must actually be used — the whole reason
+    `channel_for` grew keyword arguments in the first place."""
+    from app.core.crypto import encrypt
+    from app.models.notification import CHANNEL_WHATSAPP_LINKED, address_digest
+
+    tenant_id, dest_id, delivery_id = delivery
+    await admin_session.execute(
+        text(
+            "UPDATE notification_destinations "
+            "SET channel = :ch, address_encrypted = :enc, address_hash = :hash "
+            "WHERE id = :id"
+        ),
+        {
+            "ch": CHANNEL_WHATSAPP_LINKED,
+            "enc": encrypt("+6591234567"),
+            "hash": address_digest("+6591234567"),
+            "id": dest_id,
+        },
+    )
+    await admin_session.commit()
+
+    fake = FakeChannel(SendResult(outcome=SendOutcome.SENT, provider_message_id="wamid.1"))
+    seen_kwargs: dict = {}
+
+    def _channel_for(name, **kwargs):
+        seen_kwargs.update(kwargs)
+        return fake
+
+    monkeypatch.setattr(delivery_jobs, "channel_for", _channel_for)
+
+    await delivery_jobs.deliver_notification(
+        {}, delivery_id=str(delivery_id), tenant_id=str(tenant_id)
+    )
+
+    assert await _status(tenant_id, delivery_id) == STATUS_SENT
+    assert len(fake.sends) == 1
+    assert seen_kwargs["tenant_id"] == tenant_id
+    assert seen_kwargs["user_id"] is not None
+
+
+async def test_whatsapp_linked_permanent_with_disable_disables_the_destination(
+    delivery, admin_session, monkeypatch
+) -> None:
+    """A logged-out linked device: PERMANENT with disable_destination=True
+    (whatsapp_linked.py's dead-session branch) must disable exactly like the
+    other channels' address-level PERMANENT failures do."""
+    from app.core.crypto import encrypt
+    from app.models.notification import CHANNEL_WHATSAPP_LINKED, address_digest
+
+    tenant_id, dest_id, delivery_id = delivery
+    await admin_session.execute(
+        text(
+            "UPDATE notification_destinations "
+            "SET channel = :ch, address_encrypted = :enc, address_hash = :hash "
+            "WHERE id = :id"
+        ),
+        {
+            "ch": CHANNEL_WHATSAPP_LINKED,
+            "enc": encrypt("+6591234567"),
+            "hash": address_digest("+6591234567"),
+            "id": dest_id,
+        },
+    )
+    await admin_session.commit()
+
+    fake = FakeChannel(
+        SendResult(
+            outcome=SendOutcome.PERMANENT,
+            error="device logged out",
+            disable_destination=True,
+        )
+    )
+    monkeypatch.setattr(delivery_jobs, "channel_for", lambda name, **kwargs: fake)
+
+    await delivery_jobs.deliver_notification(
+        {}, delivery_id=str(delivery_id), tenant_id=str(tenant_id)
+    )
+
+    assert await _status(tenant_id, delivery_id) == STATUS_FAILED
+    async with tenant_session(tenant_id) as session:
+        disabled = (
+            await session.execute(
+                text("SELECT disabled_at FROM notification_destinations WHERE id = :id"),
+                {"id": dest_id},
+            )
+        ).scalar_one()
+    assert disabled is not None
+
+
+async def test_whatsapp_linked_permanent_without_disable_leaves_it_enabled(
+    delivery, admin_session, monkeypatch
+) -> None:
+    """The gateway-refused / outcome-unknown branches set
+    disable_destination=False — the number itself is fine, so the destination
+    must stay enabled just like whatsapp.py's template-config-error case does."""
+    from app.core.crypto import encrypt
+    from app.models.notification import CHANNEL_WHATSAPP_LINKED, address_digest
+
+    tenant_id, dest_id, delivery_id = delivery
+    await admin_session.execute(
+        text(
+            "UPDATE notification_destinations "
+            "SET channel = :ch, address_encrypted = :enc, address_hash = :hash "
+            "WHERE id = :id"
+        ),
+        {
+            "ch": CHANNEL_WHATSAPP_LINKED,
+            "enc": encrypt("+6591234567"),
+            "hash": address_digest("+6591234567"),
+            "id": dest_id,
+        },
+    )
+    await admin_session.commit()
+
+    fake = FakeChannel(
+        SendResult(
+            outcome=SendOutcome.PERMANENT,
+            error="unknown outcome, not retried to avoid a duplicate",
+            disable_destination=False,
+        )
+    )
+    monkeypatch.setattr(delivery_jobs, "channel_for", lambda name, **kwargs: fake)
+
+    await delivery_jobs.deliver_notification(
+        {}, delivery_id=str(delivery_id), tenant_id=str(tenant_id)
+    )
+
+    assert await _status(tenant_id, delivery_id) == STATUS_FAILED
+    async with tenant_session(tenant_id) as session:
+        disabled = (
+            await session.execute(
+                text("SELECT disabled_at FROM notification_destinations WHERE id = :id"),
+                {"id": dest_id},
+            )
+        ).scalar_one()
+    assert disabled is None

@@ -6,6 +6,7 @@ import {
   NOTIFICATIONS_SETTINGS_PATH,
   NOTIFICATIONS_SUBSCRIPTIONS_PATH,
   TELEGRAM_LINK_PATH,
+  WHATSAPP_LINKED_DESTINATION_PATH,
   notificationDestinationPath,
 } from "../../api";
 
@@ -35,6 +36,10 @@ export type Destination = {
 
 export type NotificationSettings = {
   channels: Record<string, boolean>;
+  // Present only once the recruiter has a CONNECTED paired WhatsApp device
+  // (see `WA_SESSION_PATH`) — distinct from `channels.whatsapp`, which is the
+  // unrelated Meta Cloud API channel.
+  whatsapp_linked_number: string | null;
   destinations: Destination[];
   events: NotificationEvent[];
 };
@@ -203,5 +208,34 @@ export function useNotifications() {
     }
   }, []);
 
-  return { state, reload: load, setEvents, unlink, requestTelegramLink };
+  const addWhatsAppLinkedDestination = useCallback(async (): Promise<string | null> => {
+    try {
+      const res = await fetch(WHATSAPP_LINKED_DESTINATION_PATH, {
+        method: "POST",
+        credentials: "include",
+        headers: { Accept: "application/json" },
+      });
+      // 400 is the only refusal this endpoint has, and it means exactly one
+      // thing: no connected device. The backend chose 400 over 409 to match
+      // the other linking routes in that file, so match it here rather than
+      // letting the specific sentence fall through to the generic one.
+      if (res.status === 400) {
+        return "You need a connected WhatsApp device first — link one in Settings -> WhatsApp.";
+      }
+      if (!res.ok) return "We could not add that just now.";
+      await load(undefined, true);
+      return null;
+    } catch {
+      return "We could not reach the server.";
+    }
+  }, [load]);
+
+  return {
+    state,
+    reload: load,
+    setEvents,
+    unlink,
+    requestTelegramLink,
+    addWhatsAppLinkedDestination,
+  };
 }
