@@ -62,6 +62,19 @@
   gap: 20px; align-items: start;
 }
 
+/* The candidates list column: the table and its pager together, as one grid
+   child of `.jo-split`, so the pager sits directly under the last row rather
+   than under the whole split — where it used to be, level with a detail panel
+   that is sticky and a screen tall. Job orders solves the same problem with
+   `.jo-list` in job-orders.css; this is the candidates page's own copy rather
+   than a shared import, because that file is scoped to job orders and pulling
+   it in here for one rule would make the candidates page depend on CSS that
+   is not about it. `min-width: 0` is the part that actually matters: without
+   it a grid item defaults to the intrinsic width of its content, and a
+   fixed-layout table would push this column wider than the 1.85fr `.jo-split`
+   gives it. */
+.cand-list { min-width: 0; }
+
 /* Sticky so the row stays readable while the list is scrolled. Cleared of the
    sticky nav, and capped so a long description scrolls inside the panel
    instead of pushing the page. */
@@ -181,6 +194,26 @@
   margin-top: 20px; display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
 }
 .jo-pager .btn:disabled { opacity: 0.5; cursor: default; }
+
+/* The rows-per-page control inside `.jo-pager`. Belongs here rather than in
+   `job-orders.css`, which only job orders imports — candidates and clients
+   render the same pager and were getting an unstyled, unaligned browser
+   `<select>` until this moved. Pushed to the far end of the row: it is a
+   setting for the list, not a step through it, and sitting beside Next it
+   would read as a third way to move. `margin-left: auto` rather than a
+   spacer so it falls back to sitting under the buttons when the row wraps. */
+.jo-perpage {
+  margin-left: auto; display: flex; align-items: center; gap: 8px;
+  font-size: 0.875rem; color: var(--ink-500);
+}
+/* Its own rule rather than `.gl-input`, which is full-width by design — a
+   two-digit select does not want the row. */
+.jo-perpage-select {
+  font: inherit; padding: 7px 10px; color: var(--ink-900);
+  background: var(--surface); border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+.jo-perpage-select:focus-visible { outline: 2px solid var(--blue-500); outline-offset: 2px; }
 
 /* ---- sync activity and mailbox overview ---- */
 .jo-panels {

@@ -299,22 +299,10 @@
   overflow: hidden; overflow-wrap: break-word;
 }
 
-/* Pushed to the far end of the pager row: it is a setting for the list, not a
-   step through it, and sitting beside Next it would read as a third way to
-   move. `margin-left: auto` rather than a spacer so it falls back to sitting
-   under the buttons when the row wraps. */
-.jo-perpage {
-  margin-left: auto; display: flex; align-items: center; gap: 8px;
-  font-size: 0.875rem; color: var(--ink-500);
-}
-/* Its own rule rather than `.gl-input`, which is full-width by design — a
-   two-digit select does not want the row. */
-.jo-perpage-select {
-  font: inherit; padding: 7px 10px; color: var(--ink-900);
-  background: var(--surface); border: 1px solid var(--line);
-  border-radius: var(--radius);
-}
-.jo-perpage-select:focus-visible { outline: 2px solid var(--blue-500); outline-offset: 2px; }
+/* `.jo-perpage` and `.jo-perpage-select` moved to `app.css`, beside
+   `.jo-pager` — they belong to the shared pager, which candidates and clients
+   also render, and this stylesheet is loaded only for job orders. Living here
+   left the other two screens' page-size control entirely unstyled. */
 
 .jo-activity h3, .jo-overview h3 { margin-bottom: 12px; }
 .jo-overview-rows { margin-bottom: 14px; }

@@ -377,6 +377,25 @@ export const CANDIDATES_PATH = `${API_BASE}/api/candidates`;
  */
 export const CANDIDATES_PAGE_SIZE = Number(process.env.NEXT_PUBLIC_CANDIDATES_PAGE_SIZE) || 10;
 
+/** What the page-size control offers. Same idiom as `OPPORTUNITIES_PAGE_SIZES`
+ *  above — not the same set: the configured default is folded in and the
+ *  result deduped, so an operator who sets the env var to something not on
+ *  this list still gets a control whose value is one of its own options — a
+ *  select whose value matches nothing renders blank and looks broken. 10
+ *  stays in the set even though it is already the default, because dropping
+ *  it here would silently take it out of the choices too.
+ *
+ *  Candidates offers 40 and 50 as well, where job orders stops at 30: a
+ *  candidate row is shorter than a job order's, so a screen holds more of
+ *  them before the table itself is the thing scrolling, and this list is the
+ *  one an agency with a wall display is most likely to want stretched.
+ *
+ *  The server clamps `limit` to `CANDIDATES_PAGE_LIMIT` (200) rather than
+ *  rejecting it, so nothing here can ask for a page it will not get. */
+export const CANDIDATES_PAGE_SIZES: readonly number[] = [
+  ...new Set([10, 20, 30, 40, 50, CANDIDATES_PAGE_SIZE]),
+].sort((a, b) => a - b);
+
 /** One candidate, for GET/PATCH/DELETE. Encoded, so an id that is not the
  *  uuid we expect cannot walk out of its own path segment. */
 export function candidatePath(id: string): string {
@@ -571,6 +590,26 @@ export const CLIENTS_DASHBOARD_PATH = "/dashboard/clients";
  * unmerges them.
  */
 export const CLIENTS_PATH = `${API_BASE}/api/clients`;
+
+/** How many clients one page of the list asks for. Same env-override and
+ *  NaN-guard reasoning as `CANDIDATES_PAGE_SIZE` above — an unset variable or
+ *  a typo parses to `NaN`, and `limit=NaN` is a 422 from the API, so a bad
+ *  value must fall back to a working page rather than break the screen. */
+export const CLIENTS_PAGE_SIZE = Number(process.env.NEXT_PUBLIC_CLIENTS_PAGE_SIZE) || 50;
+
+/** What the page-size control offers. Same idiom as `CANDIDATES_PAGE_SIZES`
+ *  above: the configured default is folded in and the result deduped, so an
+ *  operator who sets the env var to something not on this list still gets a
+ *  control whose value is one of its own options. 50 is the set's floor
+ *  rather than 10 — it was the list's hardcoded `limit` before this control
+ *  existed, so keeping it as the default and the smallest offered size means
+ *  nobody's page gets smaller than what they were already looking at.
+ *
+ *  The server clamps `limit` to `CLIENTS_PAGE_LIMIT` (200) rather than
+ *  rejecting it, so nothing here can ask for a page it will not get. */
+export const CLIENTS_PAGE_SIZES: readonly number[] = [
+  ...new Set([50, 100, 150, CLIENTS_PAGE_SIZE]),
+].sort((a, b) => a - b);
 
 /** One client, for GET. Encoded, so an id that is not the uuid we expect
  *  cannot walk out of its own path segment. */

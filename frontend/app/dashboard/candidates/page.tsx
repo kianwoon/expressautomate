@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-import { CANDIDATES_PAGE_SIZE, DASHBOARD_PATH, LANDING_PATH } from "../../api";
+import { CANDIDATES_PAGE_SIZE, CANDIDATES_PAGE_SIZES, DASHBOARD_PATH, LANDING_PATH } from "../../api";
 import { useAuth } from "../../auth";
 import { SiteFooter } from "../../site-footer";
 import { SiteNav } from "../../site-nav";
@@ -143,6 +143,7 @@ function Workspace({ role }: { role: string }) {
     state,
     filter,
     offset,
+    limit: pageSize,
     q,
     initial,
     eligibleFor,
@@ -156,6 +157,7 @@ function Workspace({ role }: { role: string }) {
     setInitial,
     setEligibleFor,
     setScope,
+    setLimit,
     reload,
   } = useCandidates(initialEligibleFor());
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -207,6 +209,32 @@ function Workspace({ role }: { role: string }) {
   const items = state.status === "ready" ? state.page.items : EMPTY;
   const total = state.status === "ready" ? state.page.total : 0;
   const limit = state.status === "ready" ? state.page.limit : CANDIDATES_PAGE_SIZE;
+
+  // Built once and rendered in one of two places, exactly as `job-orders.tsx`
+  // does: under the table when there are rows, and on its own when the page
+  // turned out to be empty. Two call sites with the same four props is two
+  // things to keep in step, which is exactly what the bug this fixes was —
+  // `reload()` after an archive or a delete bumps the nonce but never resets
+  // `offset`, so removing the last row on page 2 came back with an empty page
+  // and no pager, and the only way off it was a filter chip.
+  const pager = (
+    <Pager
+      total={total}
+      limit={limit}
+      offset={offset}
+      pageSize={pageSize}
+      onOffset={(next) => {
+        setOffset(next);
+        setSelectedId(null);
+      }}
+      onPageSize={(next) => {
+        setLimit(next);
+        // Same reason as paging: resizing the page goes back to the first
+        // one, so the open row is very likely not on it.
+        setSelectedId(null);
+      }}
+    />
+  );
 
   // Open on the first row once the page loads, the same fallback job orders
   // uses: a panel that starts blank spends the first screenful asking to be
@@ -493,16 +521,37 @@ function Workspace({ role }: { role: string }) {
           Set the placement type on that job order, then try again.
         </p>
       ) : items.length === 0 ? (
-        <p className="body jo-note" aria-live="polite">
-          {emptyLine(filter, initial, scope)}
-        </p>
+        <>
+          <p className="body jo-note" aria-live="polite">
+            {offset > 0
+              ? // Not "there are none" — there are, on an earlier page. The
+                // list shrank while this page was open, the same case
+                // `job-orders.tsx` handles the same way.
+                "This page is empty now. The list changed while you were reading it."
+              : emptyLine(filter, initial, scope)}
+          </p>
+          {/* An empty page that is not the first one. Reads exactly like the
+              job orders case: a poll, an archive or a delete can empty the
+              page a recruiter is standing on, and the pager is how they get
+              back — it has to render here too, since this branch is what
+              replaces the list rather than sitting under it. */}
+          {offset > 0 && pager}
+        </>
       ) : (
         <>
           <p className="body jo-note" aria-live="polite">
             Showing {offset + 1}–{offset + items.length} of {total.toLocaleString()}.
           </p>
           <div className="jo-split" aria-busy={refreshing || undefined}>
-            <CandidatesTable rows={items} selectedId={selectedId} onSelect={setSelectedId} />
+            {/* The pager lives in this column, under the table it steps
+                through — the same placement job orders uses in `.jo-list`.
+                Below the split it sat under the detail panel too, which is
+                sticky and a screen tall, so the control for the list ended
+                up nowhere near the list. */}
+            <div className="cand-list">
+              <CandidatesTable rows={items} selectedId={selectedId} onSelect={setSelectedId} />
+              {pager}
+            </div>
             <CandidatePanel
               row={detailError ? null : detail}
               onEdit={() => detail && setView({ mode: "edit", row: detail })}
@@ -518,15 +567,6 @@ function Workspace({ role }: { role: string }) {
               {detailError}
             </p>
           )}
-          <Pager
-            total={total}
-            limit={limit}
-            offset={offset}
-            onOffset={(next) => {
-              setOffset(next);
-              setSelectedId(null);
-            }}
-          />
         </>
       )}
     </>
@@ -637,42 +677,81 @@ function emptyLine(filter: Filter, initial: string | null, scope: Scope): string
   return "No candidates yet. Add the first one, or import a spreadsheet once that lands.";
 }
 
+/** `limit` is what the server used and is what the arithmetic must run on — it
+ *  clamps, so it is not always what was asked for. `pageSize` is what was
+ *  asked for, and is the only thing the control may show: a select whose value
+ *  disagrees with its options renders blank. Mirrors `Pager` in
+ *  `job-orders.tsx` exactly, down to this comment — same distinction, same
+ *  reason.
+ *
+ *  The size control stays even when everything fits on one page — that is
+ *  exactly when someone might want a smaller one — so only Previous/Next and
+ *  the page count are conditional. */
 function Pager({
   total,
   limit,
   offset,
+  pageSize,
   onOffset,
+  onPageSize,
 }: {
   total: number;
   limit: number;
   offset: number;
+  pageSize: number;
   onOffset: (offset: number) => void;
+  onPageSize: (limit: number) => void;
 }) {
-  if (total <= limit) return null;
   const page = Math.floor(offset / limit) + 1;
-  const pages = Math.max(1, Math.ceil(total / limit));
+  // `page` is in the max because the two can disagree: a list that shrank
+  // under a poll leaves someone standing on page 2 of a set that now fits on
+  // page 1, and "Page 2 of 1" is not a thing to show anyone.
+  const pages = Math.max(1, Math.ceil(total / limit), page);
+  // `offset > 0` and not only `total > limit`: in that same case there is one
+  // page's worth of rows and the reader is past it, so the steps are the only
+  // way back — hiding them because everything now fits is what would strand
+  // them.
+  const paged = total > limit || offset > 0;
 
   return (
-    <nav className="jo-pager" aria-label="Candidate pages">
-      <button
-        type="button"
-        className="btn btn-secondary"
-        disabled={offset === 0}
-        onClick={() => onOffset(Math.max(0, offset - limit))}
-      >
-        Previous
-      </button>
-      <span className="body jo-sub" aria-live="polite">
-        Page {page} of {pages}
-      </span>
-      <button
-        type="button"
-        className="btn btn-secondary"
-        disabled={offset + limit >= total}
-        onClick={() => onOffset(offset + limit)}
-      >
-        Next
-      </button>
+    <nav className="jo-pager" aria-label="Candidate pages and page size">
+      {paged && (
+        <>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            disabled={offset === 0}
+            onClick={() => onOffset(Math.max(0, offset - limit))}
+          >
+            Previous
+          </button>
+          <span className="body jo-sub" aria-live="polite">
+            Page {page} of {pages}
+          </span>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            disabled={offset + limit >= total}
+            onClick={() => onOffset(offset + limit)}
+          >
+            Next
+          </button>
+        </>
+      )}
+      <label className="jo-perpage">
+        Rows per page
+        <select
+          className="jo-perpage-select"
+          value={pageSize}
+          onChange={(event) => onPageSize(Number(event.target.value))}
+        >
+          {CANDIDATES_PAGE_SIZES.map((n) => (
+            <option key={n} value={n}>
+              {n}
+            </option>
+          ))}
+        </select>
+      </label>
     </nav>
   );
 }

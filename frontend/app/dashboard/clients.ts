@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import {
+  CLIENTS_PAGE_SIZE,
   CLIENTS_PATH,
   clientArchivePath,
   clientAssigneePath,
@@ -148,8 +149,8 @@ export type ClientPage = {
  *  wrongly merged client could never be found again to unmerge. */
 export type Filter = null | ClientStatus;
 
-function listUrl(filter: Filter, offset: number): string {
-  const params = new URLSearchParams({ limit: "50", offset: String(offset) });
+function listUrl(filter: Filter, offset: number, limit: number): string {
+  const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
   if (filter) params.set("status", filter);
   return `${CLIENTS_PATH}?${params.toString()}`;
 }
@@ -174,11 +175,22 @@ export type Clients = {
   state: ListState;
   filter: Filter;
   offset: number;
+  /** What is being asked for — distinct from `state.page.limit`, which is
+   *  what the server actually used and clamps. Mirrors `limit` in
+   *  `candidates.ts` and `opportunities.ts`: the select the page-size control
+   *  renders must show what was asked, because a select whose value disagrees
+   *  with its options renders blank. */
+  limit: number;
   /** The last counts we were told, kept across a reload so the chips do not
    *  blink back to nothing every time a filter changes. */
   counts: Record<string, number>;
   setFilter: (filter: Filter) => void;
   setOffset: (offset: number) => void;
+  /** Back to the first page for the same reason `setFilter` does: offset 150
+   *  of a 50-row page is page four, and of a 150-row page it may be past the
+   *  end of the list entirely. Growing the page while standing deep in the
+   *  list would land on nothing. */
+  setLimit: (limit: number) => void;
   reload: () => void;
 };
 
@@ -189,6 +201,7 @@ export function useClients(): Clients {
   const [state, setState] = useState<ListState>({ status: "loading" });
   const [filter, setFilterRaw] = useState<Filter>("unconfirmed");
   const [offset, setOffset] = useState(0);
+  const [limit, setLimitRaw] = useState(CLIENTS_PAGE_SIZE);
   const [counts, setCounts] = useState<Record<string, number>>(ZERO_COUNTS);
   const [nonce, setNonce] = useState(0);
 
@@ -197,7 +210,7 @@ export function useClients(): Clients {
     setState({ status: "loading" });
     (async () => {
       try {
-        const res = await fetch(listUrl(filter, offset), {
+        const res = await fetch(listUrl(filter, offset, limit), {
           credentials: "include",
           headers: { Accept: "application/json" },
           signal: controller.signal,
@@ -216,15 +229,23 @@ export function useClients(): Clients {
       }
     })();
     return () => controller.abort();
-  }, [filter, offset, nonce]);
+  }, [filter, offset, limit, nonce]);
 
   const setFilter = useCallback((next: Filter) => {
     setFilterRaw(next);
     setOffset(0);
   }, []);
+  // A page-size change is a filter change like any other for the purposes of
+  // the offset, and for the same reason `candidates.ts` resets it: standing
+  // on offset 150 when the page grows to 150 rows is standing past the end
+  // of a 200-row list.
+  const setLimit = useCallback((next: number) => {
+    setLimitRaw(next);
+    setOffset(0);
+  }, []);
   const reload = useCallback(() => setNonce((n) => n + 1), []);
 
-  return { state, filter, offset, counts, setFilter, setOffset, reload };
+  return { state, filter, offset, limit, counts, setFilter, setOffset, setLimit, reload };
 }
 
 /** The one server field name a 422 is checked against when picking which
