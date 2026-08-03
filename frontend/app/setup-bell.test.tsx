@@ -48,23 +48,46 @@ afterEach(() => {
 });
 
 describe("SetupBell", () => {
-  it("renders no button while both settings are configured", async () => {
+  // The button stays in the tree and the slot hides it, so that the space it
+  // reserves is the button's own size rather than a width copied into
+  // globals.css by hand — see the comment in setup-bell.tsx. These therefore
+  // assert the slot is hidden, not that the button is gone; jsdom does not
+  // apply the stylesheet, so `visibility` cannot be asserted here directly and
+  // `data-visible` is the thing the CSS keys off.
+  function slotOf(container: HTMLElement): HTMLElement {
+    const slot = container.querySelector(".setup-bell-slot");
+    if (!(slot instanceof HTMLElement)) throw new Error("no setup-bell slot rendered");
+    return slot;
+  }
+
+  it("hides the bell while both settings are configured", async () => {
     stubFetch({
       notifications: { destinations: [{ disabled: false, mine: true }] },
       discovery: { run: { status: "done" } },
     });
-    render(<SetupBell />);
+    const { container } = render(<SetupBell />);
 
-    await waitFor(() => expect(screen.queryByRole("button")).toBeNull());
+    await waitFor(() => expect(slotOf(container).dataset.visible).toBe("no"));
   });
 
-  it("renders no button when either fetch fails", async () => {
+  it("hides the bell when either fetch fails", async () => {
     stubFetch({ fail: "discovery" });
-    render(<SetupBell />);
+    const { container } = render(<SetupBell />);
 
-    // Give the failed fetch a tick to resolve, then confirm nothing appeared.
+    // Give the failed fetch a tick to resolve, then confirm it stayed hidden.
     await new Promise((r) => setTimeout(r, 0));
-    expect(screen.queryByRole("button")).toBeNull();
+    expect(slotOf(container).dataset.visible).toBe("no");
+  });
+
+  it("shows no count on the hidden bell, so nothing is announced as outstanding", async () => {
+    stubFetch({
+      notifications: { destinations: [{ disabled: false, mine: true }] },
+      discovery: { run: { status: "done" } },
+    });
+    const { container } = render(<SetupBell />);
+
+    await waitFor(() => expect(slotOf(container).dataset.visible).toBe("no"));
+    expect(screen.getByRole("button").getAttribute("aria-label")).toBe("0 setup steps left");
   });
 
   it("shows the bell with an announced count once an item is outstanding", async () => {

@@ -63,10 +63,12 @@ type ClientDiscoveryResponse = {
  * One known edge, accepted rather than solved: promoting your own Telegram
  * chat to the agency feed nulls its `user_id` (`set_scope` in
  * notifications.py), so `mine` goes false and this nudge comes back even
- * though alerts still arrive on that same chat. The address is stored hashed,
- * so who originally linked it is genuinely unrecoverable — the alternative is
- * a second column recording it, which is more machinery than a re-appearing
- * checklist row that demoting or re-linking clears.
+ * though alerts still arrive on that same chat. `user_id` was the only record
+ * of who linked it, so once nulled the owner is unrecoverable — the chat id
+ * itself is stored encrypted and can be read back, but it maps to a Telegram
+ * account, not to an app user. Recovering it would mean a second column
+ * remembering the original owner, which is more machinery than a checklist
+ * row that demoting or re-linking clears.
  */
 function notificationsConfigured(response: NotificationsSettingsResponse): boolean {
   return response.destinations.some((destination) => destination.mine && !destination.disabled);

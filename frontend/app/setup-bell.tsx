@@ -56,9 +56,14 @@ export function SetupBell() {
   // failure into `null` rather than a separate error type worth surfacing.
   const outstanding = resolved && tasks !== null && tasks.length > 0 ? tasks : null;
 
+  // The button is rendered either way and hidden by the slot when there is
+  // nothing outstanding, rather than dropped from the tree. Dropping it made
+  // the reserved space a width written out in globals.css that had to be kept
+  // equal to `.btn-icon`'s real size by hand — and the moment those disagreed,
+  // the corner moved. Hidden, the space reserved *is* the button.
   return (
     <div className="setup-bell-slot" data-visible={outstanding ? "yes" : "no"}>
-      {outstanding && <BellButton tasks={outstanding} />}
+      <BellButton tasks={outstanding ?? []} />
     </div>
   );
 }
@@ -68,7 +73,7 @@ export function SetupBell() {
  *  are `next`, `react` and `qrcode`. */
 function BellIcon() {
   return (
-    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" aria-hidden="true">
+    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" aria-hidden="true">
       <path
         d="M12 3c-3.31 0-6 2.69-6 6v3.09c0 .55-.16 1.09-.46 1.55L4.2 15.6a1 1 0 0 0 .84 1.55h13.92a1 1 0 0 0 .84-1.55l-1.34-1.96A2.9 2.9 0 0 1 18 12.09V9c0-3.31-2.69-6-6-6Z"
         stroke="currentColor"
@@ -126,7 +131,7 @@ function BellButton({ tasks }: { tasks: SetupTask[] }) {
     >
       <button
         ref={triggerRef}
-        className="btn btn-secondary nav-bell-trigger"
+        className="btn btn-secondary btn-icon nav-bell-trigger"
         type="button"
         aria-expanded={open}
         aria-controls={panelId}

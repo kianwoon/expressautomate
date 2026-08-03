@@ -258,33 +258,27 @@ h3 { font-size: 1.125rem; letter-spacing: -0.01em; font-weight: 650; }
 .nav-menu-item:disabled { color: var(--ink-300); cursor: default; }
 .nav-menu-item:disabled:hover { background: none; }
 
-/* The setup bell (setup-bell.tsx). Always reserved at this width in the
-   signed-in corner, whether or not a bell ends up inside it — see the long
-   comment on `SetupBell` for why: without a fixed-size slot, the fetch that
-   decides whether to show it resolves after first paint, and Settings/the
-   account menu would visibly jump when the bell appeared or the day it
-   disappeared for good. `visibility: hidden` rather than `display: none` for
-   the same reason `.nav-auth[data-resolved="no"]` uses it — hidden content
-   still occupies the box. */
-.setup-bell-slot {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 44px;
-  min-height: 44px;
-}
+/* The setup bell (setup-bell.tsx). The slot holds the real button at all
+   times and merely hides it when there is nothing to nudge about — see the
+   comment on `SetupBell` for why: the fetch that decides whether to show it
+   resolves after first paint, and Settings and the account menu beside it
+   would visibly jump when the bell appeared, or the day it disappeared for
+   good. Hiding the button rather than dropping it keeps the reserved space
+   equal to the real thing *by construction*, so no width here has to be kept
+   in step with `.btn-icon`'s padding by hand. `visibility: hidden` rather
+   than `display: none` for the same reason `.nav-auth[data-resolved="no"]`
+   uses it — hidden content still occupies its box, and is out of the tab
+   order while it does. */
+.setup-bell-slot { display: inline-flex; }
 .setup-bell-slot[data-visible="no"] { visibility: hidden; }
 
-.nav-bell-trigger {
-  position: relative;
-  /* A square icon button, not the pill shape `.btn` normally is — there is no
-     label beside the icon, so the padding that gives a text button its shape
-     would just be dead space here. */
-  width: 44px;
-  height: 44px;
-  padding: 0;
-  justify-content: center;
-}
+/* Only the positioning context for the badge below. The square icon shape is
+   `.btn-icon`'s job and is not restated here: `.btn` sets `padding: 11px 20px`
+   further down this file, so a `padding: 0` at this same specificity loses to
+   it and the glyph collapses to a couple of pixels inside a button that still
+   looks the right size — an invisible bell beside a visible badge, which is
+   exactly how this shipped the first time. */
+.nav-bell-trigger { position: relative; }
 .nav-bell-trigger[aria-expanded="true"] { background: var(--surface-alt); }
 
 /* The count, in the corner of the bell. Sized for one or two digits; the
