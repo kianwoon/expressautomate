@@ -7,6 +7,7 @@ import type { Me } from "../auth";
 import { DetailPanel } from "./detail-panel";
 import { JobOrderForm } from "./job-order-form";
 import "./job-orders.css";
+import { IntakePause } from "./intake-pause";
 import { LiveLight } from "./live-light";
 import { JobOrdersTable } from "./job-orders-table";
 import {
@@ -214,6 +215,12 @@ export function JobOrders({ me, heading = "h2" }: { me: Me; heading?: "h1" | "h2
             what goes stale when the stream stops, so the light saying so
             belongs here rather than in a corner of the page. */}
         <LiveLight />
+        {/* Beside the light, not inside it. `LiveLight` reports whether this
+            page is being told things; this switch decides whether the mailbox
+            feeds the pipeline at all. Related enough to sit together, and
+            unrelated enough that one control for both would lie one way or
+            the other. */}
+        <IntakePause />
         <ReviewBell count={counts.needs_review} onOpen={() => setFilter("needs_review")} />
         {/* Beside the list it adds to, not in a settings page. A job order
             taken over the phone is typed in while the client is still on it,

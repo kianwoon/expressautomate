@@ -331,6 +331,15 @@ export const MAILBOX_SETTINGS_PATH = `${API_BASE}/api/mailbox/settings`;
 export const MAILBOX_LOOKBACK_PATH = `${MAILBOX_SETTINGS_PATH}/lookback`;
 
 /**
+ * The intake pause: stop this recruiter's own mailbox feeding the pipeline,
+ * and start it again from the current moment. No mailbox id in either path —
+ * the server resolves the caller's own mailbox from the session, so there is
+ * no cross-user surface to build a wrong URL against.
+ */
+export const MAILBOX_PAUSE_PATH = `${API_BASE}/api/mailbox/pause`;
+export const MAILBOX_RESUME_PATH = `${API_BASE}/api/mailbox/resume`;
+
+/**
  * The agency's shorthand glossary, and the attributes a code may refer to.
  *
  * Clients write `C/F` and `o/o` in job orders. The decoding is deterministic
