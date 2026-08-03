@@ -1173,6 +1173,27 @@ select.gl-input:focus-visible { outline: 2px solid var(--blue-500); outline-offs
   filter: grayscale(1);
   opacity: 0.45;
 }
+
+/* The other icon buttons in the same row, sized against the mark above rather
+   than against the text.
+
+   `.btn-icon` sizes its child to the text line box — 18px, the height of the
+   words in the button beside it. That is right for an icon standing in for a
+   word, and wrong here: `.wa-btn` above hands its entire 42px tile to the
+   mark, so an 18px glyph next to it is a third the size with a ring of dead
+   space around it, which is exactly how the first version of this row looked.
+   24px is the compromise the pale tile can carry — the glyph reads at the
+   mark's weight without touching a border the green tile does not have. */
+/* Scoped to `.btn-icon` deliberately: `.btn-icon svg` in globals.css is one
+   class plus one type, so a lone `.action-glyph` would lose to it and stay
+   18px. Naming the button is what puts this ahead. */
+.btn-icon .action-glyph {
+  width: 24px;
+  height: 24px;
+}
+.btn-secondary:disabled .action-glyph {
+  opacity: 0.45;
+}
 .wa-field {
   display: grid;
   gap: 4px;
