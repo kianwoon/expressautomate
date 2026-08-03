@@ -207,7 +207,15 @@ export function useClients(): Clients {
 
   useEffect(() => {
     const controller = new AbortController();
-    setState({ status: "loading" });
+    // Rows already on screen stay on screen while the refetch runs — the same
+    // reasoning as `useCandidates`, which this list had drifted away from.
+    // Unconditionally dropping to `loading` empties the split, and emptying
+    // the split unmounts the detail panel beside it, so a reader who changes
+    // rows-per-page watches the client they were reading disappear and come
+    // back. It was survivable while every refetch followed a click that
+    // changed which rows belonged on screen; a page-size control is the first
+    // one where the selected row is meant to still be there afterwards.
+    setState((prev) => (prev.status === "ready" ? prev : { status: "loading" }));
     (async () => {
       try {
         const res = await fetch(listUrl(filter, offset, limit), {

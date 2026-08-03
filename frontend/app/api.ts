@@ -597,18 +597,26 @@ export const CLIENTS_PATH = `${API_BASE}/api/clients`;
  *  value must fall back to a working page rather than break the screen. */
 export const CLIENTS_PAGE_SIZE = Number(process.env.NEXT_PUBLIC_CLIENTS_PAGE_SIZE) || 50;
 
-/** What the page-size control offers. Same idiom as `CANDIDATES_PAGE_SIZES`
- *  above: the configured default is folded in and the result deduped, so an
- *  operator who sets the env var to something not on this list still gets a
- *  control whose value is one of its own options. 50 is the set's floor
- *  rather than 10 — it was the list's hardcoded `limit` before this control
- *  existed, so keeping it as the default and the smallest offered size means
- *  nobody's page gets smaller than what they were already looking at.
+/** What the page-size control offers — the same ladder as
+ *  `CANDIDATES_PAGE_SIZES`, and deliberately so.
+ *
+ *  It first shipped as 50/100/150, on the reasoning that 50 was already this
+ *  list's hardcoded `limit` and nobody's page should get smaller. That reads
+ *  well and is wrong: a floor of 50 is not a smaller default, it is a control
+ *  that cannot do the thing it exists for. A reader who wants twenty rows on
+ *  screen has no way to ask for twenty. The default still holds at 50 via
+ *  `CLIENTS_PAGE_SIZE`, so nobody's page changes until they change it — which
+ *  was the whole of the original concern, and the floor was never carrying it.
+ *
+ *  Two lists offering different ladders for no reason a reader could name is
+ *  also just drift. Same idiom as candidates: the configured default is folded
+ *  in and the result deduped, so an operator who sets the env var to something
+ *  off this list still gets a control whose value is one of its own options.
  *
  *  The server clamps `limit` to `CLIENTS_PAGE_LIMIT` (200) rather than
  *  rejecting it, so nothing here can ask for a page it will not get. */
 export const CLIENTS_PAGE_SIZES: readonly number[] = [
-  ...new Set([50, 100, 150, CLIENTS_PAGE_SIZE]),
+  ...new Set([10, 20, 30, 40, 50, CLIENTS_PAGE_SIZE]),
 ].sort((a, b) => a - b);
 
 /** One client, for GET. Encoded, so an id that is not the uuid we expect
