@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
   OPPORTUNITIES_PAGE_SIZE,
+  OPPORTUNITIES_PAGE_SIZES,
   OPPORTUNITIES_PATH,
   opportunityOccupationalRequirementPath,
   opportunityPath,
@@ -13,6 +14,10 @@ import {
 import { useLive } from "../events";
 import { DEFAULT_SORT, type Sort } from "./job-orders-table";
 import { ApiError, readError } from "./candidates";
+import {
+  OPPORTUNITIES_PAGE_SIZE_KEY,
+  usePersistedPageSize,
+} from "./use-persisted-page-size";
 
 // The writes live next door. Re-exported here because this module has been
 // the one door to the opportunities endpoint since it was written, and moving
@@ -252,7 +257,11 @@ export function useOpportunities(): Opportunities {
   const [filter, setFilterRaw] = useState<Filter>(null);
   const [scope, setScopeRaw] = useState<Scope>("all");
   const [offset, setOffset] = useState(0);
-  const [limit, setLimitRaw] = useState(OPPORTUNITIES_PAGE_SIZE);
+  const [limit, setLimitRaw] = usePersistedPageSize(
+    OPPORTUNITIES_PAGE_SIZE_KEY,
+    OPPORTUNITIES_PAGE_SIZE,
+    OPPORTUNITIES_PAGE_SIZES,
+  );
   const [q, setQRaw] = useState("");
   const [debouncedQ, setDebouncedQ] = useState("");
   const [sort, setSortRaw] = useState<Sort>(DEFAULT_SORT);

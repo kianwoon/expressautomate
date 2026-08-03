@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import {
   CLIENTS_PAGE_SIZE,
+  CLIENTS_PAGE_SIZES,
   CLIENTS_PATH,
   clientArchivePath,
   clientAssigneePath,
@@ -21,6 +22,10 @@ import {
   clientUnsuspendPath,
 } from "../api";
 import { cacheKey, cachedSignedUrl, forget } from "./signed-url-cache";
+import {
+  CLIENTS_PAGE_SIZE_KEY,
+  usePersistedPageSize,
+} from "./use-persisted-page-size";
 
 /**
  * The agency's client list, and the one place that talks to the clients
@@ -201,7 +206,11 @@ export function useClients(): Clients {
   const [state, setState] = useState<ListState>({ status: "loading" });
   const [filter, setFilterRaw] = useState<Filter>("unconfirmed");
   const [offset, setOffset] = useState(0);
-  const [limit, setLimitRaw] = useState(CLIENTS_PAGE_SIZE);
+  const [limit, setLimitRaw] = usePersistedPageSize(
+    CLIENTS_PAGE_SIZE_KEY,
+    CLIENTS_PAGE_SIZE,
+    CLIENTS_PAGE_SIZES,
+  );
   const [counts, setCounts] = useState<Record<string, number>>(ZERO_COUNTS);
   const [nonce, setNonce] = useState(0);
 

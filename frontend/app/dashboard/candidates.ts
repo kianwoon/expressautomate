@@ -7,6 +7,7 @@ import {
   CANDIDATE_IMPORTS_LIMIT,
   CANDIDATE_IMPORTS_PATH,
   CANDIDATES_PAGE_SIZE,
+  CANDIDATES_PAGE_SIZES,
   CANDIDATES_PATH,
   candidateAccessRequestDeclinePath,
   candidateAccessRequestGrantPath,
@@ -36,6 +37,10 @@ import {
   WA_SESSION_PATH,
 } from "../api";
 import { cacheKey, cachedSignedUrl, forget } from "./signed-url-cache";
+import {
+  CANDIDATES_PAGE_SIZE_KEY,
+  usePersistedPageSize,
+} from "./use-persisted-page-size";
 
 /**
  * The agency's candidate list, and the one place that talks to the
@@ -379,7 +384,11 @@ export function useCandidates(initialEligibleFor: string | null = null): Candida
   const [q, setQRaw] = useState("");
   const [initial, setInitialRaw] = useState<string | null>(null);
   const [eligibleFor, setEligibleForRaw] = useState<string | null>(initialEligibleFor);
-  const [limit, setLimitRaw] = useState(CANDIDATES_PAGE_SIZE);
+  const [limit, setLimitRaw] = usePersistedPageSize(
+    CANDIDATES_PAGE_SIZE_KEY,
+    CANDIDATES_PAGE_SIZE,
+    CANDIDATES_PAGE_SIZES,
+  );
   const [counts, setCounts] = useState<Record<string, number> | null>(ZERO_COUNTS);
   const [initials, setInitials] = useState<string[] | null>(NO_INITIALS);
   const [scope, setScopeRaw] = useState<Scope>("all");
