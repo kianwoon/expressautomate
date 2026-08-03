@@ -19,7 +19,7 @@ from app.models.notification import (
 from app.services.notify import events
 from app.services.notify.channels.base import SendOutcome, SendResult
 from app.services.notify.render import _HEADLINE, _TEMPLATE_FOR, render
-from app.workers import jobs
+from app.workers import delivery_jobs
 
 
 def test_every_event_kind_can_be_rendered() -> None:
@@ -159,9 +159,9 @@ async def test_a_share_row_delivers_end_to_end(share_delivery, monkeypatch) -> N
     """Emit-only tests pass on a system whose worker crashes on these rows."""
     tenant_id, delivery_id, _ = share_delivery
     fake = FakeChannel(SendResult(outcome=SendOutcome.SENT, provider_message_id="7"))
-    monkeypatch.setattr(jobs, "channel_for", lambda name: fake)
+    monkeypatch.setattr(delivery_jobs, "channel_for", lambda name: fake)
 
-    await jobs.deliver_notification(
+    await delivery_jobs.deliver_notification(
         {}, delivery_id=str(delivery_id), tenant_id=str(tenant_id)
     )
 

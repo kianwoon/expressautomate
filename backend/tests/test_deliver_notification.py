@@ -15,7 +15,7 @@ from app.models.notification import (
     address_digest,
 )
 from app.services.notify.channels.base import SendOutcome, SendResult
-from app.workers import jobs
+from app.workers import delivery_jobs
 
 
 class FakeChannel:
@@ -77,7 +77,7 @@ async def delivery(admin_session):
         {"id": user_id, "tid": tenant_id},
     )
     # The delivery job re-reads the opportunity at send time (see the job's
-    # docstring in `app/workers/jobs.py`), so the row it points at must exist —
+    # docstring in `app/workers/delivery_jobs.py`), so the row it points at must exist —
     # which means walking the FK chain down to a mailbox, since that is what
     # `opportunities.email_message_id` and `email_messages.mailbox_id` require.
     await admin_session.execute(
@@ -155,9 +155,9 @@ async def _status(tenant_id, delivery_id) -> str:
 async def test_successful_send_marks_the_row_sent(delivery, monkeypatch) -> None:
     tenant_id, _, delivery_id = delivery
     fake = FakeChannel(SendResult(outcome=SendOutcome.SENT, provider_message_id="42"))
-    monkeypatch.setattr(jobs, "channel_for", lambda name: fake)
+    monkeypatch.setattr(delivery_jobs, "channel_for", lambda name: fake)
 
-    await jobs.deliver_notification(
+    await delivery_jobs.deliver_notification(
         {}, delivery_id=str(delivery_id), tenant_id=str(tenant_id)
     )
 
@@ -169,9 +169,9 @@ async def test_the_channel_receives_the_decrypted_address(delivery, monkeypatch)
     """The column holds ciphertext; Telegram needs the chat id."""
     tenant_id, _, delivery_id = delivery
     fake = FakeChannel(SendResult(outcome=SendOutcome.SENT, provider_message_id="1"))
-    monkeypatch.setattr(jobs, "channel_for", lambda name: fake)
+    monkeypatch.setattr(delivery_jobs, "channel_for", lambda name: fake)
 
-    await jobs.deliver_notification(
+    await delivery_jobs.deliver_notification(
         {}, delivery_id=str(delivery_id), tenant_id=str(tenant_id)
     )
     assert fake.sends[0][0] == "12345"
@@ -181,10 +181,10 @@ async def test_a_second_run_does_not_send_again(delivery, monkeypatch) -> None:
     """The sweep and the original enqueue can both fire for one row."""
     tenant_id, _, delivery_id = delivery
     fake = FakeChannel(SendResult(outcome=SendOutcome.SENT, provider_message_id="1"))
-    monkeypatch.setattr(jobs, "channel_for", lambda name: fake)
+    monkeypatch.setattr(delivery_jobs, "channel_for", lambda name: fake)
 
     for _ in range(2):
-        await jobs.deliver_notification(
+        await delivery_jobs.deliver_notification(
             {}, delivery_id=str(delivery_id), tenant_id=str(tenant_id)
         )
     assert len(fake.sends) == 1
@@ -194,9 +194,9 @@ async def test_permanent_failure_disables_the_destination(delivery, monkeypatch)
     """A dead address must become visible, not absorb messages forever."""
     tenant_id, dest_id, delivery_id = delivery
     fake = FakeChannel(SendResult(outcome=SendOutcome.PERMANENT, error="bot blocked"))
-    monkeypatch.setattr(jobs, "channel_for", lambda name: fake)
+    monkeypatch.setattr(delivery_jobs, "channel_for", lambda name: fake)
 
-    await jobs.deliver_notification(
+    await delivery_jobs.deliver_notification(
         {}, delivery_id=str(delivery_id), tenant_id=str(tenant_id)
     )
 
@@ -214,11 +214,11 @@ async def test_permanent_failure_disables_the_destination(delivery, monkeypatch)
 async def test_transient_failure_returns_the_row_to_pending(delivery, monkeypatch) -> None:
     tenant_id, _, delivery_id = delivery
     fake = FakeChannel(SendResult(outcome=SendOutcome.TRANSIENT, error="503"))
-    monkeypatch.setattr(jobs, "channel_for", lambda name: fake)
+    monkeypatch.setattr(delivery_jobs, "channel_for", lambda name: fake)
 
     with pytest.raises(Exception):  # noqa: B017 — arq retries on any exception
         # Raising is how arq is told to retry — see the job's docstring.
-        await jobs.deliver_notification(
+        await delivery_jobs.deliver_notification(
             {}, delivery_id=str(delivery_id), tenant_id=str(tenant_id)
         )
 
@@ -232,10 +232,10 @@ async def test_unexpected_exception_releases_the_row_back_to_pending(
     row in 'sending' — nothing else ever looks at that status, so a row left
     there is lost silently and permanently."""
     tenant_id, _, delivery_id = delivery
-    monkeypatch.setattr(jobs, "channel_for", lambda name: ExplodingChannel())
+    monkeypatch.setattr(delivery_jobs, "channel_for", lambda name: ExplodingChannel())
 
     with pytest.raises(KeyError):
-        await jobs.deliver_notification(
+        await delivery_jobs.deliver_notification(
             {}, delivery_id=str(delivery_id), tenant_id=str(tenant_id)
         )
 
@@ -254,9 +254,9 @@ async def test_transient_failure_past_max_attempts_gives_up(
     await admin_session.commit()
 
     fake = FakeChannel(SendResult(outcome=SendOutcome.TRANSIENT, error="503"))
-    monkeypatch.setattr(jobs, "channel_for", lambda name: fake)
+    monkeypatch.setattr(delivery_jobs, "channel_for", lambda name: fake)
 
-    await jobs.deliver_notification(
+    await delivery_jobs.deliver_notification(
         {}, delivery_id=str(delivery_id), tenant_id=str(tenant_id)
     )
     assert await _status(tenant_id, delivery_id) == STATUS_FAILED
@@ -265,8 +265,8 @@ async def test_transient_failure_past_max_attempts_gives_up(
 async def test_a_missing_row_is_not_an_error(monkeypatch) -> None:
     """RLS already decided the job's tenant does not own this row."""
     fake = FakeChannel(SendResult(outcome=SendOutcome.SENT))
-    monkeypatch.setattr(jobs, "channel_for", lambda name: fake)
-    await jobs.deliver_notification(
+    monkeypatch.setattr(delivery_jobs, "channel_for", lambda name: fake)
+    await delivery_jobs.deliver_notification(
         {}, delivery_id=str(uuid.uuid4()), tenant_id=str(uuid.uuid4())
     )
     assert fake.sends == []
@@ -277,7 +277,7 @@ def test_the_job_is_registered_with_arq() -> None:
     the queue, where the producer already saw success."""
     from app.workers.settings import WorkerSettings
 
-    assert jobs.deliver_notification in WorkerSettings.functions
+    assert delivery_jobs.deliver_notification in WorkerSettings.functions
 
 
 async def test_an_opted_out_number_is_never_messaged(
@@ -312,9 +312,9 @@ async def test_an_opted_out_number_is_never_messaged(
     await admin_session.commit()
 
     fake = FakeChannel(SendResult(outcome=SendOutcome.SENT))
-    monkeypatch.setattr(jobs, "channel_for", lambda name: fake)
+    monkeypatch.setattr(delivery_jobs, "channel_for", lambda name: fake)
 
-    await jobs.deliver_notification(
+    await delivery_jobs.deliver_notification(
         {}, delivery_id=str(delivery_id), tenant_id=str(tenant_id)
     )
     assert fake.sends == []
@@ -360,10 +360,10 @@ async def test_a_transient_failure_leaves_the_rollup_batch_suppressed(
     await _insert_suppressed(admin_session, tenant_id, dest_id, EVENT_OPPORTUNITY_NEW, 2)
 
     fake = FakeChannel(SendResult(outcome=SendOutcome.TRANSIENT, error="503"))
-    monkeypatch.setattr(jobs, "channel_for", lambda name: fake)
+    monkeypatch.setattr(delivery_jobs, "channel_for", lambda name: fake)
 
     with pytest.raises(Exception):  # noqa: B017 — arq retries on any exception
-        await jobs.deliver_notification(
+        await delivery_jobs.deliver_notification(
             {}, delivery_id=str(delivery_id), tenant_id=str(tenant_id)
         )
 
@@ -399,15 +399,15 @@ async def test_a_retry_after_transient_failure_still_reports_the_rollup(
             SendResult(outcome=SendOutcome.SENT, provider_message_id="1"),
         ]
     )
-    monkeypatch.setattr(jobs, "channel_for", lambda name: channel)
+    monkeypatch.setattr(delivery_jobs, "channel_for", lambda name: channel)
 
     with pytest.raises(Exception):  # noqa: B017
-        await jobs.deliver_notification(
+        await delivery_jobs.deliver_notification(
             {}, delivery_id=str(delivery_id), tenant_id=str(tenant_id)
         )
 
     # The retry — arq would re-enqueue the same job; here we just call again.
-    await jobs.deliver_notification(
+    await delivery_jobs.deliver_notification(
         {}, delivery_id=str(delivery_id), tenant_id=str(tenant_id)
     )
 
@@ -446,10 +446,10 @@ async def test_a_transient_failures_retry_after_reaches_arqs_defer(
     fake = FakeChannel(
         SendResult(outcome=SendOutcome.TRANSIENT, error="429", retry_after=17.5)
     )
-    monkeypatch.setattr(jobs, "channel_for", lambda name: fake)
+    monkeypatch.setattr(delivery_jobs, "channel_for", lambda name: fake)
 
     with pytest.raises(Retry) as excinfo:
-        await jobs.deliver_notification(
+        await delivery_jobs.deliver_notification(
             {}, delivery_id=str(delivery_id), tenant_id=str(tenant_id)
         )
 
@@ -489,9 +489,9 @@ async def test_a_whatsapp_template_error_does_not_disable_the_destination(
             disable_destination=False,
         )
     )
-    monkeypatch.setattr(jobs, "channel_for", lambda name: fake)
+    monkeypatch.setattr(delivery_jobs, "channel_for", lambda name: fake)
 
-    await jobs.deliver_notification(
+    await delivery_jobs.deliver_notification(
         {}, delivery_id=str(delivery_id), tenant_id=str(tenant_id)
     )
 

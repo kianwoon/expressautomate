@@ -17,13 +17,13 @@ from app.core.config import settings
 from app.core.logging import configure_logging
 from app.services.graph.client import warn_if_unconfigured
 from app.workers.cv_jobs import parse_candidate_cv
+from app.workers.delivery_jobs import deliver_notification
 from app.workers.discovery_jobs import run_client_discovery
 from app.workers.import_jobs import run_candidate_import
 from app.workers.jobs import (
     backfill_mailbox_job,
     classify_batch,
     classify_email,
-    deliver_notification,
     delta_sync_mailbox,
     extract_email,
     fetch_email,
