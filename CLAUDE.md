@@ -127,9 +127,12 @@ regions and is untested here.
 
 Its env vars are set by hand and start empty: `WA_GATEWAY_SHARED_SECRET`
 (required — the process refuses to boot without it) and, from P2, the database
-URL and `WA_GATEWAY_ENCRYPTION_KEY`. `api` needs `WA_GATEWAY_URL` +
-`WA_GATEWAY_SHARED_SECRET` once it first calls the gateway (P3) — the same
-"first call to an external system" rule as `GRAPH_BASE_URL` and `R2_*` below.
+URL and `WA_GATEWAY_ENCRYPTION_KEY`. `api` got `WA_GATEWAY_URL` +
+`WA_GATEWAY_SHARED_SECRET` once P3's QR pairing became its first call to the
+gateway — the same "first call to an external system" rule as `GRAPH_BASE_URL`
+and `R2_*` below. `worker` and `arq` needed the same two vars later, when a
+cron sweep and a queued job each became a first caller in turn — see the
+service table below.
 
 **Per-service env vars are also not in this repo.** The workflow deploys the
 image; the variables were set by hand, so they drift per service. `GRAPH_BASE_URL`
@@ -146,6 +149,31 @@ pass either way, because nothing in this repo knows what Koyeb was told:
 ```bash
 koyeb deployment get $(koyeb deployments list --service <id> -o json | jq -r '.deployments[0].id') -o json | jq -r '.deployment.definition.env[].key'
 ```
+
+**Besides `gateway`, the app runs three compute services, not one "worker."**
+The plan's periodic recovery tasks and its queued jobs are two different
+processes with two different lifecycles (`backend/app/workers/main.py`,
+`backend/app/workers/settings.py`), and "the worker" is ambiguous between
+them:
+
+| Service | id | Command | Runs | Calls gateway |
+|---|---|---|---|---|
+| `api` | `4a352e28` | web (FastAPI + static export) | HTTP routes under `/api` | **yes** — QR pairing (`app/api/wa_gateway.py`, `app/api/candidate_whatsapp.py`) |
+| `worker` | `e1423408` | `python -u -m app.workers.main` | the CRON/scheduler loop: `rescan_stuck`, `classify_fetched`, `renew_subscriptions`, `delta_sync`, `ensure_subscriptions`, `flush_notifications`, `sweep_stale_wa_sends`, `sweep_wa_liveness` | **yes** — `sweep_wa_liveness` |
+| `arq` | `0822002c` | `arq app.workers.settings.WorkerSettings` | the queue worker: `fetch_email`, `classify_batch`/`classify_email`, `extract_email`, `deliver_notification`, CV parsing, candidate import, sourcing, client discovery | **yes** — `deliver_notification` |
+
+This is why "which service calls the gateway" cannot be answered from the
+feature being shipped: it depends on whether the code path is a cron task
+(`worker`) or a queued job (`arq`) — `api` already called the gateway for QR
+pairing, which is why its env was already set; `worker` and `arq` were the
+ones that needed catching up. `worker` had
+no `WA_GATEWAY_URL`/`WA_GATEWAY_SHARED_SECRET` at all from 2026-07-29 (when
+the gateway shipped) until 2026-08-03, so `sweep_wa_liveness` — the sweep
+whose entire job is to notice a recruiter's device dropped off with no
+browser open — had been failing silently for five days. Both `worker` and
+`arq` now carry the two vars, referencing the shared secret as the Koyeb
+secret `ea-wa-gateway-shared-secret` rather than holding a copy, matching
+`api`.
 
 Live: https://expressautomate.app · repo: `kianwoon/expressautomate` (private)
 
