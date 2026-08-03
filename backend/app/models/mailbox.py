@@ -48,4 +48,9 @@ class Mailbox(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
     delta_link: Mapped[str | None] = mapped_column(Text)
     initial_sync_from: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     backfill_completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # NULL means intake is running; a timestamp means the owner paused it, and
+    # records since when. Deliberately not a `status` value: pause and
+    # re-auth are independent facts, and `status = 'active'` also gates
+    # subscription renewal, which must keep running through a pause.
+    ingest_paused_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     retention_months: Mapped[int] = mapped_column(Integer, nullable=False)
