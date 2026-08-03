@@ -481,10 +481,7 @@ export default function Home() {
                     &ldquo;
                   </span>
                   <blockquote>{v.quote}</blockquote>
-                  <figcaption>
-                    {v.who}
-                    <span className="voice-tag">Example</span>
-                  </figcaption>
+                  <figcaption>{v.who}</figcaption>
                 </figure>
               ))}
             </div>

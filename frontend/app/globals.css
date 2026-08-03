@@ -688,10 +688,6 @@ section { padding: 60px 0; }
 .voice-mark { font-size: 2rem; line-height: 0.6; color: var(--ink-300); font-family: Georgia, serif; }
 .voice blockquote { margin: 0; font-size: 0.9375rem; color: var(--ink-900); }
 .voice figcaption { font-size: 0.8125rem; color: var(--ink-500); display: grid; gap: 8px; justify-items: start; }
-.voice-tag {
-  font-size: 0.5625rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
-  background: var(--surface-alt); color: var(--ink-500); padding: 3px 8px; border-radius: 999px;
-}
 /* The label that keeps the section honest — styled to be read, not skipped. */
 .illustrative {
   display: flex; gap: 10px; align-items: flex-start;
