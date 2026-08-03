@@ -15,6 +15,7 @@ from sqlalchemy import text
 
 from app.api import candidates as candidates_api
 from app.main import app
+from app.services.storage.r2 import avatar_key
 from tests.conftest import AdminSessionLocal
 from tests.test_clients_api import sign_in  # the real session cookie, not a copy
 
@@ -134,13 +135,19 @@ async def test_list_and_detail_both_carry_the_avatar_fields(agency_with_candidat
         assert detail_before.json()["avatar_key"] is None
         assert detail_before.json()["avatar_updated_at"] is None
 
+        # The real key function rather than a plausible-looking string. The
+        # column is opaque to the serialiser, so any value would round-trip —
+        # but a fixture that invents its own format is one more place claiming
+        # something about production that nothing checks, which is the exact
+        # shape of the bug this test exists for.
+        stored_key = avatar_key(tid, ids["active"])
         async with AdminSessionLocal() as s:
             await s.execute(
                 text(
                     "UPDATE candidates SET avatar_key = :k, "
                     "avatar_updated_at = now() WHERE id = :i"
                 ),
-                {"k": f"tenants/{tid}/candidates/{ids['active']}/avatar.jpg", "i": ids["active"]},
+                {"k": stored_key, "i": ids["active"]},
             )
             await s.commit()
 
@@ -148,10 +155,10 @@ async def test_list_and_detail_both_carry_the_avatar_fields(agency_with_candidat
         detail_after = await http.get(f"/api/candidates/{ids['active']}")
 
     row = next(r for r in list_body["items"] if r["id"] == str(ids["active"]))
-    assert row["avatar_key"] == f"tenants/{tid}/candidates/{ids['active']}/avatar.jpg"
+    assert row["avatar_key"] == stored_key
     assert isinstance(row["avatar_updated_at"], str) and row["avatar_updated_at"]
     detail_json = detail_after.json()
-    assert detail_json["avatar_key"] == f"tenants/{tid}/candidates/{ids['active']}/avatar.jpg"
+    assert detail_json["avatar_key"] == stored_key
     assert isinstance(detail_json["avatar_updated_at"], str) and detail_json["avatar_updated_at"]
 
 
