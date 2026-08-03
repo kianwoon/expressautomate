@@ -237,4 +237,79 @@ describe("typing in a job order", () => {
     await fillAndSave();
     await waitFor(() => expect(screen.getAllByText("Warehouse assistant").length).toBeGreaterThan(0));
   });
+
+  it("has no separate Company field — the Client picker is the one place the name is typed", async () => {
+    await openForm();
+    // The old free-text Company input is gone entirely. What is left is the
+    // Client picker, and it is the only field that could hold a company name.
+    const form = within(screen.getByRole("dialog"));
+    expect(form.queryByLabelText("Company")).toBeNull();
+    expect(form.getAllByLabelText("Client")).toHaveLength(1);
+  });
+
+  it("sends the typed company name even when it matches no client", async () => {
+    await openForm();
+    const form = within(screen.getByRole("dialog"));
+    fireEvent.change(form.getByLabelText("Job title"), { target: { value: "Warehouse assistant" } });
+    fireEvent.change(form.getByLabelText("Client"), { target: { value: "Nobody Yet Pte Ltd" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save job order" }));
+
+    await waitFor(() =>
+      expect(lastBody(fetchMock)).toMatchObject({
+        company_name_raw: "Nobody Yet Pte Ltd",
+        client_id: null,
+      }),
+    );
+  });
+
+  it("sends both the client id and the matched name when a client is picked", async () => {
+    await openForm();
+    const form = within(screen.getByRole("dialog"));
+    fireEvent.change(form.getByLabelText("Job title"), { target: { value: "Warehouse assistant" } });
+    fireEvent.change(form.getByLabelText("Client"), { target: { value: "sun" } });
+    const option = await screen.findByRole("option", { name: "Sunrise Logistics" });
+    fireEvent.click(option);
+    fireEvent.click(screen.getByRole("button", { name: "Save job order" }));
+
+    await waitFor(() =>
+      expect(lastBody(fetchMock)).toMatchObject({
+        company_name_raw: "Sunrise Logistics",
+        client_id: "cl-1",
+      }),
+    );
+  });
+
+  it("sends neither a client nor a company name when the field is cleared", async () => {
+    await openForm();
+    const form = within(screen.getByRole("dialog"));
+    fireEvent.change(form.getByLabelText("Job title"), { target: { value: "Warehouse assistant" } });
+    fireEvent.change(form.getByLabelText("Client"), { target: { value: "sun" } });
+    const option = await screen.findByRole("option", { name: "Sunrise Logistics" });
+    fireEvent.click(option);
+    fireEvent.change(form.getByLabelText("Client"), { target: { value: "" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save job order" }));
+
+    await waitFor(() =>
+      expect(lastBody(fetchMock)).toMatchObject({ company_name_raw: null, client_id: null }),
+    );
+  });
+
+  it("gives every field a realistic example as a placeholder", async () => {
+    await openForm();
+    const form = within(screen.getByRole("dialog"));
+    const expectations: Array<[string, string]> = [
+      ["Job title", "Warehouse assistant"],
+      ["Client", "Sunrise Logistics Pte Ltd"],
+      ["Location", "Tuas"],
+      ["Pay", "$2,800/month"],
+      ["Working hours", "Mon–Fri, 9am–6pm"],
+      ["How long it runs", "6-month contract"],
+      ["Kind of work", "Full-time"],
+      ["What the job involves", "Picking and packing orders at a Jurong East warehouse. Some heavy lifting."],
+      ["What they are looking for", "At least 1 year warehouse experience. Able to work weekends."],
+    ];
+    for (const [label, placeholder] of expectations) {
+      expect(form.getByLabelText(label).getAttribute("placeholder")).toBe(placeholder);
+    }
+  });
 });

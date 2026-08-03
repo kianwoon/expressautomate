@@ -23,6 +23,13 @@ import { CLIENTS_PATH } from "../api";
  * and the job-order detail panel — and a second copy is a second debounce, a
  * second race rule and a second set of bugs.
  *
+ * The manual form has no separate Company field any more — this is the one
+ * place the company name is typed. Picking a match sets `client_id`; typing a
+ * name that matches nothing is not an error, it is a new client, created on
+ * save. `onQueryChange` exists so a caller that cares about the raw text (the
+ * manual form does, for `company_name_raw`) can have it, without forcing that
+ * bookkeeping on the detail panel, which does not.
+ *
  * allow-hardcode: the strings below are user-facing labels and copy rendered
  * to the page, not a list anything is matched against.
  */
@@ -43,27 +50,45 @@ const CLIENT_SEARCH_LIMIT = 8;
  *  would suggest the rest is available here. */
 export type ClientMatch = { id: string; name: string };
 
-/** The line under the field on the manual job-order form, and the default
- *  because that is the screen this component was written for. It names the
- *  form's own Company input, so a screen without one has to say something
- *  else — see the `hint` prop. */
-const DEFAULT_HINT =
-  "Leave this empty if the company is not on our list yet. The name still goes in Company.";
+/** The line under the field. The default now describes this component's own
+ *  behaviour — pick a match, or type a name that has none and it becomes a
+ *  new client on save — rather than pointing at a separate Company input,
+ *  because the manual form no longer has one; this field is where the
+ *  company name is typed. */
+const DEFAULT_HINT = "Pick a client from the list, or just type the name — it'll be added when you save.";
+
+/** Told the client will be created from what is on screen right now: typed
+ *  text with no match picked. Shown in the dropdown's empty state rather
+ *  than as a confirmation step — the user already chose silent creation on
+ *  save, so this is a light note, not a gate. */
+function newClientNote(query: string): string {
+  return `No match for "${query}" — it will be added as a new client when you save.`;
+}
 
 export function ClientSearch({
   value,
   onChange,
   label,
   hint = DEFAULT_HINT,
+  placeholder = "Search, or leave empty",
+  onQueryChange,
 }: {
   value: ClientMatch | null;
   onChange: (client: ClientMatch | null) => void;
   label: string;
-  /** What the line under the field says. Overridable because the default
-   *  points at the manual form's Company input, and the detail panel has no
-   *  such field — telling a recruiter to type the name somewhere that is not
-   *  on the screen is worse than saying nothing. */
+  /** What the line under the field says. Overridable because the default now
+   *  describes generic add-on-save behaviour, and a caller with a narrower
+   *  story (the detail panel: link to an existing client) may want its own
+   *  words. */
   hint?: string;
+  /** Shown before anything is typed. */
+  placeholder?: string;
+  /** Told the raw text as it is typed, selection or not, and again with the
+   *  matched name when a match is picked. The manual job-order form needs
+   *  this: `company_name_raw` must always carry what was typed. A caller that
+   *  does not pass it (the detail panel) simply is not told — it never
+   *  needed the raw text, only the picked client. */
+  onQueryChange?: (raw: string) => void;
 }) {
   const inputId = useId();
   const listId = useId();
@@ -71,17 +96,30 @@ export function ClientSearch({
   const [matches, setMatches] = useState<ClientMatch[]>([]);
   const [open, setOpen] = useState(false);
   const [failed, setFailed] = useState(false);
+  // True only once a request for the CURRENT text has completed — not while
+  // the debounce is pending, not while the request is in flight. The
+  // "will be added as a new client" note reads it: without this, `matches`
+  // is briefly `[]` on every keystroke (this state's own initial value, or
+  // the previous term's leftovers cleared below) and the note would flash
+  // for a company that is about to be found, telling the recruiter they are
+  // about to create a duplicate when they are not.
+  const [searched, setSearched] = useState(false);
   // Every search takes a ticket and only the newest may write, the same rule
   // the lists use: "sun" and "sunr" are two requests and the shorter one can
   // land second, putting the wider set of matches under the narrower text.
+  // `searched` is set from inside the same `mine === generation.current`
+  // check as `matches`, so a stale reply that loses the check cannot mark a
+  // newer, still-pending search as settled either.
   const generation = useRef(0);
 
   useEffect(() => {
     const term = query.trim();
     if (term.length === 0) {
       setMatches([]);
+      setSearched(false);
       return;
     }
+    setSearched(false);
     const timer = setTimeout(async () => {
       const mine = ++generation.current;
       try {
@@ -95,6 +133,7 @@ export function ClientSearch({
           setMatches([]);
           setOpen(false);
           setFailed(true);
+          setSearched(false);
           return;
         }
         const body = (await res.json()) as { items?: ClientMatch[] };
@@ -102,6 +141,7 @@ export function ClientSearch({
         setMatches(body.items ?? []);
         setOpen(true);
         setFailed(false);
+        setSearched(true);
       } catch {
         // Quiet, not silent. An error banner over a client lookup would report
         // a problem with a job order that is fine, so this is a line under the
@@ -111,6 +151,7 @@ export function ClientSearch({
           setMatches([]);
           setOpen(false);
           setFailed(true);
+          setSearched(false);
         }
       }
     }, CLIENT_SEARCH_DEBOUNCE_MS);
@@ -130,13 +171,15 @@ export function ClientSearch({
         aria-autocomplete="list"
         autoComplete="off"
         value={value ? value.name : query}
-        placeholder="Search, or leave empty"
+        placeholder={placeholder}
         onChange={(event) => {
           // Editing after a selection un-selects it. The text no longer names
           // the client that was chosen, and keeping the id would file the job
           // order under a company the recruiter has visibly typed away from.
           if (value) onChange(null);
-          setQuery(event.target.value);
+          const next = event.target.value;
+          setQuery(next);
+          onQueryChange?.(next);
         }}
         // Deferred, like `MemberPicker`'s: a blur fires before the click that
         // caused it, so closing immediately would close the list out from
@@ -154,6 +197,7 @@ export function ClientSearch({
                 aria-selected={false}
                 onClick={() => {
                   onChange(match);
+                  onQueryChange?.(match.name);
                   setOpen(false);
                 }}
               >
@@ -162,6 +206,11 @@ export function ClientSearch({
             </li>
           ))}
         </ul>
+      )}
+      {searched && open && matches.length === 0 && !failed && !value && query.trim().length > 0 && (
+        <p className="jo-form-hint" role="status">
+          {newClientNote(query.trim())}
+        </p>
       )}
       {failed && (
         <p className="jo-form-hint" role="status">

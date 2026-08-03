@@ -124,6 +124,78 @@ describe("ClientSearch", () => {
     expect(onChange).toHaveBeenCalledWith(null);
   });
 
+  it("reports the raw typed text as it is typed, unmatched or not", async () => {
+    const fetchMock = mockSearch([]);
+    const onQueryChange = vi.fn();
+    render(
+      <ClientSearch value={null} onChange={() => {}} label="Client" onQueryChange={onQueryChange} />,
+    );
+
+    fireEvent.change(screen.getByLabelText("Client"), { target: { value: "Nobody Yet Pte Ltd" } });
+    expect(onQueryChange).toHaveBeenCalledWith("Nobody Yet Pte Ltd");
+    await waitFor(() => expect(searchCalls(fetchMock).length).toBeGreaterThan(0));
+  });
+
+  it("reports the matched name too when a match is picked", async () => {
+    mockSearch();
+    const onChange = vi.fn();
+    const onQueryChange = vi.fn();
+    render(
+      <ClientSearch value={null} onChange={onChange} label="Client" onQueryChange={onQueryChange} />,
+    );
+
+    fireEvent.change(screen.getByLabelText("Client"), { target: { value: "sun" } });
+    const option = await screen.findByRole("option", { name: "Sunrise Logistics" });
+    fireEvent.click(option);
+
+    expect(onChange).toHaveBeenCalledWith({ id: "cl-1", name: "Sunrise Logistics" });
+    expect(onQueryChange).toHaveBeenCalledWith("Sunrise Logistics");
+  });
+
+  it("notes that an unmatched name becomes a new client on save", async () => {
+    mockSearch([]);
+    render(<ClientSearch value={null} onChange={() => {}} label="Client" />);
+
+    fireEvent.change(screen.getByLabelText("Client"), { target: { value: "Nobody Yet Pte Ltd" } });
+
+    const note = await screen.findByRole("status");
+    expect(note.textContent).toContain("will be added as a new client");
+  });
+
+  it("never shows the new-client note for a term that turns out to match — not mid-flight, not after", async () => {
+    // A response the test controls the timing of, so it can inspect the DOM
+    // both while the request is still in flight and after it lands. A
+    // fetch mock that resolves immediately (like the others in this file)
+    // cannot catch a flag that is wrongly true for that brief window.
+    let resolveFetch: (value: unknown) => void = () => {};
+    const fetchMock = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          resolveFetch = resolve;
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    render(<ClientSearch value={null} onChange={() => {}} label="Client" />);
+    fireEvent.change(screen.getByLabelText("Client"), { target: { value: "sun" } });
+
+    // Debounce has elapsed and the request is in flight, unresolved.
+    await sleep(SETTLE_MS);
+    expect(screen.queryByText(/will be added as a new client/)).toBeNull();
+
+    // It resolves with a match — "sun" was never a name nobody has recorded.
+    resolveFetch(jsonResponse({ items: [{ id: "cl-1", name: "Sunrise Logistics" }] }));
+    await screen.findByRole("option", { name: "Sunrise Logistics" });
+
+    expect(screen.queryByText(/will be added as a new client/)).toBeNull();
+  });
+
+  it("takes a placeholder", () => {
+    mockSearch();
+    render(<ClientSearch value={null} onChange={() => {}} label="Client" placeholder="Acme Pte Ltd" />);
+    expect(screen.getByLabelText("Client").getAttribute("placeholder")).toBe("Acme Pte Ltd");
+  });
+
   it("says so when the search cannot be read", async () => {
     const fetchMock = vi.fn(async () => jsonResponse({ detail: "boom" }, { ok: false, status: 500 }));
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);

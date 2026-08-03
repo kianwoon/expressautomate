@@ -461,7 +461,9 @@ async def test_a_hand_typed_job_order_belongs_to_whoever_typed_it() -> None:
         body = response.json()
         assert body["source"] == "manual"
         assert body["assigned_user_id"] == str(user_id)
-        assert body["client_id"] is None
+        # No client_id was sent, but a company name was typed, so the route
+        # resolves it to a (newly created) client rather than leaving it null.
+        assert body["client_id"] is not None
 
         opportunity_id = uuid.UUID(body["id"])
         assert await _assigned_user_id(opportunity_id) == user_id
@@ -521,6 +523,141 @@ async def test_a_hand_typed_job_order_keeps_the_client_it_was_given() -> None:
             )
         assert response.status_code == 201, response.text
         assert response.json()["client_id"] == str(client_id)
+    finally:
+        await cleanup_tenant(tenant_id)
+
+
+async def test_a_hand_typed_job_order_creates_a_client_for_a_new_company() -> None:
+    """No `client_id`, a company name nobody has seen before: a client is
+    created and linked, in the same transaction as the opportunity."""
+    tenant_id, user_id = await seed_tenant_with_user()
+    try:
+        async with _signed_in_client(user_id, tenant_id) as c:
+            response = await c.post(
+                "/api/opportunities",
+                json={"company_name_raw": "Brand New Co Pte Ltd"},
+            )
+        assert response.status_code == 201, response.text
+        client_id = response.json()["client_id"]
+        assert client_id is not None
+
+        async with AdminSessionLocal() as s:
+            row = (
+                await s.execute(
+                    Client.__table__.select().where(Client.__table__.c.id == uuid.UUID(client_id))
+                )
+            ).one()
+        assert row.tenant_id == tenant_id
+        assert row.name == "Brand New Co Pte Ltd"
+        assert row.name_normalized == "brand new"
+        assert row.source == Client.MANUAL
+        assert row.status == Client.CONFIRMED
+        assert row.email_domain is None
+    finally:
+        await cleanup_tenant(tenant_id)
+
+
+async def test_a_hand_typed_job_order_links_an_existing_company_by_name() -> None:
+    """A differing legal suffix still matches the normalised name, and no
+    second client is created."""
+    tenant_id, user_id = await seed_tenant_with_user()
+    existing_id = uuid.uuid4()
+    try:
+        async with AdminSessionLocal() as s:
+            s.add(
+                Client(
+                    id=existing_id,
+                    tenant_id=tenant_id,
+                    name="Acme",
+                    name_normalized="acme",
+                )
+            )
+            await s.commit()
+
+        async with _signed_in_client(user_id, tenant_id) as c:
+            response = await c.post(
+                "/api/opportunities",
+                json={"company_name_raw": "Acme Pte Ltd"},
+            )
+        assert response.status_code == 201, response.text
+        assert response.json()["client_id"] == str(existing_id)
+
+        async with AdminSessionLocal() as s:
+            rows = (
+                await s.execute(
+                    Client.__table__.select().where(
+                        Client.__table__.c.tenant_id == tenant_id
+                    )
+                )
+            ).all()
+        assert len(rows) == 1
+    finally:
+        await cleanup_tenant(tenant_id)
+
+
+async def test_a_hand_typed_job_order_with_blank_company_name_creates_no_client() -> None:
+    """Whitespace-only is the same as absent — nothing to resolve, so nothing
+    is created."""
+    tenant_id, user_id = await seed_tenant_with_user()
+    try:
+        async with _signed_in_client(user_id, tenant_id) as c:
+            response = await c.post(
+                "/api/opportunities",
+                json={"company_name_raw": "   "},
+            )
+        assert response.status_code == 201, response.text
+        assert response.json()["client_id"] is None
+
+        async with AdminSessionLocal() as s:
+            rows = (
+                await s.execute(
+                    Client.__table__.select().where(
+                        Client.__table__.c.tenant_id == tenant_id
+                    )
+                )
+            ).all()
+        assert rows == []
+    finally:
+        await cleanup_tenant(tenant_id)
+
+
+async def test_a_hand_typed_job_order_does_not_match_a_merged_client() -> None:
+    """A merged row's identity belongs to its target; matching it would
+    silently resurrect an identity a recruiter deliberately retired."""
+    tenant_id, user_id = await seed_tenant_with_user()
+    merged_id = uuid.uuid4()
+    survivor_id = uuid.uuid4()
+    try:
+        async with AdminSessionLocal() as s:
+            s.add(
+                Client(
+                    id=survivor_id,
+                    tenant_id=tenant_id,
+                    name="Acme Holdings",
+                    name_normalized="acme holdings",
+                )
+            )
+            s.add(
+                Client(
+                    id=merged_id,
+                    tenant_id=tenant_id,
+                    name="Acme",
+                    name_normalized="acme",
+                    status=Client.MERGED,
+                    merged_into_client_id=survivor_id,
+                )
+            )
+            await s.commit()
+
+        async with _signed_in_client(user_id, tenant_id) as c:
+            response = await c.post(
+                "/api/opportunities",
+                json={"company_name_raw": "Acme Pte Ltd"},
+            )
+        assert response.status_code == 201, response.text
+        client_id = response.json()["client_id"]
+        assert client_id is not None
+        assert client_id != str(merged_id)
     finally:
         await cleanup_tenant(tenant_id)
 

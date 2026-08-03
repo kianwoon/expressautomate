@@ -60,6 +60,7 @@ from app.models import (
     User,
 )
 from app.models.extraction import ExtractionEvidence
+from app.services.client_matching import resolve_or_create_client_by_name
 from app.services.notify.dispatch import emit_and_enqueue
 from app.services.notify.events import (
     EVENT_OPPORTUNITY_ASSIGNED,
@@ -1366,6 +1367,7 @@ async def create_opportunity(body: ManualOpportunityRequest, request: Request) -
     user_uuid, tenant_uuid, _role = await _require_session_with_role(request)
 
     opportunity_id = uuid.uuid4()
+    resolved_client_id = body.client_id
     async with tenant_session(tenant_uuid) as session:
         # Refused here, before the insert, for the reason the link route gives:
         # a client picked from the list and deleted or merged before Save is
@@ -1376,6 +1378,17 @@ async def create_opportunity(body: ManualOpportunityRequest, request: Request) -
                 raise HTTPException(
                     status_code=422, detail=_CLIENT_NOT_IN_AGENCY
                 )
+        elif body.company_name_raw is not None and body.company_name_raw.strip():
+            # No client was picked, but a company name was typed: resolve it
+            # to a client — matching an existing one on its normalised name,
+            # otherwise creating one — in the same transaction as the
+            # opportunity insert below, so a failed request cannot leave an
+            # orphan client behind. `body.client_id is not None` above always
+            # wins over this; a recruiter who picked a client is never
+            # second-guessed by what they also typed.
+            resolved_client_id = await resolve_or_create_client_by_name(
+                session, tenant_uuid, body.company_name_raw
+            )
         session.add(
             Opportunity(
                 id=opportunity_id,
@@ -1385,7 +1398,7 @@ async def create_opportunity(body: ManualOpportunityRequest, request: Request) -
                 # "when did this arrive" and keeps it sorting beside the
                 # extracted rows instead of sinking under every NULL.
                 received_datetime=datetime.now(UTC),
-                client_id=body.client_id,
+                client_id=resolved_client_id,
                 assigned_user_id=user_uuid,
                 source=Opportunity.MANUAL,
                 company_name_raw=body.company_name_raw,
@@ -1407,8 +1420,11 @@ async def create_opportunity(body: ManualOpportunityRequest, request: Request) -
         # Flushed inside the guard rather than left to the commit at the end of
         # the block, so a client deleted between the check above and this write
         # is answered with the same 422 instead of escaping as a 500 from a
-        # commit nobody is watching.
-        if body.client_id is not None:
+        # commit nobody is watching. Covers the resolved-by-name path too: it
+        # inserts within this same transaction, so nothing has had a chance to
+        # delete it before the flush, but the guard costs nothing to keep and
+        # keeps the two paths identical below this point.
+        if resolved_client_id is not None:
             async with _client_link_conflict_becomes_422():
                 await session.flush()
         else:
@@ -1426,7 +1442,7 @@ async def create_opportunity(body: ManualOpportunityRequest, request: Request) -
         "id": str(opportunity_id),
         "source": Opportunity.MANUAL,
         "assigned_user_id": str(user_uuid),
-        "client_id": str(body.client_id) if body.client_id else None,
+        "client_id": str(resolved_client_id) if resolved_client_id else None,
         "company_name_raw": body.company_name_raw,
         "job_title_raw": body.job_title_raw,
     }

@@ -291,6 +291,7 @@ export function CandidateForm({
             className="jo-search"
             value={form.full_name}
             onChange={(e) => set("full_name", e.target.value)}
+            placeholder="Tan Wei Ming"
             required
             autoFocus
           />
@@ -301,6 +302,7 @@ export function CandidateForm({
             type="email"
             value={form.email}
             onChange={(e) => set("email", e.target.value)}
+            placeholder="weiming.tan@gmail.com"
           />
         </Field>
         <Field label="Phone">
@@ -308,6 +310,7 @@ export function CandidateForm({
             className="jo-search"
             value={form.phone_raw}
             onChange={(e) => set("phone_raw", e.target.value)}
+            placeholder="+65 9123 4567"
           />
         </Field>
         <Field label="Current title">
@@ -315,6 +318,7 @@ export function CandidateForm({
             className="jo-search"
             value={form.current_title}
             onChange={(e) => set("current_title", e.target.value)}
+            placeholder="Warehouse assistant"
           />
         </Field>
         <Field label="Current employer">
@@ -322,6 +326,7 @@ export function CandidateForm({
             className="jo-search"
             value={form.current_employer}
             onChange={(e) => set("current_employer", e.target.value)}
+            placeholder="Acme Logistics Pte Ltd"
           />
         </Field>
         <Field label="Location">
@@ -329,6 +334,7 @@ export function CandidateForm({
             className="jo-search"
             value={form.location}
             onChange={(e) => set("location", e.target.value)}
+            placeholder="Tuas"
           />
         </Field>
         <Field label="Years of experience">
@@ -337,6 +343,7 @@ export function CandidateForm({
             type="number"
             value={form.years_experience}
             onChange={(e) => set("years_experience", e.target.value)}
+            placeholder="3"
           />
         </Field>
         <Field label="Expected salary">
@@ -345,6 +352,7 @@ export function CandidateForm({
             type="number"
             value={form.expected_salary}
             onChange={(e) => set("expected_salary", e.target.value)}
+            placeholder="2800"
           />
         </Field>
         <Field label="Salary currency">
@@ -376,6 +384,7 @@ export function CandidateForm({
             className="jo-search"
             value={form.notice_period_raw}
             onChange={(e) => set("notice_period_raw", e.target.value)}
+            placeholder="2 weeks"
           />
         </Field>
         <Field label="Employment type">
@@ -383,6 +392,7 @@ export function CandidateForm({
             className="jo-search"
             value={form.employment_type}
             onChange={(e) => set("employment_type", e.target.value)}
+            placeholder="Full-time"
           />
         </Field>
         <Field label="Stage">
@@ -403,6 +413,7 @@ export function CandidateForm({
             className="jo-search"
             value={form.skills}
             onChange={(e) => set("skills", e.target.value)}
+            placeholder="forklift operation, inventory management, WMS"
           />
         </Field>
         {/* Two groups, kept apart on purpose. The four above the divider are
@@ -448,6 +459,7 @@ export function CandidateForm({
               type="number"
               value={form.education_years}
               onChange={(e) => set("education_years", e.target.value)}
+              placeholder="10"
             />
           </Field>
           <Field label="Nationality">
@@ -497,6 +509,7 @@ export function CandidateForm({
                 className="jo-search"
                 value={form.race_detail}
                 onChange={(e) => set("race_detail", e.target.value)}
+                placeholder="Eurasian"
               />
             </Field>
           )}
@@ -508,6 +521,7 @@ export function CandidateForm({
             style={{ minHeight: 80 }}
             value={form.notes}
             onChange={(e) => set("notes", e.target.value)}
+            placeholder="Available for immediate start; prefers day shift"
           />
         </Field>
 

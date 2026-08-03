@@ -220,3 +220,78 @@ async def _surviving(session: AsyncSession, row) -> tuple[uuid.UUID, uuid.UUID |
         hops += 1
     await session.execute(_TOUCH, {"id": client_id})
     return client_id, assignee
+
+
+# Same shape as `_BY_NAME`: merged rows are excluded because a merged row's
+# identity now belongs to its target, and the surviving row is what a manual
+# opportunity should link to.
+_BY_NAME_MANUAL = text(
+    """
+    SELECT id FROM clients
+    WHERE tenant_id = :tenant_id AND name_normalized = :name AND status <> 'merged'
+    ORDER BY last_seen_at DESC NULLS LAST, created_at DESC
+    LIMIT 1
+    """
+)
+
+_INSERT_CLIENT_MANUAL = text(
+    """
+    INSERT INTO clients
+        (id, tenant_id, name, name_normalized, email_domain, status, source)
+    VALUES (:id, :tenant_id, :name, :name_normalized, NULL, :status, :source)
+    RETURNING id
+    """
+)
+
+
+async def resolve_or_create_client_by_name(
+    session: AsyncSession,
+    tenant_id: uuid.UUID,
+    company_name_raw: str,
+) -> uuid.UUID | None:
+    """Turn a typed company name into a client id, matching or creating.
+
+    Used by the manual opportunity route when a recruiter typed a company
+    name but did not pick a client from the list. Deliberately name-only —
+    a hand-typed vacancy carries no sender domain to match on, so this is
+    the same second step `_resolve` takes, without the first.
+
+    Runs inside the caller's transaction and does not commit: the opportunity
+    insert that follows must be able to roll the client back with it, or a
+    failed request would leave an orphan client behind.
+
+    No unique constraint backs `name_normalized` (by design — see
+    `Client.name_normalized`'s docstring), so nothing here closes the
+    two-concurrent-creates race: two requests typing the same new name at
+    once can each miss the other's SELECT and insert two rows. That is the
+    same race `_resolve` above already accepts for the pipeline's own
+    name-matching path; a duplicate here costs a recruiter a later manual
+    merge, same as a duplicate there does, so it is tolerated rather than
+    guarded with a second query or a lock this table was not built to take.
+    """
+    normalized = normalize_company_name(company_name_raw)
+    if not normalized:
+        return None
+
+    row = (
+        await session.execute(
+            _BY_NAME_MANUAL, {"tenant_id": tenant_id, "name": normalized}
+        )
+    ).first()
+    if row is not None:
+        return row.id
+
+    inserted = (
+        await session.execute(
+            _INSERT_CLIENT_MANUAL,
+            {
+                "id": uuid.uuid4(),
+                "tenant_id": tenant_id,
+                "name": company_name_raw.strip(),
+                "name_normalized": normalized,
+                "status": Client.CONFIRMED,
+                "source": Client.MANUAL,
+            },
+        )
+    ).one()
+    return inserted.id

@@ -159,3 +159,40 @@ describe("ClientForm", () => {
     expect(onCancel).toHaveBeenCalledWith("cl-new");
   });
 });
+
+describe("every free-text field carries an example placeholder", () => {
+  // Pinned so a future edit cannot silently drop the example text a
+  // recruiter relies on to see the expected shape of each field.
+  it("shows an example in every client-level text, number and textarea field", () => {
+    render(<ClientForm client={null} onDone={() => {}} onCancel={() => {}} />);
+
+    const expected: [string, string][] = [
+      ["Client name *", "Acme Logistics Pte Ltd"],
+      ["Mail domain", "acme.com"],
+      ["Website", "https://acmelogistics.com.sg"],
+      ["Phone", "+65 6221 3344"],
+      ["Fee percent", "18"],
+      ["Payment terms (days)", "30"],
+      ["Address", "8 Tuas Avenue 10, Singapore 639145"],
+      ["Notes", "Prefers WhatsApp updates; invoices to accounts@acmelogistics.com.sg"],
+    ];
+    expected.forEach(([label, placeholder]) => {
+      expect(screen.getByLabelText(label).getAttribute("placeholder")).toBe(placeholder);
+    });
+  });
+
+  it("shows an example in every contact-row field", () => {
+    render(<ClientForm client={null} onDone={() => {}} onCancel={() => {}} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Add contact" }));
+
+    expect(screen.getByLabelText("Name *").getAttribute("placeholder")).toBe("Mei Ling Tan");
+    expect(screen.getByLabelText("Title").getAttribute("placeholder")).toBe("HR Manager");
+    expect(screen.getByLabelText("Email").getAttribute("placeholder")).toBe(
+      "meiling@acmelogistics.com.sg",
+    );
+    expect(screen.getAllByLabelText("Phone")[1].getAttribute("placeholder")).toBe(
+      "+65 9123 4567",
+    );
+  });
+});

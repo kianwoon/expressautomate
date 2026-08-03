@@ -366,6 +366,7 @@ export function ClientForm({
             className="jo-search"
             value={form.name}
             onChange={(e) => set("name", e.target.value)}
+            placeholder="Acme Logistics Pte Ltd"
             required
             autoFocus
           />
@@ -389,6 +390,7 @@ export function ClientForm({
             className="jo-search"
             value={form.website}
             onChange={(e) => set("website", e.target.value)}
+            placeholder="https://acmelogistics.com.sg"
           />
         </Field>
         <Field label="Phone">
@@ -396,6 +398,7 @@ export function ClientForm({
             className="jo-search"
             value={form.phone}
             onChange={(e) => set("phone", e.target.value)}
+            placeholder="+65 6221 3344"
           />
         </Field>
         <Field label="Fee percent">
@@ -407,6 +410,7 @@ export function ClientForm({
             step="any"
             value={form.fee_percent}
             onChange={(e) => set("fee_percent", e.target.value)}
+            placeholder="18"
           />
         </Field>
         <Field label="Payment terms (days)">
@@ -415,6 +419,7 @@ export function ClientForm({
             type="number"
             value={form.payment_terms_days}
             onChange={(e) => set("payment_terms_days", e.target.value)}
+            placeholder="30"
           />
         </Field>
         <Field label="Address" full>
@@ -423,6 +428,7 @@ export function ClientForm({
             style={{ minHeight: 60 }}
             value={form.address}
             onChange={(e) => set("address", e.target.value)}
+            placeholder="8 Tuas Avenue 10, Singapore 639145"
           />
         </Field>
         <Field label="Notes" full>
@@ -431,6 +437,7 @@ export function ClientForm({
             style={{ minHeight: 80 }}
             value={form.notes}
             onChange={(e) => set("notes", e.target.value)}
+            placeholder="Prefers WhatsApp updates; invoices to accounts@acmelogistics.com.sg"
           />
         </Field>
 
@@ -450,6 +457,7 @@ export function ClientForm({
                   className="jo-search"
                   value={row.name}
                   onChange={(e) => setRow(row.key, { name: e.target.value })}
+                  placeholder="Mei Ling Tan"
                   aria-invalid={!isBlankRow(row) && row.name.trim() === "" ? true : undefined}
                 />
               </Field>
@@ -458,6 +466,7 @@ export function ClientForm({
                   className="jo-search"
                   value={row.title}
                   onChange={(e) => setRow(row.key, { title: e.target.value })}
+                  placeholder="HR Manager"
                 />
               </Field>
               <Field label="Email">
@@ -466,6 +475,7 @@ export function ClientForm({
                   type="email"
                   value={row.email}
                   onChange={(e) => setRow(row.key, { email: e.target.value })}
+                  placeholder="meiling@acmelogistics.com.sg"
                 />
               </Field>
               <Field label="Phone">
@@ -473,6 +483,7 @@ export function ClientForm({
                   className="jo-search"
                   value={row.phone}
                   onChange={(e) => setRow(row.key, { phone: e.target.value })}
+                  placeholder="+65 9123 4567"
                 />
               </Field>
               <div className="cf-contact-acts">

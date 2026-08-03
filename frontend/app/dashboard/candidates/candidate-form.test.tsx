@@ -131,3 +131,56 @@ describe("not recorded is a value the form can send, not just one it can show", 
     expect(body.race_detail).toBeNull();
   });
 });
+
+describe("every free-text field carries an example placeholder", () => {
+  // A blank text box gives a recruiter no sense of the expected shape or
+  // length. Each field below must show a concrete example — pinned here so a
+  // future edit that drops one is caught by the suite rather than by a
+  // recruiter staring at an empty box. Date inputs and the two selects that
+  // already open on a real "Not recorded" default are deliberately excluded:
+  // a placeholder on a native date picker is not shown by most browsers, and
+  // a select with a chosen default has nothing for a placeholder to fill.
+  it("shows an example in every text, number and textarea field", () => {
+    render(<CandidateForm row={null} onDone={() => {}} onCancel={() => {}} />);
+
+    const expected: [string, string][] = [
+      ["Full name *", "Tan Wei Ming"],
+      ["Email", "weiming.tan@gmail.com"],
+      ["Phone", "+65 9123 4567"],
+      ["Current title", "Warehouse assistant"],
+      ["Current employer", "Acme Logistics Pte Ltd"],
+      ["Location", "Tuas"],
+      ["Years of experience", "3"],
+      ["Expected salary", "2800"],
+      ["Salary currency", "SGD"],
+      ["Salary period", "month"],
+      ["Notice period", "2 weeks"],
+      ["Employment type", "Full-time"],
+      ["Skills (comma separated)", "forklift operation, inventory management, WMS"],
+      ["Years of formal education", "10"],
+    ];
+    expected.forEach(([label, placeholder]) => {
+      expect(screen.getByLabelText(label).getAttribute("placeholder")).toBe(placeholder);
+    });
+
+    // Nationality's placeholder doubles as format guidance ("Two-letter
+    // country code, e.g. PH") because the field is validated to that shape —
+    // still an example, just pinned separately from the plain-example list
+    // above. `getByLabelText` cannot resolve this one reliably because the
+    // input carries a `list` attribute pointing at its `<datalist>`, so it is
+    // located by its placeholder instead.
+    expect(screen.getByPlaceholderText("Two-letter country code, e.g. PH")).toBeTruthy();
+
+    expect(screen.getByLabelText(/^Notes$/).getAttribute("placeholder")).toBe(
+      "Available for immediate start; prefers day shift",
+    );
+  });
+
+  it("shows an example for race detail once Others is picked", () => {
+    render(<CandidateForm row={null} onDone={() => {}} onCancel={() => {}} />);
+
+    fireEvent.change(screen.getByLabelText(/^Race$/), { target: { value: "others" } });
+
+    expect(screen.getByLabelText("Race detail").getAttribute("placeholder")).toBe("Eurasian");
+  });
+});

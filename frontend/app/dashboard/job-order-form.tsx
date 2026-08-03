@@ -39,17 +39,25 @@ function orNull(value: string): string | null {
 }
 
 /** One labelled free-text field. A component rather than nine copies of the
- *  same three elements, so the label and the input cannot drift apart. */
+ *  same three elements, so the label and the input cannot drift apart.
+ *
+ *  `placeholder` is a concrete, realistic example of what goes in the field —
+ *  never an instruction like "enter job title" — because the recruiter is
+ *  transcribing a phone call at speed and a real example reads faster than a
+ *  command does. It is a placeholder only: it never becomes the value and
+ *  never gets submitted. */
 function Field({
   label,
   value,
   onChange,
   multiline,
+  placeholder,
 }: {
   label: string;
   value: string;
   onChange: (next: string) => void;
   multiline?: boolean;
+  placeholder?: string;
 }) {
   const id = useId();
   return (
@@ -61,6 +69,7 @@ function Field({
           className="jo-search"
           rows={3}
           value={value}
+          placeholder={placeholder}
           onChange={(e) => onChange(e.target.value)}
         />
       ) : (
@@ -69,6 +78,7 @@ function Field({
           className="jo-search"
           type="text"
           value={value}
+          placeholder={placeholder}
           onChange={(e) => onChange(e.target.value)}
         />
       )}
@@ -144,21 +154,48 @@ export function JobOrderForm({
       </p>
 
       <div className="jo-form-grid">
-        <Field label="Job title" value={fields.job_title_raw} onChange={set("job_title_raw")} />
-        <Field label="Company" value={fields.company_name_raw} onChange={set("company_name_raw")} />
-        <ClientSearch value={client} onChange={setClient} label="Client" />
-        <Field label="Location" value={fields.location_raw} onChange={set("location_raw")} />
-        <Field label="Pay" value={fields.salary_raw} onChange={set("salary_raw")} />
+        <Field
+          label="Job title"
+          value={fields.job_title_raw}
+          onChange={set("job_title_raw")}
+          placeholder="Warehouse assistant"
+        />
+        <ClientSearch
+          value={client}
+          onChange={setClient}
+          label="Client"
+          placeholder="Sunrise Logistics Pte Ltd"
+          onQueryChange={set("company_name_raw")}
+        />
+        <Field
+          label="Location"
+          value={fields.location_raw}
+          onChange={set("location_raw")}
+          placeholder="Tuas"
+        />
+        <Field
+          label="Pay"
+          value={fields.salary_raw}
+          onChange={set("salary_raw")}
+          placeholder="$2,800/month"
+        />
         <Field
           label="Working hours"
           value={fields.working_hours_raw}
           onChange={set("working_hours_raw")}
+          placeholder="Mon–Fri, 9am–6pm"
         />
-        <Field label="How long it runs" value={fields.duration_raw} onChange={set("duration_raw")} />
+        <Field
+          label="How long it runs"
+          value={fields.duration_raw}
+          onChange={set("duration_raw")}
+          placeholder="6-month contract"
+        />
         <Field
           label="Kind of work"
           value={fields.employment_type}
           onChange={set("employment_type")}
+          placeholder="Full-time"
         />
       </div>
 
@@ -166,12 +203,14 @@ export function JobOrderForm({
         label="What the job involves"
         value={fields.job_description}
         onChange={set("job_description")}
+        placeholder="Picking and packing orders at a Jurong East warehouse. Some heavy lifting."
         multiline
       />
       <Field
         label="What they are looking for"
         value={fields.requirements}
         onChange={set("requirements")}
+        placeholder="At least 1 year warehouse experience. Able to work weekends."
         multiline
       />
 
