@@ -212,8 +212,14 @@
     "/api/mailbox/ingest": [
       "POST"
     ],
+    "/api/mailbox/pause": [
+      "POST"
+    ],
     "/api/mailbox/preview": [
       "GET"
+    ],
+    "/api/mailbox/resume": [
+      "POST"
     ],
     "/api/mailbox/settings": [
       "GET"

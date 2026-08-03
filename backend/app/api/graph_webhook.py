@@ -25,6 +25,7 @@ from sqlalchemy import text
 
 from app.core.config import settings
 from app.core.logging import get_logger
+from app.db.rls import tenant_session
 from app.db.session import SessionLocal
 from app.services.events import KIND_MAIL, publish
 from app.services.ingest.intake import record_notification
@@ -44,6 +45,13 @@ _LIFECYCLE_JOBS = {
 }
 
 _RESOLVE = text("SELECT * FROM resolve_subscription(:subscription_id)")
+
+# Read under the resolved tenant's own session — the resolver bypasses RLS and
+# is kept to its three routing columns on purpose, so the pause flag is a
+# second, tenant-scoped read rather than a widening of the one pre-tenant path.
+_INGEST_PAUSED = text(
+    "SELECT ingest_paused_at FROM mailboxes WHERE id = :mailbox_id"
+)
 
 
 def _validation_response(request: Request) -> Response | None:
@@ -127,6 +135,24 @@ def _client_state_matches(offered: str | None, expected: str | None) -> bool:
     return hmac.compare_digest((offered or "").encode(), expected.encode())
 
 
+async def _intake_paused(tenant_id: uuid.UUID, mailbox_id: uuid.UUID) -> bool:
+    """Has this mailbox's owner switched intake off?
+
+    The webhook is the primary intake path and it never consults
+    `active_mailboxes()`, so without this check every vacation email would be
+    ingested in real time through a gate that was never there — the
+    subscription deliberately stays alive during a pause so resume does not
+    have to recreate it. Dropping here, before `record_notification`, keeps a
+    long pause from accumulating rows nothing will ever fetch; the job-level
+    gate in `fetch_email` remains the authoritative check behind it.
+    """
+    async with tenant_session(tenant_id) as session:
+        paused = (
+            await session.execute(_INGEST_PAUSED, {"mailbox_id": mailbox_id})
+        ).scalar_one_or_none()
+    return paused is not None
+
+
 async def _notifications(request: Request) -> list[dict]:
     """The `value` list, bounded.
 
@@ -165,10 +191,24 @@ async def notifications(request: Request) -> Response:
     # dashboard twice, which would double every refetch on a busy mailbox.
     tenants_seen: set[uuid.UUID] = set()
     tenants_nudged: set[uuid.UUID] = set()
+    # Memoised like `_authorised`'s resolver, and for the same reason: a batch
+    # names the same mailbox over and over, and this endpoint is public.
+    paused_seen: dict[uuid.UUID, bool] = {}
 
     async for item, record in _authorised(await _notifications(request)):
         message_id = (item.get("resourceData") or {}).get("id")
         if not message_id:
+            continue
+
+        if record.mailbox_id not in paused_seen:
+            paused_seen[record.mailbox_id] = await _intake_paused(
+                record.tenant_id, record.mailbox_id
+            )
+        if paused_seen[record.mailbox_id]:
+            # Deliberately not added to `tenants_seen` either: a paused
+            # mailbox's arrivals must not nudge the dashboard into refetching
+            # figures the pause guarantees have not changed.
+            log.info("notification_dropped_intake_paused", mailbox_id=str(record.mailbox_id))
             continue
 
         tenants_seen.add(record.tenant_id)

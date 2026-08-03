@@ -1,0 +1,27 @@
+/* The intake switch. Its own file rather than job-orders.css because the
+   pill renders in two places — the dashboard header and /settings — and only
+   the dashboard loads that sheet.
+
+   Shaped like the live light it sits beside because both are status, but this
+   one is a button and dresses like one on hover/focus. Running is quiet for
+   the reason the live pill is; paused earns the amber treatment permanently,
+   because the failure mode of the pause is forgetting it is on — it must not
+   recede into the header the way a healthy status does. */
+.jo-intake {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 8px 14px; font-size: 0.875rem; border-radius: 999px;
+  border: 1px solid var(--line); background: transparent;
+  color: var(--ink-500); white-space: nowrap; cursor: pointer;
+}
+.jo-intake-dot { width: 8px; height: 8px; border-radius: 999px; flex: none; }
+.jo-intake[data-state="on"] .jo-intake-dot { background: var(--teal-500); }
+.jo-intake[data-state="paused"] {
+  color: var(--amber-700); background: var(--amber-050); border-color: var(--amber-200);
+}
+.jo-intake[data-state="paused"] .jo-intake-dot { background: var(--amber-600); }
+.jo-intake:hover { border-color: var(--blue-500); }
+.jo-intake:focus-visible { outline: 2px solid var(--blue-500); outline-offset: 2px; }
+.jo-intake:disabled { opacity: 0.6; cursor: default; }
+/* The toggle's own failure line. `role="alert"` carries it to a screen
+   reader; this only keeps it legible and off the pill itself. */
+.jo-intake-error { font-size: 0.8125rem; color: var(--amber-700); max-width: 32ch; }
