@@ -203,7 +203,6 @@ export function JobOrders({ me, heading = "h2" }: { me: Me; heading?: "h1" | "h2
 
       <div className="jo-head">
         <div>
-          <span className="eyebrow">Job orders</span>
           {/* The page's h1 when nothing above it is one. Removing "Signed in
               as …" left a running dashboard whose outline began at h2, which
               is how a screen reader loses the top of a document. This is the

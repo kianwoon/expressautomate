@@ -68,7 +68,10 @@
    waiting to be looked at is not. */
 .jo-stat[data-tone="attention"] { border-left: 3px solid var(--amber-600); }
 
-.jo-head-title { margin-top: 12px; }
+/* No margin: the 12px here used to clear the "Job orders" eyebrow above the
+   title. The eyebrow is gone, so the gap would only push the heading off its
+   own baseline with the controls beside it. */
+.jo-head-title { margin-top: 0; }
 .jo-head-body { margin-top: 12px; max-width: 68ch; }
 
 .jo-note-card { margin-top: 16px; display: grid; gap: 16px; justify-items: start; }
