@@ -59,10 +59,17 @@ MESSAGE_FIELDS = (
 
 # allow-hardcode: SQL statements, not a phrase list.
 _CLAIM = text(
-    "SELECT e.graph_message_id, e.processing_status, m.ms_user_id"
+    "SELECT e.graph_message_id, e.processing_status, m.ms_user_id,"
+    " m.ingest_paused_at"
     " FROM email_messages e"
     " JOIN mailboxes m ON m.id = e.mailbox_id"
     " WHERE e.id = :id AND e.mailbox_id = :mailbox_id"
+)
+
+# The pause gate for delta_sync_mailbox, which otherwise never reads its
+# mailbox row before walking. fetch_email gets the same column through _CLAIM.
+_INGEST_PAUSED = text(
+    "SELECT ingest_paused_at FROM mailboxes WHERE id = :mailbox_id"
 )
 
 _RECORD_FETCH = text(
@@ -271,6 +278,22 @@ async def fetch_email(
         # Unknown row, or a job whose tenant does not own it. RLS already
         # decided; there is nothing to do and nothing to report.
         log.info("fetch_skipped_unknown_row", email_message_id=email_message_id)
+        return
+    if row.ingest_paused_at is not None:
+        # The owner switched intake off. This is the authoritative gate — the
+        # webhook, the delta sweep and `rescan_stuck` all funnel through this
+        # job, so nothing is fetched during a pause no matter which door the
+        # notification came in by. The row stays `pending` deliberately: a row
+        # that reaches here was recorded *before* the pause (the webhook drops
+        # paused mailboxes' notifications and the delta walk is gated, so
+        # nothing records rows during one), and `rescan_stuck` picks it up
+        # once intake resumes — pre-pause mail is not the mail this feature
+        # exists to skip.
+        log.info(
+            "fetch_skipped_intake_paused",
+            email_message_id=email_message_id,
+            mailbox_id=mailbox_id,
+        )
         return
     if row.processing_status != "pending":
         # `rescan_stuck` and the delta sweep may both enqueue the same row.
@@ -816,6 +839,21 @@ async def delta_sync_mailbox(ctx, *, tenant_id: str, mailbox_id: str) -> None:
 
     tenant = uuid.UUID(tenant_id)
     mailbox = uuid.UUID(mailbox_id)
+
+    async with tenant_session(tenant) as session:
+        paused = (
+            await session.execute(_INGEST_PAUSED, {"mailbox_id": mailbox})
+        ).scalar_one_or_none()
+    if paused is not None:
+        # Intake is paused. `active_mailboxes()` already excludes this mailbox
+        # from the scheduled sweep, but this job is also enqueued directly — a
+        # `missed` lifecycle event, `recreate_subscription`'s follow-up — so
+        # the gate lives at the job, where every caller funnels through.
+        # Walking anyway would advance nothing the resume walk does not
+        # rebuild, and would ingest exactly the window the pause exists to
+        # skip.
+        log.info("delta_sync_skipped_intake_paused", mailbox_id=mailbox_id)
+        return
 
     try:
         client = await graph_client_for_mailbox(tenant, mailbox)
