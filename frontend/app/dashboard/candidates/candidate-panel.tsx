@@ -37,19 +37,38 @@ import { WhatsappActivityTimeline, WhatsappButton } from "./candidate-whatsapp";
  *  back for restore — because a glyph nobody recognises is strictly worse than
  *  the word it replaced.
  *
- *  `currentColor` and no explicit size: `.btn-secondary` supplies the ink and
- *  `.btn-icon` sizes every child to the text line box beside it, so these stay
- *  the same height as Edit without restating its numbers.
+ *  They are drawn to one specification, and the first attempt was not: an
+ *  18px hairline adrift in a 42px tile, beside a WhatsApp mark that fills its
+ *  own tile corner to corner. Three things have to agree or the row reads as
+ *  three unrelated controls —
+ *
+ *    - the same optical box. Every glyph is drawn to roughly 3.5 → 20.5 in
+ *      this 24 grid, so the bin does not sit smaller than the archive box
+ *      merely because a bin is a narrower object.
+ *    - the same stroke. 2.2 rather than 1.8: the weight that stands up next
+ *      to a solid brand mark instead of fading beside it.
+ *    - the same corner. 1.2–1.4 radii throughout, matching each other rather
+ *      than whatever each shape happened to want.
+ *
+ *  `currentColor` and no size attribute: `.btn-secondary` supplies the ink,
+ *  and `.action-glyph` in `app.css` supplies the 24px — larger than the 18px
+ *  `.btn-icon` gives a text-sized icon, because these stand beside a mark that
+ *  is the full height of the button.
  *
  *  `aria-hidden`, because the accessible name lives on the button — the same
- *  arrangement as `WhatsappGlyph`. */
+ *  arrangement as `WhatsappGlyph`.
+ *
+ *  allow-hardcode: the `d` attributes below are glyph outlines — drawn shapes,
+ *  not a list of inputs anything is matched against. There is no
+ *  content-agnostic way to express a bin. */
 function ActionGlyph({ children }: { children: ReactNode }) {
   return (
     <svg
+      className="action-glyph"
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
-      strokeWidth={1.8}
+      strokeWidth={2.2}
       strokeLinecap="round"
       strokeLinejoin="round"
       aria-hidden="true"
@@ -61,36 +80,36 @@ function ActionGlyph({ children }: { children: ReactNode }) {
 
 const SHARE_GLYPH = (
   <ActionGlyph>
-    <circle cx="18" cy="5" r="3" />
-    <circle cx="6" cy="12" r="3" />
-    <circle cx="18" cy="19" r="3" />
-    <path d="M8.6 10.5 15.4 6.5" />
-    <path d="M8.6 13.5 15.4 17.5" />
+    <circle cx="17.6" cy="6.2" r="2.6" />
+    <circle cx="6.4" cy="12" r="2.6" />
+    <circle cx="17.6" cy="17.8" r="2.6" />
+    <path d="M8.7 10.8 15.3 7.4" />
+    <path d="M8.7 13.2 15.3 16.6" />
   </ActionGlyph>
 );
 
 const ARCHIVE_GLYPH = (
   <ActionGlyph>
-    <rect x="3" y="4" width="18" height="4" rx="1" />
-    <path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8" />
-    <path d="M10 12h4" />
+    <rect x="3.2" y="4.2" width="17.6" height="4.4" rx="1.4" />
+    <path d="M5.4 8.6v10.2a1.4 1.4 0 0 0 1.4 1.4h10.4a1.4 1.4 0 0 0 1.4-1.4V8.6" />
+    <path d="M9.8 13h4.4" />
   </ActionGlyph>
 );
 
 const RESTORE_GLYPH = (
   <ActionGlyph>
-    <path d="M3 12a9 9 0 1 0 2.6-6.4" />
-    <path d="M3 4v5h5" />
+    <path d="M3.6 2.7v5.6h5.6" />
+    <path d="M4.1 9.2a8.4 8.4 0 1 0 2-2.9L3.6 8.3" />
   </ActionGlyph>
 );
 
 const DELETE_GLYPH = (
   <ActionGlyph>
-    <path d="M4 7h16" />
-    <path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
-    <path d="M6 7v12a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1V7" />
-    <path d="M10 11v5" />
-    <path d="M14 11v5" />
+    <path d="M3.8 6.6h16.4" />
+    <path d="M9.4 6.6V4.8a1.2 1.2 0 0 1 1.2-1.2h2.8a1.2 1.2 0 0 1 1.2 1.2v1.8" />
+    <path d="M5.9 6.6v12.3a1.4 1.4 0 0 0 1.4 1.4h9.4a1.4 1.4 0 0 0 1.4-1.4V6.6" />
+    <path d="M10.2 10.8v5.4" />
+    <path d="M13.8 10.8v5.4" />
   </ActionGlyph>
 );
 
