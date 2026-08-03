@@ -1,5 +1,6 @@
 "use client";
 
+import type { ReactNode } from "react";
 import { useEffect, useRef, useState } from "react";
 
 import { Breakable } from "../../breakable";
@@ -26,6 +27,72 @@ import { WhatsappActivityTimeline, WhatsappButton } from "./candidate-whatsapp";
  * marker is the only reason `overridden_fields` exists: it tells the reader
  * an import will not silently overwrite what they typed.
  */
+
+/** The action row's glyphs.
+ *
+ *  WhatsApp went to an icon first and left the words beside it looking like a
+ *  different kind of control; these follow it so the row reads as one set. Each
+ *  shape is the one the reader has already learnt somewhere else — connected
+ *  nodes for share, a lidded box for archive, a bin for delete, an arrow going
+ *  back for restore — because a glyph nobody recognises is strictly worse than
+ *  the word it replaced.
+ *
+ *  `currentColor` and no explicit size: `.btn-secondary` supplies the ink and
+ *  `.btn-icon` sizes every child to the text line box beside it, so these stay
+ *  the same height as Edit without restating its numbers.
+ *
+ *  `aria-hidden`, because the accessible name lives on the button — the same
+ *  arrangement as `WhatsappGlyph`. */
+function ActionGlyph({ children }: { children: ReactNode }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.8}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      {children}
+    </svg>
+  );
+}
+
+const SHARE_GLYPH = (
+  <ActionGlyph>
+    <circle cx="18" cy="5" r="3" />
+    <circle cx="6" cy="12" r="3" />
+    <circle cx="18" cy="19" r="3" />
+    <path d="M8.6 10.5 15.4 6.5" />
+    <path d="M8.6 13.5 15.4 17.5" />
+  </ActionGlyph>
+);
+
+const ARCHIVE_GLYPH = (
+  <ActionGlyph>
+    <rect x="3" y="4" width="18" height="4" rx="1" />
+    <path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8" />
+    <path d="M10 12h4" />
+  </ActionGlyph>
+);
+
+const RESTORE_GLYPH = (
+  <ActionGlyph>
+    <path d="M3 12a9 9 0 1 0 2.6-6.4" />
+    <path d="M3 4v5h5" />
+  </ActionGlyph>
+);
+
+const DELETE_GLYPH = (
+  <ActionGlyph>
+    <path d="M4 7h16" />
+    <path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
+    <path d="M6 7v12a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1V7" />
+    <path d="M10 11v5" />
+    <path d="M14 11v5" />
+  </ActionGlyph>
+);
 
 const STAGE_LABEL: Record<Candidate["pipeline_stage"], string> = {
   new: "New",
@@ -308,14 +375,20 @@ function Detail({
           >
             Edit
           </button>
+          {/* Icon-only from here down, and the name has to come from
+              `aria-label` — which doubles as the hover tooltip, so a sighted
+              reader who does not recognise the shape is one hover from the
+              word. */}
           {row.record_status !== "merged" && (
             <button
               type="button"
-              className="btn btn-secondary"
+              className="btn btn-secondary btn-icon"
               onClick={() => setSharing(true)}
               disabled={busy}
+              aria-label="Share"
+              title="Share"
             >
-              Share
+              {SHARE_GLYPH}
             </button>
           )}
           {/* Claiming is what CREATES the right to edit, so it is offered
@@ -331,18 +404,46 @@ function Detail({
             <WhatsappButton row={row} onLogged={() => setActivityVersion((v) => v + 1)} />
           )}
           {row.record_status === "active" && (
-            <button type="button" className="btn btn-secondary" onClick={archive} disabled={busy}>
-              {busy ? "Saving…" : "Archive"}
+            <button
+              type="button"
+              className="btn btn-secondary btn-icon"
+              onClick={archive}
+              disabled={busy}
+              // The name stays "Archive" while the request is in flight.
+              // Swapping it to "Saving…" swapped the button's identity out of
+              // the accessibility tree — and a screen reader does not
+              // re-announce a name change anyway, so the swap cost the label
+              // and bought nothing. `aria-busy` is the part that carries.
+              aria-label="Archive"
+              title={busy ? "Saving…" : "Archive"}
+              aria-busy={busy}
+            >
+              {ARCHIVE_GLYPH}
             </button>
           )}
           {row.record_status === "archived" && (
-            <button type="button" className="btn btn-secondary" onClick={restore} disabled={busy}>
-              {busy ? "Saving…" : "Restore"}
+            <button
+              type="button"
+              className="btn btn-secondary btn-icon"
+              onClick={restore}
+              disabled={busy}
+              aria-label="Restore"
+              title={busy ? "Saving…" : "Restore"}
+              aria-busy={busy}
+            >
+              {RESTORE_GLYPH}
             </button>
           )}
           {onDelete && (
-            <button type="button" className="btn btn-secondary" onClick={remove} disabled={busy}>
-              Delete
+            <button
+              type="button"
+              className="btn btn-secondary btn-icon"
+              onClick={remove}
+              disabled={busy}
+              aria-label="Delete"
+              title="Delete"
+            >
+              {DELETE_GLYPH}
             </button>
           )}
         </div>
