@@ -15,6 +15,7 @@ import {
 import { displayNameOf, useAuth, useSignInHref } from "./auth";
 import { resetMembers } from "./dashboard/members";
 import { Logo } from "./logo";
+import { SetupBell } from "./setup-bell";
 
 /** The product's own screens, for someone signed in.
  *
@@ -118,6 +119,12 @@ export function SiteNav() {
         >
           {auth.status === "signed-in" ? (
             <>
+              {/* The onboarding nudge, before Settings — it is about getting
+                  the account finished, not about the account itself, but it
+                  still belongs in this corner rather than the workspace links
+                  on the left for the same reason Settings does: it is
+                  something you do as this account, not part of the work. */}
+              <SetupBell />
               {/* Settings stays in the corner rather than joining the
                   workspace links on the left. It is the one page you reach
                   *as* this account rather than to do the work, so it belongs

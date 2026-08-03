@@ -18,6 +18,19 @@
   --amber-200: #f0dcb8;
   --amber-050: #fdf6e9;
 
+  /* Red, introduced only for the setup bell's unread count (site-nav.tsx /
+     setup-bell.tsx). This is a different job from amber above: amber marks
+     *work waiting* on a record that already exists (a job order missing a
+     field), where this is a *count of unfinished setup steps* — closer to a
+     phone's badge than to a data-quality flag, and the two must not collide
+     into "one attention colour" or a recruiter loses the distinction between
+     "review this" and "you're not done onboarding yet". One value only, the
+     badge fill, paired with `#fff` text the same way `--brand-gradient`
+     already pairs with `#fff` elsewhere in this file — no tint is defined
+     because nothing washes a background with it, and a token nothing uses is
+     an invitation to reach for red where amber is meant. */
+  --rose-600: #dc2626;
+
   /* The pale washes behind the quality badges and the selected row. Named
      rather than inlined so the three states are visibly one family. */
   --blue-050: #eef4ff;
@@ -244,6 +257,82 @@ h3 { font-size: 1.125rem; letter-spacing: -0.01em; font-weight: 650; }
 .nav-menu-item:focus-visible { outline: 2px solid var(--blue-500); outline-offset: -2px; }
 .nav-menu-item:disabled { color: var(--ink-300); cursor: default; }
 .nav-menu-item:disabled:hover { background: none; }
+
+/* The setup bell (setup-bell.tsx). Always reserved at this width in the
+   signed-in corner, whether or not a bell ends up inside it — see the long
+   comment on `SetupBell` for why: without a fixed-size slot, the fetch that
+   decides whether to show it resolves after first paint, and Settings/the
+   account menu would visibly jump when the bell appeared or the day it
+   disappeared for good. `visibility: hidden` rather than `display: none` for
+   the same reason `.nav-auth[data-resolved="no"]` uses it — hidden content
+   still occupies the box. */
+.setup-bell-slot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  min-height: 44px;
+}
+.setup-bell-slot[data-visible="no"] { visibility: hidden; }
+
+.nav-bell-trigger {
+  position: relative;
+  /* A square icon button, not the pill shape `.btn` normally is — there is no
+     label beside the icon, so the padding that gives a text button its shape
+     would just be dead space here. */
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  justify-content: center;
+}
+.nav-bell-trigger[aria-expanded="true"] { background: var(--surface-alt); }
+
+/* The count, in the corner of the bell. Sized for one or two digits; the
+   checklist is fixed at two items so it can never need a third. */
+.nav-bell-badge {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--rose-600);
+  color: #fff;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  line-height: 16px;
+  text-align: center;
+}
+
+.nav-bell-panel {
+  /* Wide enough for a subtitle line to read as a sentence rather than
+     wrapping after every third word; `.nav-menu-panel`'s own `min-width` is
+     the account menu's narrower "one line per row" case. */
+  min-width: max(280px, 100%);
+  padding: 8px;
+}
+.nav-bell-heading {
+  padding: 6px 10px 8px;
+  margin-bottom: 2px;
+  border-bottom: 1px solid var(--line);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--ink-500);
+}
+.nav-bell-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  color: var(--ink-900);
+}
+.nav-bell-item:hover { background: var(--surface-alt); }
+.nav-bell-item:focus-visible { outline: 2px solid var(--blue-500); outline-offset: -2px; }
+.nav-bell-item-label { font-size: 0.9375rem; font-weight: 600; }
+.nav-bell-item-subtitle { font-size: 0.8125rem; color: var(--ink-500); }
+.nav-bell-item + .nav-bell-item { margin-top: 2px; }
 
 .brand { display: flex; align-items: center; gap: 18px; min-height: 74px; }
 .brand-name { font-size: 1.8rem; font-weight: 700; letter-spacing: -0.02em; }
@@ -831,6 +920,14 @@ footer { border-top: 1px solid var(--line); padding: 48px 0 40px; color: var(--i
   .brand-tag { display: none; }
   .brand-name { font-size: 1.6rem; }
   .nav-auth { min-width: 0; }
+  /* The reserved bell slot collapses here rather than holding 44px forever.
+     Above this width the empty slot is cheap and buys a corner that never
+     moves; at 560px it is a visible bite out of a bar that is already
+     dropping `min-width` to fit, and a recruiter who has finished onboarding
+     would carry that gap for good. The cost is a one-time shift on a phone
+     the first time the bell resolves — paid once, by the new user we are
+     nudging, not permanently by everyone past it. */
+  .setup-bell-slot[data-visible="no"] { display: none; }
 }
 
 /* At 320px the wordmark and the sign-in button together are wider than the
