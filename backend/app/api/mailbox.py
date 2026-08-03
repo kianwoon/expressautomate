@@ -25,7 +25,9 @@ from app.core.logging import get_logger
 from app.db.rls import tenant_session
 from app.models import MicrosoftToken, User
 from app.services import ms_auth
+from app.services.events import KIND_MAILBOX, publish
 from app.services.graph.client import GraphAuthError, GraphClient, GraphError
+from app.services.graph.delta import sync_mailbox
 from app.services.graph.preview import offered_windows, preview_inbox
 from app.workers.queue import enqueue
 
@@ -40,9 +42,23 @@ _EXISTING_MAILBOX = text(
 
 # The chosen start date, and whether the walk for it has finished. Read by the
 # settings endpoints, which change that date rather than the mailbox itself.
+# `ingest_paused_at` rides along so the settings payload can say whether
+# intake is running without a second query.
 _MAILBOX_LOOKBACK = text(
-    "SELECT id, initial_sync_from, backfill_completed_at FROM mailboxes"
-    " WHERE user_id = :user_id AND folder_id = 'inbox'"
+    "SELECT id, initial_sync_from, backfill_completed_at, ingest_paused_at"
+    " FROM mailboxes WHERE user_id = :user_id AND folder_id = 'inbox'"
+)
+
+# Idempotent by construction: the `IS NULL` predicate makes a second pause a
+# no-op that keeps the original timestamp — the UI shows "paused since", and a
+# double-click must not quietly move that date.
+_PAUSE_INTAKE = text(
+    "UPDATE mailboxes SET ingest_paused_at = now()"
+    " WHERE id = :mailbox_id AND ingest_paused_at IS NULL"
+)
+
+_RESUME_INTAKE = text(
+    "UPDATE mailboxes SET ingest_paused_at = NULL WHERE id = :mailbox_id"
 )
 
 # Clearing `backfill_completed_at` is not bookkeeping — it is the whole
@@ -224,6 +240,11 @@ async def mailbox_settings(request: Request) -> dict:
     return {
         "initial_sync_from": current.isoformat(),
         "backfill_complete": row.backfill_completed_at is not None,
+        # NULL means intake is running. A timestamp is both the flag and the
+        # date the UI shows — the failure mode of the pause is forgetting it.
+        "ingest_paused_at": (
+            row.ingest_paused_at.isoformat() if row.ingest_paused_at else None
+        ),
         # Only the options that reach further back than the current setting.
         # Offering a shorter one would be a lie: moving the date later
         # un-imports nothing, so the control would read as a delete and behave
@@ -295,6 +316,134 @@ async def extend_lookback(request: Request, body: LookbackRequest) -> dict:
         initial_sync_from=since.isoformat(),
     )
     return {"initial_sync_from": since.isoformat()}
+
+
+@router.post("/mailbox/pause")
+async def pause_intake(request: Request) -> dict:
+    """Stop this recruiter's own mailbox feeding the pipeline.
+
+    No mailbox id in the path, deliberately: the mailbox is resolved from the
+    session the same way `GET /mailbox/settings` resolves it, so there is no
+    cross-user surface to guard wrong.
+
+    The subscription is left alone. Graph keeps notifying us and keeps the
+    subscription renewable; the webhook and the worker jobs drop the work
+    instead. That is what lets resume skip recreating anything.
+    """
+    user_uuid, tenant_uuid = _require_session(request)
+
+    async with tenant_session(tenant_uuid) as session:
+        row = (
+            await session.execute(_MAILBOX_LOOKBACK, {"user_id": user_uuid})
+        ).one_or_none()
+        if row is None:
+            raise HTTPException(status_code=404, detail="No mailbox is being read yet.")
+        if row.ingest_paused_at is not None:
+            # Already paused. Repeating the write would move the "paused
+            # since" date the UI shows, so the original one is returned.
+            return {"paused_at": row.ingest_paused_at.isoformat()}
+        await session.execute(_PAUSE_INTAKE, {"mailbox_id": row.id})
+        paused_at = (
+            await session.execute(
+                text("SELECT ingest_paused_at FROM mailboxes WHERE id = :id"),
+                {"id": row.id},
+            )
+        ).scalar_one()
+
+    # Other open tabs learn now rather than on their next accidental reload —
+    # the same nudge `mark_needs_reauth` sends, for the same reason.
+    await publish(tenant_uuid, KIND_MAILBOX)
+    log.info(
+        "mailbox_intake_paused",
+        tenant_id=str(tenant_uuid),
+        mailbox_id=str(row.id),
+    )
+    return {"paused_at": paused_at.isoformat()}
+
+
+@router.post("/mailbox/resume")
+async def resume_intake(request: Request) -> dict:
+    """Start reading again — from right now, not from where the pause began.
+
+    Clearing `delta_link` would NOT mean "start from now": a null checkpoint
+    makes the next sweep walk the entire folder history, replaying exactly
+    the window the pause exists to skip. So resume establishes a fresh cursor
+    first — a `since = now()` filtered walk whose end product is a new
+    `deltaLink` with the paused window already behind it — and only then
+    clears the pause. The order is load-bearing: unpausing before the new
+    cursor is stored would let the scheduled sweep resume from the pre-pause
+    checkpoint and ingest the vacation.
+
+    Synchronous like `mailbox_preview`, not queued: the filtered walk sees
+    only mail received in the last instant, so it is one Graph round trip —
+    and a failure must leave the mailbox visibly paused rather than "resumed"
+    with a stale cursor waiting to replay.
+
+    `backfill_completed_at` is deliberately left set. Clearing it would queue
+    a backfill of exactly the window this feature exists to skip.
+    """
+    user_uuid, tenant_uuid = _require_session(request)
+
+    async with tenant_session(tenant_uuid) as session:
+        row = (
+            await session.execute(_MAILBOX_LOOKBACK, {"user_id": user_uuid})
+        ).one_or_none()
+
+    if row is None:
+        raise HTTPException(status_code=404, detail="No mailbox is being read yet.")
+    if row.ingest_paused_at is None:
+        # Not paused, nothing to resume — and the cursor must not be touched,
+        # or an idle double-click would discard a perfectly good checkpoint.
+        return {"resumed_from": None}
+
+    # Same operator guard as `mailbox_preview`: this is the other route in
+    # this module that reaches Graph from the web process.
+    if not settings.graph_configured():
+        log.error("graph_base_url_missing", route="mailbox_resume")
+        raise HTTPException(
+            status_code=503,
+            detail="Mailbox access is not configured on this deployment "
+            "(GRAPH_BASE_URL). See docs/setup.md.",
+        )
+
+    resumed_from = datetime.now(UTC)
+    try:
+        token = await ms_auth.access_token_for_user(tenant_uuid, user_uuid)
+    except ms_auth.MailboxNotAuthorised as exc:
+        log.info("mailbox_resume_unauthorised", user_id=str(user_uuid), error=str(exc))
+        raise HTTPException(status_code=403, detail="Reconnect your mailbox.") from exc
+
+    async with GraphClient(token) as graph:
+        try:
+            # Stores the fresh deltaLink itself. Anything the filtered walk
+            # does record arrived at or after `resumed_from`, which is mail
+            # the user asked to start reading again — its fetch jobs may race
+            # the pause still being set for a moment, in which case the rows
+            # sit `pending` until `rescan_stuck` re-enqueues them.
+            await sync_mailbox(tenant_uuid, row.id, graph, since=resumed_from)
+        except GraphAuthError as exc:
+            log.info("mailbox_resume_refused", user_id=str(user_uuid), error=repr(exc))
+            raise HTTPException(status_code=403, detail="Reconnect your mailbox.") from exc
+        except (GraphError, httpx.HTTPStatusError, httpx.RequestError) as exc:
+            # The pause is still in place, and saying so beats a bare 500:
+            # nothing was resumed, and retrying is the fix.
+            log.warning("mailbox_resume_failed", user_id=str(user_uuid), error=repr(exc))
+            raise HTTPException(
+                status_code=502,
+                detail="Microsoft could not be reached just now — intake is still paused.",
+            ) from exc
+
+    async with tenant_session(tenant_uuid) as session:
+        await session.execute(_RESUME_INTAKE, {"mailbox_id": row.id})
+
+    await publish(tenant_uuid, KIND_MAILBOX)
+    log.info(
+        "mailbox_intake_resumed",
+        tenant_id=str(tenant_uuid),
+        mailbox_id=str(row.id),
+        resumed_from=resumed_from.isoformat(),
+    )
+    return {"resumed_from": resumed_from.isoformat()}
 
 
 def _window_start(days: int | None) -> datetime:

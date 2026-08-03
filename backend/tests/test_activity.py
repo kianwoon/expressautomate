@@ -263,10 +263,20 @@ async def test_a_broken_audit_trail_cannot_break_the_sync(
     tenant_id, _user_id, mailbox_id = await agencies("agency-a")
     _wire_sync(monkeypatch, result=DeltaResult(seen=3, recorded=3, capped=False))
 
-    def _explode(*args, **kwargs):
+    # The first session the job opens is the intake-pause gate, which is part
+    # of the sync itself and entitled to fail loudly. The outage this test
+    # stages is the one *after* the sync succeeded — the diary's own write —
+    # so the gate reads through and everything later explodes.
+    real = jobs.tenant_session
+    calls = {"n": 0}
+
+    def _explode_after_the_gate(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return real(*args, **kwargs)
         raise RuntimeError("the events table is gone")
 
-    monkeypatch.setattr(jobs, "tenant_session", _explode)
+    monkeypatch.setattr(jobs, "tenant_session", _explode_after_the_gate)
 
     # No exception: the sync completed, and that is what the caller is told.
     await jobs.delta_sync_mailbox(
