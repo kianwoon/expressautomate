@@ -183,8 +183,16 @@ class BodyStore(Protocol):
     async def get(self, key: str) -> str | None: ...
     async def get_bytes(self, key: str) -> bytes | None: ...
     async def delete(self, *keys: str) -> None: ...
-    async def put_bytes(self, key: str, content: bytes, content_type: str) -> None: ...
-    async def presigned_get(self, key: str, ttl_seconds: int) -> str: ...
+    async def put_bytes(
+        self,
+        key: str,
+        content: bytes,
+        content_type: str,
+        cache_control: str | None = None,
+    ) -> None: ...
+    async def presigned_get(
+        self, key: str, ttl_seconds: int, cache_control: str | None = None
+    ) -> str: ...
 
 
 class R2BodyStore:
@@ -256,12 +264,24 @@ class R2BodyStore:
                     ) from exc
                 raise
 
-    async def put_bytes(self, key: str, content: bytes, content_type: str) -> None:
+    async def put_bytes(
+        self,
+        key: str,
+        content: bytes,
+        content_type: str,
+        cache_control: str | None = None,
+    ) -> None:
         """Store binary content (the avatar path — everything else here is text).
 
         Kept as a sibling to `put` rather than a replacement so every existing
         caller storing `str` bodies is untouched.
+
+        `cache_control` is stored ON the object rather than only signed into
+        each URL, so a browser that reaches the object by any route is told how
+        long it may keep the bytes. Without it R2 answers with no caching
+        directive at all and every read is a full download.
         """
+        extra = {"CacheControl": cache_control} if cache_control else {}
         async with self._client() as s3:
             try:
                 await s3.put_object(
@@ -269,6 +289,7 @@ class R2BodyStore:
                     Key=key,
                     Body=content,
                     ContentType=content_type,
+                    **extra,
                 )
             except ClientError as exc:
                 if exc.response.get("Error", {}).get("Code") == _NO_SUCH_BUCKET:
@@ -278,16 +299,27 @@ class R2BodyStore:
                     ) from exc
                 raise
 
-    async def presigned_get(self, key: str, ttl_seconds: int) -> str:
+    async def presigned_get(
+        self, key: str, ttl_seconds: int, cache_control: str | None = None
+    ) -> str:
         """A time-limited URL for reading `key` directly from R2.
 
         Used for the avatar path so the browser fetches the image straight
         from R2 rather than proxying bytes through the API.
+
+        `cache_control` is signed into the URL as `response-cache-control`,
+        which makes R2 return that header on the response. It is what lets the
+        browser reuse the bytes instead of re-downloading the whole image every
+        time the panel opens — and because it is part of the signature, a
+        caller cannot lengthen it by editing the query string.
         """
+        params = {"Bucket": settings.R2_BUCKET_NAME, "Key": key}
+        if cache_control:
+            params["ResponseCacheControl"] = cache_control
         async with self._client() as s3:
             return await s3.generate_presigned_url(
                 "get_object",
-                Params={"Bucket": settings.R2_BUCKET_NAME, "Key": key},
+                Params=params,
                 ExpiresIn=ttl_seconds,
             )
 
@@ -366,6 +398,7 @@ class InMemoryBodyStore:
     def __init__(self) -> None:
         self.objects: dict[str, str] = {}
         self.binary_objects: dict[str, tuple[bytes, str]] = {}
+        self.cache_control: dict[str, str | None] = {}
 
     async def put(self, key: str, content: str) -> None:
         self.objects[key] = content
@@ -381,9 +414,20 @@ class InMemoryBodyStore:
         for key in keys:
             self.objects.pop(key, None)
             self.binary_objects.pop(key, None)
+            self.cache_control.pop(key, None)
 
-    async def put_bytes(self, key: str, content: bytes, content_type: str) -> None:
+    async def put_bytes(
+        self,
+        key: str,
+        content: bytes,
+        content_type: str,
+        cache_control: str | None = None,
+    ) -> None:
         self.binary_objects[key] = (content, content_type)
+        self.cache_control[key] = cache_control
 
-    async def presigned_get(self, key: str, ttl_seconds: int) -> str:
-        return f"https://fake-r2.test/{key}?ttl={ttl_seconds}"
+    async def presigned_get(
+        self, key: str, ttl_seconds: int, cache_control: str | None = None
+    ) -> str:
+        suffix = f"&cc={cache_control}" if cache_control else ""
+        return f"https://fake-r2.test/{key}?ttl={ttl_seconds}{suffix}"

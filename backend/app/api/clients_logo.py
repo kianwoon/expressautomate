@@ -41,6 +41,17 @@ router = APIRouter(tags=["clients"])
 
 _STORED_MIME = "image/png"
 
+
+def _cache_control() -> str:
+    """What a browser is allowed to do with the bytes once it has them.
+
+    Same reasoning as `_cache_control` in `candidates_avatar.py`, including why
+    there is no `immutable`: a presigned URL's timestamp has second
+    granularity, so a replacement re-signed inside the same clock second would
+    otherwise be served from cache as the logo it replaced.
+    """
+    return f"private, max-age={settings.CLIENT_LOGO_CACHE_MAX_AGE_SECONDS}"
+
 # Which Pillow plugins `Image.open` is allowed to try. A module constant, not a
 # setting: this is a security allowlist and must not be reachable from .env,
 # where widening it would be a config change rather than a code review. Left
@@ -135,7 +146,11 @@ def _reencode(content: bytes) -> bytes:
             #
             # No `exif=` and no `icc_profile=`: saving a fresh image without
             # them IS the strip. Nothing is carried over from the original.
-            canvas.save(buffer, format="PNG")
+            # `optimize` spends a little more CPU once, at upload, to try
+            # harder at the compression pass. A wordmark is flat colour, which
+            # is exactly what that pass is good at, and the bytes it saves are
+            # paid back on every read.
+            canvas.save(buffer, format="PNG", optimize=True)
     except Image.DecompressionBombError as exc:
         raise HTTPException(
             status_code=400, detail="Logo dimensions are implausibly large."
@@ -174,7 +189,7 @@ async def upload_logo(
     # Derived from the authenticated tenant, never from anything the client
     # sent. This is the line that makes cross-tenant writes impossible.
     key = client_logo_key(tenant_uuid, client_id)
-    await store.put_bytes(key, encoded, _STORED_MIME)
+    await store.put_bytes(key, encoded, _STORED_MIME, _cache_control())
 
     updated_at = datetime.now(UTC)
     async with tenant_session(tenant_uuid) as session:
@@ -216,7 +231,9 @@ async def get_logo(
     # Recomputed rather than read back from the row: the stored value should
     # match, but signing whatever a row happens to hold would turn any future
     # write path into a way to sign an arbitrary key.
-    url = await store.presigned_get(client_logo_key(tenant_uuid, client_id), ttl)
+    url = await store.presigned_get(
+        client_logo_key(tenant_uuid, client_id), ttl, _cache_control()
+    )
     return {"url": url, "expires_in": ttl}
 
 

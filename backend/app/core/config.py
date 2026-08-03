@@ -191,22 +191,45 @@ class Settings(BaseSettings):
 
     # --- Candidate avatar photos (shown only inside the candidate modal) ---
     AVATAR_MAX_UPLOAD_BYTES: int = Field(default=5 * 1024 * 1024, gt=0)
-    AVATAR_MAX_PIXEL_DIMENSION: int = Field(default=1024, gt=0)
+    # The photo is drawn at 56 CSS pixels. 512 is already 4x that — enough
+    # headroom for a 3x display and for a future larger crop — and every pixel
+    # beyond it is bytes the recruiter waits for and never sees. It was 1024,
+    # which is 4x the area for no visible difference.
+    AVATAR_MAX_PIXEL_DIMENSION: int = Field(default=512, gt=0)
     AVATAR_PRESIGNED_URL_TTL_SECONDS: int = Field(default=300, gt=0)
     # What every avatar is re-encoded *to*. Whatever the client uploads is
     # decoded and written back out in this format, which is what strips EXIF
     # (phone photos carry GPS). A Pillow format name, not a MIME type: the MIME
     # type is looked up from Pillow's own registry so the two can never drift.
-    # PNG by default because it is lossless and keeps transparency.
-    AVATAR_STORED_FORMAT: str = "PNG"
+    #
+    # WEBP rather than PNG. PNG is lossless, and losslessly encoding a
+    # photograph is the worst case for it — a phone snapshot lands at a few
+    # megabytes where the same image in WEBP is tens of kilobytes, for a circle
+    # 56 pixels across. WEBP keeps the alpha channel PNG was chosen for, and is
+    # supported by every browser this product targets. Anything Pillow can save
+    # is accepted here; only the default moved.
+    AVATAR_STORED_FORMAT: str = "WEBP"
+    # How long a browser may reuse avatar bytes it has already downloaded,
+    # signed into the presigned URL as `response-cache-control` and stored on
+    # the object. Tied to the URL's own lifetime by default rather than set
+    # independently: caching bytes for longer than the URL that names them
+    # cannot help, because the next URL is a different one.
+    AVATAR_CACHE_MAX_AGE_SECONDS: int = Field(default=300, ge=0)
 
     # --- Client company logos (shown in the clients panel and sourcing) ---
     # A company logo, not a passport photo: its own limits, because the two
     # have no reason to move together and a shared constant would only reveal
     # the coupling when changing one broke the other.
     CLIENT_LOGO_MAX_UPLOAD_BYTES: int = Field(default=5 * 1024 * 1024, gt=0)
-    CLIENT_LOGO_MAX_PIXEL_DIMENSION: int = Field(default=1024, gt=0)
+    # Same reasoning as the avatar bound: the mark is drawn at 56 pixels, and a
+    # 1024 square PNG is four times the area for nothing anyone can see. A
+    # wordmark stays legible far below that.
+    CLIENT_LOGO_MAX_PIXEL_DIMENSION: int = Field(default=512, gt=0)
     CLIENT_LOGO_PRESIGNED_URL_TTL_SECONDS: int = Field(default=300, gt=0)
+    # The logo counterpart of AVATAR_CACHE_MAX_AGE_SECONDS. Separate for the
+    # same reason the two size limits are separate: the pages differ, and a
+    # shared constant would only reveal the coupling by breaking one of them.
+    CLIENT_LOGO_CACHE_MAX_AGE_SECONDS: int = Field(default=300, ge=0)
 
     # --- CV documents ---
     # How much text one CV may contribute. This is the decompression-bomb

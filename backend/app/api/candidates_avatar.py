@@ -81,6 +81,25 @@ def _stored_mime() -> str:
     return mime
 
 
+def _cache_control() -> str:
+    """What a browser is allowed to do with the bytes once it has them.
+
+    `private` because the object is one candidate's photo behind a signed URL,
+    so no shared proxy has any business keeping a copy. Without this header R2
+    answers with no caching directive at all and the browser re-downloads the
+    whole image every time the panel opens.
+
+    Deliberately no `immutable`. It would be the natural thing to add — the key
+    is deterministic and the frontend keys its own URL cache on
+    `avatar_updated_at` — but a presigned URL's timestamp has only second
+    granularity, so a replacement uploaded and re-signed inside the same clock
+    second produces a byte-identical URL for different bytes. `max-age` alone
+    lets the browser revalidate its way out of that; `immutable` tells it not
+    to bother, and the recruiter sees the photo they just replaced.
+    """
+    return f"private, max-age={settings.AVATAR_CACHE_MAX_AGE_SECONDS}"
+
+
 async def _read_within_limit(upload: UploadFile) -> bytes:
     """Read the upload, refusing anything over the configured size.
 
@@ -176,7 +195,7 @@ async def upload_avatar(
     # Derived from the authenticated tenant, never from anything the client
     # sent. This is the line that makes cross-tenant writes impossible.
     key = avatar_key(tenant_uuid, candidate_id)
-    await store.put_bytes(key, encoded, _stored_mime())
+    await store.put_bytes(key, encoded, _stored_mime(), _cache_control())
 
     updated_at = datetime.now(UTC)
     async with tenant_session(tenant_uuid) as session:
@@ -218,7 +237,9 @@ async def get_avatar(
     # Recomputed rather than read back from the row: the stored value should
     # match, but signing whatever a row happens to hold would turn any future
     # write path into a way to sign an arbitrary key.
-    url = await store.presigned_get(avatar_key(tenant_uuid, candidate_id), ttl)
+    url = await store.presigned_get(
+        avatar_key(tenant_uuid, candidate_id), ttl, _cache_control()
+    )
     return {"url": url, "expires_in": ttl}
 
 

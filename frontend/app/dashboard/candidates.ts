@@ -35,6 +35,7 @@ import {
   candidateWhatsappSendPath,
   WA_SESSION_PATH,
 } from "../api";
+import { cacheKey, cachedSignedUrl, forget } from "./signed-url-cache";
 
 /**
  * The agency's candidate list, and the one place that talks to the
@@ -781,18 +782,34 @@ export async function getCandidateDocumentUrl(
 
 export type AvatarUrl = { url: string; expires_in: number };
 
+/** Namespaces this candidate's photo inside the shared signed-URL cache, so a
+ *  candidate id and a client id that happen to collide cannot swap images. */
+const AVATAR_CACHE_KIND = "candidate-avatar";
+
 /** A presigned URL good for roughly `expires_in` seconds — `null` means the
- *  candidate has no photo (a 404), not a failed request. Callers must not
- *  hold onto the URL past the component's lifetime: it is re-fetched every
- *  time the panel opens rather than cached anywhere longer-lived. */
-export async function getCandidateAvatar(id: string): Promise<AvatarUrl | null> {
-  const res = await fetch(candidateAvatarPath(id), {
-    credentials: "include",
-    headers: { Accept: "application/json" },
-  });
-  if (res.status === 404) return null;
-  if (!res.ok) throw new ApiError(await readError(res));
-  return (await res.json()) as AvatarUrl;
+ *  candidate has no photo (a 404), not a failed request.
+ *
+ *  Memoised in memory for the URL's own lifetime, keyed on `version`
+ *  (`avatar_updated_at`), so re-opening the same panel returns the *same* URL
+ *  string and the browser reuses the image it already has instead of
+ *  downloading it again. See `signed-url-cache.ts` for why that string has to
+ *  be stable and why nothing here is persisted. Callers that have no version
+ *  to pass get the old behaviour: a fresh request every time. */
+export async function getCandidateAvatar(
+  id: string,
+  version: string | null = null,
+): Promise<AvatarUrl | null> {
+  const fetchIt = async (): Promise<AvatarUrl | null> => {
+    const res = await fetch(candidateAvatarPath(id), {
+      credentials: "include",
+      headers: { Accept: "application/json" },
+    });
+    if (res.status === 404) return null;
+    if (!res.ok) throw new ApiError(await readError(res));
+    return (await res.json()) as AvatarUrl;
+  };
+  if (version === null) return fetchIt();
+  return cachedSignedUrl(cacheKey(AVATAR_CACHE_KIND, id, version), fetchIt);
 }
 
 export async function uploadCandidateAvatar(
@@ -1150,6 +1167,9 @@ export async function deleteCandidateAvatar(id: string): Promise<void> {
     headers: { Accept: "application/json" },
   });
   if (!res.ok) throw new ApiError(await readError(res));
+  // Removal is the one change with no new `avatar_updated_at` to miss the
+  // cache on — the column goes null — so the entry has to be dropped by hand.
+  forget(AVATAR_CACHE_KIND, id);
 }
 
 // ------------------------------------------------ ownership and sharing

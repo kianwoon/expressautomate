@@ -84,7 +84,7 @@ export function ClientLogo({
     }
     (async () => {
       try {
-        const url = await getClientLogo(client.id);
+        const url = await getClientLogo(client.id, client.logo_updated_at);
         if (cancelled) return;
         setLogo(url ? { status: "ready", url: url.url } : { status: "none" });
       } catch {
@@ -104,8 +104,11 @@ export function ClientLogo({
     setBusy(true);
     setError(null);
     try {
-      await uploadClientLogo(client.id, file);
-      const url = await getClientLogo(client.id);
+      // The version the upload just returned, not the stale one on `client` —
+      // it is what the URL cache keys on, so passing the old one would look
+      // like a hit and show the logo that was replaced.
+      const uploaded = await uploadClientLogo(client.id, file);
+      const url = await getClientLogo(client.id, uploaded.logo_updated_at);
       if (url) setLogo({ status: "ready", url: url.url });
       onChanged?.();
     } catch (err) {
@@ -150,7 +153,18 @@ export function ClientLogo({
     // A short-lived presigned URL, not an asset `next/image` can optimise or
     // cache — same tradeoff as `candidate-avatar.tsx`.
     // eslint-disable-next-line @next/next/no-img-element
-    <img className="cl-logo-photo" src={logo.url} alt={alt} width={56} height={56} />
+    <img
+      className="cl-logo-photo"
+      src={logo.url}
+      alt={alt}
+      width={56}
+      height={56}
+      decoding="async"
+      // The sourcing list draws one of these per card, most of them below the
+      // fold. Deferring the ones nobody has scrolled to is the difference
+      // between a handful of image requests and one per result.
+      loading="lazy"
+    />
   ) : (
     <span
       className="cl-logo-initials"

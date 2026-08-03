@@ -19,6 +19,7 @@ import {
   clientUnmergePath,
   clientUnsuspendPath,
 } from "../api";
+import { cacheKey, cachedSignedUrl, forget } from "./signed-url-cache";
 
 /**
  * The agency's client list, and the one place that talks to the clients
@@ -476,18 +477,33 @@ export async function deleteContact(clientId: string, contactId: string): Promis
 
 export type LogoUrl = { url: string; expires_in: number };
 
+/** Namespaces this client's logo inside the shared signed-URL cache, so a
+ *  client id and a candidate id that happen to collide cannot swap images. */
+const LOGO_CACHE_KIND = "client-logo";
+
 /** A presigned URL good for roughly `expires_in` seconds — `null` means the
- *  client has no logo (a 404), not a failed request. Callers must not hold
- *  onto the URL past the component's lifetime: re-fetch it fresh rather than
- *  caching it anywhere longer-lived. Mirrors `getCandidateAvatar`. */
-export async function getClientLogo(id: string): Promise<LogoUrl | null> {
-  const res = await fetch(clientLogoPath(id), {
-    credentials: "include",
-    headers: { Accept: "application/json" },
-  });
-  if (res.status === 404) return null;
-  if (!res.ok) throw new ApiError(await readError(res));
-  return (await res.json()) as LogoUrl;
+ *  client has no logo (a 404), not a failed request.
+ *
+ *  Memoised in memory for the URL's own lifetime, keyed on `version`
+ *  (`logo_updated_at`) — see `getCandidateAvatar`, which this mirrors. It
+ *  matters more here: the sourcing list renders one `ClientLogo` per card
+ *  (`job-orders-sourcing.tsx`), several of them routinely the same client, so
+ *  without this each card signs and downloads the same logo for itself. */
+export async function getClientLogo(
+  id: string,
+  version: string | null = null,
+): Promise<LogoUrl | null> {
+  const fetchIt = async (): Promise<LogoUrl | null> => {
+    const res = await fetch(clientLogoPath(id), {
+      credentials: "include",
+      headers: { Accept: "application/json" },
+    });
+    if (res.status === 404) return null;
+    if (!res.ok) throw new ApiError(await readError(res));
+    return (await res.json()) as LogoUrl;
+  };
+  if (version === null) return fetchIt();
+  return cachedSignedUrl(cacheKey(LOGO_CACHE_KIND, id, version), fetchIt);
 }
 
 export async function uploadClientLogo(
@@ -575,4 +591,7 @@ export async function deleteClientLogo(id: string): Promise<void> {
     headers: { Accept: "application/json" },
   });
   if (!res.ok) throw new ApiError(await readError(res));
+  // Removal is the one change with no new `logo_updated_at` to miss the cache
+  // on — the column goes null — so the entry has to be dropped by hand.
+  forget(LOGO_CACHE_KIND, id);
 }
