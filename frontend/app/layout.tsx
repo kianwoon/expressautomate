@@ -2,13 +2,13 @@ import type { Metadata } from "next";
 import "./globals.css";
 import "./app.css";
 
-const TITLE = "expressautomate.app — AI recruitment operations";
+const TITLE = "expressautomate.app — find a place for each person";
 
 /**
  * Bump when any raster in public/ that this page links is redrawn — the three
  * icons or og.png. See the note on `icons` below for the measurement behind it.
  */
-const ASSET_VERSION = "3";
+const ASSET_VERSION = "4";
 
 const OG_IMAGE = `/og.png?v=${ASSET_VERSION}`;
 
@@ -16,7 +16,7 @@ const OG_IMAGE = `/og.png?v=${ASSET_VERSION}`;
    two lines and the description at two more, so this says what the product
    does and stops — no feature list that will be cut mid-word. */
 const PREVIEW_DESCRIPTION =
-  "AI recruitment operations — consolidate your agency's scattered recruitment data into one structured, searchable picture, so your team acts on evidence instead of retyping.";
+  "Recruitment operations built on a simple belief — every candidate has strengths worth finding, and a client deserves the pre-work to recommend the right one.";
 
 /**
  * metadataBase makes every relative URL below absolute in the emitted HTML,
@@ -31,7 +31,7 @@ export const metadata: Metadata = {
   metadataBase: new URL("https://expressautomate.app"),
   title: TITLE,
   description:
-    "AI recruitment operations for small agencies. Consolidate scattered recruitment data into one structured, searchable record — job orders, candidates, clients and the evidence behind each. Starts with read-only Outlook access.",
+    "AI recruitment operations for Singapore agencies. One record per candidate, the pre-work done before a client asks, and the evidence behind every field. Starts with read-only Outlook access.",
   openGraph: {
     siteName: "expressautomate.app",
     title: TITLE,
@@ -44,7 +44,7 @@ export const metadata: Metadata = {
         url: OG_IMAGE,
         width: 1200,
         height: 630,
-        alt: "expressautomate.app — your agency knows more than any one person can see. Put it in one place.",
+        alt: "expressautomate.app — a place for each person, and a client worth building with.",
       },
     ],
   },

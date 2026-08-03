@@ -12,9 +12,9 @@ import { SiteNav } from "./site-nav";
 
 /** The promises under the hero copy — what an agency owner is buying. */
 const HERO_POINTS = [
-  "Capture every role automatically",
-  "Free your recruiters from manual work",
-  "See your market with real data",
+  "One record per candidate, not a folder that hides them",
+  "The pre-work done before a client asks",
+  "Built for Singapore recruitment agencies",
 ] as const;
 
 /** The three objections an agency raises before reading any further.
@@ -200,6 +200,32 @@ const SECURITY_STRIP = [
   "Every field traceable to its email",
 ] as const;
 
+/**
+ * The two beliefs the product is built around, said as beliefs rather than as
+ * features — because the vision outruns what is built today. Each card names
+ * what is real now and what is still ahead, the same honesty the connector
+ * list applies to its planned rows. A card that stated the full vision as
+ * today's product would be the one over-claim this page exists to avoid.
+ */
+const MISSION = [
+  {
+    icon: "users",
+    title: "Treasure every candidate",
+    belief:
+      "Everyone has strengths and unique value. The work is to find a place for each person, and let them contribute — not to filter people out against a checklist.",
+    today:
+      "Today that starts with a full record per person — a CV read into a work-history timeline, skills and notes kept in one place — so a candidate is never reduced to the last role they matched. A strength read that is not tied to any one job is the work ahead.",
+  },
+  {
+    icon: "building",
+    title: "Elevate the service to clients",
+    belief:
+      "Do the pre-work — assess, validate, recommend the best candidate possible. Then work with the client to manage not just the current need, but future needs and expansion.",
+    today:
+      "Today that means every job order arrives pre-structured, candidates are scored and eligibility-checked before you forward a name, and each client keeps a history of what you have filled for them. The fuller, forward-looking client view is the work ahead.",
+  },
+] as const;
+
 export default function Home() {
   return (
     <>
@@ -211,16 +237,15 @@ export default function Home() {
             <div>
               <span className="eyebrow">For recruitment agencies of 3–50</span>
               <h1 style={{ marginTop: 14 }}>
-                From scattered data
+                <span className="gradient-text">A place for each person.</span>
                 <br />
-                <span className="gradient-text">to clear decisions,</span>
-                <br />
-                every day.
+                A client worth building with.
               </h1>
               <p className="lede" style={{ marginTop: 20 }}>
-                What clients pay, which skills keep recurring, which roles never fill — the
-                recruitment work your team already does becomes the evidence they act on, instead
-                of scattering across mailboxes, spreadsheets and people&rsquo;s heads.
+                We believe every candidate has strengths worth finding — not a checkbox to filter
+                against — and that a client deserves the pre-work to assess, validate and recommend
+                the right person, not just a quick fill. expressautomate starts that work today,
+                from the recruitment mail your team already handles.
               </p>
 
               <ul className="ticks">
@@ -254,6 +279,36 @@ export default function Home() {
                     {t.label}
                   </span>
                 </span>
+              ))}
+            </div>
+          </div>
+        </section>
+
+        <section id="why" className="alt">
+          <div className="wrap">
+            <div className="head-center">
+              <span className="eyebrow">Why we are building this</span>
+              <h2 style={{ marginTop: 12 }}>Two beliefs, in plain words</h2>
+              <p className="body" style={{ marginTop: 12 }}>
+                The product is early, and these are the beliefs shaping it. Each one names what
+                exists today, and what is still ahead.
+              </p>
+            </div>
+
+            <div className="grid-2" style={{ marginTop: 36 }}>
+              {MISSION.map((m) => (
+                <div className="card" key={m.title}>
+                  <div className="icon">
+                    <Icon name={m.icon} />
+                  </div>
+                  <h3>{m.title}</h3>
+                  <p className="body" style={{ marginTop: 10, fontSize: "0.9375rem" }}>
+                    {m.belief}
+                  </p>
+                  <p className="body" style={{ marginTop: 12, fontSize: "0.875rem", color: "var(--ink-500)" }}>
+                    {m.today}
+                  </p>
+                </div>
               ))}
             </div>
           </div>
@@ -407,8 +462,9 @@ export default function Home() {
             <div>
               <h2>What using it should feel like</h2>
               <p className="body" style={{ marginTop: 12 }}>
-                We are looking to work with a small number of Singapore recruitment agencies and build
-                the product alongside them.
+                We are building for agencies who want to find a place for each person, not just fill
+                a seat — and to earn a client&rsquo;s longer trust, not just this month&rsquo;s brief.
+                We are looking to work with a small number of Singapore agencies and build it with them.
               </p>
               {/* Said once, plainly, rather than hidden in small print. */}
               <p className="illustrative" style={{ marginTop: 16 }}>

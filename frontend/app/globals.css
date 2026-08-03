@@ -394,6 +394,7 @@ section { padding: 60px 0; }
 .hero { padding: 64px 0 48px; background: linear-gradient(180deg, #f7fbff 0%, #ffffff 100%); }
 .alt { background: var(--surface-alt); border-block: 1px solid var(--line); }
 
+.grid-2 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 28px; }
 .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 28px; }
 .grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 22px; }
 .split { display: grid; grid-template-columns: 1.05fr 0.95fr; gap: 56px; align-items: center; }
@@ -787,7 +788,7 @@ footer { border-top: 1px solid var(--line); padding: 48px 0 40px; color: var(--i
 @media (max-width: 860px) {
   section { padding: 40px 0; }
   .hero { padding: 32px 0 32px; }
-  .grid-3, .grid-4, .split, .hero-grid { grid-template-columns: 1fr; gap: 24px; }
+  .grid-2, .grid-3, .grid-4, .split, .hero-grid { grid-template-columns: 1fr; gap: 24px; }
   /* The name used to be hidden here, because name + "Switch account" +
      "Sign out" was three things too many for a phone nav and pushed the auth
      corner off the row. All three now live inside the account menu, so the

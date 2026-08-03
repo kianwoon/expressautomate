@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- The public site only. /dashboard and /settings are behind sign-in and
+     carry no indexable content; they are excluded here and disallowed in
+     robots.txt. trailingSlash is on (next.config.ts), so each path ends in /. -->
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url><loc>https://expressautomate.app/</loc><priority>1.0</priority></url>
+  <url><loc>https://expressautomate.app/about/</loc><priority>0.5</priority></url>
+  <url><loc>https://expressautomate.app/blog/</loc><priority>0.3</priority></url>
+  <url><loc>https://expressautomate.app/careers/</loc><priority>0.3</priority></url>
+  <url><loc>https://expressautomate.app/help/</loc><priority>0.4</priority></url>
+  <url><loc>https://expressautomate.app/pricing/</loc><priority>0.5</priority></url>
+  <url><loc>https://expressautomate.app/privacy/</loc><priority>0.3</priority></url>
+  <url><loc>https://expressautomate.app/terms/</loc><priority>0.3</priority></url>
+  <url><loc>https://expressautomate.app/updates/</loc><priority>0.4</priority></url>
+  <url><loc>https://expressautomate.app/use-cases/</loc><priority>0.5</priority></url>
+</urlset>

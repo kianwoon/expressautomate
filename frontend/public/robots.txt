@@ -1,0 +1,8 @@
+# The app behind sign-in is no use to a crawler, so it is disallowed; the
+# public site (landing, legal, and the pages that explain the product) is open.
+User-agent: *
+Allow: /
+Disallow: /dashboard
+Disallow: /settings
+
+Sitemap: https://expressautomate.app/sitemap.xml
