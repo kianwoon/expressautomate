@@ -283,7 +283,7 @@ describe('SessionManager', { skip: SKIP }, () => {
     const connected = await manager.status(ref);
     assert.equal(connected.status, 'connected');
     assert.equal(connected.qr, null);
-    assert.equal(connected.phoneNumber, '6591234567');
+    assert.equal(connected.phoneNumber, '+6591234567');
 
     assert.ok(pushed.some((p) => p.qr === 'raw-qr-string'), 'the QR change was pushed for the SSE nudge');
 

@@ -686,8 +686,12 @@ export function toJid(to: string): string {
   return `${to.replace(/\D/g, '')}@s.whatsapp.net`;
 }
 
-/** `"6591234567:12@s.whatsapp.net"` → `"6591234567"`. Baileys' own jid can
- *  carry a device suffix after `:`; the phone number is only the user part. */
+/** `"6591234567:12@s.whatsapp.net"` → `"+6591234567"`. Baileys' own jid can
+ *  carry a device suffix after `:`; the phone number is only the user part.
+ *  The `+` is added back here, not left to whatever reads `phoneNumber`
+ *  later — a jid's user part never carries it, but this function's name and
+ *  every caller's expectation is E.164, and E.164 always has one. */
 function jidToE164(jid: string): string {
-  return jid.split('@')[0]?.split(':')[0] ?? jid;
+  const digits = jid.split('@')[0]?.split(':')[0] ?? jid;
+  return digits ? `+${digits}` : digits;
 }
