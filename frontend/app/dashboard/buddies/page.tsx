@@ -130,14 +130,7 @@ function Workspace() {
             Showing {buddies.length} {buddies.length === 1 ? "buddy" : "buddies"}.
           </p>
           <div className="card jo-table-card">
-            <table className="jo-table jo-table-clients">
-              <colgroup>
-                <col style={{ width: "22%" }} />
-                <col style={{ width: "28%" }} />
-                <col style={{ width: "18%" }} />
-                <col style={{ width: "18%" }} />
-                <col style={{ width: "14%" }} />
-              </colgroup>
+            <table className="jo-table" style={{ tableLayout: "auto", minWidth: 720 }}>
               <thead>
                 <tr>
                   {COLUMNS.map((col) => (
