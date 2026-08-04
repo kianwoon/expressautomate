@@ -265,11 +265,14 @@ function Detail({
 
       {/* Above the fields, not below them: whose job order this is changes
           whether the rest is yours to act on, so it has to be read first.
-          "Unassigned" is a state a recruiter can do something about, which is
-          why it is said in words rather than left as an absent line. */}
+          The buddy who referred the client IS the owner — they brought the
+          account in and manage the relationship. "Unassigned" is when no
+          buddy is linked yet. */}
       <p className="jo-detail-owner" data-testid="jo-detail-owner">
         <span className="row-k">Owner</span>
-        {row.assigned_user_id && row.assignee_name ? (
+        {row.buddy_name ? (
+          <span>{row.buddy_name}</span>
+        ) : row.assigned_user_id && row.assignee_name ? (
           <>
             <Initials name={row.assignee_name} seed={row.assigned_user_id} size={22} />
             <span>{row.assignee_name}</span>

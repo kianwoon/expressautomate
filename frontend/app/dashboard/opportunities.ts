@@ -137,6 +137,9 @@ export type Opportunity = {
    *  just filed a job order needs to see which company they chose. `null`
    *  exactly when `client_id` is. */
   client_name: string | null;
+  /** The buddy who referred this client — the external recruiter who owns the
+   *  account. Shown as "Owner" in the detail panel. `null` when no buddy. */
+  buddy_name?: string | null;
   /** Where the row came from: read out of an email, or typed by a recruiter. */
   source: "pipeline" | "manual";
   /** Visible to me because a colleague shared it, rather than because it is

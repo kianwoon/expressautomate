@@ -53,6 +53,8 @@ from app.api.auth import _require_session_with_role
 from app.core.config import settings
 from app.db.rls import tenant_session
 from app.models import (
+    Buddy,
+    BuddyReferral,
     Client,
     EmailMessage,
     Opportunity,
@@ -212,6 +214,8 @@ def _row_select(user_uuid: uuid.UUID):
     email = aliased(EmailMessage)
     assignee = aliased(User)
     linked_client = aliased(Client)
+    buddy = aliased(Buddy)
+    buddy_referral = aliased(BuddyReferral)
     return (
         select(
             Opportunity,
@@ -220,6 +224,7 @@ def _row_select(user_uuid: uuid.UUID):
             _assignee_name_expr(assignee).label("assignee_name"),
             linked_client.name.label("client_name"),
             shared_with_me_exists(user_uuid).label("shared_with_me"),
+            buddy.name.label("buddy_name"),
         )
         # OUTER, and that matters: `email_message_id` is nullable — a job
         # order typed in by hand has no email at all, and a retention purge
@@ -252,6 +257,24 @@ def _row_select(user_uuid: uuid.UUID):
             and_(
                 linked_client.id == Opportunity.client_id,
                 linked_client.tenant_id == Opportunity.tenant_id,
+            ),
+            isouter=True,
+        )
+        # The buddy who referred this client — the person who actually owns
+        # the account. OUTER because not every client has a buddy referral.
+        .join(
+            buddy_referral,
+            and_(
+                buddy_referral.client_id == Opportunity.client_id,
+                buddy_referral.tenant_id == Opportunity.tenant_id,
+            ),
+            isouter=True,
+        )
+        .join(
+            buddy,
+            and_(
+                buddy.id == buddy_referral.buddy_id,
+                buddy.tenant_id == buddy_referral.tenant_id,
             ),
             isouter=True,
         )
@@ -393,6 +416,7 @@ async def list_opportunities(
                 assignee_name,
                 client_name,
                 shared_with_me,
+                buddy_name,
             )
             for (
                 opportunity,
@@ -401,6 +425,7 @@ async def list_opportunities(
                 assignee_name,
                 client_name,
                 shared_with_me,
+                buddy_name,
             ) in rows
         ],
         "total": total,
@@ -568,7 +593,7 @@ async def get_opportunity(opportunity_id: uuid.UUID, request: Request) -> dict:
         evidence = await _evidence_counts(session, [opportunity_id])
         codes = await _decoded_codes(session, [opportunity_id])
 
-    opportunity, internet_id, graph_id, assignee_name, client_name, shared = row
+    opportunity, internet_id, graph_id, assignee_name, client_name, shared, buddy_name = row
     return _payload(
         opportunity,
         internet_id,
@@ -578,6 +603,7 @@ async def get_opportunity(opportunity_id: uuid.UUID, request: Request) -> dict:
         assignee_name,
         client_name,
         shared,
+        buddy_name,
     )
 
 
@@ -807,6 +833,7 @@ def _payload(
     assignee_name: str | None,
     client_name: str | None,
     shared_with_me: bool,
+    buddy_name: str | None = None,
 ) -> dict:
     """One row, with absences preserved as absences."""
     verified_fields, total_fields = evidence
@@ -846,6 +873,11 @@ def _payload(
         # eight job orders under six different companies has no way to check
         # what they chose.
         "client_name": client_name,
+        # The buddy who referred this client — the external recruiter who owns
+        # the account. Shown as the "Owner" in the job order panel for a
+        # single-user workspace where the internal assignee is always the one
+        # signed-in user and carries no information.
+        "buddy_name": buddy_name,
         "source": row.source,
         # "A share is one of the reasons you can see this", not "the only
         # reason" — see the design note on why the two differ.
