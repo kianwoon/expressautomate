@@ -65,6 +65,12 @@ function Notice({ heading, body }: { heading: string; body: string }) {
   );
 }
 
+const COLUMNS = [
+  { key: "name", label: "Name" },
+  { key: "email_domain", label: "Agency" },
+  { key: "referral_count", label: "Referrals" },
+] as const;
+
 function Workspace() {
   const [buddies, setBuddies] = useState<Buddy[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -126,30 +132,47 @@ function Workspace() {
     <>
       <h1 style={{ fontSize: "clamp(1.75rem, 3.4vw, 2.5rem)" }}>Buddies</h1>
       <p className="lede" style={{ marginTop: 18, maxWidth: "62ch" }}>
-        External recruiters who forward job orders into your mailbox. {buddies.length} buddies have
-        referred {totalReferrals} {totalReferrals === 1 ? "client" : "clients"}.
+        External recruiters who forward job orders into your mailbox. {buddies.length}{" "}
+        {buddies.length === 1 ? "buddy has" : "buddies have"} referred {totalReferrals}{" "}
+        {totalReferrals === 1 ? "client" : "clients"}.
       </p>
 
       <div className="jo-split" style={{ marginTop: 24 }}>
         <div className="cl-list">
-          <table className="jo-table" style={{ width: "100%" }}>
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Agency</th>
-                <th style={{ textAlign: "right" }}>Referrals</th>
-              </tr>
-            </thead>
-            <tbody>
-              {buddies.map((b) => (
-                <tr key={b.id}>
-                  <td>{b.name}</td>
-                  <td className="jo-sub">{b.email_domain ?? "—"}</td>
-                  <td style={{ textAlign: "right" }}>{b.referral_count}</td>
+          <p className="body jo-note" aria-live="polite">
+            Showing {buddies.length} {buddies.length === 1 ? "buddy" : "buddies"}.
+          </p>
+          <div className="card jo-table-card">
+            <table className="jo-table jo-table-clients">
+              <colgroup>
+                <col style={{ width: "35%" }} />
+                <col style={{ width: "40%" }} />
+                <col style={{ width: "25%" }} />
+              </colgroup>
+              <thead>
+                <tr>
+                  {COLUMNS.map((column) => (
+                    <th key={column.key} className="row-k jo-th">
+                      {column.label}
+                    </th>
+                  ))}
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {buddies.map((b) => (
+                  <tr key={b.id} className="jo-row">
+                    <td className="jo-td jo-td-strong">{b.name}</td>
+                    <td className="jo-td">
+                      {b.email_domain ?? <span className="muted">Not mentioned</span>}
+                    </td>
+                    <td className="jo-td" data-nowrap="yes">
+                      {b.referral_count}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
     </>
