@@ -245,13 +245,26 @@ function EmailAliases() {
       </p>
 
       {aliases.length > 0 && (
-        <div className="rows" style={{ marginTop: 16 }}>
+        <div style={{ marginTop: 16, display: "grid", gap: 0 }}>
           {aliases.map((a) => (
-            <div className="row" key={a.id}>
-              <span className="row-k">{a.email}</span>
+            <div
+              key={a.id}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 12,
+                padding: "9px 0",
+                borderTop: "1px solid var(--line)",
+              }}
+            >
+              <span style={{ fontSize: "0.9375rem", minWidth: 0, overflowWrap: "anywhere" }}>
+                {a.email}
+              </span>
               <button
                 type="button"
                 className="btn btn-secondary"
+                style={{ flexShrink: 0, padding: "7px 14px", fontSize: "0.8125rem" }}
                 onClick={() => removeAlias(a.id)}
               >
                 Remove
