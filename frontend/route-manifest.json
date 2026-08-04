@@ -16,6 +16,12 @@
     "/api/auth/microsoft/login": [
       "GET"
     ],
+    "/api/buddies": [
+      "GET"
+    ],
+    "/api/buddies/{buddy_id}": [
+      "GET"
+    ],
     "/api/candidates": [
       "GET",
       "POST"
@@ -298,6 +304,13 @@
     ],
     "/api/opportunities/{opportunity_id}/sourcing/{run_id}": [
       "GET"
+    ],
+    "/api/user/emails": [
+      "GET",
+      "POST"
+    ],
+    "/api/user/emails/{email_id}": [
+      "DELETE"
     ],
     "/api/wa/consent": [
       "POST"
