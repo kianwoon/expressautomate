@@ -221,13 +221,19 @@ async def test_an_unmatched_client_leaves_the_job_order_on_the_queue(
 async def test_a_matched_client_with_no_recruiter_still_leaves_it_on_the_queue(
     captured_events,
 ) -> None:
-    """A client nobody owns yet: the client is recorded, the assignee is not."""
+    """A client nobody owns yet: the client is recorded, the assignee is not.
+
+    A pipeline-created client is assigned to the mailbox owner — the person the
+    client emailed to. So the only way a new client arrives with no recruiter is
+    a mailbox whose owner is gone (user_id NULL, e.g. a deleted recruiter). In
+    that case the client is recorded but the opportunity stays on the queue.
+    """
     from app.services.ingest.persist import persist
 
-    tenant_id, recruiter_a = await seed_tenant_with_user()
+    tenant_id, _recruiter_a = await seed_tenant_with_user()
     try:
         message_id = await _mailbox_message(
-            tenant_id, owner_user_id=recruiter_a, sender_email="hr@acme.com.sg"
+            tenant_id, owner_user_id=None, sender_email="hr@acme.com.sg"
         )
         response, result, source = _extraction("Acme Pte Ltd")
         ids = await persist(tenant_id, message_id, response, result, source=source)
