@@ -58,9 +58,9 @@ _INSERT_CLIENT = text(
     """
     INSERT INTO clients
         (id, tenant_id, name, name_normalized, email_domain, status,
-         first_seen_email_message_id, last_seen_at)
+         first_seen_email_message_id, last_seen_at, assigned_user_id)
     VALUES (:id, :tenant_id, :name, :name_normalized, :domain, 'unconfirmed',
-            :message_id, now())
+            :message_id, now(), :assigned_user_id)
     ON CONFLICT (tenant_id, email_domain)
         WHERE email_domain IS NOT NULL AND status <> 'merged'
     DO UPDATE SET last_seen_at = now()
@@ -91,6 +91,27 @@ _INSERT_MENTION = text(
     """
 )
 
+# A domain-matched sender is a person at that company — capture them as a
+# contact. No unique index backs (tenant_id, client_id, email) on
+# `client_contacts` (the only unique index there is the partial one on the
+# single primary), so dedup is `WHERE NOT EXISTS` in the same statement rather
+# than an ON CONFLICT. Additive only, matching `apply_contacts` in
+# client_discovery: a contact the client already has is left exactly as a
+# recruiter keeps it. `is_primary` is never set by the pipeline — promoting is
+# a person's call, and the partial unique index makes a concurrent
+# auto-promote unsafe.
+_INSERT_CONTACT = text(
+    """
+    INSERT INTO client_contacts (id, tenant_id, client_id, name, email, is_primary)
+    SELECT :id, :tenant_id, :client_id, :name, :email, false
+    WHERE NOT EXISTS (
+        SELECT 1 FROM client_contacts
+        WHERE tenant_id = :tenant_id AND client_id = :client_id
+          AND lower(coalesce(email, '')) = lower(:email)
+    )
+    """
+)
+
 
 @dataclass(frozen=True)
 class MatchedClient:
@@ -101,10 +122,16 @@ class MatchedClient:
     second query for something we just read. `assigned_user_id` is None when
     the client is real but nobody owns it yet: that is queue work, not an
     error.
+
+    `matched_by` records how the match was decided — "email_domain" or "name"
+    — so the caller can tell a domain fact from a name resemblance. Contact
+    capture uses it: only a domain match is strong enough evidence that the
+    sender is a person at that company.
     """
 
     client_id: uuid.UUID
     assigned_user_id: uuid.UUID | None
+    matched_by: str
 
 
 async def match_client(
@@ -113,6 +140,9 @@ async def match_client(
     email_message_id: uuid.UUID | None,
     sender_email: str | None,
     company_name: str | None,
+    *,
+    mailbox_owner_id: uuid.UUID | None = None,
+    sender_name: str | None = None,
 ) -> MatchedClient | None:
     """Resolve this email to a client, recording how.
 
@@ -120,6 +150,19 @@ async def match_client(
     name. That is a real outcome, not an error: a message can legitimately
     mention no company, and inventing a client for it would be exactly the
     fabrication the pipeline exists to avoid (§15).
+
+    `mailbox_owner_id` is the recruiter whose mailbox received the email — the
+    person the client emailed to. It is written onto a *new* client only: the
+    `_INSERT_CLIENT` ON CONFLICT clause updates `last_seen_at` and nothing
+    else, so a client that already exists keeps the owner it was first given.
+    That is the "first person the client emailed to" rule — a forward to a
+    colleague never reassigns.
+
+    `sender_name` is the sender's display name from the email header. It is
+    captured as a client contact when the match is by domain (a domain match
+    is the evidence that the sender is a person at that company); a name match
+    or a free-domain sender creates no contact, because neither establishes
+    that link.
     """
     domain = domain_of(sender_email)
     normalized = normalize_company_name(company_name) if company_name else ""
@@ -128,7 +171,8 @@ async def match_client(
         return None
 
     client_id, assigned_user_id, matched_by = await _resolve(
-        session, tenant_id, domain, normalized, company_name, email_message_id
+        session, tenant_id, domain, normalized, company_name, email_message_id,
+        mailbox_owner_id,
     )
     if client_id is None:
         return None
@@ -143,7 +187,15 @@ async def match_client(
             "matched_by": matched_by,
         },
     )
-    return MatchedClient(client_id=client_id, assigned_user_id=assigned_user_id)
+
+    if matched_by == "email_domain" and sender_email:
+        await _capture_contact(
+            session, tenant_id, client_id, sender_email, sender_name
+        )
+
+    return MatchedClient(
+        client_id=client_id, assigned_user_id=assigned_user_id, matched_by=matched_by
+    )
 
 
 async def _resolve(
@@ -153,6 +205,7 @@ async def _resolve(
     normalized: str,
     company_name: str | None,
     email_message_id: uuid.UUID | None,
+    mailbox_owner_id: uuid.UUID | None,
 ) -> tuple[uuid.UUID | None, uuid.UUID | None, str]:
     if domain is not None:
         row = (
@@ -187,6 +240,7 @@ async def _resolve(
                 "name_normalized": normalized,
                 "domain": domain,
                 "message_id": email_message_id,
+                "assigned_user_id": mailbox_owner_id,
             },
         )
     ).one()
@@ -220,6 +274,34 @@ async def _surviving(session: AsyncSession, row) -> tuple[uuid.UUID, uuid.UUID |
         hops += 1
     await session.execute(_TOUCH, {"id": client_id})
     return client_id, assignee
+
+
+async def _capture_contact(
+    session: AsyncSession,
+    tenant_id: uuid.UUID,
+    client_id: uuid.UUID,
+    sender_email: str,
+    sender_name: str | None,
+) -> None:
+    """Record the sender as a contact of the client, if not already known.
+
+    Only reached on a domain match — the caller has already established the
+    sender belongs to this company. The check is case-insensitive on email,
+    matching how `apply_contacts` in client_discovery deduplicates: a contact
+    the client already has is left untouched, never overwritten. The whole
+    insert-and-dedup is one statement, so two concurrent extractions of the
+    same sender cannot each miss the other and insert twice.
+    """
+    await session.execute(
+        _INSERT_CONTACT,
+        {
+            "id": uuid.uuid4(),
+            "tenant_id": tenant_id,
+            "client_id": client_id,
+            "name": (sender_name or "").strip() or sender_email,
+            "email": sender_email,
+        },
+    )
 
 
 # Same shape as `_BY_NAME`: merged rows are excluded because a merged row's

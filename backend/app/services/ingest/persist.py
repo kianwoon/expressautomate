@@ -152,8 +152,19 @@ _SELECT_GLOSSARY = text(
 
 # The matcher needs the sender, which lives on the message rather than in the
 # extraction. Read inside the same transaction so it cannot disagree with what
-# the rest of this write assumes.
-_SENDER = text("SELECT sender_email FROM email_messages WHERE id = :id")
+# the rest of this write assumes. The LEFT JOIN to mailboxes picks up the
+# recruiter who owns the mailbox — the person the client emailed to, who
+# becomes a newly-created client's assigned recruiter — without losing the
+# sender when the mailbox row has gone (a deleted mailbox nulls user_id but
+# the sender_email still reaches the matcher).
+_SENDER = text(
+    """
+    SELECT em.sender_email, em.sender_name, m.user_id AS mailbox_owner_id
+    FROM email_messages em
+    LEFT JOIN mailboxes m ON em.mailbox_id = m.id
+    WHERE em.id = :id
+    """
+)
 
 _INSERT_CODE = text(
     """
@@ -292,15 +303,20 @@ async def persist(
         # One client per email, not per vacancy: three vacancies in one mail
         # come from one company, and proposing three identical clients would
         # make the review queue unusable on the first busy day.
-        sender_email = (
+        sender_row = (
             await session.execute(_SENDER, {"id": email_message_id})
-        ).scalar_one_or_none()
+        ).one_or_none()
+        sender_email = sender_row.sender_email if sender_row else None
+        sender_name = sender_row.sender_name if sender_row else None
+        mailbox_owner_id = sender_row.mailbox_owner_id if sender_row else None
         first_company = next(
             (_value(job.company) for job in response.jobs if _value(job.company)),
             None,
         )
         matched = await match_client(
-            session, tenant_id, email_message_id, sender_email, first_company
+            session, tenant_id, email_message_id, sender_email, first_company,
+            mailbox_owner_id=mailbox_owner_id,
+            sender_name=sender_name,
         )
 
         # An email describing three vacancies becomes three rows. They share

@@ -76,26 +76,49 @@ async def agency():
     await cleanup_tenant(tid)
 
 
-async def _insert_message(tenant_id: uuid.UUID, message_id: uuid.UUID) -> None:
+async def _insert_message(
+    tenant_id: uuid.UUID,
+    message_id: uuid.UUID,
+    *,
+    sender_email: str = "hr@acme.com.sg",
+    sender_name: str | None = None,
+    mailbox_owner_id: uuid.UUID | None = None,
+) -> uuid.UUID:
+    """Seed a mailbox (optionally owned by a recruiter) and one email on it.
+
+    Returns the mailbox id, so a test that needs to point a *second* email at
+    the same mailbox can. The mailbox owner is what drives the assignment
+    rule, and the sender columns drive contact capture — both are optional so
+    the existing tests that need neither keep their defaults.
+    """
     mailbox_id = uuid.uuid4()
+    ms_user_id = f"ms-user-{mailbox_id.hex[:8]}"
     async with AdminSessionLocal() as s:
         await s.execute(
             text(
-                "INSERT INTO mailboxes (id, tenant_id, ms_user_id, folder_id, scope,"
-                " status, retention_months)"
-                " VALUES (:i, :t, 'ms-user-1', 'inbox', 'folder', 'active', 24)"
+                "INSERT INTO mailboxes (id, tenant_id, user_id, ms_user_id, folder_id,"
+                " scope, status, retention_months)"
+                " VALUES (:i, :t, :u, :ms, 'inbox', 'folder', 'active', 24)"
             ),
-            {"i": mailbox_id, "t": tenant_id},
+            {"i": mailbox_id, "t": tenant_id, "u": mailbox_owner_id, "ms": ms_user_id},
         )
         await s.execute(
             text(
                 "INSERT INTO email_messages"
-                " (id, tenant_id, mailbox_id, graph_message_id, subject, sender_email)"
-                " VALUES (:i, :t, :m, 'MSG-1', 'Vacancy', 'hr@acme.com.sg')"
+                " (id, tenant_id, mailbox_id, graph_message_id, subject,"
+                "  sender_email, sender_name)"
+                " VALUES (:i, :t, :m, 'MSG-1', 'Vacancy', :se, :sn)"
             ),
-            {"i": message_id, "t": tenant_id, "m": mailbox_id},
+            {
+                "i": message_id,
+                "t": tenant_id,
+                "m": mailbox_id,
+                "se": sender_email,
+                "sn": sender_name,
+            },
         )
         await s.commit()
+    return mailbox_id
 
 
 async def test_persisting_an_extraction_proposes_the_sender_as_a_client(agency) -> None:
@@ -269,3 +292,154 @@ async def test_running_persist_twice_leaves_one_client_and_one_mention(agency) -
         clients = (await s.execute(text("SELECT count(*) FROM clients"))).scalar_one()
         mentions = (await s.execute(text("SELECT count(*) FROM client_mentions"))).scalar_one()
     assert (clients, mentions) == (1, 1)
+
+
+async def _a_recruiter(tenant_id: uuid.UUID) -> uuid.UUID:
+    user_id = uuid.uuid4()
+    async with AdminSessionLocal() as s:
+        await s.execute(
+            text(
+                "INSERT INTO users (id, tenant_id, email, role)"
+                " VALUES (:i, :t, :e, 'recruiter')"
+            ),
+            {"i": user_id, "t": tenant_id, "e": f"{user_id.hex[:8]}@example.test"},
+        )
+        await s.commit()
+    return user_id
+
+
+async def test_a_new_client_is_assigned_to_the_mailbox_owner(agency) -> None:
+    """The recruiter whose mailbox received the email becomes the client's owner.
+
+    A client is created on the first email from a domain, and the mailbox
+    owner — the person the client emailed to — is written as
+    `assigned_user_id`. That is the "first person the client emailed to"
+    rule: the owner is decided once, at creation, not on every re-match.
+    """
+    from app.services.ingest.persist import persist
+
+    owner = await _a_recruiter(agency)
+    message_id = uuid.uuid4()
+    await _insert_message(agency, message_id, mailbox_owner_id=owner)
+
+    response, result, source = _extraction_fixture(company_name="Acme Pte Ltd")
+    await persist(agency, message_id, response, result, source=source)
+
+    async with tenant_session(agency) as s:
+        assigned = (
+            await s.execute(text("SELECT assigned_user_id FROM clients"))
+        ).scalar_one()
+    assert assigned == owner
+
+
+async def test_a_second_email_preserves_the_first_owner(agency) -> None:
+    """A forwarded email never reassigns the client.
+
+    Client emails recruiter A; A forwards to B. The client was created on A's
+    email, so A is the owner. The same client emailing B's mailbox re-matches
+    the existing row, and `_INSERT_CLIENT`'s ON CONFLICT DO UPDATE SET
+    last_seen_at touches nothing else — B never becomes the owner.
+    """
+    from app.services.ingest.persist import persist
+
+    owner_a = await _a_recruiter(agency)
+    owner_b = await _a_recruiter(agency)
+
+    msg_a = uuid.uuid4()
+    await _insert_message(agency, msg_a, mailbox_owner_id=owner_a)
+    response, result, source = _extraction_fixture(company_name="Acme Pte Ltd")
+    await persist(agency, msg_a, response, result, source=source)
+
+    # Same client domain, different mailbox owned by B.
+    msg_b = uuid.uuid4()
+    await _insert_message(agency, msg_b, mailbox_owner_id=owner_b)
+    await persist(agency, msg_b, response, result, source=source)
+
+    async with tenant_session(agency) as s:
+        row = (
+            await s.execute(
+                text("SELECT assigned_user_id, count(*) FROM clients GROUP BY assigned_user_id")
+            )
+        ).one()
+    assert row.assigned_user_id == owner_a
+    assert row.count == 1
+
+
+async def test_a_domain_matched_sender_becomes_a_contact(agency) -> None:
+    """A sender on the client's own domain is a person at that company.
+
+    The match is by domain, so the sender is captured as a `ClientContact`.
+    The display name from the email header is the contact's name; when it is
+    absent the email address stands in (the column is NOT NULL).
+    """
+    from app.services.ingest.persist import persist
+
+    message_id = uuid.uuid4()
+    await _insert_message(
+        agency, message_id,
+        sender_email="jane.doe@acme.com.sg",
+        sender_name="Jane Doe",
+    )
+    response, result, source = _extraction_fixture(company_name="Acme Pte Ltd")
+    await persist(agency, message_id, response, result, source=source)
+
+    async with tenant_session(agency) as s:
+        rows = (
+            await s.execute(
+                text("SELECT name, email, is_primary FROM client_contacts")
+            )
+        ).all()
+    assert rows == [("Jane Doe", "jane.doe@acme.com.sg", False)]
+
+
+async def test_a_free_email_sender_creates_no_contact(agency) -> None:
+    """A free-domain sender is a person, not a company — no contact is captured.
+
+    `hotmail.com` is on FREE_EMAIL_DOMAINS, so `domain_of` returns None and
+    the match falls through to the company name. A name match does not
+    establish that the sender belongs to that company, so no contact row is
+    written. This is the user's test case: expressautomate@hotmail.com sends
+    a job order whose body names a company.
+    """
+    from app.services.ingest.persist import persist
+
+    message_id = uuid.uuid4()
+    await _insert_message(
+        agency, message_id,
+        sender_email="expressautomate@hotmail.com",
+        sender_name="EA User",
+    )
+    response, result, source = _extraction_fixture(company_name="Acme Pte Ltd")
+    await persist(agency, message_id, response, result, source=source)
+
+    async with tenant_session(agency) as s:
+        contacts = (
+            await s.execute(text("SELECT count(*) FROM client_contacts"))
+        ).scalar_one()
+    assert contacts == 0
+
+
+async def test_reprocessing_creates_no_duplicate_contact(agency) -> None:
+    """A retried extraction does not add the same contact twice.
+
+    The `_INSERT_CONTACT` guard is `WHERE NOT EXISTS` on the lowercased email,
+    so a `rescan_stuck` re-run that reaches the same sender is a no-op rather
+    than a second row.
+    """
+    from app.services.ingest.persist import persist
+
+    message_id = uuid.uuid4()
+    await _insert_message(
+        agency, message_id,
+        sender_email="jane.doe@acme.com.sg",
+        sender_name="Jane Doe",
+    )
+    response, result, source = _extraction_fixture(company_name="Acme Pte Ltd")
+    await persist(agency, message_id, response, result, source=source)
+    await persist(agency, message_id, response, result, source=source)
+
+    async with tenant_session(agency) as s:
+        contacts = (
+            await s.execute(text("SELECT count(*) FROM client_contacts"))
+        ).scalar_one()
+    assert contacts == 1
