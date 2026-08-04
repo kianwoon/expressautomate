@@ -124,37 +124,35 @@ function Workspace() {
         {totalReferrals === 1 ? "client" : "clients"}.
       </p>
 
-      <div className="jo-split" style={{ marginTop: 24 }}>
-        <div className="cl-list">
-          <p className="body jo-note" aria-live="polite">
-            Showing {buddies.length} {buddies.length === 1 ? "buddy" : "buddies"}.
-          </p>
-          <div className="card jo-table-card">
-            <table className="jo-table" style={{ tableLayout: "auto", minWidth: 720 }}>
-              <thead>
-                <tr>
-                  {COLUMNS.map((col) => (
-                    <th key={col.key} className="row-k jo-th">{col.label}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {buddies.map((b) => (
-                  <tr key={b.id} className="jo-row">
-                    <td className="jo-td jo-td-strong">{b.name}</td>
-                    <td className="jo-td">{b.email}</td>
-                    <td className="jo-td">
-                      <PhoneCell buddy={b} />
-                    </td>
-                    <td className="jo-td">
-                      {b.email_domain ?? <span className="muted">—</span>}
-                    </td>
-                    <td className="jo-td" data-nowrap="yes">{b.referral_count}</td>
-                  </tr>
+      <div style={{ marginTop: 24 }}>
+        <p className="body jo-note" aria-live="polite">
+          Showing {buddies.length} {buddies.length === 1 ? "buddy" : "buddies"}.
+        </p>
+        <div className="card jo-table-card">
+          <table className="jo-table" style={{ tableLayout: "auto" }}>
+            <thead>
+              <tr>
+                {COLUMNS.map((col) => (
+                  <th key={col.key} className="row-k jo-th">{col.label}</th>
                 ))}
-              </tbody>
-            </table>
-          </div>
+              </tr>
+            </thead>
+            <tbody>
+              {buddies.map((b) => (
+                <tr key={b.id} className="jo-row">
+                  <td className="jo-td jo-td-strong">{b.name}</td>
+                  <td className="jo-td" style={{ overflowWrap: "break-word", whiteSpace: "nowrap" }}>{b.email}</td>
+                  <td className="jo-td">
+                    <PhoneCell buddy={b} />
+                  </td>
+                  <td className="jo-td" style={{ whiteSpace: "nowrap" }}>
+                    {b.email_domain ?? <span className="muted">—</span>}
+                  </td>
+                  <td className="jo-td" data-nowrap="yes">{b.referral_count}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       </div>
     </>
