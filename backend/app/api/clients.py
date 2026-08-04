@@ -26,6 +26,7 @@ from app.api.auth import _require_session, _require_session_with_role
 from app.api.integrity import is_duplicate
 from app.core.config import settings
 from app.db.rls import tenant_session
+from app.models.buddy import Buddy, BuddyReferral
 from app.models.client import Client, ClientCollaborator, ClientContact, ClientMention
 from app.models.opportunity import Opportunity
 from app.models.tenant import User
@@ -166,7 +167,11 @@ def _assignee_join(stmt, assignee):
     )
 
 
-def _serialize(client: Client, assignee_name: str | None = None) -> dict:
+def _serialize(
+    client: Client,
+    assignee_name: str | None = None,
+    buddy_name: str | None = None,
+) -> dict:
     return {
         "id": str(client.id),
         "assigned_user_id": (
@@ -177,6 +182,10 @@ def _serialize(client: Client, assignee_name: str | None = None) -> dict:
         # rather than looked up in the browser against the members list, so a
         # row's name does not depend on a second request having landed.
         "assignee_name": assignee_name,
+        # The external recruiter who referred this client (via a forwarded
+        # job order). Resolved in the same query — same N+1 reasoning as
+        # assignee_name.
+        "buddy_name": buddy_name,
         "name": client.name,
         "name_normalized": client.name_normalized,
         "email_domain": client.email_domain,
@@ -287,8 +296,13 @@ async def list_clients(
             counts[stored] = counts.get(stored, 0) + n
 
         assignee = aliased(User)
+        buddy = aliased(Buddy)
         base = _assignee_join(
-            select(Client, _assignee_name_expr(assignee)), assignee
+            select(Client, _assignee_name_expr(assignee), buddy.name.label("buddy_name")), assignee
+        ).outerjoin(
+            BuddyReferral, BuddyReferral.client_id == Client.id
+        ).outerjoin(
+            buddy, buddy.id == BuddyReferral.buddy_id
         )
         if status is not None:
             base = base.where(Client.status == status)
@@ -357,7 +371,9 @@ async def list_clients(
         ).all()
 
     return {
-        "items": [_serialize(c, assignee_name) for c, assignee_name in rows],
+        "items": [
+            _serialize(c, an, bn) for c, an, bn in rows
+        ],
         "total": total,
         "limit": page_limit,
         "offset": offset,
@@ -371,18 +387,23 @@ async def get_client(request: Request, client_id: uuid.UUID) -> dict:
     _user_uuid, tenant_uuid = _require_session(request)
     async with tenant_session(tenant_uuid) as session:
         assignee = aliased(User)
+        buddy = aliased(Buddy)
         row = (
             await session.execute(
                 _assignee_join(
-                    select(Client, _assignee_name_expr(assignee)), assignee
-                ).where(Client.id == client_id)
+                    select(Client, _assignee_name_expr(assignee), buddy.name.label("buddy_name")),
+                    assignee,
+                )
+                .outerjoin(BuddyReferral, BuddyReferral.client_id == Client.id)
+                .outerjoin(buddy, buddy.id == BuddyReferral.buddy_id)
+                .where(Client.id == client_id)
             )
         ).one_or_none()
         # Same 404-not-403 reasoning as `_load`: naming an id as another
         # agency's is itself a cross-tenant disclosure.
         if row is None:
             raise HTTPException(status_code=404, detail="Client not found")
-        client, assignee_name = row
+        client, assignee_name, buddy_name = row
 
         # Embedded here rather than given a `GET /clients/{id}/collaborators`
         # of its own. Two reasons, and the list endpoint is both of them: a
@@ -434,7 +455,7 @@ async def get_client(request: Request, client_id: uuid.UUID) -> dict:
             .all()
         )
 
-    payload = _serialize(client, assignee_name)
+    payload = _serialize(client, assignee_name, buddy_name)
     payload["collaborators"] = [
         {"user_id": str(user_id), "name": name} for user_id, name in collaborators
     ]

@@ -38,7 +38,7 @@ const STATUS_LABEL: Record<Client["status"], string> = {
  *  a reader scanning down sees the same columns in both. */
 const COLUMNS: { key: ClientSortKey; label: string }[] = [
   { key: "name", label: "Name" },
-  { key: "email_domain", label: "Mail domain" },
+  { key: "email_domain", label: "Referred by" },
   { key: "status", label: "Status" },
   { key: "last_seen", label: "Last seen" },
 ];
@@ -109,7 +109,7 @@ export function ClientsTable({
                   </button>
                 </td>
                 <td className="jo-td">
-                  {row.email_domain ?? <span className="muted">Not mentioned</span>}
+                  {row.buddy_name ?? <span className="muted">—</span>}
                 </td>
                 <td className="jo-td">
                   <span className="cl-status" data-status={row.status}>

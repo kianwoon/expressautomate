@@ -130,6 +130,8 @@ export type Client = {
    */
   assigned_user_id?: string | null;
   assignee_name?: string | null;
+  /** The external recruiter who referred this client (via a forwarded job order). */
+  buddy_name?: string | null;
   /** Colleagues recorded as also covering the account. Grants no access to
    *  the client's job orders — see `ClientCollaborator`. */
   collaborators?: Collaborator[];

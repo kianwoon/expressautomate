@@ -216,6 +216,15 @@ function Detail({
               number. */}
           <ClientAssignee client={row} onChanged={onDetailChanged} />
 
+          {row.buddy_name && (
+            <div className="rows" style={{ marginTop: 16 }}>
+              <div className="row">
+                <span className="row-k">Referred by</span>
+                <span>{row.buddy_name}</span>
+              </div>
+            </div>
+          )}
+
           <ClientFacts row={row} onEdit={() => setEditing(true)} />
 
           <Mentions mentions={row.mentions} />
