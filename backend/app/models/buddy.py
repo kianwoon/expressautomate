@@ -79,6 +79,10 @@ class Buddy(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
     # The domain of the buddy's email — inferred at creation time so buddies
     # from the same agency can be grouped without parsing the email again.
     email_domain: Mapped[str | None] = mapped_column(String(255), index=True)
+    # Maintained by the user — the pipeline never fills this in, because an
+    # email forwarding header carries no phone number. A recruiter adds it
+    # when they want to reach the buddy directly.
+    phone: Mapped[str | None] = mapped_column(Text)
     PIPELINE = "pipeline"
     MANUAL = "manual"
     source: Mapped[str] = mapped_column(

@@ -9,7 +9,7 @@ import uuid
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, EmailStr
-from sqlalchemy import func, select, text
+from sqlalchemy import func, select, text, update
 
 from app.api.auth import _require_session
 from app.db.rls import tenant_session
@@ -124,11 +124,44 @@ async def list_buddies(request: Request) -> list[dict]:
             "name": row.Buddy.name,
             "email": row.Buddy.email,
             "email_domain": row.Buddy.email_domain,
+            "phone": row.Buddy.phone,
             "source": row.Buddy.source,
             "referral_count": row.referral_count,
         }
         for row in rows
     ]
+
+
+class BuddyUpdate(BaseModel):
+    phone: str | None = None
+
+
+@router.patch("/buddies/{buddy_id}")
+async def update_buddy(request: Request, buddy_id: uuid.UUID, body: BuddyUpdate) -> dict:
+    """Update a buddy's editable fields (phone)."""
+    _user_uuid, tenant_uuid = _require_session(request)
+
+    async with tenant_session(tenant_uuid) as session:
+        buddy = (
+            await session.execute(
+                select(Buddy).where(Buddy.id == buddy_id)
+            )
+        ).scalar_one_or_none()
+        if buddy is None:
+            raise HTTPException(status_code=404, detail="Buddy not found")
+
+        await session.execute(
+            update(Buddy).where(Buddy.id == buddy_id).values(phone=body.phone)
+        )
+
+    return {
+        "id": str(buddy_id),
+        "name": buddy.name,
+        "email": buddy.email,
+        "email_domain": buddy.email_domain,
+        "phone": body.phone,
+        "source": buddy.source,
+    }
 
 
 @router.get("/buddies/{buddy_id}")
@@ -156,6 +189,7 @@ async def get_buddy(request: Request, buddy_id: uuid.UUID) -> dict:
         "name": buddy.name,
         "email": buddy.email,
         "email_domain": buddy.email_domain,
+        "phone": buddy.phone,
         "source": buddy.source,
         "referrals": [
             {"client_id": str(r.client_id)}

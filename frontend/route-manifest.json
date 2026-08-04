@@ -20,7 +20,8 @@
       "GET"
     ],
     "/api/buddies/{buddy_id}": [
-      "GET"
+      "GET",
+      "PATCH"
     ],
     "/api/candidates": [
       "GET",
