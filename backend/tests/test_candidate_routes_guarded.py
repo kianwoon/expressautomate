@@ -107,6 +107,12 @@ EDIT_ONLY_EXEMPT: dict[str, dict[str, str]] = {
             "is the point of sharing one; it changes nothing about the "
             "candidate record."
         ),
+        "whatsapp_translate": (
+            "Writes nothing at all — pure text-in, text-out. It loads the "
+            "candidate through the read guard (so a recruiter cannot translate "
+            "a draft for a candidate they cannot see) but changes no row, so "
+            "the edit guard has nothing to apply to."
+        ),
     },
     "sourcing.py": {
         "record_submission": (

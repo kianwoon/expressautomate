@@ -253,14 +253,18 @@ async def whatsapp_translate(
 ) -> dict:
     """Re-render the WhatsApp draft in another language.
 
-    Same session scope as the draft and send routes: the candidate id in the
-    path is what ties the request to a tenant through RLS, so the recruiter is
-    translating a message they are entitled to see. `english` short-circuits
-    without touching the network — the frontend could do the same, but keeping
-    it server-side means there is one code path that decides what "translate to
-    English" means, and the no-op is cheap.
+    Loads the candidate through `load_visible_candidate` for the same reason
+    the draft route does: the candidate id in the path is what ties the request
+    to a tenant through RLS, and a recruiter must not translate a message for a
+    candidate they cannot see. The candidate row itself is not translated —
+    only the recruiter's own text — but the visibility check is the gate, and
+    it runs whether or not the translation network call is made. `english`
+    short-circuits without touching the network, and still loads the candidate,
+    so "translate to English" cannot be a visibility bypass.
     """
-    await _require_session_with_role(request)
+    user_uuid, tenant_uuid, role = await _require_session_with_role(request)
+    async with tenant_session(tenant_uuid) as session:
+        await load_visible_candidate(session, candidate_id, user_uuid, role)
 
     if body.target_language not in WHATSAPP_LANGUAGES:
         raise HTTPException(
