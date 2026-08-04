@@ -14,6 +14,7 @@ from sqlalchemy import insert, text
 from app.api import (
     activity,
     auth,
+    buddies,
     candidate_documents,
     candidate_imports,
     candidate_merge,
@@ -179,6 +180,7 @@ api.include_router(candidate_documents.router)
 api.include_router(client_discovery.router)
 api.include_router(clients.router)
 api.include_router(clients_logo.router)
+api.include_router(buddies.router)
 api.include_router(notifications.router)
 api.include_router(events.router)
 api.include_router(telegram_webhook.router)

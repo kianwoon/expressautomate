@@ -1,3 +1,4 @@
+from app.models.buddy import Buddy, BuddyReferral, UserEmail
 from app.models.candidate import Candidate, CandidateFieldOverride, CandidateSkill
 from app.models.candidate_access_request import CandidateAccessRequest
 from app.models.candidate_share import CandidateShare
@@ -30,6 +31,8 @@ from app.models.tenant import Tenant, User
 from app.models.wa_session import WaSession, WaSessionKey
 
 __all__ = [
+    "Buddy",
+    "BuddyReferral",
     "Candidate",
     "CandidateAccessRequest",
     "CandidateFieldOverride",
@@ -61,6 +64,7 @@ __all__ = [
     "SyncEvent",
     "Tenant",
     "User",
+    "UserEmail",
     "WaSession",
     "WaSessionKey",
     "WhatsAppSuppression",

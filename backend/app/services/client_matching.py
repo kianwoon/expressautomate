@@ -141,6 +141,42 @@ _INSERT_CONTACT = text(
     """
 )
 
+# --- Buddy capture (forwarded-email original senders) ---
+
+# Is the original sender actually the user (one of their declared aliases)?
+# If so, this is the user forwarding from their own work address — not a
+# buddy. Checked before any buddy row is written.
+_USER_EMAIL_MATCH = text(
+    "SELECT 1 FROM user_emails WHERE tenant_id = :tenant_id AND lower(email) = lower(:email)"
+)
+
+# Upsert a buddy keyed on email. Emails are stored lowercased so the
+# (tenant_id, email) unique constraint catches repeats. ON CONFLICT DO
+# NOTHING — the row the pipeline created first keeps its name and domain.
+_UPSERT_BUDDY = text(
+    """
+    INSERT INTO buddies (id, tenant_id, name, email, email_domain, source)
+    VALUES (:id, :tenant_id, :name, :email, :domain, 'pipeline')
+    ON CONFLICT (tenant_id, email) DO NOTHING
+    RETURNING id
+    """
+)
+
+# Fallback when ON CONFLICT fired (RETURNING yields nothing): re-read.
+_BUDDY_BY_EMAIL = text(
+    "SELECT id FROM buddies WHERE tenant_id = :tenant_id AND lower(email) = lower(:email)"
+)
+
+# One referral per (buddy, client). ON CONFLICT DO NOTHING — a buddy who
+# forwards three times for the same client is still one referral.
+_INSERT_REFERRAL = text(
+    """
+    INSERT INTO buddy_referrals (id, tenant_id, buddy_id, client_id, email_message_id)
+    VALUES (:id, :tenant_id, :buddy_id, :client_id, :message_id)
+    ON CONFLICT (tenant_id, buddy_id, client_id) DO NOTHING
+    """
+)
+
 
 @dataclass(frozen=True)
 class MatchedClient:
@@ -218,15 +254,14 @@ async def match_client(
         },
     )
 
-    # Capture a contact: the original sender for forwarded email (they have
-    # the client relationship), or the envelope sender for direct email when
-    # matched by domain (the sender IS at the client's company). A name match
-    # with no domain captures nothing — neither sender is confirmed to be at
-    # the client's company.
+    # A forwarded email's original sender is a buddy (an external recruiter
+    # who referred this client), not a client contact. A direct email's
+    # envelope sender IS at the client's company when matched by domain —
+    # that is a real client contact.
     if original_sender_email:
-        await _capture_contact(
-            session, tenant_id, client_id, original_sender_email,
-            original_sender_name,
+        await _capture_buddy(
+            session, tenant_id, client_id, email_message_id,
+            original_sender_email, original_sender_name,
         )
     elif matched_by == "email_domain" and sender_email:
         await _capture_contact(
@@ -366,6 +401,70 @@ async def _capture_contact(
             "client_id": client_id,
             "name": (sender_name or "").strip() or sender_email,
             "email": sender_email,
+        },
+    )
+
+
+async def _capture_buddy(
+    session: AsyncSession,
+    tenant_id: uuid.UUID,
+    client_id: uuid.UUID,
+    email_message_id: uuid.UUID | None,
+    sender_email: str,
+    sender_name: str | None,
+) -> None:
+    """Record the original sender of a forward as a buddy who referred the client.
+
+    First checks whether the sender is actually the user (via their declared
+    email aliases) — a user forwarding from their own work address is not a
+    buddy. Otherwise upserts the buddy and creates a referral link.
+
+    Runs inside the extraction transaction, so a buddy whose referral
+    triggers a rollback never exists outside it.
+    """
+    is_self = (
+        await session.execute(
+            _USER_EMAIL_MATCH,
+            {"tenant_id": tenant_id, "email": sender_email},
+        )
+    ).first()
+    if is_self:
+        return
+
+    domain = sender_email.rsplit("@", 1)[-1].lower() if "@" in sender_email else None
+    inserted = (
+        await session.execute(
+            _UPSERT_BUDDY,
+            {
+                "id": uuid.uuid4(),
+                "tenant_id": tenant_id,
+                "name": (sender_name or "").strip() or sender_email,
+                "email": sender_email.lower(),
+                "domain": domain,
+            },
+        )
+    ).first()
+    if inserted is not None:
+        buddy_id = inserted.id
+    else:
+        row = (
+            await session.execute(
+                _BUDDY_BY_EMAIL,
+                {"tenant_id": tenant_id, "email": sender_email.lower()},
+            )
+        ).first()
+        if row is None:
+            return
+        buddy_id = row.id
+
+    await session.execute(
+        _INSERT_REFERRAL,
+        {
+            "id": uuid.uuid4(),
+            "tenant_id": tenant_id,
+            "buddy_id": buddy_id,
+            "client_id": client_id,
+            "message_id": email_message_id,
         },
     )
 

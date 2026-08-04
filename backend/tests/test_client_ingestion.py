@@ -450,13 +450,12 @@ async def test_reprocessing_creates_no_duplicate_contact(agency) -> None:
     assert contacts == 1
 
 
-async def test_a_forwarded_email_captures_the_original_sender_as_contact(agency) -> None:
-    """A forwarded email captures the original sender, not the forwarder.
+async def test_a_forwarded_email_captures_the_original_sender_as_buddy(agency) -> None:
+    """A forwarded email's original sender is a buddy, not a client contact.
 
-    The envelope sender (the forwarder) is NOT the contact — the original
-    sender found in the body's forwarding header is. This is the Recruit
-    Express case: Jocelyn forwarded, but Topaz originated the job order, so
-    Topaz is the contact on the client.
+    The original sender (Topaz) is an external recruiter who referred the
+    client — she is NOT a Wearnes employee. So she becomes a buddy with a
+    referral, not a client contact. The forwarder (Jocelyn) is nobody.
     """
     from app.services.ingest.persist import persist
 
@@ -474,12 +473,51 @@ async def test_a_forwarded_email_captures_the_original_sender_as_contact(agency)
     )
 
     async with tenant_session(agency) as s:
-        rows = (
-            await s.execute(
-                text("SELECT name, email FROM client_contacts")
-            )
+        contacts = (await s.execute(text("SELECT count(*) FROM client_contacts"))).scalar_one()
+        buddies = (
+            await s.execute(text("SELECT name, email, email_domain FROM buddies"))
         ).all()
-    assert len(rows) == 1
-    assert rows[0].email == "topaz@recruitexpress.com.sg"
-    assert "Topaz" in rows[0].name
+        referrals = (await s.execute(text("SELECT count(*) FROM buddy_referrals"))).scalar_one()
+
+    assert contacts == 0, "a forwarded sender is a buddy, not a client contact"
+    assert len(buddies) == 1
+    assert buddies[0].email == "topaz@recruitexpress.com.sg"
+    assert "Topaz" in buddies[0].name
+    assert buddies[0].email_domain == "recruitexpress.com.sg"
+    assert referrals == 1
+
+
+async def test_a_user_alias_is_not_a_buddy(agency) -> None:
+    """If the original sender matches a declared user email alias, skip buddy capture.
+
+    The user forwarding from their own work address is the user, not a buddy.
+    """
+    from app.services.ingest.persist import persist
+
+    owner = await _a_recruiter(agency)
+    message_id = uuid.uuid4()
+    await _insert_message(agency, message_id, mailbox_owner_id=owner)
+
+    # Declare an alias for the user.
+    async with tenant_session(agency) as s:
+        await s.execute(
+            text(
+                "INSERT INTO user_emails (id, tenant_id, user_id, email)"
+                " VALUES (:id, :tid, :uid, :email)"
+            ),
+            {"id": str(uuid.uuid4()), "tid": str(agency), "uid": str(owner),
+             "email": "work@recruitexpress.com.sg"},
+        )
+        await s.commit()
+
+    response, result, source = _extraction_fixture(company_name="Acme Pte Ltd")
+    await persist(
+        agency, message_id, response, result, source=source,
+        original_sender_email="work@recruitexpress.com.sg",
+        original_sender_name="The User",
+    )
+
+    async with tenant_session(agency) as s:
+        buddies = (await s.execute(text("SELECT count(*) FROM buddies"))).scalar_one()
+    assert buddies == 0, "the user's own alias must not create a buddy"
 
