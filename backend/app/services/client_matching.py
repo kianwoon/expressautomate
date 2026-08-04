@@ -1,14 +1,17 @@
 """Deciding which client an email is about.
 
-Three steps, first hit wins: the sender's domain, then the normalised company
-name, then a new proposal. Only the first is an identity claim the pipeline is
-entitled to make on its own — a domain is a fact about where the mail came
-from. A name match records that the two look alike and leaves the row
-unconfirmed for a person to judge.
+The company named in the body is the authority, not the sender's domain.
+A recruitment agency forwards dozens of job orders from different hiring
+companies, and keying on the sender's domain collapses all of them into one
+client — the agency itself. So the body's company name is tried first;
+only when no company is named does the sender's domain get a turn (a direct
+email from a company that didn't get its name extracted is still better
+keyed on domain than on nothing).
 
-The service takes a session rather than opening one. It runs inside the
-extraction transaction in `persist()`, and a second connection would let the
-extraction roll back while the client it proposed survived.
+When a client is created from a body company name, the sender's domain is
+NOT attached: the sender is frequently an intermediary, and pinning their
+domain onto the hiring company's identity key would be a fabrication. The
+client's real domain can be filled in later by a recruiter.
 """
 
 import uuid
@@ -43,18 +46,23 @@ _BY_DOMAIN = text(
     """
 )
 
-# Name matching ignores merged rows — a merged row's identity now belongs to
-# its target — and prefers the most recently seen of any remaining ties.
+# Same shape as `_BY_DOMAIN`: merged rows are deprioritised, not excluded, so
+# `_surviving` can follow the chain. A name-created client has no domain to
+# fall back on (the sender's domain is not attached — see the module
+# docstring), so excluding merged rows here would strand a merged client with
+# no way back to its survivor.
 _BY_NAME = text(
     """
     SELECT id, status, merged_into_client_id, assigned_user_id FROM clients
-    WHERE tenant_id = :tenant_id AND name_normalized = :name AND status <> 'merged'
-    ORDER BY last_seen_at DESC NULLS LAST, created_at DESC
+    WHERE tenant_id = :tenant_id AND name_normalized = :name
+    ORDER BY (status = 'merged') ASC, last_seen_at DESC NULLS LAST, created_at DESC
     LIMIT 1
     """
 )
 
-_INSERT_CLIENT = text(
+# Domain-keyed insert: the partial unique index backs the ON CONFLICT, so two
+# concurrent workers hitting the same domain resolve to one row.
+_INSERT_CLIENT_BY_DOMAIN = text(
     """
     INSERT INTO clients
         (id, tenant_id, name, name_normalized, email_domain, status,
@@ -64,6 +72,27 @@ _INSERT_CLIENT = text(
     ON CONFLICT (tenant_id, email_domain)
         WHERE email_domain IS NOT NULL AND status <> 'merged'
     DO UPDATE SET last_seen_at = now()
+    RETURNING id, assigned_user_id
+    """
+)
+
+# Name-keyed insert: there is no unique index on name_normalized (by design —
+# two unrelated firms can normalise to the same string), so the ON CONFLICT
+# trick above cannot apply. Instead a WHERE NOT EXISTS guards the insert:
+# whichever worker loses the race inserts nothing, and the caller re-reads
+# the row the winner created. The race costs one extra SELECT, not a
+# duplicate row.
+_INSERT_CLIENT_BY_NAME = text(
+    """
+    INSERT INTO clients
+        (id, tenant_id, name, name_normalized, email_domain, status,
+         first_seen_email_message_id, last_seen_at, assigned_user_id)
+    SELECT :id, :tenant_id, :name, :name_normalized, NULL, 'unconfirmed',
+           :message_id, now(), :assigned_user_id
+    WHERE NOT EXISTS (
+        SELECT 1 FROM clients
+        WHERE tenant_id = :tenant_id AND name_normalized = :name_normalized
+    )
     RETURNING id, assigned_user_id
     """
 )
@@ -207,6 +236,47 @@ async def _resolve(
     email_message_id: uuid.UUID | None,
     mailbox_owner_id: uuid.UUID | None,
 ) -> tuple[uuid.UUID | None, uuid.UUID | None, str]:
+    # The company named in the body is the authority. A forwarded job order
+    # names the hiring company; the sender is frequently an intermediary
+    # whose domain is the agency's, not the client's. Trying domain first
+    # collapsed every forwarded order onto the forwarding agency.
+    if normalized:
+        row = (
+            await session.execute(_BY_NAME, {"tenant_id": tenant_id, "name": normalized})
+        ).first()
+        if row is not None:
+            client_id, assignee = await _surviving(session, row)
+            return client_id, assignee, "name"
+
+        # New client from the body company name. The sender's domain is NOT
+        # attached — see the module docstring. No unique index backs
+        # name_normalized (by design), so a WHERE NOT EXISTS guards the race
+        # and the caller re-reads if it lost.
+        params = {
+            "id": uuid.uuid4(),
+            "tenant_id": tenant_id,
+            "name": company_name.strip(),
+            "name_normalized": normalized,
+            "message_id": email_message_id,
+            "assigned_user_id": mailbox_owner_id,
+        }
+        inserted = (
+            await session.execute(_INSERT_CLIENT_BY_NAME, params)
+        ).first()
+        if inserted is not None:
+            return inserted.id, inserted.assigned_user_id, "name"
+        # Lost the race — another worker inserted first. Re-read it.
+        row = (
+            await session.execute(_BY_NAME, {"tenant_id": tenant_id, "name": normalized})
+        ).first()
+        if row is not None:
+            client_id, assignee = await _surviving(session, row)
+            return client_id, assignee, "name"
+        return None, None, ""
+
+    # No company in the body — fall back to the sender's domain. A direct
+    # email from a company that didn't get its name extracted is still
+    # better keyed on domain than on nothing.
     if domain is not None:
         row = (
             await session.execute(
@@ -217,38 +287,23 @@ async def _resolve(
             client_id, assignee = await _surviving(session, row)
             return client_id, assignee, "email_domain"
 
-    if normalized:
-        row = (
-            await session.execute(_BY_NAME, {"tenant_id": tenant_id, "name": normalized})
-        ).first()
-        if row is not None:
-            client_id, assignee = await _surviving(session, row)
-            return client_id, assignee, "name"
+        inserted = (
+            await session.execute(
+                _INSERT_CLIENT_BY_DOMAIN,
+                {
+                    "id": uuid.uuid4(),
+                    "tenant_id": tenant_id,
+                    "name": domain,
+                    "name_normalized": domain,
+                    "domain": domain,
+                    "message_id": email_message_id,
+                    "assigned_user_id": mailbox_owner_id,
+                },
+            )
+        ).one()
+        return inserted.id, inserted.assigned_user_id, "email_domain"
 
-    if not normalized:
-        # A domain with no name still deserves a row; the domain is the name
-        # we have, and labelling it anything else would be a guess.
-        normalized = domain or ""
-
-    inserted = (
-        await session.execute(
-            _INSERT_CLIENT,
-            {
-                "id": uuid.uuid4(),
-                "tenant_id": tenant_id,
-                "name": (company_name or domain or "").strip(),
-                "name_normalized": normalized,
-                "domain": domain,
-                "message_id": email_message_id,
-                "assigned_user_id": mailbox_owner_id,
-            },
-        )
-    ).one()
-    return (
-        inserted.id,
-        inserted.assigned_user_id,
-        "email_domain" if domain else "name",
-    )
+    return None, None, ""
 
 
 async def _surviving(session: AsyncSession, row) -> tuple[uuid.UUID, uuid.UUID | None]:

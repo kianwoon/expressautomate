@@ -275,7 +275,7 @@ async def test_a_two_hop_merge_chain_lands_on_the_final_survivor(agency) -> None
         matched = await match_client(s, agency, None, "hr@acme.com.sg", "Acme Pte Ltd")
         await s.commit()
     assert matched == MatchedClient(
-        client_id=c, assigned_user_id=survivor_recruiter, matched_by="email_domain"
+        client_id=c, assigned_user_id=survivor_recruiter, matched_by="name"
     )
 
 
@@ -367,7 +367,7 @@ async def test_the_match_carries_the_clients_recruiter(agency) -> None:
         await s.commit()
 
     assert matched == MatchedClient(
-        client_id=cid, assigned_user_id=user_id, matched_by="email_domain"
+        client_id=cid, assigned_user_id=user_id, matched_by="name"
     )
 
 

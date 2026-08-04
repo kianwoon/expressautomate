@@ -19,7 +19,7 @@ from app.services.llm.client import LLMResult
 from tests.conftest import AdminSessionLocal, cleanup_tenant
 
 
-def _extraction_fixture(*, company_name: str) -> tuple[ExtractionResponse, LLMResult]:
+def _extraction_fixture(*, company_name: str | None) -> tuple[ExtractionResponse, LLMResult, str]:
     """Copied from tests/test_extract_job.py's `_payload`/`_response` helpers.
 
     Rebuilt here rather than imported so this test breaks the moment the real
@@ -28,35 +28,35 @@ def _extraction_fixture(*, company_name: str) -> tuple[ExtractionResponse, LLMRe
     source = "Vacancy at Acme Pte Ltd. Finance officer role, up to $3500 per month."
     salary_at = source.index("up to $3500")
     period_at = source.index("per month")
-    job = {
-        "company": {
+    job: dict = {}
+    if company_name is not None:
+        job["company"] = {
             "value": company_name,
             "evidence": "Acme Pte Ltd",
             "start_char": source.index("Acme Pte Ltd"),
             "end_char": source.index("Acme Pte Ltd") + len("Acme Pte Ltd"),
             "confidence": 0.9,
-        },
-        "job_title": {
-            "value": "Finance officer",
-            "evidence": "Finance officer",
-            "start_char": source.index("Finance officer"),
-            "end_char": source.index("Finance officer") + len("Finance officer"),
-            "confidence": 0.95,
-        },
-        "salary": {
-            "value": "3500",
-            "evidence": "up to $3500",
-            "start_char": salary_at,
-            "end_char": salary_at + len("up to $3500"),
-            "confidence": 0.9,
-        },
-        "salary_period": {
-            "value": "month",
-            "evidence": "per month",
-            "start_char": period_at,
-            "end_char": period_at + len("per month"),
-            "confidence": 0.9,
-        },
+        }
+    job["job_title"] = {
+        "value": "Finance officer",
+        "evidence": "Finance officer",
+        "start_char": source.index("Finance officer"),
+        "end_char": source.index("Finance officer") + len("Finance officer"),
+        "confidence": 0.95,
+    }
+    job["salary"] = {
+        "value": "3500",
+        "evidence": "up to $3500",
+        "start_char": salary_at,
+        "end_char": salary_at + len("up to $3500"),
+        "confidence": 0.9,
+    }
+    job["salary_period"] = {
+        "value": "month",
+        "evidence": "per month",
+        "start_char": period_at,
+        "end_char": period_at + len("per month"),
+        "confidence": 0.9,
     }
     response = ExtractionResponse.model_validate({"jobs": [job]})
     result = LLMResult(data={}, model="test/fast")
@@ -121,7 +121,12 @@ async def _insert_message(
     return mailbox_id
 
 
-async def test_persisting_an_extraction_proposes_the_sender_as_a_client(agency) -> None:
+async def test_persisting_an_extraction_proposes_the_body_company_as_a_client(agency) -> None:
+    """The company named in the body is the client, not the sender's domain.
+
+    A forwarded job order names the hiring company; the sender's domain (here
+    the forwarding agency's) is not attached to the client.
+    """
     from app.services.ingest.persist import persist
 
     message_id = uuid.uuid4()
@@ -134,7 +139,9 @@ async def test_persisting_an_extraction_proposes_the_sender_as_a_client(agency) 
         rows = (
             await s.execute(text("SELECT email_domain, status FROM clients"))
         ).all()
-    assert rows == [("acme.com.sg", "unconfirmed")]
+    # domain is NULL: the body company created the client, and the sender's
+    # domain is not attached (the sender may be an intermediary).
+    assert rows == [(None, "unconfirmed")]
 
 
 def _three_job_extraction(*, companies: list[str]) -> tuple[ExtractionResponse, LLMResult, str]:
@@ -266,16 +273,13 @@ async def test_one_email_three_jobs_different_companies_uses_first_named(agency)
 
     async with tenant_session(agency) as s:
         rows = (
-            await s.execute(text("SELECT email_domain, status FROM clients"))
+            await s.execute(text("SELECT name_normalized, email_domain FROM clients"))
         ).all()
-    # match_client() is called once per email with the first non-empty
-    # company across all jobs ("Acme Pte Ltd", from Beta/Gamma's jobs it
-    # never sees), plus the sender's domain. The sender's domain wins the
-    # match/insert here (client_matching.py tries domain before name), so the
-    # single client row is keyed on "acme.com.sg" — Beta Holdings and Gamma
-    # Co never produce their own client rows or mentions, which is exactly
-    # the "one client per email" guarantee this test exists to pin down.
-    assert rows == [("acme.com.sg", "unconfirmed")]
+    # The first non-empty company across all jobs ("Acme Pte Ltd") creates
+    # one client. The sender's domain is not attached — the body company is
+    # the authority. Beta Holdings and Gamma Co never produce their own rows,
+    # which is the "one client per email" guarantee this test pins down.
+    assert rows == [("acme", None)]
 
 
 async def test_running_persist_twice_leaves_one_client_and_one_mention(agency) -> None:
@@ -368,9 +372,10 @@ async def test_a_second_email_preserves_the_first_owner(agency) -> None:
 async def test_a_domain_matched_sender_becomes_a_contact(agency) -> None:
     """A sender on the client's own domain is a person at that company.
 
-    The match is by domain, so the sender is captured as a `ClientContact`.
-    The display name from the email header is the contact's name; when it is
-    absent the email address stands in (the column is NOT NULL).
+    Contact capture only fires on a domain match — the body names no company,
+    so the sender's domain is the fallback that creates the client. The display
+    name from the email header is the contact's name; when it is absent the
+    email address stands in (the column is NOT NULL).
     """
     from app.services.ingest.persist import persist
 
@@ -380,7 +385,8 @@ async def test_a_domain_matched_sender_becomes_a_contact(agency) -> None:
         sender_email="jane.doe@acme.com.sg",
         sender_name="Jane Doe",
     )
-    response, result, source = _extraction_fixture(company_name="Acme Pte Ltd")
+    # No company in the body — the match falls to the sender's domain.
+    response, result, source = _extraction_fixture(company_name=None)
     await persist(agency, message_id, response, result, source=source)
 
     async with tenant_session(agency) as s:
@@ -392,22 +398,21 @@ async def test_a_domain_matched_sender_becomes_a_contact(agency) -> None:
     assert rows == [("Jane Doe", "jane.doe@acme.com.sg", False)]
 
 
-async def test_a_free_email_sender_creates_no_contact(agency) -> None:
-    """A free-domain sender is a person, not a company — no contact is captured.
+async def test_a_body_company_match_creates_no_contact(agency) -> None:
+    """A body-company match creates no contact — the sender may be an intermediary.
 
-    `hotmail.com` is on FREE_EMAIL_DOMAINS, so `domain_of` returns None and
-    the match falls through to the company name. A name match does not
-    establish that the sender belongs to that company, so no contact row is
-    written. This is the user's test case: expressautomate@hotmail.com sends
-    a job order whose body names a company.
+    When the company is named in the body, the client is matched by name and
+    the sender is NOT captured as a contact. A forwarded job order's sender is
+    a recruiter at an agency, not a person at the hiring company, so capturing
+    them would be a fabrication.
     """
     from app.services.ingest.persist import persist
 
     message_id = uuid.uuid4()
     await _insert_message(
         agency, message_id,
-        sender_email="expressautomate@hotmail.com",
-        sender_name="EA User",
+        sender_email="jocelynchan@recruitexpress.com.sg",
+        sender_name="Jocelyn Chan",
     )
     response, result, source = _extraction_fixture(company_name="Acme Pte Ltd")
     await persist(agency, message_id, response, result, source=source)
@@ -434,7 +439,7 @@ async def test_reprocessing_creates_no_duplicate_contact(agency) -> None:
         sender_email="jane.doe@acme.com.sg",
         sender_name="Jane Doe",
     )
-    response, result, source = _extraction_fixture(company_name="Acme Pte Ltd")
+    response, result, source = _extraction_fixture(company_name=None)
     await persist(agency, message_id, response, result, source=source)
     await persist(agency, message_id, response, result, source=source)
 

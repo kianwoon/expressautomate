@@ -11,6 +11,7 @@ import uuid
 import pytest
 from sqlalchemy import text
 
+from app.services.client_naming import normalize_company_name
 from app.services.ingest.schema import ExtractionResponse
 from app.services.llm.client import LLMResult
 from tests.conftest import AdminSessionLocal, cleanup_tenant, seed_tenant_with_user
@@ -139,7 +140,7 @@ async def _client_owned_by(
                 "i": client_id,
                 "t": tenant_id,
                 "n": name,
-                "nn": name.lower(),
+                "nn": normalize_company_name(name),
                 "d": domain,
                 "u": user_id,
             },

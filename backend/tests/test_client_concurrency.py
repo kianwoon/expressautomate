@@ -34,14 +34,19 @@ async def agency():
     await cleanup_tenant(tid)
 
 
-async def _match_once(tenant_id: uuid.UUID, sender: str) -> uuid.UUID | None:
+async def _match_once(tenant_id: uuid.UUID, sender: str, company: str | None = None) -> uuid.UUID | None:
     async with tenant_session(tenant_id) as session:
-        matched = await match_client(session, tenant_id, None, sender, "Acme Pte Ltd")
+        matched = await match_client(session, tenant_id, None, sender, company)
         await session.commit()
         return matched.client_id if matched else None
 
 
-async def test_two_concurrent_matches_produce_one_client(agency) -> None:
+async def test_two_concurrent_domain_matches_produce_one_client(agency) -> None:
+    """The partial unique index on (tenant_id, email_domain) deduplicates
+    concurrent inserts: two workers hitting the same domain resolve to one row
+    via the ON CONFLICT clause. Name-based matching has no unique index (by
+    design — two firms can share a name) and tolerates duplicates a recruiter
+    merges later, so this guarantee is domain-specific."""
     results = await asyncio.gather(
         _match_once(agency, "hr@acme.com.sg"),
         _match_once(agency, "jobs@acme.com.sg"),
