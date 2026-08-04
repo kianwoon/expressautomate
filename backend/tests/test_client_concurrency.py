@@ -34,7 +34,9 @@ async def agency():
     await cleanup_tenant(tid)
 
 
-async def _match_once(tenant_id: uuid.UUID, sender: str, company: str | None = None) -> uuid.UUID | None:
+async def _match_once(
+    tenant_id: uuid.UUID, sender: str, company: str | None = None
+) -> uuid.UUID | None:
     async with tenant_session(tenant_id) as session:
         matched = await match_client(session, tenant_id, None, sender, company)
         await session.commit()
