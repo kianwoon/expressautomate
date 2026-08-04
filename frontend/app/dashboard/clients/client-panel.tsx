@@ -6,7 +6,6 @@ import { CLIENTS_PATH } from "../../api";
 import type { Client, ClientMention, ClientPage, Contact, MatchedBy } from "../clients";
 import { getClient, mergeClient, suspendClient, unmergeClient, unsuspendClient } from "../clients";
 import { day, when } from "../format";
-import { ClientAssignee } from "./client-assignee";
 import { ClientForm } from "./client-form";
 import { ClientLogo } from "./client-logo";
 
@@ -211,19 +210,18 @@ function Detail({
             </div>
           </div>
 
-          {/* Above the facts: which recruiter holds the account decides where
-              its next job order lands, so it outranks the fee and the phone
-              number. */}
-          <ClientAssignee client={row} onChanged={onDetailChanged} />
-
-          {row.buddy_name && (
-            <div className="rows" style={{ marginTop: 16 }}>
-              <div className="row">
-                <span className="row-k">Referred by</span>
-                <span>{row.buddy_name}</span>
-              </div>
+          {/* Who looks after this client: the external recruiter who referred it.
+              For a single-user workspace the internal "assignee" is always the
+              one signed-in user, so the buddy — the person with the actual
+              client relationship — is the meaningful name to show. */}
+          <section className="cl-assignee" aria-label="Who looks after this client">
+            <div className="cl-facts-head">
+              <span className="eyebrow">Looked after by</span>
             </div>
-          )}
+            <p className="cl-assignee-held">
+              {row.buddy_name ?? "Nobody yet"}
+            </p>
+          </section>
 
           <ClientFacts row={row} onEdit={() => setEditing(true)} />
 
