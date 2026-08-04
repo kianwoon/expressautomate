@@ -68,22 +68,24 @@ function Workspace() {
   const [buddies, setBuddies] = useState<Buddy[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const reload = () => {
+  const [reloadKey, setReloadKey] = useState(0);
+
+  useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
         const res = await fetch(BUDDIES_API_PATH, { credentials: "include" });
         if (!res.ok) throw new Error();
         const data = (await res.json()) as Buddy[];
-        if (!cancelled) setBuddies(data);
+        if (!cancelled) { setBuddies(data); setError(null); }
       } catch {
         if (!cancelled) setError("We could not load your buddies just now.");
       }
     })();
     return () => { cancelled = true; };
-  };
+  }, [reloadKey]);
 
-  useEffect(() => reload(), []);
+  const reload = () => setReloadKey((k) => k + 1);
 
   if (error) {
     return (
@@ -133,6 +135,13 @@ function Workspace() {
           </p>
           <div className="card jo-table-card">
             <table className="jo-table jo-table-clients">
+              <colgroup>
+                <col style={{ width: "22%" }} />
+                <col style={{ width: "28%" }} />
+                <col style={{ width: "18%" }} />
+                <col style={{ width: "18%" }} />
+                <col style={{ width: "14%" }} />
+              </colgroup>
               <thead>
                 <tr>
                   {COLUMNS.map((col) => (
@@ -146,7 +155,7 @@ function Workspace() {
                     <td className="jo-td jo-td-strong">{b.name}</td>
                     <td className="jo-td">{b.email}</td>
                     <td className="jo-td">
-                      <PhoneCell buddy={b} onChanged={reload()} />
+                      <PhoneCell buddy={b} onChanged={reload} />
                     </td>
                     <td className="jo-td">
                       {b.email_domain ?? <span className="muted">—</span>}
@@ -188,20 +197,17 @@ function PhoneCell({ buddy, onChanged }: { buddy: Buddy; onChanged: () => void }
 
   if (editing) {
     return (
-      <span style={{ display: "flex", gap: 4, alignItems: "center" }}>
-        <input
-          type="tel"
-          className="jo-search"
-          style={{ padding: "5px 8px", fontSize: "0.875rem", width: 130 }}
-          value={value}
-          onChange={(e) => setValue(e.target.value)}
-          disabled={saving}
-          onKeyDown={(e) => { if (e.key === "Enter") save(); if (e.key === "Escape") setEditing(false); }}
-        />
-        <button type="button" className="btn btn-secondary" style={{ padding: "5px 10px", fontSize: "0.8125rem" }} onClick={save} disabled={saving}>
-          {saving ? "…" : "OK"}
-        </button>
-      </span>
+      <input
+        type="tel"
+        className="jo-search"
+        style={{ padding: "4px 8px", fontSize: "0.8125rem", width: "100%", maxWidth: 140 }}
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        disabled={saving}
+        autoFocus
+        onKeyDown={(e) => { if (e.key === "Enter") save(); if (e.key === "Escape") setEditing(false); }}
+        onBlur={save}
+      />
     );
   }
 
