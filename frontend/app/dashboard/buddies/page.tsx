@@ -155,7 +155,7 @@ function Workspace() {
                     <td className="jo-td jo-td-strong">{b.name}</td>
                     <td className="jo-td">{b.email}</td>
                     <td className="jo-td">
-                      <PhoneCell buddy={b} onChanged={reload} />
+                      <PhoneCell buddy={b} />
                     </td>
                     <td className="jo-td">
                       {b.email_domain ?? <span className="muted">—</span>}
@@ -172,22 +172,26 @@ function Workspace() {
   );
 }
 
-function PhoneCell({ buddy, onChanged }: { buddy: Buddy; onChanged: () => void }) {
+function PhoneCell({ buddy }: { buddy: Buddy }) {
   const [editing, setEditing] = useState(false);
   const [value, setValue] = useState(buddy.phone ?? "");
+  const [saved, setSaved] = useState(buddy.phone ?? "");
   const [saving, setSaving] = useState(false);
 
   async function save() {
+    const trimmed = value.trim();
+    if (trimmed === saved) { setEditing(false); return; }
     setSaving(true);
     try {
       await fetch(`${BUDDIES_API_PATH}/${buddy.id}`, {
         method: "PATCH",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ phone: value.trim() || null }),
+        body: JSON.stringify({ phone: trimmed || null }),
       });
+      setSaved(trimmed || "");
+      buddy.phone = trimmed || null;
       setEditing(false);
-      onChanged();
     } catch {
       /* best-effort */
     } finally {
@@ -216,9 +220,9 @@ function PhoneCell({ buddy, onChanged }: { buddy: Buddy; onChanged: () => void }
       type="button"
       className="jo-rowbtn"
       style={{ fontSize: "0.9375rem" }}
-      onClick={() => { setValue(buddy.phone ?? ""); setEditing(true); }}
+      onClick={() => { setValue(saved); setEditing(true); }}
     >
-      {buddy.phone ?? <span className="muted">Add</span>}
+      {saved || <span className="muted">Add</span>}
     </button>
   );
 }
