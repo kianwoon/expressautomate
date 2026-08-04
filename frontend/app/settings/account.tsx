@@ -165,7 +165,9 @@ function AccountForm({ me }: { me: Me }) {
         </div>
       </div>
 
-      <EmailAliases />
+      <div className="jo-panels" style={{ marginTop: 24 }}>
+        <EmailAliases />
+      </div>
     </>
   );
 }
@@ -234,7 +236,7 @@ function EmailAliases() {
   }
 
   return (
-    <div className="card" style={{ marginTop: 24 }}>
+    <div className="card">
       <h3>Email aliases</h3>
       <p className="body" style={{ marginTop: 8, maxWidth: "52ch" }}>
         Your other email addresses — typically your work email at a partner agency. The system
@@ -250,7 +252,6 @@ function EmailAliases() {
               <button
                 type="button"
                 className="btn btn-secondary"
-                style={{ fontSize: 13 }}
                 onClick={() => removeAlias(a.id)}
               >
                 Remove
@@ -260,11 +261,12 @@ function EmailAliases() {
         </div>
       )}
 
-      <div style={{ marginTop: 16, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+      <label style={{ display: "block", marginTop: 16 }}>
+        <span className="row-k">Add an email</span>
         <input
           type="email"
           className="jo-search"
-          style={{ flex: 1, minWidth: 200 }}
+          style={{ marginTop: 6, width: "100%" }}
           placeholder="work@agency.com"
           value={input}
           onChange={(e) => setInput(e.target.value)}
@@ -273,9 +275,12 @@ function EmailAliases() {
             if (e.key === "Enter") addAlias();
           }}
         />
+      </label>
+
+      <div style={{ marginTop: 16, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
         <button
           type="button"
-          className="btn btn-secondary"
+          className="btn btn-primary"
           onClick={addAlias}
           disabled={adding || !input.trim()}
         >
@@ -284,7 +289,7 @@ function EmailAliases() {
       </div>
 
       {error && (
-        <p className="body jo-detail-error" role="alert" style={{ marginTop: 8 }}>
+        <p className="body jo-detail-error" role="alert" style={{ marginTop: 12 }}>
           {error}
         </p>
       )}
