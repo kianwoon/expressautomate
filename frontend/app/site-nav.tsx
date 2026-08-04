@@ -3,6 +3,7 @@
 import { useEffect, useId, useState } from "react";
 
 import {
+  BUDDIES_DASHBOARD_PATH,
   CANDIDATES_DASHBOARD_PATH,
   CLIENTS_DASHBOARD_PATH,
   DASHBOARD_PATH,
@@ -32,6 +33,7 @@ const WORKSPACE_LINKS = [
   { href: DASHBOARD_PATH, label: "Dashboard" },
   { href: CANDIDATES_DASHBOARD_PATH, label: "Candidates" },
   { href: CLIENTS_DASHBOARD_PATH, label: "Clients" },
+  { href: BUDDIES_DASHBOARD_PATH, label: "Buddies" },
 ] as const;
 
 /**

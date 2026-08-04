@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useState } from "react";
 
-import { ME_PATH } from "../api";
+import { ME_PATH, USER_EMAILS_API_PATH } from "../api";
 import { useAuth, type Me } from "../auth";
 
 /**
@@ -164,6 +164,130 @@ function AccountForm({ me }: { me: Me }) {
           </div>
         </div>
       </div>
+
+      <EmailAliases />
     </>
+  );
+}
+
+type Alias = { id: string; email: string; verified: boolean };
+
+function EmailAliases() {
+  const [aliases, setAliases] = useState<Alias[]>([]);
+  const [loaded, setLoaded] = useState(false);
+  const [input, setInput] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [adding, setAdding] = useState(false);
+
+  const load = useCallback(async () => {
+    try {
+      const res = await fetch(USER_EMAILS_API_PATH, { credentials: "include" });
+      if (res.ok) setAliases((await res.json()) as Alias[]);
+    } catch {
+      /* not critical — the list is best-effort */
+    }
+    setLoaded(true);
+  }, []);
+
+  if (!loaded) {
+    void load();
+    return null;
+  }
+
+  async function addAlias() {
+    const email = input.trim().toLowerCase();
+    if (!email || adding) return;
+    setAdding(true);
+    setError(null);
+    try {
+      const res = await fetch(USER_EMAILS_API_PATH, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({ email }),
+      });
+      if (!res.ok) {
+        const detail = (await res.json().catch(() => null))?.detail;
+        setError(typeof detail === "string" ? detail : "Could not add that email.");
+        return;
+      }
+      const row = (await res.json()) as Alias;
+      setAliases((prev) => [...prev, row]);
+      setInput("");
+    } catch {
+      setError("We could not reach the server.");
+    } finally {
+      setAdding(false);
+    }
+  }
+
+  async function removeAlias(id: string) {
+    try {
+      await fetch(`${USER_EMAILS_API_PATH}/${id}`, {
+        method: "DELETE",
+        credentials: "include",
+      });
+      setAliases((prev) => prev.filter((a) => a.id !== id));
+    } catch {
+      /* best-effort */
+    }
+  }
+
+  return (
+    <div className="card" style={{ marginTop: 24 }}>
+      <h3>Email aliases</h3>
+      <p className="body" style={{ marginTop: 8, maxWidth: "52ch" }}>
+        Your other email addresses — typically your work email at a partner agency. The system
+        recognises these as yours, so forwarded emails from your own address are not mistaken for a
+        buddy.
+      </p>
+
+      {aliases.length > 0 && (
+        <div className="rows" style={{ marginTop: 16 }}>
+          {aliases.map((a) => (
+            <div className="row" key={a.id}>
+              <span className="row-k">{a.email}</span>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                style={{ fontSize: 13 }}
+                onClick={() => removeAlias(a.id)}
+              >
+                Remove
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div style={{ marginTop: 16, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        <input
+          type="email"
+          className="jo-search"
+          style={{ flex: 1, minWidth: 200 }}
+          placeholder="work@agency.com"
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          disabled={adding}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") addAlias();
+          }}
+        />
+        <button
+          type="button"
+          className="btn btn-secondary"
+          onClick={addAlias}
+          disabled={adding || !input.trim()}
+        >
+          {adding ? "Adding…" : "Add"}
+        </button>
+      </div>
+
+      {error && (
+        <p className="body jo-detail-error" role="alert" style={{ marginTop: 8 }}>
+          {error}
+        </p>
+      )}
+    </div>
   );
 }

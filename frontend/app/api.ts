@@ -250,6 +250,13 @@ export const SETTINGS_ACCOUNT_PATH = "/settings/account";
 export const SETTINGS_WHATSAPP_PATH = "/settings/whatsapp";
 export const SETTINGS_CLIENT_DISCOVERY_PATH = "/settings/client-discovery";
 
+/** The buddy network. A site route for the page, so no API_BASE prefix. */
+export const BUDDIES_DASHBOARD_PATH = "/dashboard/buddies";
+
+/** Buddy and user-email API endpoints. */
+export const BUDDIES_API_PATH = `${API_BASE}/api/buddies`;
+export const USER_EMAILS_API_PATH = `${API_BASE}/api/user/emails`;
+
 /**
  * Client auto-discovery: a header-only scan of the signed-in recruiter's own
  * mailbox that backfills contacts onto existing clients and offers the ranked
