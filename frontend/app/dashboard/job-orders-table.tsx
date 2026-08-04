@@ -128,28 +128,24 @@ export function JobOrdersTable({
               >
                 <Td nowrap>{day(row.received_datetime)}</Td>
                 <td className="jo-td jo-td-strong">
-                  {/* Whose job order it is, without spending a column: the
-                      table is `table-layout: fixed` and the eight widths above
-                      are each fitted to their content, so a ninth would take
-                      room none of them has to give. It sits beside the company
-                      because that is the cell a recruiter is already reading
-                      to identify the row.
-
-                      Outside the button on purpose. The button's label says
-                      what pressing it does; the owner is a fact about the row,
-                      not part of that action, and folding it in would have a
-                      screen reader announce "Show details for Priya Nair". */}
-                  <span className="jo-owner" title={row.assignee_name ?? "Unassigned"}>
-                    {row.assigned_user_id ? (
+                  {/* Whose job order it is: the buddy who referred the client
+                      owns the account. Falls back to the internal assignee
+                      only when no buddy is linked. Outside the button on
+                      purpose — the owner is a fact about the row, not part of
+                      the "show details" action. */}
+                  <span
+                    className="jo-owner"
+                    title={row.buddy_name ?? row.assignee_name ?? "Unassigned"}
+                  >
+                    {row.buddy_name ? (
+                      <Initials name={row.buddy_name} seed={row.buddy_name} size={18} />
+                    ) : row.assigned_user_id ? (
                       <Initials
                         name={row.assignee_name ?? "?"}
                         seed={row.assigned_user_id}
                         size={18}
                       />
                     ) : (
-                      // Drawn, not omitted. The unassigned queue is a state a
-                      // recruiter can claim from, so an empty ring says "nobody
-                      // yet" where a blank space would say nothing at all.
                       <span className="jo-owner-empty" role="img" aria-label="Unassigned" />
                     )}
                   </span>
