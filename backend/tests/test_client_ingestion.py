@@ -448,3 +448,38 @@ async def test_reprocessing_creates_no_duplicate_contact(agency) -> None:
             await s.execute(text("SELECT count(*) FROM client_contacts"))
         ).scalar_one()
     assert contacts == 1
+
+
+async def test_a_forwarded_email_captures_the_original_sender_as_contact(agency) -> None:
+    """A forwarded email captures the original sender, not the forwarder.
+
+    The envelope sender (the forwarder) is NOT the contact — the original
+    sender found in the body's forwarding header is. This is the Recruit
+    Express case: Jocelyn forwarded, but Topaz originated the job order, so
+    Topaz is the contact on the client.
+    """
+    from app.services.ingest.persist import persist
+
+    message_id = uuid.uuid4()
+    await _insert_message(
+        agency, message_id,
+        sender_email="jocelynchan@recruitexpress.com.sg",
+        sender_name="Jocelyn Chan",
+    )
+    response, result, source = _extraction_fixture(company_name="Wearnes Automotive")
+    await persist(
+        agency, message_id, response, result, source=source,
+        original_sender_email="topaz@recruitexpress.com.sg",
+        original_sender_name="Topaz Liang",
+    )
+
+    async with tenant_session(agency) as s:
+        rows = (
+            await s.execute(
+                text("SELECT name, email FROM client_contacts")
+            )
+        ).all()
+    assert len(rows) == 1
+    assert rows[0].email == "topaz@recruitexpress.com.sg"
+    assert "Topaz" in rows[0].name
+

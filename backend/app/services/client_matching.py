@@ -172,6 +172,8 @@ async def match_client(
     *,
     mailbox_owner_id: uuid.UUID | None = None,
     sender_name: str | None = None,
+    original_sender_email: str | None = None,
+    original_sender_name: str | None = None,
 ) -> MatchedClient | None:
     """Resolve this email to a client, recording how.
 
@@ -187,11 +189,10 @@ async def match_client(
     That is the "first person the client emailed to" rule — a forward to a
     colleague never reassigns.
 
-    `sender_name` is the sender's display name from the email header. It is
-    captured as a client contact when the match is by domain (a domain match
-    is the evidence that the sender is a person at that company); a name match
-    or a free-domain sender creates no contact, because neither establishes
-    that link.
+    Contact capture uses the *original sender* when one is available (a
+    forwarded email — the original sender has the client relationship, not the
+    forwarder). For a direct email (no original sender), the envelope sender
+    is the client's contact and their domain is attached to the client.
     """
     domain = domain_of(sender_email)
     normalized = normalize_company_name(company_name) if company_name else ""
@@ -217,7 +218,17 @@ async def match_client(
         },
     )
 
-    if matched_by == "email_domain" and sender_email:
+    # Capture a contact: the original sender for forwarded email (they have
+    # the client relationship), or the envelope sender for direct email when
+    # matched by domain (the sender IS at the client's company). A name match
+    # with no domain captures nothing — neither sender is confirmed to be at
+    # the client's company.
+    if original_sender_email:
+        await _capture_contact(
+            session, tenant_id, client_id, original_sender_email,
+            original_sender_name,
+        )
+    elif matched_by == "email_domain" and sender_email:
         await _capture_contact(
             session, tenant_id, client_id, sender_email, sender_name
         )

@@ -263,6 +263,9 @@ async def persist(
     response: ExtractionResponse,
     result: LLMResult,
     source: str,
+    *,
+    original_sender_email: str | None = None,
+    original_sender_name: str | None = None,
 ) -> list[uuid.UUID]:
     """Record one model run and every vacancy it found. Returns the new ids.
 
@@ -317,6 +320,8 @@ async def persist(
             session, tenant_id, email_message_id, sender_email, first_company,
             mailbox_owner_id=mailbox_owner_id,
             sender_name=sender_name,
+            original_sender_email=original_sender_email,
+            original_sender_name=original_sender_name,
         )
 
         # An email describing three vacancies becomes three rows. They share

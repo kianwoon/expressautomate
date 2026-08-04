@@ -570,6 +570,7 @@ async def extract_email(
     same extraction while the first was still in flight.
     """
     from app.services.ingest.extract import extract
+    from app.services.ingest.forwarding import extract_original_sender
     from app.services.ingest.persist import persist
     from app.services.ingest.preprocess import to_text
     from app.services.llm.client import LLMInvalidJSON
@@ -638,7 +639,16 @@ async def extract_email(
         await _fail_extraction(tenant, email_message_id, str(exc))
         return
 
-    ids = await persist(tenant, uuid.UUID(email_message_id), response, result, source)
+    # The forwarding header is in the body text that `to_text` preserved.
+    # Parsing it is cheap and deterministic — no model call — and it is what
+    # tells us the original sender (who has the client relationship) apart
+    # from the forwarder (who just relayed the mail).
+    original_sender = extract_original_sender(source)
+    ids = await persist(
+        tenant, uuid.UUID(email_message_id), response, result, source,
+        original_sender_email=original_sender.email if original_sender else None,
+        original_sender_name=original_sender.name if original_sender else None,
+    )
     # A recruitment email with no vacancy in it is a successful outcome, not a
     # failure — the gate fails open, so plenty of what reaches here genuinely
     # describes nothing to fill. Both statuses are terminal in RESUME_JOB.
