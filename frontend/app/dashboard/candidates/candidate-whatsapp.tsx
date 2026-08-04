@@ -12,9 +12,11 @@ import {
   getWhatsappDraft,
   logCandidateActivity,
   sendCandidateWhatsapp,
+  translateWhatsappDraft,
   WhatsappSendError,
   type ActivityItem,
   type WaSessionStatus,
+  type WhatsappLanguage,
 } from "../candidates";
 import { Dialog } from "../dialog";
 import { when } from "../format";
@@ -56,6 +58,18 @@ export function whatsappUrl(phoneE164: string, message: string): string {
  *  landline as well as for "no number at all", so the reason has to cover
  *  both rather than implying a number is simply missing. */
 const NO_NUMBER_REASON = "No WhatsApp-reachable number on file for this candidate.";
+
+/** The languages the draft can be rendered in. English is first because it is
+ *  the default and the canonical source the backend renders; the rest are
+ *  translated on demand via `translateWhatsappDraft`. The wire values match
+ *  `WhatsappLanguage` and the server's `WHATSAPP_LANGUAGES`, so this array is
+ *  the single place the selector's options are listed. */
+const WHATSAPP_LANGUAGES: ReadonlyArray<{ value: WhatsappLanguage; label: string }> = [
+  { value: "english", label: "English" },
+  { value: "chinese", label: "Chinese" },
+  { value: "malay", label: "Malay" },
+  { value: "tamil", label: "Tamil" },
+];
 
 /** WhatsApp's mark, in its own colours.
  *
@@ -294,6 +308,15 @@ function WhatsappModal({
     offerPopup: boolean;
   } | null>(null);
   const [clientRequestId, setClientRequestId] = useState(() => newClientRequestId());
+  // The selected language and the editable English source it translates from.
+  // English is canonical: the backend renders the draft in English, and every
+  // non-English switch re-translates from `englishSource` (so Chinese → Tamil
+  // never translates Chinese to Tamil). When the recruiter edits the textarea
+  // while English is shown, `englishSource` follows along, so a later switch
+  // carries their edits.
+  const [language, setLanguage] = useState<WhatsappLanguage>("english");
+  const [englishSource, setEnglishSource] = useState("");
+  const [translating, setTranslating] = useState(false);
   // Not a blocker: the backend already rewrites the message to omit the name
   // entirely rather than fall back to an email (see settings/account.tsx),
   // so a signed-in user with neither name is fine to send, just less
@@ -310,6 +333,10 @@ function WhatsappModal({
         if (cancelled) return;
         setDraft({ status: "ready", phone_e164: body.phone_e164, message: body.message });
         setText(body.message);
+        // The draft is always English; it is the canonical source every other
+        // language is translated from.
+        setEnglishSource(body.message);
+        setLanguage("english");
         // A freshly loaded draft is a new message, distinct from whatever
         // was retried before this modal opened.
         setClientRequestId(newClientRequestId());
@@ -443,14 +470,51 @@ function WhatsappModal({
     }
   }
 
+  async function changeLanguage(next: WhatsappLanguage) {
+    // English is the canonical source, held in `englishSource`. Switching to
+    // English restores it with no network call; switching to anything else
+    // re-translates from `englishSource`, never from the textarea's current
+    // contents — so Chinese → Tamil is not Chinese-translated-to-Tamil.
+    if (next === language || translating) return;
+    if (next === "english") {
+      setText(englishSource);
+      setLanguage("english");
+      setClientRequestId(newClientRequestId());
+      return;
+    }
+    setTranslating(true);
+    setSendError(null);
+    try {
+      const translation = await translateWhatsappDraft(row.id, englishSource, next);
+      setText(translation);
+      setLanguage(next);
+      // A translated message is a different message than the English one that
+      // was last attempted — a send must not dedupe against an English request
+      // the server has no reason to treat as the same.
+      setClientRequestId(newClientRequestId());
+    } catch (err) {
+      // The textarea still holds the previous language, so the selector must
+      // stay on it too: a box in Chinese with the selector on Tamil is a lie.
+      // `language` is left unchanged (revert), and the server's own words tell
+      // the recruiter what to do — no silent English fallback.
+      setSendError({
+        text: err instanceof ApiError ? err.message : "We couldn't translate that just now.",
+        pointToSettings: false,
+        offerPopup: false,
+      });
+    } finally {
+      setTranslating(false);
+    }
+  }
+
   return (
     <Dialog
       titleId="wa-modal-title"
-      // Held shut while a send is in flight. Escape used to close over the
-      // top of one, and the recruiter never saw whether the message went —
-      // the worst moment to hide the answer, since the retry is a second
-      // message to a real person.
-      onClose={sending ? () => {} : onClose}
+      // Held shut while a send or translation is in flight. Escape used to
+      // close over the top of one, and the recruiter never saw whether the
+      // message went — the worst moment to hide the answer, since the retry
+      // is a second message to a real person.
+      onClose={sending || translating ? () => {} : onClose}
       title={
         <>
           <WhatsappGlyph size={24} />
@@ -484,13 +548,41 @@ function WhatsappModal({
               </p>
             )}
             <label className="wa-field">
+              <span className="row-k">Language</span>
+              <select
+                className="jo-search"
+                value={language}
+                // A translation in flight cannot be cancelled, so the selector
+                // is locked until it resolves — flipping it mid-request would
+                // race two translations for one box.
+                disabled={translating}
+                onChange={(e) => {
+                  void changeLanguage(e.target.value as WhatsappLanguage);
+                }}
+              >
+                {WHATSAPP_LANGUAGES.map((l) => (
+                  <option key={l.value} value={l.value}>
+                    {translating && language === l.value ? `${l.label}…` : l.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="wa-field">
               <span className="row-k">Message</span>
               <textarea
                 className="jo-search"
                 style={{ minHeight: 160 }}
                 value={text}
+                disabled={translating}
                 onChange={(e) => {
                   setText(e.target.value);
+                  // While English is shown, the textarea *is* the English
+                  // source — an edit must flow into `englishSource` so a later
+                  // switch translates the edited text, not the original draft.
+                  // A non-English message is the recruiter's edits to a
+                  // translation; `englishSource` stays as the re-translation
+                  // baseline, untouched here.
+                  if (language === "english") setEnglishSource(e.target.value);
                   // An edit makes this a different message than whatever was
                   // last attempted — a retry of the *edited* text must not
                   // dedupe against a send the server has no reason to treat
@@ -533,7 +625,7 @@ function WhatsappModal({
                     type="button"
                     className="btn btn-primary"
                     onClick={() => void sendNow()}
-                    disabled={sending}
+                    disabled={sending || translating}
                   >
                     {sending ? "Sending…" : "Send"}
                   </button>
@@ -541,17 +633,27 @@ function WhatsappModal({
                     type="button"
                     className="btn btn-secondary"
                     onClick={openWhatsapp}
-                    disabled={sending}
+                    disabled={sending || translating}
                   >
                     Open WhatsApp instead
                   </button>
                 </>
               ) : (
-                <button type="button" className="btn btn-primary" onClick={openWhatsapp}>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={openWhatsapp}
+                  disabled={translating}
+                >
                   Open WhatsApp
                 </button>
               )}
-              <button type="button" className="btn btn-secondary" onClick={onClose} disabled={sending}>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={onClose}
+                disabled={sending || translating}
+              >
                 Cancel
               </button>
             </div>

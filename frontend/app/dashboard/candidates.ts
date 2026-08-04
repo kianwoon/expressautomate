@@ -34,6 +34,7 @@ import {
   candidateUnmergePath,
   candidateWhatsappDraftPath,
   candidateWhatsappSendPath,
+  candidateWhatsappTranslatePath,
   WA_SESSION_PATH,
 } from "../api";
 import { cacheKey, cachedSignedUrl, forget } from "./signed-url-cache";
@@ -990,6 +991,38 @@ export async function getWhatsappDraft(id: string): Promise<WhatsappDraft> {
   });
   if (!res.ok) throw new ApiError(await readError(res));
   return (await res.json()) as WhatsappDraft;
+}
+
+/** The languages the WhatsApp modal can render the draft in. English is the
+ *  canonical source produced by `whatsapp_draft_text`; the others are
+ *  translated on demand. The wire values match `WHATSAPP_LANGUAGES` on the
+ *  server, so this is the single source of truth for the selector's option
+ *  set on both sides. */
+export type WhatsappLanguage = "english" | "chinese" | "malay" | "tamil";
+
+/** Translates the current English text into another language. The caller sends
+ *  the English source on every non-English switch — never the previously shown
+ *  translation — so two non-English languages never translate from each other.
+ *  `english` round-trips the source unchanged (the server handles it without
+ *  calling the translation service), so the same function covers switching back.
+ *
+ *  Throws `ApiError` carrying the server's `detail` on a 502 (service down) or
+ *  422 (unsupported language); the modal shows that detail and reverts the
+ *  selector, so the box never holds a language the selector does not show. */
+export async function translateWhatsappDraft(
+  id: string,
+  sourceText: string,
+  targetLanguage: WhatsappLanguage,
+): Promise<string> {
+  const res = await fetch(candidateWhatsappTranslatePath(id), {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify({ source_text: sourceText, target_language: targetLanguage }),
+  });
+  if (!res.ok) throw new ApiError(await readError(res));
+  const body = (await res.json()) as { translation: string };
+  return body.translation;
 }
 
 export type ActivityItem = {

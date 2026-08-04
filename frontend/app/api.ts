@@ -508,6 +508,16 @@ export function candidateWhatsappSendPath(id: string): string {
   return `${candidatePath(id)}/whatsapp-send`;
 }
 
+/** Re-renders the WhatsApp draft in another language. POST with the English
+ *  `source_text` and a `target_language`; the server returns the translation.
+ *  Sibling to `whatsapp-send` above — flat, same shape. `english` is a no-op
+ *  that round-trips the source, so the caller can switch back without special
+ *  casing. A 502 means the translation service is unreachable; a 422 means the
+ *  language is not supported. */
+export function candidateWhatsappTranslatePath(id: string): string {
+  return `${candidatePath(id)}/whatsapp-translate`;
+}
+
 /** The roles a candidate held. Nested under the candidate because a role has
  *  no meaning apart from one — an id from another agency is a 404 before any
  *  role is reached. POST creates; the collection itself is never fetched

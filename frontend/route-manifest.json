@@ -121,6 +121,9 @@
     "/api/candidates/{candidate_id}/whatsapp-send": [
       "POST"
     ],
+    "/api/candidates/{candidate_id}/whatsapp-translate": [
+      "POST"
+    ],
     "/api/client-discovery": [
       "GET"
     ],

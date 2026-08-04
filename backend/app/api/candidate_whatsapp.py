@@ -59,9 +59,31 @@ from app.services.wa_gateway import (
     GatewayUnreachableError,
     WaGatewayClient,
 )
+from app.services.whatsapp_translate import (
+    TranslateError,
+    translate_message,
+)
 
 log = get_logger(__name__)
 router = APIRouter(tags=["candidates"])
+
+
+# The languages the WhatsApp modal offers in its Language selector. The draft
+# is always rendered in English (`whatsapp_draft_text`); the recruiter picks a
+# target here and `POST /whatsapp-translate` re-renders it through Google
+# Translate. `english` is the canonical source and never reaches the
+# translation service — it is included so the frontend can render the full
+# option set from one list and so input validation has a single closed set.
+#
+# allow-hardcode: this is a fixed product list of supported languages, in the
+# same category as the pipeline `STAGES` in the candidate form — not a value
+# that belongs in config or the database.
+WHATSAPP_LANGUAGES: dict[str, str] = {
+    "english": "English",
+    "chinese": "Chinese",
+    "malay": "Malay",
+    "tamil": "Tamil",
+}
 
 
 # Letters whose *name* opens with a vowel sound, for a title that begins with
@@ -207,6 +229,60 @@ async def whatsapp_draft(request: Request, candidate_id: uuid.UUID) -> dict:
         job_title=candidate.current_title,
     )
     return {"phone_e164": candidate.phone_e164, "message": message}
+
+
+class WhatsAppTranslateIn(BaseModel):
+    """The English text to translate, and the language to translate it into.
+
+    `source_text` is whatever is in the modal's textarea — the rendered draft
+    or the recruiter's edits to it. English is the canonical source: the
+    frontend preserves the English text across language switches and sends it
+    here on every non-English switch, so two non-English languages never
+    translate from each other.
+    """
+
+    source_text: str
+    target_language: str
+
+
+@router.post("/candidates/{candidate_id}/whatsapp-translate")
+async def whatsapp_translate(
+    request: Request,
+    candidate_id: uuid.UUID,
+    body: WhatsAppTranslateIn,
+) -> dict:
+    """Re-render the WhatsApp draft in another language.
+
+    Same session scope as the draft and send routes: the candidate id in the
+    path is what ties the request to a tenant through RLS, so the recruiter is
+    translating a message they are entitled to see. `english` short-circuits
+    without touching the network — the frontend could do the same, but keeping
+    it server-side means there is one code path that decides what "translate to
+    English" means, and the no-op is cheap.
+    """
+    await _require_session_with_role(request)
+
+    if body.target_language not in WHATSAPP_LANGUAGES:
+        raise HTTPException(
+            status_code=422,
+            detail="That language is not supported.",
+        )
+
+    if body.target_language == "english":
+        return {"translation": body.source_text}
+
+    try:
+        translation = await translate_message(body.source_text, body.target_language)
+    except TranslateError as exc:
+        # 502, not 500: the failure is upstream (Google's endpoint), and 500
+        # would read as "our server broke". The recruiter's recourse is to try
+        # again or keep the English text — no silent fallback, because a
+        # candidate would otherwise read a message the recruiter never chose.
+        raise HTTPException(
+            status_code=502,
+            detail=str(exc) or "We couldn't translate that just now.",
+        ) from exc
+    return {"translation": translation}
 
 
 class WhatsAppSendIn(BaseModel):
