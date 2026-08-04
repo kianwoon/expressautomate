@@ -68,8 +68,6 @@ function Workspace() {
   const [buddies, setBuddies] = useState<Buddy[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const [reloadKey, setReloadKey] = useState(0);
-
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -83,9 +81,7 @@ function Workspace() {
       }
     })();
     return () => { cancelled = true; };
-  }, [reloadKey]);
-
-  const reload = () => setReloadKey((k) => k + 1);
+  }, []);
 
   if (error) {
     return (
