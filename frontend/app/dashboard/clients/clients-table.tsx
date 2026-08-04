@@ -1,7 +1,7 @@
 "use client";
 
 import { day } from "../format";
-import type { Client } from "../clients";
+import type { Client, ClientSort, ClientSortKey } from "../clients";
 
 /**
  * The list half of the clients master-detail.
@@ -17,6 +17,11 @@ import type { Client } from "../clients";
  * colouring is `data-status` in `app.css`, so the labels above stay the only
  * place the wording lives.
  *
+ * The sortable headers follow `job-orders-table.tsx`: click to sort ascending,
+ * click again to reverse. The sort is server-side, so the order a recruiter
+ * sees is the order paging steps through — not a re-sort of the current page
+ * that would disagree with the next one.
+ *
  * allow-hardcode: the strings here are user-facing copy, not a list anything
  * is matched against.
  */
@@ -29,14 +34,27 @@ const STATUS_LABEL: Record<Client["status"], string> = {
   merged: "Merged",
 };
 
+/** The server sort key each column maps to. Order matches the `<colgroup>` so
+ *  a reader scanning down sees the same columns in both. */
+const COLUMNS: { key: ClientSortKey; label: string }[] = [
+  { key: "name", label: "Name" },
+  { key: "email_domain", label: "Mail domain" },
+  { key: "status", label: "Status" },
+  { key: "last_seen", label: "Last seen" },
+];
+
 export function ClientsTable({
   rows,
   selectedId,
   onSelect,
+  sort,
+  onSort,
 }: {
   rows: Client[];
   selectedId: string | null;
   onSelect: (id: string) => void;
+  sort: ClientSort;
+  onSort: (sort: ClientSort) => void;
 }) {
   return (
     <div className="card jo-table-card">
@@ -61,10 +79,9 @@ export function ClientsTable({
         </colgroup>
         <thead>
           <tr>
-            <th className="row-k jo-th">Name</th>
-            <th className="row-k jo-th">Mail domain</th>
-            <th className="row-k jo-th">Status</th>
-            <th className="row-k jo-th">Last seen</th>
+            {COLUMNS.map((column) => (
+              <Th key={column.key} column={column} sort={sort} onSort={onSort} />
+            ))}
           </tr>
         </thead>
         <tbody>
@@ -108,5 +125,47 @@ export function ClientsTable({
         </tbody>
       </table>
     </div>
+  );
+}
+
+function Th({
+  column,
+  sort,
+  onSort,
+}: {
+  column: { key: ClientSortKey; label: string };
+  sort: ClientSort;
+  onSort: (sort: ClientSort) => void;
+}) {
+  const active = sort.key === column.key;
+  return (
+    <th
+      className="row-k jo-th"
+      // The arrow is invisible to a screen reader, and a table that has
+      // silently reordered itself is indistinguishable from one that lost rows.
+      aria-sort={active ? (sort.descending ? "descending" : "ascending") : "none"}
+      data-active={active ? "yes" : undefined}
+    >
+      <button
+        type="button"
+        className="jo-sort"
+        // Re-clicking the sorted column reverses it; moving to a new column
+        // starts ascending — except Last seen, where descending is what anyone
+        // clicking a date column means by "sort by date". The same rule
+        // `job-orders-table.tsx` applies to its Received column.
+        onClick={() =>
+          onSort(
+            active
+              ? { key: column.key, descending: !sort.descending }
+              : { key: column.key, descending: column.key === "last_seen" },
+          )
+        }
+      >
+        <span>{column.label}</span>
+        <span className="jo-arrow" aria-hidden="true">
+          {active ? (sort.descending ? "↓" : "↑") : ""}
+        </span>
+      </button>
+    </th>
   );
 }

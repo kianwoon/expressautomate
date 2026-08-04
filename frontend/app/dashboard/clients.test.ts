@@ -48,6 +48,7 @@ function page(overrides: Partial<ClientPage> = {}): ClientPage {
     limit: 50,
     offset: 0,
     counts: { all: 0 },
+    initials: [],
     ...overrides,
   };
 }

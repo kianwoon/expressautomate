@@ -7,7 +7,7 @@ import { useAuth } from "../../auth";
 import { SiteFooter } from "../../site-footer";
 import { SiteNav } from "../../site-nav";
 import { archiveClient, confirmClient, getClient, restoreClient, useClients } from "../clients";
-import type { Client, Filter } from "../clients";
+import type { Client, ClientSort, Filter } from "../clients";
 import { ClientForm } from "./client-form";
 import "./clients.css";
 import { ClientPanel } from "./client-panel";
@@ -45,6 +45,15 @@ const CHIPS: { key: Filter; label: string }[] = [
   // list and the pointer runs loser -> survivor, so this is the only route
   // back to a wrongly merged client.
   { key: "merged", label: "Merged" },
+];
+
+// The A–Z bar mirrors the candidates page verbatim. `#` is every name whose
+// first character is not a Latin letter — digits, punctuation, CJK — exactly
+// the bucket the server folds such names into.
+const NON_ALPHA_INITIAL = "#";
+const INITIALS: string[] = [
+  ...Array.from({ length: 26 }, (_, i) => String.fromCharCode(65 + i)),
+  NON_ALPHA_INITIAL,
 ];
 
 export default function ClientsPage() {
@@ -103,6 +112,13 @@ function Workspace() {
     offset,
     limit: pageSize,
     counts,
+    q,
+    setQ,
+    initial,
+    initials,
+    setInitial,
+    sort,
+    setSort,
     setFilter,
     setOffset,
     setLimit,
@@ -189,6 +205,25 @@ function Workspace() {
     refetchDetail();
   }, [reload, refetchDetail]);
 
+  // Picking a letter or a new sort column both re-order the list from its
+  // first page, so the open row — very likely no longer at the top — is closed
+  // for the same reason paging closes it. A search clears it for the same
+  // reason: a narrower list is a different first page.
+  const pickInitial = useCallback(
+    (next: string | null) => {
+      setInitial(next);
+      setSelectedId(null);
+    },
+    [setInitial],
+  );
+  const onSort = useCallback(
+    (next: ClientSort) => {
+      setSort(next);
+      setSelectedId(null);
+    },
+    [setSort],
+  );
+
   async function doConfirm() {
     if (!detail) return;
     await confirmClient(detail.id);
@@ -245,6 +280,48 @@ function Workspace() {
           Add client
         </button>
       </div>
+
+      <div className="jo-controls" style={{ marginTop: 12 }}>
+        <input
+          className="jo-search"
+          type="search"
+          value={q}
+          onChange={(event) => setQ(event.target.value)}
+          placeholder="Search name…"
+          aria-label="Search clients"
+        />
+      </div>
+
+      <nav className="jo-index" aria-label="Jump to clients by first letter">
+        <button
+          type="button"
+          className="jo-index-key"
+          data-active={initial === null ? "yes" : undefined}
+          aria-pressed={initial === null}
+          onClick={() => pickInitial(null)}
+        >
+          All
+        </button>
+        {INITIALS.map((letter) => {
+          const active = initial === letter;
+          return (
+            <button
+              key={letter}
+              type="button"
+              className="jo-index-key"
+              data-active={active ? "yes" : undefined}
+              aria-pressed={active}
+              // `initials` is the server's word on which letters have rows, so
+              // a letter with none is disabled rather than hidden: the bar is a
+              // map of the alphabet, and gaps in it would read as bugs.
+              disabled={!initials.includes(letter)}
+              onClick={() => pickInitial(letter)}
+            >
+              {letter}
+            </button>
+          );
+        })}
+      </nav>
 
       {adding && (
         <ClientForm
@@ -309,7 +386,13 @@ function Workspace() {
                 use in `.jo-list` / `.cand-list`. Below the whole split it sat
                 under the detail panel too, which is unrelated to paging. */}
             <div className="cl-list">
-              <ClientsTable rows={items} selectedId={selectedId} onSelect={setSelectedId} />
+              <ClientsTable
+                rows={items}
+                selectedId={selectedId}
+                onSelect={setSelectedId}
+                sort={sort}
+                onSort={onSort}
+              />
               {pager}
             </div>
             <ClientPanel

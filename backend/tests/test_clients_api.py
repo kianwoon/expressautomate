@@ -120,6 +120,175 @@ async def test_the_status_filter_is_the_review_queue(agency_with_clients) -> Non
     assert body["counts"]["unconfirmed"] == 1
 
 
+@pytest.fixture
+async def agency_with_named_clients():
+    """Three live clients whose names, domains and statuses differ, so the
+    letter bar and every sort column have something to disagree about.
+
+    "Acme" is shared with `agency_with_clients`, but this fixture stands on its
+    own: sorting and the A–Z index need more than one row to be meaningful,
+    and the single-row fixture cannot tell ascending from descending.
+    """
+    tid, uid = uuid.uuid4(), uuid.uuid4()
+    rows = [
+        # name, name_normalized, email_domain, status — order is deliberately
+        # not the order any sort returns, so the assertions are not tautological.
+        ("Beacon Corp", "beacon corp", "beacon.sg", "confirmed", uuid.uuid4()),
+        ("Acme", "acme", "acme.com", "unconfirmed", uuid.uuid4()),
+        ("Zenith Ltd", "zenith ltd", None, "archived", uuid.uuid4()),
+        # A second "B" so the within-letter order is observable: recency would
+        # interleave other letters, alphabetical keeps the two B's together.
+        ("Bora Trading", "bora trading", "bora.sg", "confirmed", uuid.uuid4()),
+    ]
+    ids = {name: cid for name, *_rest, cid in rows}
+    async with AdminSessionLocal() as s:
+        await s.execute(
+            text("INSERT INTO tenants (id, name, slug) VALUES (:i, :n, :n)"),
+            {"i": tid, "n": f"agency-{tid.hex[:6]}"},
+        )
+        await s.execute(
+            text(
+                "INSERT INTO users (id, tenant_id, email, role) "
+                "VALUES (:i, :t, :e, 'owner')"
+            ),
+            {"i": uid, "t": tid, "e": f"u{uid.hex[:6]}@agency.sg"},
+        )
+        for name, norm, domain, status, cid in rows:
+            await s.execute(
+                text(
+                    "INSERT INTO clients (id, tenant_id, name, name_normalized, "
+                    "email_domain, status) VALUES (:i, :t, :n, :norm, :d, :s)"
+                ),
+                {"i": cid, "t": tid, "n": name, "norm": norm, "d": domain, "s": status},
+            )
+        await s.commit()
+    yield tid, uid, ids
+    await cleanup_tenant(tid)
+
+
+async def test_the_initial_filter_keeps_only_one_letter(
+    agency_with_named_clients,
+) -> None:
+    tid, uid, ids = agency_with_named_clients
+    async with await _client_for(tid, uid) as http:
+        body = (await http.get("/api/clients?initial=B")).json()
+    assert {row["name"] for row in body["items"]} == {"Beacon Corp", "Bora Trading"}
+
+
+async def test_initials_lists_letters_with_rows_and_omits_empty_ones(
+    agency_with_named_clients,
+) -> None:
+    """The bar answers "which letters could I click next", so it is computed
+    before the `initial` filter narrows the page — and it never names a letter
+    that would return an empty list."""
+    tid, uid, _ids = agency_with_named_clients
+    async with await _client_for(tid, uid) as http:
+        body = (await http.get("/api/clients")).json()
+        # The bar is unchanged while standing on a letter, same as candidates.
+        narrowed = (await http.get("/api/clients?initial=B")).json()
+    assert body["initials"] == ["A", "B", "Z"]
+    assert narrowed["initials"] == ["A", "B", "Z"]
+
+
+async def test_selecting_a_letter_orders_alphabetically(
+    agency_with_named_clients,
+) -> None:
+    """Recency inside a letter reads as no order at all — a recruiter scanning
+    a letter is looking for a name, so the list meets them in reading order
+    the way the candidates page does under the same control. Two clients share
+    the letter B here precisely so that order is observable rather than trivial."""
+    tid, uid, _ids = agency_with_named_clients
+    async with await _client_for(tid, uid) as http:
+        body = (await http.get("/api/clients?initial=B")).json()
+    assert [row["name"] for row in body["items"]] == ["Beacon Corp", "Bora Trading"]
+
+
+async def test_sort_by_name_ascending(agency_with_named_clients) -> None:
+    tid, uid, _ids = agency_with_named_clients
+    async with await _client_for(tid, uid) as http:
+        body = (await http.get("/api/clients?sort_by=name")).json()
+    assert [row["name"] for row in body["items"]] == [
+        "Acme",
+        "Beacon Corp",
+        "Bora Trading",
+        "Zenith Ltd",
+    ]
+
+
+async def test_sort_by_name_descending(agency_with_named_clients) -> None:
+    tid, uid, _ids = agency_with_named_clients
+    async with await _client_for(tid, uid) as http:
+        body = (await http.get("/api/clients?sort_by=name&descending=true")).json()
+    assert [row["name"] for row in body["items"]] == [
+        "Zenith Ltd",
+        "Bora Trading",
+        "Beacon Corp",
+        "Acme",
+    ]
+
+
+async def test_sort_by_email_domain_puts_nulls_last(
+    agency_with_named_clients,
+) -> None:
+    tid, uid, ids = agency_with_named_clients
+    async with await _client_for(tid, uid) as http:
+        body = (await http.get("/api/clients?sort_by=email_domain")).json()
+    # Zenith has no domain; nulls last means it sits at the bottom.
+    assert [row["id"] for row in body["items"]][-1] == str(ids["Zenith Ltd"])
+
+
+async def test_sort_by_status(agency_with_named_clients) -> None:
+    tid, uid, _ids = agency_with_named_clients
+    async with await _client_for(tid, uid) as http:
+        body = (await http.get("/api/clients?sort_by=status")).json()
+    # Ascending alphabetic over the status literals. Two confirmed clients tie
+    # on status and fall back to id — assert only the status sequence, which is
+    # the thing the sort key decides.
+    assert [row["status"] for row in body["items"]] == [
+        "archived",
+        "confirmed",
+        "confirmed",
+        "unconfirmed",
+    ]
+
+
+async def test_an_unknown_sort_column_is_rejected(agency_with_named_clients) -> None:
+    """The whitelist is the type system, not a lookup: a typo is a 422, never
+    silently ignored as "no sort"."""
+    tid, uid, _ids = agency_with_named_clients
+    async with await _client_for(tid, uid) as http:
+        res = await http.get("/api/clients?sort_by=bogus")
+    assert res.status_code == 422
+
+
+async def test_the_default_order_is_by_recency_not_name(
+    agency_with_clients,
+) -> None:
+    """No sort param means the review queue: what changed lately. This is the
+    order the list had before sorting existed, and it must not move."""
+    tid, uid, ids = agency_with_clients
+    async with await _client_for(tid, uid) as http:
+        body = (await http.get("/api/clients")).json()
+    assert [row["id"] for row in body["items"]] == [str(ids["live"])]
+
+
+async def test_explicit_last_seen_sort_matches_the_default_order(
+    agency_with_named_clients,
+) -> None:
+    """The frontend always sends `sort_by=last_seen&descending=true` so the
+    table's active-column highlight is honest. That must agree with the no-sort
+    default row-for-row, or the list would appear to re-order itself the moment
+    the page loads. The `last_seen` sort carries `created_at` as its secondary
+    key precisely to preserve the default's tiebreak."""
+    tid, uid, _ids = agency_with_named_clients
+    async with await _client_for(tid, uid) as http:
+        default = (await http.get("/api/clients")).json()
+        explicit = (await http.get("/api/clients?sort_by=last_seen&descending=true")).json()
+    assert [row["id"] for row in default["items"]] == [
+        row["id"] for row in explicit["items"]
+    ]
+
+
 async def test_confirming_is_the_only_way_a_client_becomes_confirmed(agency_with_clients) -> None:
     tid, uid, ids = agency_with_clients
     async with await _client_for(tid, uid) as http:

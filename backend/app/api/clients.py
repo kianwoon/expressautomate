@@ -30,11 +30,26 @@ from app.models.client import Client, ClientCollaborator, ClientContact, ClientM
 from app.models.opportunity import Opportunity
 from app.models.tenant import User
 from app.services.client_naming import normalize_company_name
+from app.services.name_index import initial_of as _initial_of
+from app.services.name_index import sorted_initials as _sorted_initials
 from app.services.visibility import OWNER_ROLE
 
 router = APIRouter(tags=["clients"])
 
 StatusFilter = Literal["unconfirmed", "confirmed", "suspended", "archived", "merged"]
+
+# A single letter or `#`; anything else is a 422 from the framework rather than
+# a hand-rolled check, so the contract lives in the OpenAPI schema too. Shared
+# shape with `candidates.py`, kept here as a local singleton for the same B008
+# reason documented there.
+InitialFilter = Query(default=None, pattern=r"^([A-Za-z]|#)$")
+
+# The columns a recruiter may sort the list by. Anything else is a 422 from the
+# framework, so the whitelist is enforced by the type system rather than by a
+# lookup that could silently ignore a typo. `last_seen` and `created` are the
+# two the default order already uses; `name`, `email_domain` and `status` are
+# the ones the table exposes headers for.
+ClientSortBy = Literal["name", "email_domain", "status", "last_seen", "created"]
 
 
 class MergeRequest(BaseModel):
@@ -187,6 +202,58 @@ def _serialize(client: Client, assignee_name: str | None = None) -> dict:
     }
 
 
+def _client_order(sort_by, descending, initial):
+    """The ORDER BY clauses for the clients list, as a tuple SQLAlchemy spreads.
+
+    Three branches, because the list answers three different questions:
+
+    * An explicit `sort_by` — the recruiter clicked a column header. Honoured
+      exactly, direction included.
+    * A letter selected with no explicit sort — "find this company" reads as
+      alphabetical. Recency inside a letter is no order at all: you cannot scan
+      for a name in it. Same call candidates makes for the same reason.
+    * Nothing — the review queue, where "what changed lately" is the question
+      and recency wins. This is the order the list had before sorting existed,
+      preserved so the default view does not move.
+
+    `Client.id` last on every branch, because no key above is unique. A bulk
+    import gives many rows the same `last_seen_at`, and two clients genuinely
+    share a name — and where the sort key ties, Postgres is free to return them
+    in a different order each time it is asked. Paging then shows somebody
+    twice and somebody else not at all, which reads as the list losing clients
+    rather than as an unstable sort.
+    """
+    if sort_by is not None:
+        # Nulls last on every nullable key: a client with no mail domain or no
+        # last-seen is not the most or least of anything, and pinning it to one
+        # end of the list would be a judgement the data does not support.
+        #
+        # The two date columns each carry their natural companion as a
+        # secondary key, so the default `last_seen` sort agrees row-for-row
+        # with the order the list had before sorting existed (`last_seen_at`
+        # then `created_at`, both descending) rather than re-introducing the
+        # instability a single non-unique key would.
+        if sort_by == "name":
+            keys = (func.lower(Client.name), Client.name_normalized)
+        elif sort_by == "email_domain":
+            keys = (Client.email_domain,)
+        elif sort_by == "status":
+            keys = (Client.status,)
+        elif sort_by == "last_seen":
+            keys = (Client.last_seen_at, Client.created_at)
+        else:  # "created"
+            keys = (Client.created_at, Client.last_seen_at)
+        ordered = tuple(
+            k.desc().nullslast() if descending else k.asc().nullslast() for k in keys
+        )
+        return (*ordered, Client.id.asc())
+
+    if initial is not None:
+        return (func.lower(Client.name).asc(), Client.id.asc())
+
+    return (Client.last_seen_at.desc().nullslast(), Client.created_at.desc(), Client.id.asc())
+
+
 @router.get("/clients")
 async def list_clients(
     request: Request,
@@ -196,6 +263,9 @@ async def list_clients(
     offset: int = Query(default=0, ge=0),
     status: StatusFilter | None = None,
     q: str | None = None,
+    initial: str | None = InitialFilter,
+    sort_by: ClientSortBy | None = None,
+    descending: bool = False,
 ) -> dict:
     _user_uuid, tenant_uuid = _require_session(request)
     ceiling = settings.CLIENTS_PAGE_LIMIT
@@ -252,14 +322,35 @@ async def list_clients(
                 )
             )
 
+        # Deliberately computed from `base` *before* `initial` narrows it: the
+        # bar answers "which letters could I click next", and applying the
+        # letter already clicked would leave a bar of exactly one letter with
+        # no way back to the rest. One aggregate over the whole filtered set,
+        # not twenty-seven counting queries. Same reasoning as candidates.
+        unfiltered = base.subquery()
+        initials = _sorted_initials(
+            list(
+                (
+                    await session.execute(
+                        select(_initial_of(unfiltered.c.name))
+                        .select_from(unfiltered)
+                        .distinct()
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        )
+
+        if initial is not None:
+            base = base.where(_initial_of(Client.name) == initial.upper())
+
         total = (
             await session.execute(select(func.count()).select_from(base.subquery()))
         ).scalar_one()
         rows = (
             await session.execute(
-                base.order_by(
-                    Client.last_seen_at.desc().nullslast(), Client.created_at.desc()
-                )
+                base.order_by(*_client_order(sort_by, descending, initial))
                 .limit(page_limit)
                 .offset(offset)
             )
@@ -271,6 +362,7 @@ async def list_clients(
         "limit": page_limit,
         "offset": offset,
         "counts": counts,
+        "initials": initials,
     }
 
 

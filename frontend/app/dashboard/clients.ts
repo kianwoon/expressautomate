@@ -145,7 +145,25 @@ export type ClientPage = {
   limit: number;
   offset: number;
   counts: Record<string, number>;
+  /** Which first-letter buckets have rows, so the A–Z bar can disable the
+   *  rest. Computed by the server before the `initial` filter narrows the
+   *  page, so picking a letter never empties the bar. */
+  initials: string[];
 };
+
+/** The columns the table offers sort headers for. Mirrors the server's
+ *  `ClientSortBy` whitelist (`backend/app/api/clients.py`): the two must
+ *  agree, and the value sent is the value the server validates against. */
+export type ClientSortKey = "name" | "email_domain" | "status" | "last_seen";
+
+export type ClientSort = { key: ClientSortKey; descending: boolean };
+
+/** The review queue order — "what changed lately". The server falls back to
+ *  this when no `sort_by` is sent, and this is the sort the table shows before
+ *  a recruiter clicks a header, so the two stay in step. `last_seen` rather
+ *  than the server's twin-key `last_seen_at`/`created_at`: there is one column
+ *  for it in the UI and the server decides the rest. */
+export const DEFAULT_CLIENT_SORT: ClientSort = { key: "last_seen", descending: true };
 
 /** The chips. `null` is "All" (every non-merged row, the review queue plus
  *  everything already confirmed or archived). `"merged"` is reached only by
@@ -154,9 +172,26 @@ export type ClientPage = {
  *  wrongly merged client could never be found again to unmerge. */
 export type Filter = null | ClientStatus;
 
-function listUrl(filter: Filter, offset: number, limit: number): string {
+function listUrl(
+  filter: Filter,
+  offset: number,
+  limit: number,
+  q: string,
+  initial: string | null,
+  sort: ClientSort,
+): string {
   const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
   if (filter) params.set("status", filter);
+  if (q.trim()) params.set("q", q.trim());
+  if (initial) params.set("initial", initial);
+  // Always sent, even on the default view: the server's own default order
+  // agrees with `DEFAULT_CLIENT_SORT`, so sending it changes nothing there,
+  // and it keeps the table's active-column highlight honest rather than
+  // guessing. An explicit sort also wins over the letter-browse alphabetical
+  // fallback on the server, so a recruiter sorting while standing on a letter
+  // gets what they asked for.
+  params.set("sort_by", sort.key);
+  params.set("descending", String(sort.descending));
   return `${CLIENTS_PATH}?${params.toString()}`;
 }
 
@@ -175,6 +210,7 @@ export type ListState =
   | { status: "unreadable"; message: string };
 
 const ZERO_COUNTS: Record<string, number> = { all: 0 };
+const NO_INITIALS: string[] = [];
 
 export type Clients = {
   state: ListState;
@@ -189,6 +225,15 @@ export type Clients = {
   /** The last counts we were told, kept across a reload so the chips do not
    *  blink back to nothing every time a filter changes. */
   counts: Record<string, number>;
+  /** The free-text search box. Empty is the ordinary list; typing narrows it,
+   *  matched server-side against name and name_normalized. */
+  q: string;
+  /** The letter the list is narrowed to, or `null` for all of them. */
+  initial: string | null;
+  /** Which letters have rows, for disabling the empty ones in the bar. */
+  initials: string[];
+  /** The active column sort, shown as the highlighted header. */
+  sort: ClientSort;
   setFilter: (filter: Filter) => void;
   setOffset: (offset: number) => void;
   /** Back to the first page for the same reason `setFilter` does: offset 150
@@ -196,6 +241,9 @@ export type Clients = {
    *  end of the list entirely. Growing the page while standing deep in the
    *  list would land on nothing. */
   setLimit: (limit: number) => void;
+  setQ: (q: string) => void;
+  setInitial: (initial: string | null) => void;
+  setSort: (sort: ClientSort) => void;
   reload: () => void;
 };
 
@@ -212,6 +260,10 @@ export function useClients(): Clients {
     CLIENTS_PAGE_SIZES,
   );
   const [counts, setCounts] = useState<Record<string, number>>(ZERO_COUNTS);
+  const [q, setQRaw] = useState("");
+  const [initial, setInitialRaw] = useState<string | null>(null);
+  const [initials, setInitials] = useState<string[]>(NO_INITIALS);
+  const [sort, setSortRaw] = useState<ClientSort>(DEFAULT_CLIENT_SORT);
   const [nonce, setNonce] = useState(0);
 
   useEffect(() => {
@@ -227,7 +279,7 @@ export function useClients(): Clients {
     setState((prev) => (prev.status === "ready" ? prev : { status: "loading" }));
     (async () => {
       try {
-        const res = await fetch(listUrl(filter, offset, limit), {
+        const res = await fetch(listUrl(filter, offset, limit, q, initial, sort), {
           credentials: "include",
           headers: { Accept: "application/json" },
           signal: controller.signal,
@@ -239,6 +291,7 @@ export function useClients(): Clients {
         const page = (await res.json()) as ClientPage;
         setState({ status: "ready", page });
         setCounts(page.counts);
+        setInitials(page.initials ?? NO_INITIALS);
       } catch {
         if (!controller.signal.aborted) {
           setState({ status: "unreadable", message: "We could not reach the server." });
@@ -246,7 +299,7 @@ export function useClients(): Clients {
       }
     })();
     return () => controller.abort();
-  }, [filter, offset, limit, nonce]);
+  }, [filter, offset, limit, q, initial, sort, nonce]);
 
   const setFilter = useCallback((next: Filter) => {
     setFilterRaw(next);
@@ -260,9 +313,41 @@ export function useClients(): Clients {
     setLimitRaw(next);
     setOffset(0);
   }, []);
+  // Each of these narrows the list, and a narrower list begins on its first
+  // page — standing on offset 150 of a search that now matches 3 rows is
+  // standing past the end of it. Same pattern as `setFilter`.
+  const setQ = useCallback((next: string) => {
+    setQRaw(next);
+    setOffset(0);
+  }, []);
+  const setInitial = useCallback((next: string | null) => {
+    setInitialRaw(next);
+    setOffset(0);
+  }, []);
+  const setSort = useCallback((next: ClientSort) => {
+    setSortRaw(next);
+    setOffset(0);
+  }, []);
   const reload = useCallback(() => setNonce((n) => n + 1), []);
 
-  return { state, filter, offset, limit, counts, setFilter, setOffset, setLimit, reload };
+  return {
+    state,
+    filter,
+    offset,
+    limit,
+    counts,
+    q,
+    initial,
+    initials,
+    sort,
+    setFilter,
+    setOffset,
+    setLimit,
+    setQ,
+    setInitial,
+    setSort,
+    reload,
+  };
 }
 
 /** The one server field name a 422 is checked against when picking which
