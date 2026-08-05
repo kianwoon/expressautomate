@@ -201,10 +201,20 @@ def test_a_component_survives_the_trip_through_jsonb():
 
     serialised = serialize_components(
         [
-            Component(name="skills", weight=Decimal("3"), raw=Decimal("0.5"),
-                      contribution=Decimal("1.5"), note="Matched 1 of 2."),
-            Component(name="salary", weight=Decimal("2"), raw=None,
-                      contribution=None, note="No comparable salary."),
+            Component(
+                name="skills",
+                weight=Decimal("3"),
+                raw=Decimal("0.5"),
+                contribution=Decimal("1.5"),
+                note="Matched 1 of 2.",
+            ),
+            Component(
+                name="salary",
+                weight=Decimal("2"),
+                raw=None,
+                contribution=None,
+                note="No comparable salary.",
+            ),
         ]
     )
     assert json.loads(json.dumps(serialised)) == serialised
@@ -329,9 +339,7 @@ async def test_the_protected_report_lands_on_the_run(agency, monkeypatch):
     assert "C/F" in row.protected_attribute_note
 
 
-async def test_an_explanation_is_stored_beside_the_candidate_it_is_about(
-    agency, monkeypatch
-):
+async def test_an_explanation_is_stored_beside_the_candidate_it_is_about(agency, monkeypatch):
     tenant_id = agency
     opportunity_id = await _opportunity(tenant_id)
     candidate_id = await _candidate(
@@ -410,10 +418,7 @@ async def test_a_stranded_run_is_re_enqueued(agency, monkeypatch):
     run_id = await _run(tenant_id, opportunity_id, state=SourcingRun.RUNNING)
     async with AdminSessionLocal() as s:
         await s.execute(
-            text(
-                "UPDATE sourcing_runs SET updated_at = now() - interval '1 day'"
-                " WHERE id = :i"
-            ),
+            text("UPDATE sourcing_runs SET updated_at = now() - interval '1 day' WHERE id = :i"),
             {"i": run_id},
         )
         await s.commit()
@@ -565,9 +570,7 @@ async def test_a_run_does_not_narrow_when_no_sex_is_implied(agency):
     await _code(
         tenant_id, opportunity_id, code="SC", meaning="Singapore Citizen", attribute="nationality"
     )
-    await _candidate(
-        tenant_id, name="Bob Lee", title="staff nurse", skills=("triage",), sex="male"
-    )
+    await _candidate(tenant_id, name="Bob Lee", title="staff nurse", skills=("triage",), sex="male")
     run_id = await _run(tenant_id, opportunity_id)
 
     await run_sourcing(
@@ -589,9 +592,7 @@ async def test_conflicting_sex_codes_do_not_narrow(agency):
     opportunity_id = await _opportunity(tenant_id)
     await _code(tenant_id, opportunity_id, code="C/F", meaning="Chinese, female", attribute="race")
     await _code(tenant_id, opportunity_id, code="O/M", meaning="Any race, male", attribute="gender")
-    await _candidate(
-        tenant_id, name="Bob Lee", title="staff nurse", skills=("triage",), sex="male"
-    )
+    await _candidate(tenant_id, name="Bob Lee", title="staff nurse", skills=("triage",), sex="male")
     run_id = await _run(tenant_id, opportunity_id)
 
     await run_sourcing(
@@ -606,4 +607,3 @@ async def test_conflicting_sex_codes_do_not_narrow(agency):
     # client meant, so the pool stays whole.
     assert row.sex_prefilter_applied is False
     assert len(await _matches(tenant_id, run_id)) == 1
-

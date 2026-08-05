@@ -245,9 +245,7 @@ async def semantic_neighbors(
     sql += "  ORDER BY embedding <=> :q::vector\n  LIMIT :k"
     params["k"] = k
 
-    rows = (
-        await session.execute(sql, params)
-    ).all()
+    rows = (await session.execute(sql, params)).all()
     return {row.candidate_id: float(row.similarity) for row in rows}
 
 

@@ -136,9 +136,7 @@ async def test_persisting_an_extraction_proposes_the_body_company_as_a_client(ag
     await persist(agency, message_id, response, result, source=source)
 
     async with tenant_session(agency) as s:
-        rows = (
-            await s.execute(text("SELECT email_domain, status FROM clients"))
-        ).all()
+        rows = (await s.execute(text("SELECT email_domain, status FROM clients"))).all()
     # domain is NULL: the body company created the client, and the sender's
     # domain is not attached (the sender may be an intermediary).
     assert rows == [(None, "unconfirmed")]
@@ -215,9 +213,7 @@ async def test_one_email_three_jobs_same_company_makes_one_client(agency) -> Non
     async with tenant_session(agency) as s:
         clients = (await s.execute(text("SELECT count(*) FROM clients"))).scalar_one()
         mentions = (await s.execute(text("SELECT count(*) FROM client_mentions"))).scalar_one()
-        opportunities = (
-            await s.execute(text("SELECT count(*) FROM opportunities"))
-        ).scalar_one()
+        opportunities = (await s.execute(text("SELECT count(*) FROM opportunities"))).scalar_one()
     assert (clients, mentions) == (1, 1)
     assert opportunities == 3
 
@@ -272,9 +268,7 @@ async def test_one_email_three_jobs_different_companies_uses_first_named(agency)
     await persist(agency, message_id, response, result, source=source)
 
     async with tenant_session(agency) as s:
-        rows = (
-            await s.execute(text("SELECT name_normalized, email_domain FROM clients"))
-        ).all()
+        rows = (await s.execute(text("SELECT name_normalized, email_domain FROM clients"))).all()
     # The first non-empty company across all jobs ("Acme Pte Ltd") creates
     # one client. The sender's domain is not attached — the body company is
     # the authority. Beta Holdings and Gamma Co never produce their own rows,
@@ -302,10 +296,7 @@ async def _a_recruiter(tenant_id: uuid.UUID) -> uuid.UUID:
     user_id = uuid.uuid4()
     async with AdminSessionLocal() as s:
         await s.execute(
-            text(
-                "INSERT INTO users (id, tenant_id, email, role)"
-                " VALUES (:i, :t, :e, 'recruiter')"
-            ),
+            text("INSERT INTO users (id, tenant_id, email, role) VALUES (:i, :t, :e, 'recruiter')"),
             {"i": user_id, "t": tenant_id, "e": f"{user_id.hex[:8]}@example.test"},
         )
         await s.commit()
@@ -330,9 +321,7 @@ async def test_a_new_client_is_assigned_to_the_mailbox_owner(agency) -> None:
     await persist(agency, message_id, response, result, source=source)
 
     async with tenant_session(agency) as s:
-        assigned = (
-            await s.execute(text("SELECT assigned_user_id FROM clients"))
-        ).scalar_one()
+        assigned = (await s.execute(text("SELECT assigned_user_id FROM clients"))).scalar_one()
     assert assigned == owner
 
 
@@ -381,7 +370,8 @@ async def test_a_domain_matched_sender_becomes_a_contact(agency) -> None:
 
     message_id = uuid.uuid4()
     await _insert_message(
-        agency, message_id,
+        agency,
+        message_id,
         sender_email="jane.doe@acme.com.sg",
         sender_name="Jane Doe",
     )
@@ -390,11 +380,7 @@ async def test_a_domain_matched_sender_becomes_a_contact(agency) -> None:
     await persist(agency, message_id, response, result, source=source)
 
     async with tenant_session(agency) as s:
-        rows = (
-            await s.execute(
-                text("SELECT name, email, is_primary FROM client_contacts")
-            )
-        ).all()
+        rows = (await s.execute(text("SELECT name, email, is_primary FROM client_contacts"))).all()
     assert rows == [("Jane Doe", "jane.doe@acme.com.sg", False)]
 
 
@@ -410,7 +396,8 @@ async def test_a_body_company_match_creates_no_contact(agency) -> None:
 
     message_id = uuid.uuid4()
     await _insert_message(
-        agency, message_id,
+        agency,
+        message_id,
         sender_email="jocelynchan@recruitexpress.com.sg",
         sender_name="Jocelyn Chan",
     )
@@ -418,9 +405,7 @@ async def test_a_body_company_match_creates_no_contact(agency) -> None:
     await persist(agency, message_id, response, result, source=source)
 
     async with tenant_session(agency) as s:
-        contacts = (
-            await s.execute(text("SELECT count(*) FROM client_contacts"))
-        ).scalar_one()
+        contacts = (await s.execute(text("SELECT count(*) FROM client_contacts"))).scalar_one()
     assert contacts == 0
 
 
@@ -435,7 +420,8 @@ async def test_reprocessing_creates_no_duplicate_contact(agency) -> None:
 
     message_id = uuid.uuid4()
     await _insert_message(
-        agency, message_id,
+        agency,
+        message_id,
         sender_email="jane.doe@acme.com.sg",
         sender_name="Jane Doe",
     )
@@ -444,9 +430,7 @@ async def test_reprocessing_creates_no_duplicate_contact(agency) -> None:
     await persist(agency, message_id, response, result, source=source)
 
     async with tenant_session(agency) as s:
-        contacts = (
-            await s.execute(text("SELECT count(*) FROM client_contacts"))
-        ).scalar_one()
+        contacts = (await s.execute(text("SELECT count(*) FROM client_contacts"))).scalar_one()
     assert contacts == 1
 
 
@@ -461,22 +445,25 @@ async def test_a_forwarded_email_captures_the_original_sender_as_buddy(agency) -
 
     message_id = uuid.uuid4()
     await _insert_message(
-        agency, message_id,
+        agency,
+        message_id,
         sender_email="jocelynchan@recruitexpress.com.sg",
         sender_name="Jocelyn Chan",
     )
     response, result, source = _extraction_fixture(company_name="Wearnes Automotive")
     await persist(
-        agency, message_id, response, result, source=source,
+        agency,
+        message_id,
+        response,
+        result,
+        source=source,
         original_sender_email="topaz@recruitexpress.com.sg",
         original_sender_name="Topaz Liang",
     )
 
     async with tenant_session(agency) as s:
         contacts = (await s.execute(text("SELECT count(*) FROM client_contacts"))).scalar_one()
-        buddies = (
-            await s.execute(text("SELECT name, email, email_domain FROM buddies"))
-        ).all()
+        buddies = (await s.execute(text("SELECT name, email, email_domain FROM buddies"))).all()
         referrals = (await s.execute(text("SELECT count(*) FROM buddy_referrals"))).scalar_one()
 
     assert contacts == 0, "a forwarded sender is a buddy, not a client contact"
@@ -505,14 +492,22 @@ async def test_a_user_alias_is_not_a_buddy(agency) -> None:
                 "INSERT INTO user_emails (id, tenant_id, user_id, email)"
                 " VALUES (:id, :tid, :uid, :email)"
             ),
-            {"id": str(uuid.uuid4()), "tid": str(agency), "uid": str(owner),
-             "email": "work@recruitexpress.com.sg"},
+            {
+                "id": str(uuid.uuid4()),
+                "tid": str(agency),
+                "uid": str(owner),
+                "email": "work@recruitexpress.com.sg",
+            },
         )
         await s.commit()
 
     response, result, source = _extraction_fixture(company_name="Acme Pte Ltd")
     await persist(
-        agency, message_id, response, result, source=source,
+        agency,
+        message_id,
+        response,
+        result,
+        source=source,
         original_sender_email="work@recruitexpress.com.sg",
         original_sender_name="The User",
     )
@@ -663,6 +658,3 @@ async def _seed_glossary(tenant_id: uuid.UUID, codes: list[tuple[str, str]]) -> 
                 },
             )
         await s.commit()
-
-
-

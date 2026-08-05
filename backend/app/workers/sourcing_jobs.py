@@ -137,9 +137,7 @@ async def _semantic_scores(
         codes = list(
             (
                 await session.execute(
-                    select(OpportunityCode).where(
-                        OpportunityCode.opportunity_id == opportunity.id
-                    )
+                    select(OpportunityCode).where(OpportunityCode.opportunity_id == opportunity.id)
                 )
             ).scalars()
         )
@@ -264,17 +262,13 @@ async def run_sourcing(
         # first and refused second on purpose: leaving it at `pending` while
         # refusing would let the sweep pick it up again on the next pass and
         # discover the same thing, which is the loop rather than the end of it.
-        log.warning(
-            "sourcing_attempts_exhausted", sourcing_run_id=run_id, attempts=attempts
-        )
+        log.warning("sourcing_attempts_exhausted", sourcing_run_id=run_id, attempts=attempts)
         await _fail(tenant, record)
         return
 
     async with tenant_session(tenant) as session:
         opportunity = (
-            await session.execute(
-                select(Opportunity).where(Opportunity.id == opportunity_key)
-            )
+            await session.execute(select(Opportunity).where(Opportunity.id == opportunity_key))
         ).scalar_one_or_none()
         if opportunity is None:
             # The job order was deleted between the request and the worker.
@@ -284,9 +278,7 @@ async def run_sourcing(
             await _fail(tenant, record)
             return
 
-        candidate_ids = await eligible_candidates(
-            session, tenant_id=tenant, client_id=client
-        )
+        candidate_ids = await eligible_candidates(session, tenant_id=tenant, client_id=client)
 
         # Load the opportunity's shorthand codes once here, ahead of the sex
         # prefilter, so the same rows feed both the narrowing decision and the
@@ -295,9 +287,7 @@ async def run_sourcing(
         codes = list(
             (
                 await session.execute(
-                    select(OpportunityCode).where(
-                        OpportunityCode.opportunity_id == opportunity.id
-                    )
+                    select(OpportunityCode).where(OpportunityCode.opportunity_id == opportunity.id)
                 )
             ).scalars()
         )
@@ -324,9 +314,7 @@ async def run_sourcing(
                 dropped=prefilter_dropped,
             )
 
-        loaded = await load_scoring_inputs(
-            session, tenant_id=tenant, candidate_ids=candidate_ids
-        )
+        loaded = await load_scoring_inputs(session, tenant_id=tenant, candidate_ids=candidate_ids)
 
         # --- Semantic retrieval (the recall half of hybrid matching) ---
         # Embed the job order once and find the nearest CVs. The result feeds
@@ -432,9 +420,7 @@ async def run_sourcing(
         # place the full ranking exists.
         kept = scored[: settings.SOURCING_MAX_MATCHES]
         shortlist = kept[: settings.SOURCING_EXPLAIN_TOP_N]
-        texts = await _cv_texts(
-            session, tenant, [candidate_id for candidate_id, _, _ in shortlist]
-        )
+        texts = await _cv_texts(session, tenant, [candidate_id for candidate_id, _, _ in shortlist])
         # `codes` were loaded once by `_semantic_scores` for redaction; the
         # same rows are what `explain_matches` redacts with, so they are
         # passed through rather than re-fetched.
@@ -446,9 +432,7 @@ async def run_sourcing(
                     candidate_id=candidate_id,
                     full_name=loaded[candidate_id][0].full_name,
                     current_title=loaded[candidate_id][0].current_title,
-                    skills=[
-                        s.skill_normalized or s.skill for s in loaded[candidate_id][2]
-                    ],
+                    skills=[s.skill_normalized or s.skill for s in loaded[candidate_id][2]],
                     score=total,
                     cv_text=texts.get(candidate_id),
                 )
@@ -585,9 +569,7 @@ async def _narrow_by_sex(
     """
     if not candidate_ids:
         return [], 0
-    sex_by_id = await candidate_sexes(
-        session, tenant_id=tenant, candidate_ids=candidate_ids
-    )
+    sex_by_id = await candidate_sexes(session, tenant_id=tenant, candidate_ids=candidate_ids)
     kept: list[uuid.UUID] = []
     dropped = 0
     # Preserve the stable id order `eligible_candidates` returned, so a rerun

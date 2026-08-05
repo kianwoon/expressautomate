@@ -46,13 +46,13 @@ from app.services.ingest.evidence import parse_salary, quality_state, verify
 from app.services.ingest.glossary import DetectedCode, GlossaryEntry, detect
 from app.services.ingest.schema import ExtractedField, ExtractedJob, ExtractionResponse
 from app.services.llm.client import LLMResult
-from app.services.sourcing.preference import implied_sex
 from app.services.notify.dispatch import emit, enqueue_deliveries
 from app.services.notify.events import (
     EVENT_OPPORTUNITY_NEEDS_REVIEW,
     EVENT_OPPORTUNITY_NEW,
     OpportunityEvent,
 )
+from app.services.sourcing.preference import implied_sex
 
 log = get_logger(__name__)
 
@@ -131,6 +131,7 @@ _OPPORTUNITY_ID_NAMESPACE = uuid.UUID("2f6b6e4a-8a3d-5b4a-9c1e-6a2d4e8f1b7c")
 def _opportunity_id(email_message_id: uuid.UUID, index: int) -> uuid.UUID:
     return uuid.uuid5(_OPPORTUNITY_ID_NAMESPACE, f"{email_message_id}:{index}")
 
+
 _INSERT_EVIDENCE = text(
     """
     INSERT INTO extraction_evidence
@@ -149,9 +150,7 @@ _INSERT_EVIDENCE = text(
 # operator's own spelling — the scanner needs that, not the normalised form,
 # because a pattern built from the folded text would look for `cf` and match
 # the letters of an ordinary word.
-_SELECT_GLOSSARY = text(
-    "SELECT code, meaning, attribute FROM glossary_codes ORDER BY code"
-)
+_SELECT_GLOSSARY = text("SELECT code, meaning, attribute FROM glossary_codes ORDER BY code")
 
 # The matcher needs the sender, which lives on the message rather than in the
 # extraction. Read inside the same transaction so it cannot disagree with what
@@ -209,7 +208,12 @@ _IRREGULAR_PERIODS = {"dail": "day", "annu": "year"}
 # the missing one that a NULL produces. There is no `fortnight` in the
 # vocabulary to map them onto, so they are refused outright.
 _NOT_A_PERIOD = (
-    "biweek", "fortnight", "bimonth", "semimonth", "semiannu", "biannu",
+    "biweek",
+    "fortnight",
+    "bimonth",
+    "semimonth",
+    "semiannu",
+    "biannu",
 )
 
 
@@ -240,9 +244,7 @@ def _salary_period(field: ExtractedField | None) -> str | None:
     # Every period the answer mentions, not the first one found: "annual, paid
     # monthly" names two, and nothing here can say which one the figure is in.
     found = {period for period in _SALARY_PERIODS if period in cleaned}
-    found |= {
-        period for irregular, period in _IRREGULAR_PERIODS.items() if irregular in cleaned
-    }
+    found |= {period for irregular, period in _IRREGULAR_PERIODS.items() if irregular in cleaned}
     if len(found) == 1:
         return found.pop()
     return None
@@ -309,9 +311,7 @@ async def persist(
         # One client per email, not per vacancy: three vacancies in one mail
         # come from one company, and proposing three identical clients would
         # make the review queue unusable on the first busy day.
-        sender_row = (
-            await session.execute(_SENDER, {"id": email_message_id})
-        ).one_or_none()
+        sender_row = (await session.execute(_SENDER, {"id": email_message_id})).one_or_none()
         sender_email = sender_row.sender_email if sender_row else None
         sender_name = sender_row.sender_name if sender_row else None
         mailbox_owner_id = sender_row.mailbox_owner_id if sender_row else None
@@ -320,7 +320,11 @@ async def persist(
             None,
         )
         matched = await match_client(
-            session, tenant_id, email_message_id, sender_email, first_company,
+            session,
+            tenant_id,
+            email_message_id,
+            sender_email,
+            first_company,
             mailbox_owner_id=mailbox_owner_id,
             sender_name=sender_name,
             original_sender_email=original_sender_email,
@@ -345,12 +349,8 @@ async def persist(
                 client_id=matched.client_id if matched else None,
                 assigned_user_id=matched.assigned_user_id if matched else None,
             )
-            await _insert_evidence(
-                session, tenant_id, extraction_id, opportunity_id, job, source
-            )
-            await _insert_codes(
-                session, tenant_id, opportunity_id, job, codes, len(response.jobs)
-            )
+            await _insert_evidence(session, tenant_id, extraction_id, opportunity_id, job, source)
+            await _insert_codes(session, tenant_id, opportunity_id, job, codes, len(response.jobs))
 
             # Inside the same transaction that created the opportunity, so a
             # notification for a job order that rolled back can never exist —
@@ -463,15 +463,11 @@ def _covers(job: ExtractedJob, code: DetectedCode) -> bool:
     spans = [
         (f.start_char, f.end_char)
         for f in vars(job).values()
-        if isinstance(f, ExtractedField)
-        and f.start_char is not None
-        and f.end_char is not None
+        if isinstance(f, ExtractedField) and f.start_char is not None and f.end_char is not None
     ]
     if not spans:
         return False
-    return min(s for s, _ in spans) <= code.start_char and code.end_char <= max(
-        e for _, e in spans
-    )
+    return min(s for s, _ in spans) <= code.start_char and code.end_char <= max(e for _, e in spans)
 
 
 async def _insert_codes(
