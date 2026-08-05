@@ -909,6 +909,19 @@ class Settings(BaseSettings):
     # is anything else — the same reason `CV_DAILY_PARSE_QUOTA` exists.
     SOURCING_DAILY_RUN_QUOTA: int = Field(default=100, gt=0)
 
+    # --- Job Intelligence ---
+    # The wall clock one analysis may take: three Cerebras calls (understand →
+    # persona → search) in sequence. Generous because a reasoning-heavy JD can
+    # make each call slow, and a job this cuts short is left at `running` for
+    # `rescan_stuck` to re-enqueue. Three calls × the per-call LLM timeout is
+    # the natural ceiling; 600s matches the sourcing job, which is also LLM
+    # work bounded by model latency rather than data size.
+    JOB_INTEL_JOB_TIMEOUT_SECONDS: float = Field(default=600.0, gt=0)
+    # How many times a worker may pick one analysis up before giving up on it.
+    # Same reasoning as `SOURCING_MAX_ATTEMPTS`: a crashed worker deserves a
+    # retry, a job order that crashes the pipeline every time does not.
+    JOB_INTELLIGENCE_MAX_ATTEMPTS: int = Field(default=3, gt=0)
+
     @field_validator("MS_IDENTITY_SCOPES", "MS_MAILBOX_SCOPES")
     @classmethod
     def _non_empty_when_configured(cls, v: str) -> str:

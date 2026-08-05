@@ -19,12 +19,29 @@ individually, so joined tables would buy nothing and cost a join on every read.
 stripped before the model saw the job order — the same audit property
 `SourcingRun.protected_attribute_note` records for sourcing. It is a list rather
 than free text so a future view can render each code distinctly.
+
+`state` is a state machine like `SourcingRun.state`, for the same reason: the
+analysis runs as an arq job (the three LLM calls have no business inside an HTTP
+request, and every other LLM call in the system runs in the worker process where
+Cerebras is configured — not the api process). A row sits at `pending` from the
+POST until the worker claims it, moves to `running`, then `done` or `failed`.
+`rescan_stuck` re-enqueues rows stranded at `pending` or `running`, mirroring
+sourcing. `attempts` is spent at the claim so a job order that crashes the
+pipeline every time reaches `failed` rather than re-running forever.
 """
 
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, Text, UniqueConstraint
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PgUUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -37,6 +54,12 @@ class JobIntelligence(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
 
     __tablename__ = "job_intelligence"
 
+    PENDING = "pending"
+    RUNNING = "running"
+    DONE = "done"
+    FAILED = "failed"
+    STATES = (PENDING, RUNNING, DONE, FAILED)
+
     # Plain FK — `opportunities` has no `(tenant_id, id)` unique constraint for a
     # composite FK to reference, the same constraint that shaped
     # `SourcingRun.opportunity_id` and `CandidateSubmission.opportunity_id`.
@@ -47,9 +70,21 @@ class JobIntelligence(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
         index=True,
     )
 
-    understanding: Mapped[dict] = mapped_column(JSONB, nullable=False)
-    persona: Mapped[dict] = mapped_column(JSONB, nullable=False)
-    search_plan: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    # The state machine. `pending` from POST until the worker claims it; `done`
+    # with results, or `failed` with a sentence. Mirrors `SourcingRun.state`.
+    state: Mapped[str] = mapped_column(
+        String(16), nullable=False, default=PENDING, index=True
+    )
+    # Why a `failed` run failed, in a sentence a recruiter can act on. Same
+    # role as `SourcingRun.failure_reason`.
+    failure_reason: Mapped[str | None] = mapped_column(Text)
+    attempts: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+
+    understanding: Mapped[dict | None] = mapped_column(JSONB)
+    persona: Mapped[dict | None] = mapped_column(JSONB)
+    search_plan: Mapped[dict | None] = mapped_column(JSONB)
 
     # The model name recorded on the *last* of the three calls. The three calls
     # normally share one model, so one name suffices; recording three would be
@@ -76,4 +111,9 @@ class JobIntelligence(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
         UniqueConstraint(
             "tenant_id", "opportunity_id", name="uq_job_intelligence_one_per_opportunity"
         ),
+        CheckConstraint(
+            "state IN ('pending','running','done','failed')",
+            name="ck_job_intelligence_state",
+        ),
     )
+

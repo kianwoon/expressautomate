@@ -21,6 +21,7 @@ from app.workers.delivery_jobs import deliver_notification
 from app.workers.discovery_jobs import run_client_discovery
 from app.workers.embedding_jobs import compute_candidate_embedding
 from app.workers.import_jobs import run_candidate_import
+from app.workers.job_intelligence_jobs import run_job_intelligence
 from app.workers.jobs import (
     backfill_mailbox_job,
     classify_batch,
@@ -142,6 +143,18 @@ class WorkerSettings:
             compute_candidate_embedding,
             name="compute_candidate_embedding",
             timeout=settings.EMBEDDING_TIMEOUT_SECONDS,
+        ),
+        # The Job Intelligence analysis: three Cerebras calls (understand →
+        # persona → search) in the worker, where Cerebras is configured — the
+        # api process has no LLM credentials, so the first (synchronous) cut
+        # fell back to OpenRouter and 400'd. `name` is explicit for the same
+        # reason as its siblings: producers enqueue the string
+        # "run_job_intelligence", and a wrapper under any other name fails on
+        # the far side of the queue.
+        func(
+            run_job_intelligence,
+            name="run_job_intelligence",
+            timeout=settings.JOB_INTEL_JOB_TIMEOUT_SECONDS,
         ),
     ]
     # Every function above but the two classification jobs ends in a Graph call. Said once

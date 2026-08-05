@@ -2,10 +2,13 @@
 
 import { type ReactNode, useCallback, useEffect, useState } from "react";
 
+import { SOURCING_POLL_MS } from "../api";
 import {
   type Intelligence,
   type IntelligenceView,
+  type NoIntelligence,
   getIntelligence,
+  inFlight,
   runIntelligence,
 } from "./job-intelligence";
 import { type Opportunity } from "./opportunities";
@@ -13,26 +16,26 @@ import { type Opportunity } from "./opportunities";
 /**
  * The "Job Intelligence" section of the job order modal.
  *
- * Reads the stored analysis on mount (so an analysis a colleague ran is there
- * when the modal opens) and offers a button to run or re-run it. Full-width,
- * like the Shortlist it sits beside, because the three stages each read best
- * across the whole modal.
+ * The analysis runs as a background job, so this panel does what the sourcing
+ * panel does: read the row on mount, start it with a POST that returns 202 +
+ * `pending`, and poll GET until the row is `done` or `failed`. The three
+ * Cerebras calls run in the worker — not here, not in the request.
  *
- * Three states are kept distinct, the same way `Shortlist` keeps them:
- *  - `loading` — the first read is in flight, and we do not yet know whether an
- *    analysis exists;
- *  - `idle` with a null analysis — the read succeeded and there is nothing yet;
- *  - `error` — the read failed, which is never the same as "nothing yet".
+ * States are kept distinct the way the sourcing panel keeps them:
+ *  - `loading` — the first read is in flight;
+ *  - `idle` — the read succeeded (row may be `pending`, `done`, `failed`, or
+ *    absent entirely);
+ *  - `error` — the read failed, which is never the same as "absent".
  */
 
 type Phase =
   | { status: "loading" }
-  | { status: "idle"; view: IntelligenceView }
+  | { status: "idle"; view: IntelligenceView | NoIntelligence }
   | { status: "error"; message: string };
 
 export function JobIntelligence({ row }: { row: Opportunity }) {
   const [phase, setPhase] = useState<Phase>({ status: "loading" });
-  const [running, setRunning] = useState(false);
+  const [starting, setStarting] = useState(false);
   const [runError, setRunError] = useState<string | null>(null);
 
   const refetch = useCallback(async () => {
@@ -51,21 +54,37 @@ export function JobIntelligence({ row }: { row: Opportunity }) {
     void refetch();
   }, [refetch]);
 
+  const view = phase.status === "idle" ? phase.view : null;
+  const waiting = inFlight(view);
+
+  // Poll only while the row is `pending` or `running`. A `done` or `failed`
+  // row is a finished record — asking again is a request whose answer cannot
+  // change, every open panel, forever, for nothing.
+  useEffect(() => {
+    if (!waiting) return;
+    const timer = setInterval(() => void refetch(), SOURCING_POLL_MS);
+    return () => clearInterval(timer);
+  }, [waiting, refetch]);
+
   async function run() {
-    if (running) return;
-    setRunning(true);
+    if (starting) return;
+    setStarting(true);
     setRunError(null);
     try {
-      const view = await runIntelligence(row.id);
-      setPhase({ status: "idle", view });
+      const started = await runIntelligence(row.id);
+      setPhase({ status: "idle", view: started });
     } catch (err) {
-      setRunError(err instanceof Error ? err.message : "The analysis could not run just now.");
+      setRunError(err instanceof Error ? err.message : "The analysis could not start just now.");
     } finally {
-      setRunning(false);
+      setStarting(false);
     }
   }
 
-  const analysis = phase.status === "idle" ? phase.view.intelligence : null;
+  const state =
+    view && "state" in view ? (view as IntelligenceView).state : null;
+  const analysis = view && "intelligence" in view && view.intelligence ? view.intelligence : null;
+  const failureReason =
+    view && "failure_reason" in view ? view.failure_reason : null;
 
   return (
     <section className="src jo-intel" aria-label="Job Intelligence">
@@ -75,9 +94,15 @@ export function JobIntelligence({ row }: { row: Opportunity }) {
           type="button"
           className="src-start"
           onClick={() => void run()}
-          disabled={running}
+          disabled={starting || waiting}
         >
-          {running ? "Analysing…" : analysis ? "Re-run analysis" : "Run analysis"}
+          {starting
+            ? "Starting…"
+            : waiting
+              ? "Analysing…"
+              : analysis
+                ? "Re-run analysis"
+                : "Run analysis"}
         </button>
       </div>
 
@@ -95,19 +120,28 @@ export function JobIntelligence({ row }: { row: Opportunity }) {
         </p>
       )}
 
-      {phase.status === "idle" && analysis === null && (
+      {phase.status === "idle" && view && !("state" in view) && (
         <p className="body src-note">
           No analysis yet. “Run analysis” reads this job order and explains the work, the kind of
           person who would do it well, and how to find them.
         </p>
       )}
 
-      {phase.status === "idle" && phase.view.intelligence !== null && (
-        <Analysis
-          intelligence={phase.view.intelligence}
-          removedCodes={phase.view.removed_codes}
-          analysedAt={phase.view.analysed_at}
-        />
+      {waiting && (
+        <p className="body src-note">
+          Analysing this job order — understanding the work, inferring the ideal person, planning
+          the search. This takes a few seconds.
+        </p>
+      )}
+
+      {state === "failed" && failureReason && (
+        <p className="body src-error" role="alert">
+          {failureReason}
+        </p>
+      )}
+
+      {analysis && view && "removed_codes" in view && (
+        <Analysis intelligence={analysis} view={view as IntelligenceView} />
       )}
     </section>
   );
@@ -115,18 +149,17 @@ export function JobIntelligence({ row }: { row: Opportunity }) {
 
 function Analysis({
   intelligence,
-  removedCodes,
-  analysedAt,
+  view,
 }: {
   intelligence: Intelligence;
-  removedCodes: string[] | null;
-  analysedAt: string | null;
+  view: IntelligenceView;
 }) {
+  const { removed_codes, analysed_at } = view;
   return (
     <div className="jo-intel-body">
-      {analysedAt && (
+      {analysed_at && (
         <p className="body jo-sub jo-intel-when">
-          Last analysed {new Date(analysedAt).toLocaleString()}.
+          Last analysed {new Date(analysed_at).toLocaleString()}.
         </p>
       )}
 
@@ -172,10 +205,10 @@ function Analysis({
         <Field label="Employment type" value={intelligence.search_plan.employment_type} />
       </Stage>
 
-      {removedCodes && removedCodes.length > 0 && (
+      {removed_codes && removed_codes.length > 0 && (
         <p className="body jo-sub jo-intel-redacted">
-          {removedCodes.length} protected-attribute code
-          {removedCodes.length === 1 ? "" : "s"} from the source ({removedCodes.join(", ")}) were
+          {removed_codes.length} protected-attribute code
+          {removed_codes.length === 1 ? "" : "s"} from the source ({removed_codes.join(", ")}) were
           withheld from the analysis.
         </p>
       )}

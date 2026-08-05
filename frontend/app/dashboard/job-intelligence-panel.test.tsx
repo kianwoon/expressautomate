@@ -8,18 +8,22 @@ import type { Opportunity } from "./opportunities";
 /**
  * Mocks the data module the panel depends on, following the pattern in
  * `job-orders-sourcing.test.tsx`: the component's fetches are stubbed directly
- * rather than faking `fetch`, so the test asserts on what the panel renders for
- * each view the API can return.
+ * rather than faking `fetch`. The panel now polls GET until a row is terminal,
+ * so several tests queue successive GET responses.
  *
  * allow-hardcode: the strings below are test fixtures.
  */
 
-const getIntelligence = vi.fn(async (): Promise<IntelligenceView> => ({ intelligence: null }));
-const runIntelligence = vi.fn(async (): Promise<IntelligenceView> => ({ intelligence: null }));
+const getIntelligence = vi.fn();
+const runIntelligence = vi.fn();
 
 vi.mock("./job-intelligence", () => ({
   getIntelligence: () => getIntelligence(),
-  runIntelligence: () => runIntelligence(),
+  runIntelligence: (id: string) => runIntelligence(id),
+  inFlight: (view: unknown) => {
+    const v = view as { state?: string } | null;
+    return !!v && (v.state === "pending" || v.state === "running");
+  },
 }));
 
 function opportunity(overrides: Partial<Opportunity> = {}): Opportunity {
@@ -89,6 +93,18 @@ function analysis(overrides: Partial<Intelligence> = {}): Intelligence {
   };
 }
 
+function doneView(overrides: Partial<IntelligenceView> = {}): IntelligenceView {
+  return {
+    id: "row-1",
+    state: "done",
+    failure_reason: null,
+    analysed_at: "2026-08-06T09:00:00Z",
+    intelligence: analysis(),
+    removed_codes: [],
+    ...overrides,
+  };
+}
+
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
@@ -104,12 +120,8 @@ describe("JobIntelligence panel", () => {
     expect(getIntelligence).toHaveBeenCalled();
   });
 
-  it("renders the three stages when an analysis exists", async () => {
-    getIntelligence.mockResolvedValue({
-      intelligence: analysis(),
-      removed_codes: [],
-      analysed_at: "2026-08-06T09:00:00Z",
-    });
+  it("renders the three stages when the row is done", async () => {
+    getIntelligence.mockResolvedValue(doneView());
     render(<JobIntelligence row={opportunity()} />);
 
     await waitFor(() => {
@@ -118,54 +130,48 @@ describe("JobIntelligence panel", () => {
     expect(screen.getByText("Understanding the work")).toBeDefined();
     expect(screen.getByText("The ideal person")).toBeDefined();
     expect(screen.getByText("How to find them")).toBeDefined();
-    // A query string rendered.
     expect(screen.getByText('"logistics manager" AND dispatch')).toBeDefined();
   });
 
-  it("runs the analysis when the button is clicked", async () => {
+  it("starts the analysis with a POST that returns pending", async () => {
     getIntelligence.mockResolvedValue({ intelligence: null });
     runIntelligence.mockResolvedValue({
-      intelligence: analysis(),
-      removed_codes: [],
-      analysed_at: "2026-08-06T09:00:00Z",
+      id: "row-1",
+      state: "pending",
+      failure_reason: null,
+      analysed_at: null,
+      intelligence: null,
     });
-    render(<JobIntelligence row={opportunity()} />);
-
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: /Run analysis/i })).toBeDefined();
-    });
-
-    screen.getByRole("button", { name: /Run analysis/i }).click();
-
-    await waitFor(() => {
-      expect(runIntelligence).toHaveBeenCalled();
-    });
-    // The result replaces the empty prompt.
-    await waitFor(() => {
-      expect(screen.getByText("Understanding the work")).toBeDefined();
-    });
-  });
-
-  it("reports a server error from the run, in the server's words", async () => {
-    getIntelligence.mockResolvedValue({ intelligence: null });
-    const { ApiError } = await import("./candidates");
-    runIntelligence.mockRejectedValue(new ApiError("This job order has no title to analyse."));
     render(<JobIntelligence row={opportunity()} />);
 
     await waitFor(() => {
       screen.getByRole("button", { name: /Run analysis/i }).click();
     });
     await waitFor(() => {
+      expect(runIntelligence).toHaveBeenCalledWith("op-1");
+    });
+    // The panel shows the analysing state, not the result (it arrives on a poll).
+    await waitFor(() => {
+      expect(screen.getByText(/Analysing this job order/i)).toBeDefined();
+    });
+  });
+
+  it("shows the failure reason when the row is failed", async () => {
+    getIntelligence.mockResolvedValue({
+      id: "row-1",
+      state: "failed",
+      failure_reason: "This job order has no title to analyse.",
+      analysed_at: null,
+      intelligence: null,
+    });
+    render(<JobIntelligence row={opportunity()} />);
+    await waitFor(() => {
       expect(screen.getByText(/no title to analyse/i)).toBeDefined();
     });
   });
 
   it("names the protected-attribute codes that were withheld", async () => {
-    getIntelligence.mockResolvedValue({
-      intelligence: analysis(),
-      removed_codes: ["C/F", "O/F"],
-      analysed_at: "2026-08-06T09:00:00Z",
-    });
+    getIntelligence.mockResolvedValue(doneView({ removed_codes: ["C/F", "O/F"] }));
     render(<JobIntelligence row={opportunity()} />);
     await waitFor(() => {
       expect(screen.getByText(/withheld from the analysis/i)).toBeDefined();
