@@ -320,20 +320,25 @@ class Settings(BaseSettings):
     CEREBRAS_API_KEY: str = ""
 
     # --- Embeddings (semantic candidate matching) ---
-    # A separate provider from Cerebras, which serves completions only. The
-    # sourcing scorer embeds each candidate's CV once (at parse time, into the
-    # candidate_embeddings table) and embeds a job order's text once per run,
-    # then compares the two by cosine similarity. `text-embedding-3-small` is
-    # the default: 1536-dim, multilingual, and ~$0.02 per million tokens, so
-    # embedding an agency's whole CV library is a one-time cost in cents.
+    # Routed through OpenRouter — the same provider the extraction and
+    # classification calls already use — under the model id
+    # `openai/text-embedding-3-small`. OpenRouter's embeddings endpoint is
+    # OpenAI-compatible (same /embeddings path, same {model, input} body, same
+    # data[].embedding response), so the embeddings client in
+    # app/services/llm/embeddings.py needs no provider-specific code.
+    #
+    # `EMBEDDING_API_KEY` is optional: when empty the embeddings client falls
+    # back to `OPENROUTER_API_KEY`, so a deployment that already has the
+    # router key configured gets embeddings with no extra setup. Set
+    # `EMBEDDING_API_KEY` only to isolate embeddings billing behind its own
+    # key.
     #
     # Privacy parity: CV text already leaves the system for LLM explanations
-    # (Cerebras). Embeddings send the same text to one more provider and no
-    # further; the gate is a separate key precisely so the feature is inert
-    # until an operator opts in.
-    EMBEDDING_BASE_URL: str = "https://api.openai.com/v1"
+    # (Cerebras). Embeddings send the same text through the same router the
+    # extraction calls already use, so no new data boundary is crossed.
+    EMBEDDING_BASE_URL: str = "https://openrouter.ai/api/v1"
     EMBEDDING_API_KEY: str = ""
-    EMBEDDING_MODEL: str = "text-embedding-3-small"
+    EMBEDDING_MODEL: str = "openai/text-embedding-3-small"
     EMBEDDING_DIM: int = 1536
     # Truncate CV text before embedding. Bounding the input bounds the cost and
     # keeps one very long CV from dominating a batch. 8000 chars is well past
@@ -1019,13 +1024,29 @@ class Settings(BaseSettings):
     def embedding_configured(self) -> bool:
         """Can this process reach the embeddings provider?
 
-        Separate from `cerebras_configured` for the same reason it is separate
-        from `llm_configured`: embeddings are a different provider with
-        different credentials, and a sourcing run that falls back to the
-        six-component scorer when embeddings are absent is the correct,
-        graceful degradation — not a failure to detect.
+        Defaults to the OpenRouter key — the same one extraction and
+        classification already use — so a deployment that has the router
+        configured gets embeddings with no extra setup. `EMBEDDING_API_KEY`
+        overrides when embeddings should bill under their own key.
+
+        Kept as its own check (rather than folded into `llm_configured`)
+        because embeddings are a different endpoint with a different failure
+        mode, and a sourcing run that falls back to the six-component scorer
+        when embeddings are absent is the correct, graceful degradation — not
+        a failure to detect.
         """
-        return bool(self.EMBEDDING_BASE_URL and self.EMBEDDING_API_KEY)
+        key = self.EMBEDDING_API_KEY or self.OPENROUTER_API_KEY
+        return bool(self.EMBEDDING_BASE_URL and key)
+
+    def embedding_api_key(self) -> str:
+        """The key the embeddings client should send, resolved once.
+
+        `EMBEDDING_API_KEY` wins when set; otherwise the OpenRouter key is
+        reused. Centralised here so the client and this check agree on which
+        key is in play — a divergence between them is exactly how a run would
+        pass the configured gate and then fail the request.
+        """
+        return self.EMBEDDING_API_KEY or self.OPENROUTER_API_KEY
 
     def graph_configured(self) -> bool:
         """Can this process actually reach Graph?

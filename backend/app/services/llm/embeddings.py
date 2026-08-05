@@ -99,7 +99,7 @@ async def embed_texts(
         base_url=base_url or settings.EMBEDDING_BASE_URL,
         timeout=settings.LLM_TIMEOUT_SECONDS,
         transport=transport,
-        headers={"Authorization": f"Bearer {api_key or settings.EMBEDDING_API_KEY}"},
+        headers={"Authorization": f"Bearer {api_key or settings.embedding_api_key()}"},
     ) as client:
         response = await client.post("/embeddings", json=payload)
         response.raise_for_status()
