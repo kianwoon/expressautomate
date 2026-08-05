@@ -13,11 +13,12 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, EmailStr
 from sqlalchemy import and_, func, or_, select, text, update
 
-from app.api.auth import _require_session
+from app.api.auth import _require_session, _require_session_with_role
 from app.db.rls import tenant_session
 from app.models import Buddy, BuddyReferral, Opportunity, UserEmail
 from app.services.name_index import initial_of as _initial_of
 from app.services.name_index import sorted_initials as _sorted_initials
+from app.services.visibility import visible_opportunities
 
 router = APIRouter(tags=["buddies"])
 
@@ -137,7 +138,7 @@ async def delete_user_email(request: Request, email_id: uuid.UUID) -> None:
 # Buddies
 # ---------------------------------------------------------------------------
 
-def _referral_counts_subquery(cutoff: datetime | None):
+def _referral_counts_subquery(cutoff: datetime | None, visible):
     """One buddy → number of job orders they have referred, in a subquery.
 
     A referral is a buddy→client link, but the number a recruiter cares about
@@ -146,6 +147,12 @@ def _referral_counts_subquery(cutoff: datetime | None):
     not `BuddyReferral.id`. A buddy who forwards five job orders for the same
     client is five, not one — the same way the opportunities list attributes
     each of those rows' `buddy_name`.
+
+    `visible` is the `visible_opportunities(user_uuid, role)` clause, applied
+    here for the same reason `list_opportunities` applies it: RLS scopes to the
+    tenant, but visibility within a tenant is per-recruiter (assigned, shared,
+    or owned), and a buddy's referred job order the reader cannot see must not
+    count any more than it would appear in the job orders list.
 
     Computed in a subquery and LEFT JOINed so a buddy with no opportunities in
     the period still appears with count 0. The `cutoff` lives in the JOIN
@@ -166,6 +173,7 @@ def _referral_counts_subquery(cutoff: datetime | None):
                 Opportunity.tenant_id == BuddyReferral.tenant_id,
             ),
         )
+        .where(visible)
         .group_by(BuddyReferral.buddy_id)
     )
     if cutoff is not None:
@@ -234,12 +242,17 @@ async def list_buddies(
     work, not the buddy→client links — and `period` scopes it to a window so a
     recruiter can ask "who has been sending me work lately".
     """
-    _user_uuid, tenant_uuid = _require_session(request)
+    user_uuid, tenant_uuid, role = await _require_session_with_role(request)
     cutoff = _period_cutoff(period)
+    # The same per-recruiter visibility the job orders list applies. RLS scopes
+    # to the tenant; this scopes within it, so a buddy's referred job order the
+    # reader cannot see does not count any more than it would appear in their
+    # job orders list.
+    visible = visible_opportunities(user_uuid, role)
 
     # The referral count, once, as a LEFT JOINed column. Buddies with no
     # opportunities in the period coalesce to 0 rather than disappearing.
-    counts = _referral_counts_subquery(cutoff)
+    counts = _referral_counts_subquery(cutoff, visible)
     referral_count = func.coalesce(counts.c.n, 0).label("referral_count")
 
     async with tenant_session(tenant_uuid) as session:
@@ -396,8 +409,12 @@ async def list_buddy_referrals(
     uses to tell one forwarded job order from another are position, company,
     when it arrived, the salary and where it is.
     """
-    _user_uuid, tenant_uuid = _require_session(request)
+    user_uuid, tenant_uuid, role = await _require_session_with_role(request)
     cutoff = _period_cutoff(period)
+    # The same per-recruiter visibility the count and the job orders list
+    # apply, so the modal lists exactly the rows behind the number the
+    # recruiter clicked — nothing more, nothing less.
+    visible = visible_opportunities(user_uuid, role)
 
     async with tenant_session(tenant_uuid) as session:
         buddy = (
@@ -416,6 +433,7 @@ async def list_buddy_referrals(
                 ),
             )
             .where(BuddyReferral.buddy_id == buddy_id)
+            .where(visible)
             .order_by(Opportunity.received_datetime.desc().nullslast(), Opportunity.id.desc())
         )
         if cutoff is not None:

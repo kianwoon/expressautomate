@@ -76,6 +76,19 @@ EXEMPT: dict[str, dict[str, str]] = {
             "undecided product question."
         ),
     },
+    "buddies.py": {
+        "list_buddies": (
+            "Lists buddies, not job orders by id; the opportunity count is a "
+            "subquery that applies `visible_opportunities` directly, the same "
+            "way `list_opportunities` does — so a referred job order the reader "
+            "cannot see does not count."
+        ),
+        "list_buddy_referrals": (
+            "Lists the job orders a buddy referred, not one by id; it applies "
+            "`visible_opportunities` directly as a WHERE clause, so the modal "
+            "shows exactly the rows behind the count the recruiter clicked."
+        ),
+    },
 }
 
 
