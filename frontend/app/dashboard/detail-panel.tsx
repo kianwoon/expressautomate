@@ -240,8 +240,11 @@ function Detail({
       title={<Value text={row.job_title_raw ?? "Job order"} />}
       titleId="jo-detail-title"
       onClose={busy ? () => {} : onClose}
-      className="dlg-modal-wide"
+      className="dlg-modal-wide jo-detail-modal"
     >
+      {/* Header strip: the badges and the two lines that identify the row,
+          across the full width so the title the Dialog rendered above reads
+          as the heading of the whole record, not of one column. */}
       <div className="jo-detail-head">
         <span className="eyebrow">Details</span>
         <ReviewBadge status={row.review_status} />
@@ -275,200 +278,225 @@ function Detail({
         {row.shared_with_me && <span className="jo-detail-shared">Shared with you</span>}
       </p>
 
-      {/* Directly under the company name the extraction read off the email,
-          because the two are the same question asked twice: that line is what
-          the sender wrote, and this is which client on our books it turned out
-          to be. Nothing joins them automatically — five of the eight unlinked
-          rows in production name six candidate companies between them, which
-          is exactly why a person chooses. */}
-      <div className="jo-detail-client">
-        <ClientSearch
-          value={client}
-          onChange={setClient}
-          label="Client"
-          hint="Search for the company on our books. Leave it empty if they are not on it yet."
-        />
+      {/*
+        Two columns, not one. The modal has 880px of width, and the content
+        falls into two kinds: what the email said (the facts, read-only) and
+        what we do about it (placement, ownership, share, review). Stacked
+        singly they were a tall ribbon the recruiter scrolled through; paired,
+        reading and acting sit side by side and the whole record is one glance.
 
-        {/* Only while nobody holds it. An assigned job order never changes
-            hands on a link, so offering the choice here would be offering
-            something that does nothing. */}
-        {row.assigned_user_id === null && (
-          <label className="jo-detail-adopt">
-            <input
-              type="checkbox"
-              checked={adopt}
-              onChange={(event) => setAdopt(event.target.checked)}
+        Left: the email's facts — client, quality, the extracted fields,
+        decoded shorthand, provenance. Right: your actions — placement form,
+        find candidates, claim/assign, share, review. The long prose and the
+        shortlist answer the email rather than describing it, so they span
+        both columns at full width below.
+
+        The grid collapses to one column under ~640px (see the CSS), where
+        two narrow columns would wrap every control inside itself.
+      */}
+      <div className="jo-modal-grid">
+        {/* ---- Left: the email's facts ---- */}
+        <div className="jo-modal-col">
+          {/* Directly under the company name the extraction read off the
+              email, because the two are the same question asked twice: that
+              line is what the sender wrote, and this is which client on our
+              books it turned out to be. Nothing joins them automatically —
+              five of the eight unlinked rows in production name six candidate
+              companies between them, which is exactly why a person chooses. */}
+          <div className="jo-detail-client">
+            <ClientSearch
+              value={client}
+              onChange={setClient}
+              label="Client"
+              hint="Search for the company on our books. Leave it empty if they are not on it yet."
             />
-            <span>Also take on this client&rsquo;s recruiter</span>
-          </label>
-        )}
 
-        <button
-          type="button"
-          className="btn btn-secondary"
-          onClick={() =>
-            void move(() => onClientSet(row.id, client?.id ?? null, adopt), setClientNotice)
-          }
-          disabled={moving || (client === null && row.client_id === null)}
-        >
-          {moving ? "Saving…" : "Link this client"}
-        </button>
+            {/* Only while nobody holds it. An assigned job order never changes
+                hands on a link, so offering the choice here would be offering
+                something that does nothing. */}
+            {row.assigned_user_id === null && (
+              <label className="jo-detail-adopt">
+                <input
+                  type="checkbox"
+                  checked={adopt}
+                  onChange={(event) => setAdopt(event.target.checked)}
+                />
+                <span>Also take on this client&rsquo;s recruiter</span>
+              </label>
+            )}
 
-        {/* Said out loud, because the company name sits directly above and a
-            blank field under it reads as "linked to that one". */}
-        {row.client_id === null && (
-          <p className="body jo-sub jo-detail-hint">
-            This job order is not linked to a client, so it is not on anyone&rsquo;s account yet.
-          </p>
-        )}
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() =>
+                void move(() => onClientSet(row.id, client?.id ?? null, adopt), setClientNotice)
+              }
+              disabled={moving || (client === null && row.client_id === null)}
+            >
+              {moving ? "Saving…" : "Link this client"}
+            </button>
 
-        {clientNotice && (
-          <p className="body jo-detail-error" role="alert">
-            {clientNotice}
-          </p>
-        )}
-      </div>
-
-      <QualityNote row={row} />
-
-      <div className="rows jo-detail-rows">
-        <Row k="Received" v={day(row.received_datetime)} />
-        <Row k="Location" v={row.location_raw} />
-        <Row k="Hours" v={row.working_hours_raw} />
-        <Row k="Duration" v={row.duration_raw} />
-        <div className="row">
-          <span className="row-k">Salary</span>
-          <span>
-            <Salary row={row} />
-          </span>
-        </div>
-      </div>
-
-      <DecodedCodes row={row} />
-
-      <Prose k="Requirements" text={row.requirements} />
-      <Prose k="Description" text={row.job_description} />
-
-      <PlacementForm row={placement} onSaved={setPlacement} />
-
-      {/* Carries this job order to the candidates page rather than growing a
-          job-order picker over there — the recruiter already knows which
-          role they are filling. A plain link, not a fetch: the candidates
-          page reads `eligible_for` from the URL itself and does its own 409
-          handling if the placement type turns out not to be set. */}
-      <p className="jo-detail-find">
-        <a
-          className="btn btn-secondary"
-          href={`/dashboard/candidates?eligible_for=${encodeURIComponent(placement.id)}`}
-        >
-          Find candidates for this role
-        </a>
-      </p>
-
-      {/* Provenance, not a link. We hold an id for the message, not a URL we
-          can promise still resolves in the user's Outlook — offering one that
-          404s is worse than offering none. The id is here so a disputed row
-          can be traced back to the email it came from. */}
-      {/* Below the job order itself, above the provenance: the shortlist is
-          an answer to what the email asked for, so it only makes sense once
-          the requirements above have been read. Keyed by the row along with
-          the rest of the panel, so moving the selection starts it over rather
-          than leaving one job order's shortlist under another's title. */}
-      {/* Keyed on the placement fields too, on top of the row id `Detail` is
-          already keyed by: saving a new placement type changes which MOM
-          rules every candidate below is checked against, and the eligibility
-          fetch inside `Shortlist` caches by candidate id with no way to know
-          the job order under it just changed. Remounting is what forces it
-          to ask again rather than show yesterday's answer next to today's
-          placement type. */}
-      <Shortlist
-        key={`${placement.placement_type ?? ""}-${placement.sex_requirement ?? ""}`}
-        row={row}
-      />
-
-      <div className="jo-detail-source">
-        <span className="row-k">Source</span>
-        <p className="body jo-sub">
-          Read from one email in the connected mailbox. Every value above is the sender&rsquo;s,
-          not ours.
-        </p>
-        <div className="rows">
-          <Row k="Message id" v={row.internet_message_id} empty="Not recorded" />
-          <Row k="Graph id" v={row.graph_message_id} empty="Not recorded" />
-        </div>
-      </div>
-
-      {/* Claim sits here, after the job order has been read, and deliberately
-          not on a list row: taking one is taking responsibility for it, and
-          that decision should follow the requirements above rather than a
-          scan of the table at 9pm. */}
-      {(row.assigned_user_id === null || canAssign) && (
-        <div className="jo-detail-own">
-          {row.assigned_user_id === null && (
-            <>
-              <button
-                type="button"
-                className="btn btn-primary"
-                onClick={() => void move(() => onClaim(row.id))}
-                disabled={moving}
-              >
-                {moving ? "Claiming…" : "Claim this job order"}
-              </button>
+            {/* Said out loud, because the company name sits directly above and
+                a blank field under it reads as "linked to that one". */}
+            {row.client_id === null && (
               <p className="body jo-sub jo-detail-hint">
-                Nobody is working this one yet. Claiming it puts your name on it and makes it
-                yours to edit.
+                This job order is not linked to a client, so it is not on anyone&rsquo;s account yet.
               </p>
-            </>
-          )}
+            )}
 
-          {canAssign && (
-            <MemberSelect
-              value={row.assigned_user_id}
-              onChange={(userId) => void move(() => onAssign(row.id, userId))}
-              allowNone
-              label="Assign to"
-            />
-          )}
+            {clientNotice && (
+              <p className="body jo-detail-error" role="alert">
+                {clientNotice}
+              </p>
+            )}
+          </div>
 
-          {notice && (
-            <p className="body jo-detail-error" role="alert">
-              {notice}
+          <QualityNote row={row} />
+
+          <div className="rows jo-detail-rows">
+            <Row k="Received" v={day(row.received_datetime)} />
+            <Row k="Location" v={row.location_raw} />
+            <Row k="Hours" v={row.working_hours_raw} />
+            <Row k="Duration" v={row.duration_raw} />
+            <div className="row">
+              <span className="row-k">Salary</span>
+              <span>
+                <Salary row={row} />
+              </span>
+            </div>
+          </div>
+
+          <DecodedCodes row={row} />
+
+          {/* Provenance, not a link. We hold an id for the message, not a URL
+              we can promise still resolves in the user's Outlook — offering
+              one that 404s is worse than offering none. The id is here so a
+              disputed row can be traced back to the email it came from. */}
+          <div className="jo-detail-source">
+            <span className="row-k">Source</span>
+            <p className="body jo-sub">
+              Read from one email in the connected mailbox. Every value above is the sender&rsquo;s,
+              not ours.
             </p>
-          )}
+            <div className="rows">
+              <Row k="Message id" v={row.internet_message_id} empty="Not recorded" />
+              <Row k="Graph id" v={row.graph_message_id} empty="Not recorded" />
+            </div>
+          </div>
         </div>
-      )}
 
-      <div className="jo-detail-actions">
-        <button
-          type="button"
-          className="btn btn-secondary"
-          onClick={() => setSharing(true)}
-        >
-          Share this job order
-        </button>
-        <p className="body jo-sub jo-detail-hint">
-          Hand it to a colleague who can fill it. They get to read it and pass it on — not to edit
-          it.
-        </p>
-      </div>
+        {/* ---- Right: your actions ---- */}
+        <div className="jo-modal-col">
+          <PlacementForm row={placement} onSaved={setPlacement} />
 
-      {sharing && <ShareDialog row={row} onClose={() => setSharing(false)} />}
+          {/* Carries this job order to the candidates page rather than growing
+              a job-order picker over there — the recruiter already knows which
+              role they are filling. A plain link, not a fetch: the candidates
+              page reads `eligible_for` from the URL itself and does its own
+              409 handling if the placement type turns out not to be set. */}
+          <p className="jo-detail-find">
+            <a
+              className="btn btn-secondary"
+              href={`/dashboard/candidates?eligible_for=${encodeURIComponent(placement.id)}`}
+            >
+              Find candidates for this role
+            </a>
+          </p>
 
-      <div className="jo-detail-actions">
-        <button
-          type="button"
-          className={reviewed ? "btn btn-secondary" : "btn btn-primary"}
-          onClick={toggle}
-          disabled={saving}
-          aria-pressed={reviewed}
-        >
-          {saving ? "Saving…" : reviewed ? "Mark as not reviewed" : "Mark as reviewed"}
-        </button>
-        <p className="body jo-sub jo-detail-hint">
-          {reviewed
-            ? "Someone has checked this row against the email."
-            : "Marking it reviewed records that a person has read this against the email. It changes nothing about the extraction."}
-        </p>
+          {/* Claim sits among the actions, deliberately not on a list row:
+              taking one is taking responsibility for it, and that decision
+              should follow reading the row rather than a scan of the table at
+              9pm. */}
+          {(row.assigned_user_id === null || canAssign) && (
+            <div className="jo-detail-own">
+              {row.assigned_user_id === null && (
+                <>
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    onClick={() => void move(() => onClaim(row.id))}
+                    disabled={moving}
+                  >
+                    {moving ? "Claiming…" : "Claim this job order"}
+                  </button>
+                  <p className="body jo-sub jo-detail-hint">
+                    Nobody is working this one yet. Claiming it puts your name on it and makes it
+                    yours to edit.
+                  </p>
+                </>
+              )}
+
+              {canAssign && (
+                <MemberSelect
+                  value={row.assigned_user_id}
+                  onChange={(userId) => void move(() => onAssign(row.id, userId))}
+                  allowNone
+                  label="Assign to"
+                />
+              )}
+
+              {notice && (
+                <p className="body jo-detail-error" role="alert">
+                  {notice}
+                </p>
+              )}
+            </div>
+          )}
+
+          <div className="jo-detail-actions">
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => setSharing(true)}
+            >
+              Share this job order
+            </button>
+            <p className="body jo-sub jo-detail-hint">
+              Hand it to a colleague who can fill it. They get to read it and pass it on — not to
+              edit it.
+            </p>
+          </div>
+
+          {sharing && <ShareDialog row={row} onClose={() => setSharing(false)} />}
+
+          <div className="jo-detail-actions">
+            <button
+              type="button"
+              className={reviewed ? "btn btn-secondary" : "btn btn-primary"}
+              onClick={toggle}
+              disabled={saving}
+              aria-pressed={reviewed}
+            >
+              {saving ? "Saving…" : reviewed ? "Mark as not reviewed" : "Mark as reviewed"}
+            </button>
+            <p className="body jo-sub jo-detail-hint">
+              {reviewed
+                ? "Someone has checked this row against the email."
+                : "Marking it reviewed records that a person has read this against the email. It changes nothing about the extraction."}
+            </p>
+          </div>
+        </div>
+
+        {/* ---- Full-width: the long reading + the answer to it ---- */}
+        <Prose k="Requirements" text={row.requirements} />
+        <Prose k="Description" text={row.job_description} />
+
+        {/* Below the job order itself, above the provenance: the shortlist is
+            an answer to what the email asked for, so it only makes sense once
+            the requirements above have been read. Keyed by the row along with
+            the rest of the panel, so moving the selection starts it over
+            rather than leaving one job order's shortlist under another's
+            title. Keyed on the placement fields too, on top of the row id
+            `Detail` is already keyed by: saving a new placement type changes
+            which MOM rules every candidate below is checked against, and the
+            eligibility fetch inside `Shortlist` caches by candidate id with no
+            way to know the job order under it just changed. Remounting is what
+            forces it to ask again rather than show yesterday's answer next to
+            today's placement type. */}
+        <Shortlist
+          key={`${placement.placement_type ?? ""}-${placement.sex_requirement ?? ""}`}
+          row={row}
+        />
       </div>
 
       {/* A failure has to say so. Silently leaving the badge unchanged would

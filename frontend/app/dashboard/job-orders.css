@@ -678,3 +678,73 @@
 .jo-client-matches button:focus-visible {
   background: var(--surface-alt);
 }
+
+/* ---- job order detail modal: two columns, not a ribbon ----
+   The detail became a popup to give the list its full width, and the popup is
+   880px wide (`.dlg-modal-wide`). Stacked singly that width is mostly air
+   beside a column of fields, and the recruiter scrolled past their own
+   actions to reach the requirements. The content falls into two kinds — what
+   the email said (read-only facts) and what we do about it (placement,
+   ownership, share, review) — so they pair into two columns and the long
+   reading spans both.
+
+   The columns are a CSS grid child of the Dialog's own grid. `align-items:
+   start` keeps each column only as tall as its content rather than stretching
+   the shorter one to match, which would strand the placement form halfway
+   down the right side. A visible gutter between the columns separates the two
+   kinds of content without a border: a line would make the columns read as
+   two cards, when they are one record split for legibility. */
+.jo-detail-modal .jo-modal-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 20px 28px;
+  align-items: start;
+  margin-top: 4px;
+}
+.jo-modal-col {
+  display: grid;
+  gap: 0;
+  align-content: start;
+  min-width: 0;
+}
+
+/* The requirements and description prose, and the shortlist that answers
+   them, are full-width children of the grid. They are direct children of
+   `.jo-modal-grid` (not wrapped in a column) so `grid-column: 1 / -1` spans
+   both regardless of how many blocks sit in each column above. */
+.jo-detail-modal .jo-modal-grid > .jo-detail-prose,
+.jo-detail-modal .jo-modal-grid > .src {
+  grid-column: 1 / -1;
+}
+/* The first block in each column should not carry the top border/margin it
+   had as a mid-list item in the old single column: at the top of a column
+   that rule reads as a stray line above the first field. Reset the leading
+   spacing on whatever happens to be first in each column. */
+.jo-detail-modal .jo-modal-col > :first-child {
+  margin-top: 0;
+}
+.jo-detail-modal .jo-modal-col > :first-child,
+.jo-detail-modal .jo-modal-col > .jo-detail-client:first-child {
+  border-top: none;
+  padding-top: 0;
+}
+
+/* Two columns of the placement form's select/textarea and the ownership
+   MemberSelect read cramped against the gutter at 320px, so within a column
+   they stay full-width rather than capped — the cap was right for the old
+   narrow side panel, where a full-width control implied a new section. */
+.jo-detail-modal .jo-detail-client .jo-client-picker,
+.jo-detail-modal .jo-detail-own .mp {
+  max-width: none;
+}
+
+/* Below ~640px the two columns are each narrower than their controls, and
+   the placement select, the client search and the salary row all wrap inside
+   themselves. Collapsing to one column lets each take the full modal width,
+   the same layout as before the modal existed — just centred over the list. */
+@media (max-width: 640px) {
+  .jo-detail-modal .jo-modal-grid {
+    grid-template-columns: 1fr;
+    gap: 0;
+  }
+}
