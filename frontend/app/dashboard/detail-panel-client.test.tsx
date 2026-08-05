@@ -27,6 +27,7 @@ import type { Opportunity } from "./opportunities";
  */
 
 vi.mock("./job-orders-sourcing", () => ({ Shortlist: () => null }));
+vi.mock("./job-intelligence-panel", () => ({ JobIntelligence: () => null }));
 
 vi.mock("../events", () => ({
   useLive: () => {},

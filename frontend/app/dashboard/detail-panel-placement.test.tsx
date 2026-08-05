@@ -23,6 +23,7 @@ import type { Opportunity } from "./opportunities";
  */
 
 vi.mock("./job-orders-sourcing", () => ({ Shortlist: () => null }));
+vi.mock("./job-intelligence-panel", () => ({ JobIntelligence: () => null }));
 
 vi.mock("../auth", () => ({
   useAuth: () => ({ user: { id: "u-1", role: "recruiter" } }),

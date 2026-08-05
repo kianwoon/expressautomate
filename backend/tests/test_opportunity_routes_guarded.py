@@ -68,6 +68,15 @@ EXEMPT: dict[str, dict[str, str]] = {
             "not edit rights."
         ),
     },
+    "job_intelligence.py": {
+        "run_intelligence": (
+            "Exempt from the EDIT assertion only, and it still fails the read "
+            "assertion if it drops the read guard. The row it writes is a "
+            "`job_intelligence` row, not the job order. A share recipient may "
+            "run an analysis on work shown to them: that is visibility, "
+            "not edit rights."
+        ),
+    },
     "clients.py": {
         "set_client_assignee": (
             "Reads no job order by id. It moves a whole client's open job "

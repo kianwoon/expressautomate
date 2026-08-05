@@ -8,6 +8,7 @@ import { type ClientMatch, ClientSearch } from "./client-search";
 import { DecodedCodes, ProtectedBadge, flagged } from "./codes";
 import { Dialog } from "./dialog";
 import { Salary, Value, day } from "./format";
+import { JobIntelligence } from "./job-intelligence-panel";
 import { PlacementForm, placementFields, same } from "./job-order-placement";
 import { Shortlist } from "./job-orders-sourcing";
 import { MemberSelect } from "./member-picker";
@@ -497,6 +498,15 @@ function Detail({
           key={`${placement.placement_type ?? ""}-${placement.sex_requirement ?? ""}`}
           row={row}
         />
+
+        {/* Job Intelligence sits below the shortlist, full-width like it. The
+            analysis is an answer to "what is this role, really", read after the
+            requirements above and the shortlist it informed — so it belongs at
+            the foot of the record rather than among the actions. Keyed by the
+            row id (via the DetailPanel's own key) so moving the selection
+            starts it over rather than showing one job order's analysis under
+            another's title. */}
+        <JobIntelligence row={row} />
       </div>
 
       {/* A failure has to say so. Silently leaving the badge unchanged would

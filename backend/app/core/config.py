@@ -302,6 +302,10 @@ class Settings(BaseSettings):
     EXTRACTION_MODEL_FAST: str = ""
     EXTRACTION_MODEL_STRONG: str = ""
     CLASSIFIER_MODEL: str = ""
+    # The model the Job Intelligence engine asks. Empty falls back to
+    # `EXTRACTION_MODEL_FAST` at call time (see `job_intelligence.understand.model`),
+    # so a deployment that names only the one model still runs the analysis.
+    JOB_INTELLIGENCE_MODEL: str = ""
 
     # --- Cerebras (the classifier and extraction) ---
     # The gate is the highest-volume call in the system — one per email, on

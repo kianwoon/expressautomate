@@ -30,6 +30,7 @@ from app.api import (
     events,
     glossary,
     graph_webhook,
+    job_intelligence,
     mailbox,
     members,
     notifications,
@@ -141,6 +142,12 @@ api.include_router(graph_webhook.router)
 # that ordering explicit rather than accidental; `test_sourcing_api.py` asserts
 # each of these paths still resolves.
 api.include_router(sourcing.router)
+# Before `opportunities`, for the same shadowing reason as `sourcing` above:
+# this router owns the LITERAL path `/opportunities/{opportunity_id}/intelligence`.
+# Declared after `/opportunities/{opportunity_id}`, that literal is never reached —
+# FastAPI hands `intelligence` to the generic route as a path parameter and
+# answers 422 "not a valid UUID".
+api.include_router(job_intelligence.router)
 api.include_router(opportunities.router)
 api.include_router(opportunity_shares.router)
 api.include_router(activity.router)

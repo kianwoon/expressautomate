@@ -95,6 +95,18 @@ export function opportunitySourcingPath(id: string): string {
   return `${OPPORTUNITIES_PATH}/${encodeURIComponent(id)}/sourcing`;
 }
 
+/**
+ * The Job Intelligence analysis for one job order: POST runs the three-stage
+ * analysis (understand the work → infer the ideal person → plan the search)
+ * and stores it, GET reads the stored analysis back.
+ *
+ * Same id-in-path, same encoding, as `opportunitySourcingPath` — a function
+ * rather than a constant because the id is in the path.
+ */
+export function opportunityIntelligencePath(id: string): string {
+  return `${OPPORTUNITIES_PATH}/${encodeURIComponent(id)}/intelligence`;
+}
+
 /** One job order, for GET — the whole row, in the shape one row of the list
  *  comes back in. Read after every write, because each write route answers
  *  with only the fields it changed. Same id-in-path, same encoding, as the

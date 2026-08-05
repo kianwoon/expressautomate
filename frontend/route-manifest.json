@@ -286,6 +286,10 @@
     "/api/opportunities/{opportunity_id}/client": [
       "POST"
     ],
+    "/api/opportunities/{opportunity_id}/intelligence": [
+      "GET",
+      "POST"
+    ],
     "/api/opportunities/{opportunity_id}/occupational-requirement": [
       "POST"
     ],

@@ -30,6 +30,7 @@ import type { MutationResult, Opportunity } from "./opportunities";
  */
 
 vi.mock("./job-orders-sourcing", () => ({ Shortlist: () => null }));
+vi.mock("./job-intelligence-panel", () => ({ JobIntelligence: () => null }));
 
 let authState: Me | null = null;
 
