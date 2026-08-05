@@ -1,7 +1,7 @@
 "use client";
 
 import { ProtectedBadge, flagged } from "./codes";
-import { Salary, Value, day, dayShort } from "./format";
+import { Salary, Value, day, dayShort, salaryRange } from "./format";
 import type { Opportunity } from "./opportunities";
 import { Initials } from "./person";
 import { QualityBadge } from "./quality";
@@ -84,6 +84,17 @@ const COLUMNS: { key: SortKey; label: string }[] = [
   { key: "location", label: "Location" },
   { key: "quality", label: "Quality" },
 ];
+
+/** The full salary text, plain, for the cell's `title`. Mirrors how `Salary`
+ *  composes its two lines — the normalised range, then the sender's words — so
+ *  a clamped cell reveals on hover exactly what it folded away. The tooltip is
+ *  a convenience; the canonical place for the whole sentence is the panel. */
+function salaryTitle(row: Opportunity): string | undefined {
+  const range = salaryRange(row);
+  const raw = row.salary_raw;
+  if (range && raw) return `${range}  ·  ${raw}`;
+  return range ?? raw ?? undefined;
+}
 
 export function JobOrdersTable({
   rows,
@@ -180,7 +191,17 @@ export function JobOrdersTable({
                 </td>
                 <Td clamp>{row.job_title_raw}</Td>
                 <td className="jo-td">
-                  <Salary row={row} />
+                  {/* Clamped, like the prose columns beside it. Salary carries
+                      two lines — the normalised range and the sender's own
+                      words — and `salary_raw` is the email's full sentence,
+                      which can run the length of a paragraph when a posting
+                      banded pay by experience. The whole thing is one hover
+                      (`title`) and one panel away; the cell holds it to two
+                      lines so one long row does not set the height of every
+                      row that shares its state. */}
+                  <div className="jo-clamp" title={salaryTitle(row)}>
+                    <Salary row={row} />
+                  </div>
                 </td>
                 <Td clamp>{row.working_hours_raw}</Td>
                 <Td clamp>{row.duration_raw}</Td>
