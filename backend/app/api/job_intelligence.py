@@ -21,11 +21,11 @@ a 404 here would be indistinguishable from another agency's id.
 import uuid
 from datetime import UTC, datetime
 
+import httpx
 from fastapi import APIRouter, HTTPException, Request
 from sqlalchemy import select
 
 from app.api.auth import _require_session_with_role
-from app.core.config import settings
 from app.core.logging import get_logger
 from app.db.rls import tenant_session
 from app.models.job_intelligence import JobIntelligence
@@ -43,10 +43,6 @@ _NO_CONTEXT = (
     "This job order has no title or description to analyse. Add one and try again."
 )
 # allow-hardcode: as above.
-_NOT_CONFIGURED = (
-    "Job Intelligence is not configured on this deployment. Ask your administrator."
-)
-# allow-hardcode: as above.
 _MODEL_FAILED = (
     "The analysis could not be produced just now. Try again in a few minutes."
 )
@@ -54,12 +50,18 @@ _MODEL_FAILED = (
 
 @router.post("/opportunities/{opportunity_id}/intelligence")
 async def run_intelligence(request: Request, opportunity_id: uuid.UUID) -> dict:
-    """Run the three-stage analysis and store it, replacing any prior one."""
-    user_uuid, tenant_uuid, role = await _require_session_with_role(request)
+    """Run the three-stage analysis and store it, replacing any prior one.
 
-    model_id = settings.JOB_INTELLIGENCE_MODEL or settings.EXTRACTION_MODEL_FAST
-    if not settings.cerebras_configured(model_id):
-        raise HTTPException(status_code=503, detail=_NOT_CONFIGURED)
+    No pre-flight "is the model configured?" gate, by deliberate precedent:
+    `ingest/extract.py`, `ingest/classify.py` and `sourcing/explain.py` all call
+    the model with no such check, and they work on every deployment that has
+    Cerebras configured — which is every deployment that extracts mail at all.
+    A gate here would be the only one in the LLM stack, and it returns False on
+    credentials the rest of the stack is successfully using, which is exactly
+    the false refusal this route shipped with. If the provider is genuinely
+    unreachable the call raises and the handler below answers 502.
+    """
+    user_uuid, tenant_uuid, role = await _require_session_with_role(request)
 
     async with tenant_session(tenant_uuid) as session:
         opportunity = await load_visible_opportunity(
@@ -84,7 +86,19 @@ async def run_intelligence(request: Request, opportunity_id: uuid.UUID) -> dict:
     try:
         outcome = await analyze(opportunity, codes)
     except LLMInvalidJSON as exc:
+        # The model answered, but not in the shape we asked for.
         log.warning("job_intelligence_failed", opportunity_id=str(opportunity_id), error=repr(exc))
+        raise HTTPException(status_code=502, detail=_MODEL_FAILED) from exc
+    except httpx.HTTPError as exc:
+        # A transport or HTTP failure reaching the provider. The extraction
+        # pipeline lets this propagate as a 500 because it runs in a worker; this
+        # route is synchronous and recruiter-facing, so it answers a readable 502
+        # rather than a raw traceback. Same outcome, different audience.
+        log.warning(
+            "job_intelligence_unreachable",
+            opportunity_id=str(opportunity_id),
+            error=repr(exc),
+        )
         raise HTTPException(status_code=502, detail=_MODEL_FAILED) from exc
 
     if not outcome.result.understanding.role:

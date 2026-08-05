@@ -139,13 +139,6 @@ def _http(tid: uuid.UUID, uid: uuid.UUID) -> AsyncClient:
     return client
 
 
-@pytest.fixture(autouse=True)
-def _configured(monkeypatch):
-    monkeypatch.setattr(settings, "CEREBRAS_BASE_URL", "https://cerebras.test/v1")
-    monkeypatch.setattr(settings, "CEREBRAS_API_KEY", "test-key")
-    monkeypatch.setattr(settings, "EXTRACTION_MODEL_FAST", "test/fast")
-
-
 @pytest.fixture
 def stub_analyze(monkeypatch):
     """Replace the engine so no real model call is made."""
@@ -158,6 +151,31 @@ def stub_analyze(monkeypatch):
 
     monkeypatch.setattr(job_intelligence, "analyze", _fake)
     return captured
+
+
+async def test_post_does_not_refuse_when_cerebras_is_unconfigured(stub_analyze, monkeypatch):
+    """No config gate: the route calls the model like extraction does.
+
+    Regression test for the false-503 the route shipped with. A pre-flight
+    `cerebras_configured` check returned False on credentials the rest of the
+    LLM stack was using successfully, and the route refused every request with
+    "not configured". Extraction, classify and explain have no such gate; this
+    route matches them — an unreachable provider surfaces as a 502 from the
+    call, not a 503 from a check.
+    """
+    monkeypatch.setattr(settings, "CEREBRAS_BASE_URL", "")
+    monkeypatch.setattr(settings, "CEREBRAS_API_KEY", "")
+    monkeypatch.setattr(settings, "EXTRACTION_MODEL_FAST", "")
+
+    tid, uid = await _seed_agency()
+    oid = await _opportunity(tid, uid)
+    try:
+        async with _http(tid, uid) as c:
+            res = await c.post(f"/api/opportunities/{oid}/intelligence")
+            # Not 503 — the analysis ran (via the stub) despite empty creds.
+            assert res.status_code == 200, res.text
+    finally:
+        await _drop_agency(tid)
 
 
 async def test_post_runs_and_get_reads_back(stub_analyze):
