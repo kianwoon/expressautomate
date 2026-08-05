@@ -230,7 +230,7 @@ function Workspace() {
       <p className="lede" style={{ marginTop: 18, maxWidth: "62ch" }}>
         External recruiters who forward job orders into your mailbox. {buddies.length}{" "}
         {buddies.length === 1 ? "buddy has" : "buddies have"} referred {totalReferrals}{" "}
-        {totalReferrals === 1 ? "client" : "clients"}.
+        {totalReferrals === 1 ? "job order" : "job orders"}.
       </p>
 
       <div className="jo-controls" style={{ marginTop: 24 }}>
