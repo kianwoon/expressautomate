@@ -46,6 +46,7 @@ from app.services.ingest.evidence import parse_salary, quality_state, verify
 from app.services.ingest.glossary import DetectedCode, GlossaryEntry, detect
 from app.services.ingest.schema import ExtractedField, ExtractedJob, ExtractionResponse
 from app.services.llm.client import LLMResult
+from app.services.sourcing.preference import implied_sex
 from app.services.notify.dispatch import emit, enqueue_deliveries
 from app.services.notify.events import (
     EVENT_OPPORTUNITY_NEEDS_REVIEW,
@@ -100,11 +101,13 @@ _INSERT_OPPORTUNITY = text(
         (id, tenant_id, email_message_id, received_datetime,
          {", ".join(_SIMPLE.values())},
          salary_min, salary_max, salary_currency, salary_period, salary_raw,
-         skills, quality_state, review_status, client_id, assigned_user_id)
+         skills, quality_state, review_status, client_id, assigned_user_id,
+         sex_requirement, sex_requirement_reason)
     SELECT :id, :tenant_id, :email_message_id, em.received_datetime,
            {", ".join(f":{name}" for name in _SIMPLE)},
            :salary_min, :salary_max, :salary_currency, :salary_period, :salary_raw,
-           :skills, :quality_state, :review_status, :client_id, :assigned_user_id
+           :skills, :quality_state, :review_status, :client_id, :assigned_user_id,
+           :sex_requirement, :sex_requirement_reason
     FROM email_messages em WHERE em.id = :email_message_id
     ON CONFLICT (id) DO NOTHING
     """
@@ -337,6 +340,8 @@ async def persist(
                 opportunity_id,
                 job,
                 source,
+                codes,
+                len(response.jobs),
                 client_id=matched.client_id if matched else None,
                 assigned_user_id=matched.assigned_user_id if matched else None,
             )
@@ -512,6 +517,8 @@ async def _insert_opportunity(
     opportunity_id: uuid.UUID,
     job: ExtractedJob,
     source: str,
+    codes,
+    job_count: int,
     client_id: uuid.UUID | None = None,
     assigned_user_id: uuid.UUID | None = None,
 ) -> None:
@@ -522,11 +529,16 @@ async def _insert_opportunity(
     `assigned_user_id` would take a job order back off a recruiter who had
     claimed it in the meantime. The claim is a person's decision; the match is
     a guess about a starting point. Only the first insert gets to set it.
+
+    `sex_requirement` is derived from the client's shorthand codes that apply to
+    this vacancy (`C/F`/`O/F` → female), set alongside an audit reason naming the
+    codes. Both are NULL when no sex is implied — the ordinary case.
     """
     salary_min = salary_max = currency = None
     if job.salary is not None and not job.salary.is_missing:
         salary_min, salary_max, currency = parse_salary(job.salary.value)
 
+    sex_requirement, sex_requirement_reason = _sex_requirement_for(job, codes, job_count)
     state = quality_state(job, source)
     params = {
         "id": opportunity_id,
@@ -546,6 +558,8 @@ async def _insert_opportunity(
         "review_status": "needs_review" if state == "needs_review" else "ready",
         "client_id": client_id,
         "assigned_user_id": assigned_user_id,
+        "sex_requirement": sex_requirement,
+        "sex_requirement_reason": sex_requirement_reason,
     }
     params.update({name: _value(getattr(job, name)) for name in _SIMPLE})
     await session.execute(_INSERT_OPPORTUNITY, params)
@@ -560,6 +574,43 @@ def _skills(job: ExtractedJob) -> list[str]:
     """
     raw = _value(job.skills) or ""
     return [part.strip() for part in raw.split(",") if part.strip()]
+
+
+def _codes_for_vacancy(
+    job: ExtractedJob, codes: list[DetectedCode], job_count: int
+) -> list[DetectedCode]:
+    """The codes that apply to this one vacancy.
+
+    A single-vacancy email hands every code to that vacancy; beyond one, the
+    span check in `_covers` decides — the same rule `_insert_codes` uses, so the
+    requirement and the decoded shorthand can never disagree about which codes a
+    row was built from.
+    """
+    if job_count <= 1:
+        return list(codes)
+    return [code for code in codes if _covers(job, code)]
+
+
+def _sex_requirement_for(job: ExtractedJob, codes, job_count: int):
+    """The sex requirement and a reason, derived from this vacancy's shorthand.
+
+    `C/F` / `O/F` imply female; `C/M` / `O/M` imply male. When every applicable
+    sex-bearing code agrees, that sex becomes the row's `sex_requirement`. The
+    reason is required alongside it (the database CHECK
+    `ck_opportunities_sex_requirement_has_reason` refuses one without the other),
+    so it records plainly that the requirement came from the client's email
+    shorthand, naming the codes — an audit trail, not a justification a person
+    wrote. Returns `(None, None)` when no sex is implied, which is the ordinary
+    case for most vacancies.
+    """
+    applicable = _codes_for_vacancy(job, codes, job_count)
+    sex = implied_sex(applicable)
+    if sex is None:
+        return None, None
+    # allow-hardcode: an audit sentence naming the codes found, not configuration.
+    found = ", ".join(sorted({c.code for c in applicable}))
+    reason = f"Set from the client's shorthand in the source email: {found}."
+    return sex, reason
 
 
 async def _insert_evidence(

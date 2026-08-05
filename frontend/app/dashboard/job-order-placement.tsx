@@ -301,18 +301,16 @@ export function PlacementForm({
       </label>
 
       {(() => {
-        // The email implied a sex, but this dropdown stayed "None" — and that
-        // looks wrong until you know the field above is for a legal
-        // occupational requirement, not a client preference. The preference is
-        // honoured elsewhere (the shortlist is narrowed), so say so plainly
-        // rather than leaving a recruiter to wonder why None looks ignored.
+        // The dropdown shows a value set from the email's shorthand (C/F, O/F,
+        // …). Say where it came from, so a recruiter knows it is auto-derived
+        // from the client's words rather than a human decision, and can change
+        // it if the client's intent was read wrong.
         const implied = impliedSex(codesOf(row));
         if (!implied) return null;
         return (
           <p className="body jo-sub jo-placement-hint">
-            This email implies a {implied} preference (from the shorthand detected
-            above). It is the client&rsquo;s preference, not a legal occupational requirement, so
-            this field stays &ldquo;None&rdquo; — but the shortlist is narrowed to {implied}{" "}
+            Set from the client&rsquo;s shorthand in the source email (detected above). Change it
+            here if that reading was wrong; the shortlist is also narrowed to {implied}{" "}
             candidates automatically.
           </p>
         );

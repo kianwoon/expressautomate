@@ -521,3 +521,148 @@ async def test_a_user_alias_is_not_a_buddy(agency) -> None:
         buddies = (await s.execute(text("SELECT count(*) FROM buddies"))).scalar_one()
     assert buddies == 0, "the user's own alias must not create a buddy"
 
+
+async def test_cf_and_of_in_the_email_set_the_sex_requirement_to_female(agency) -> None:
+    """C/F and O/F in the source email set the opportunity's sex requirement.
+
+    The client's coded preference (female, here) is written to
+    `sex_requirement` at insert time, alongside an audit reason naming the
+    codes. This is the field a recruiter reads in the modal — it must show the
+    sex the client asked for, not stay on None.
+    """
+    from app.services.ingest.persist import persist
+
+    await _seed_glossary(
+        agency,
+        [
+            ("C/F", "Chinese, female"),
+            ("O/F", "Any race, female"),
+        ],
+    )
+
+    # The source contains both codes inside the evidence span so `_covers` is
+    # satisfied for a single-vacancy email (every code belongs to the one job).
+    source = "Registration Callers at The Learning Lab. C/F and O/F. $2000/month."
+    company_at = source.index("The Learning Lab")
+    title_at = source.index("Registration Callers")
+    job = {
+        "company": {
+            "value": "The Learning Lab",
+            "evidence": "The Learning Lab",
+            "start_char": company_at,
+            "end_char": company_at + len("The Learning Lab"),
+            "confidence": 0.95,
+        },
+        "job_title": {
+            "value": "Registration Callers",
+            "evidence": "Registration Callers",
+            "start_char": title_at,
+            "end_char": title_at + len("Registration Callers"),
+            "confidence": 0.95,
+        },
+    }
+    response = ExtractionResponse.model_validate({"jobs": [job]})
+    result = LLMResult(data={}, model="test/fast")
+
+    message_id = uuid.uuid4()
+    await _insert_message(agency, message_id)
+    await persist(agency, message_id, response, result, source=source)
+
+    async with tenant_session(agency) as s:
+        row = (
+            await s.execute(
+                text(
+                    "SELECT sex_requirement, sex_requirement_reason FROM opportunities"
+                    " WHERE email_message_id = :m"
+                ),
+                {"m": message_id},
+            )
+        ).one()
+    assert row.sex_requirement == "female"
+    assert row.sex_requirement_reason is not None
+    assert "C/F" in row.sex_requirement_reason
+    assert "O/F" in row.sex_requirement_reason
+
+
+async def test_conflicting_sex_codes_leave_sex_requirement_unset(agency) -> None:
+    """C/F and O/M together state both sexes — the row stays unset rather than
+    guessing which role the client meant."""
+    from app.services.ingest.persist import persist
+
+    await _seed_glossary(
+        agency,
+        [
+            ("C/F", "Chinese, female"),
+            ("O/M", "Any race, male"),
+        ],
+    )
+
+    source = "Role at Acme. C/F and O/M. $2000/month."
+    company_at = source.index("Acme")
+    title_at = source.index("Role")
+    job = {
+        "company": {
+            "value": "Acme",
+            "evidence": "Acme",
+            "start_char": company_at,
+            "end_char": company_at + len("Acme"),
+            "confidence": 0.95,
+        },
+        "job_title": {
+            "value": "Role",
+            "evidence": "Role",
+            "start_char": title_at,
+            "end_char": title_at + len("Role"),
+            "confidence": 0.95,
+        },
+    }
+    response = ExtractionResponse.model_validate({"jobs": [job]})
+    result = LLMResult(data={}, model="test/fast")
+
+    message_id = uuid.uuid4()
+    await _insert_message(agency, message_id)
+    await persist(agency, message_id, response, result, source=source)
+
+    async with tenant_session(agency) as s:
+        row = (
+            await s.execute(
+                text(
+                    "SELECT sex_requirement, sex_requirement_reason FROM opportunities"
+                    " WHERE email_message_id = :m"
+                ),
+                {"m": message_id},
+            )
+        ).one()
+    assert row.sex_requirement is None
+    assert row.sex_requirement_reason is None
+
+
+async def _seed_glossary(tenant_id: uuid.UUID, codes: list[tuple[str, str]]) -> None:
+    """Write glossary_codes rows directly — `detect()` reads these at ingest.
+
+    Production seeds them on first read via the glossary API; tests reach the
+    same table because persist's `_glossary()` is a plain SELECT, not the
+    seeding endpoint. The normalised form mirrors what the seeder writes.
+    """
+    from app.services.ingest.glossary import normalise
+
+    async with tenant_session(tenant_id) as s:
+        for code, meaning in codes:
+            await s.execute(
+                text(
+                    "INSERT INTO glossary_codes "
+                    "(id, tenant_id, code, code_normalised, meaning, source)"
+                    " VALUES (:id, :t, :c, :n, :m, 'agency')"
+                ),
+                {
+                    "id": str(uuid.uuid4()),
+                    "t": str(tenant_id),
+                    "c": code,
+                    "n": normalise(code),
+                    "m": meaning,
+                },
+            )
+        await s.commit()
+
+
+
