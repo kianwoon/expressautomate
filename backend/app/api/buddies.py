@@ -18,6 +18,7 @@ from app.db.rls import tenant_session
 from app.models import Buddy, BuddyReferral, Opportunity, UserEmail
 from app.services.name_index import initial_of as _initial_of
 from app.services.name_index import sorted_initials as _sorted_initials
+from app.services.opportunity_dedupe import duplicate_opportunity_ids
 from app.services.visibility import visible_opportunities
 
 router = APIRouter(tags=["buddies"])
@@ -148,6 +149,12 @@ def _referral_counts_subquery(cutoff: datetime | None, visible):
     client is five, not one — the same way the opportunities list attributes
     each of those rows' `buddy_name`.
 
+    Deduped: a later re-forward of an open job already held does not count a
+    second time. The same `conversation_id` rule the job orders list uses, via
+    the shared `opportunity_dedupe` service, so the number on a buddy's row
+    agrees with the list behind it. Verified against production — 17 of 73 open
+    referrals were re-forward duplicates that inflated the count.
+
     `visible` is the `visible_opportunities(user_uuid, role)` clause, applied
     here for the same reason `list_opportunities` applies it: RLS scopes to the
     tenant, but visibility within a tenant is per-recruiter (assigned, shared,
@@ -160,6 +167,7 @@ def _referral_counts_subquery(cutoff: datetime | None, visible):
     back into an inner join and drop the zero-count buddies exactly when the
     period filter is the thing being asked about.
     """
+    dupes = duplicate_opportunity_ids(visible)
     joined = (
         select(
             BuddyReferral.buddy_id.label("buddy_id"),
@@ -174,6 +182,7 @@ def _referral_counts_subquery(cutoff: datetime | None, visible):
             ),
         )
         .where(visible)
+        .where(Opportunity.id.not_in(select(dupes.c.id)))
         .group_by(BuddyReferral.buddy_id)
     )
     if cutoff is not None:
@@ -415,6 +424,10 @@ async def list_buddy_referrals(
     # apply, so the modal lists exactly the rows behind the number the
     # recruiter clicked — nothing more, nothing less.
     visible = visible_opportunities(user_uuid, role)
+    # Deduped with the same rule the count uses, so the modal behind a number
+    # shows exactly that many rows — a re-forward of an open job already listed
+    # does not appear a second time.
+    dupes = duplicate_opportunity_ids(visible)
 
     async with tenant_session(tenant_uuid) as session:
         buddy = (
@@ -434,6 +447,7 @@ async def list_buddy_referrals(
             )
             .where(BuddyReferral.buddy_id == buddy_id)
             .where(visible)
+            .where(Opportunity.id.not_in(select(dupes.c.id)))
             .order_by(Opportunity.received_datetime.desc().nullslast(), Opportunity.id.desc())
         )
         if cutoff is not None:

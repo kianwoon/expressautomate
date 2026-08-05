@@ -69,6 +69,7 @@ from app.services.notify.events import (
     EVENT_OPPORTUNITY_NEW,
     OpportunityEvent,
 )
+from app.services.opportunity_dedupe import duplicate_opportunity_ids
 from app.services.sourcing import eligibility
 from app.services.visibility import (
     can_edit,
@@ -284,59 +285,11 @@ def _row_select(user_uuid: uuid.UUID):
 async def _duplicate_opportunity_ids(session, visible) -> set[uuid.UUID]:
     """The ids of job orders that are a later re-forward of an open job already held.
 
-    The duplicate signal is the email's Graph `conversation_id`: a forward keeps
-    the conversation it came from, so the same job sent again days later lands in
-    the same conversation with a different `received_datetime`. Verified against
-    production data — `internet_message_id` never survives a forward (0 repeats
-    across 80 job orders), but `conversation_id` does (7 duplicate groups), and
-    every one of those is an unfulfilled role re-forwarded on a later day.
-
-    Partitioned by `(conversation_id, received_datetime)`, not by title:
-    `job_title_normalized` is NULL for every row in production, and one forwarded
-    email can list several distinct roles (all sharing one arrival moment). The
-    dedupe keeps every row from the *earliest* email in a conversation and hides
-    only rows from a *later* email — so a multi-role forward is not collapsed to
-    one row, but the same single role sent again next week is.
-
-    Only hides when the earliest instance is still open (`placement_type IS NULL`):
-    a role that has since been placed is finished, and a re-forward of it is a new
-    hire, not a duplicate. `visible` scopes the whole comparison so a job order a
-    recruiter cannot see cannot determine what they are shown.
+    Delegates to the shared `opportunity_dedupe` service so the job orders list
+    and the buddies referral count agree on what a duplicate is.
     """
-    email = aliased(EmailMessage)
-    # The earliest received_datetime per conversation — but only for
-    # conversations whose earliest row is still open. A conversation whose
-    # earliest instance has been placed is done, and later rows in it are new
-    # work, not duplicates.
-    open_earliest = (
-        select(
-            email.conversation_id.label("conversation_id"),
-            func.min(email.received_datetime).label("earliest_at"),
-        )
-        .select_from(Opportunity)
-        .join(email, email.id == Opportunity.email_message_id)
-        .where(visible)
-        .where(Opportunity.placement_type.is_(None))
-        .where(email.conversation_id.is_not(None))
-        .group_by(email.conversation_id)
-    ).subquery()
-
-    # Rows whose conversation has an earlier email than their own: these are the
-    # later re-forwards. Joined back through the opportunity's own email to read
-    # its conversation_id and received_datetime without a second alias on the
-    # outer query.
-    dupes = (
-        select(Opportunity.id)
-        .select_from(Opportunity)
-        .join(email, email.id == Opportunity.email_message_id)
-        .join(
-            open_earliest,
-            open_earliest.c.conversation_id == email.conversation_id,
-        )
-        .where(email.received_datetime > open_earliest.c.earliest_at)
-        .where(Opportunity.placement_type.is_(None))
-    )
-    rows = (await session.execute(dupes)).all()
+    dupes = duplicate_opportunity_ids(visible)
+    rows = (await session.execute(select(dupes.c.id))).all()
     return {row[0] for row in rows}
 
 

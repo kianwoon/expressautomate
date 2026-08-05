@@ -315,3 +315,116 @@ async def test_the_referrals_endpoint_404s_for_an_unknown_buddy(
     async with await _client_for(tid, uid) as http:
         res = await http.get(f"/api/buddies/{uuid.uuid4()}/referrals")
     assert res.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Dedupe — a later re-forward of an open job order must not count twice.
+# ---------------------------------------------------------------------------
+# The same conversation_id rule the job orders list uses, applied here so the
+# number on a buddy's row and the list in the modal behind it agree. Without
+# it, a buddy who forwarded "HR Specialist" on Monday and again on Friday
+# counts two and shows two — the very duplication the user reported.
+
+@pytest.fixture
+async def agency_with_reforwarded_buddy():
+    """One buddy whose client has the same role forwarded twice: an email on
+    day 1, then the same conversation forwarded again on day 5. Plus a second,
+    distinct role in a different conversation as a control."""
+    from app.models import Opportunity
+
+    tid, uid = uuid.uuid4(), uuid.uuid4()
+    now = datetime.now(UTC)
+    day1 = now - timedelta(days=5)
+    day5 = now
+    buddy_id, client_id, mailbox_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    conv = "AAMkAAG-reforward-conversation"
+    async with AdminSessionLocal() as s:
+        await s.execute(
+            text("INSERT INTO tenants (id, name, slug) VALUES (:i, :n, :n)"),
+            {"i": tid, "n": f"agency-{tid.hex[:6]}"},
+        )
+        await s.execute(
+            text("INSERT INTO users (id, tenant_id, email, role) VALUES (:i, :t, :e, 'owner')"),
+            {"i": uid, "t": tid, "e": f"u{uid.hex[:6]}@agency.sg"},
+        )
+        # email_messages.mailbox_id is a FK, so the row needs a mailbox to point at.
+        await s.execute(
+            text(
+                "INSERT INTO mailboxes"
+                " (id, tenant_id, user_id, ms_user_id, scope, folder_id, retention_months)"
+                " VALUES (:i, :t, :u, :m, 'user', 'inbox', :r)"
+            ),
+            {"i": mailbox_id, "t": tid, "u": uid, "m": f"oid-{tid.hex[:8]}",
+             "r": 24},
+        )
+        await s.execute(
+            text(
+                "INSERT INTO buddies (id, tenant_id, name, email, email_domain)"
+                " VALUES (:i, :t, :n, :e, :d)"
+            ),
+            {"i": buddy_id, "t": tid, "n": "Topaz", "e": "topaz@re.sg", "d": "re.sg"},
+        )
+        await s.execute(
+            text(
+                "INSERT INTO clients (id, tenant_id, name, name_normalized, status)"
+                " VALUES (:i, :t, :n, :n, 'unconfirmed')"
+            ),
+            {"i": client_id, "t": tid, "n": "Acme"},
+        )
+        await s.execute(
+            text(
+                "INSERT INTO buddy_referrals (id, tenant_id, buddy_id, client_id)"
+                " VALUES (:i, :t, :b, :c)"
+            ),
+            {"i": uuid.uuid4(), "t": tid, "b": buddy_id, "c": client_id},
+        )
+
+        async def _opp(conv_id, received, title):
+            email_id, opp_id = uuid.uuid4(), uuid.uuid4()
+            await s.execute(
+                text(
+                    "INSERT INTO email_messages"
+                    " (id, tenant_id, mailbox_id, graph_message_id,"
+                    " internet_message_id, conversation_id, received_datetime)"
+                    " VALUES (:i, :t, :m, :g, :n, :c, :r)"
+                ),
+                {"i": email_id, "t": tid, "m": mailbox_id, "g": f"g-{email_id.hex}",
+                 "n": f"<{email_id.hex}@e.sg>", "c": conv_id, "r": received},
+            )
+            s.add(Opportunity(
+                id=opp_id, tenant_id=tid, email_message_id=email_id,
+                received_datetime=received, job_title_raw=title, client_id=client_id,
+            ))
+
+        # The same role, same conversation, two different days — a re-forward.
+        await _opp(conv, day1, "HR Specialist")
+        await _opp(conv, day5, "HR Specialist")
+        # A different role, different conversation — must count separately.
+        await _opp("AAMkAAG-different", day1, "Admin Assistant")
+        await s.commit()
+    yield tid, uid, buddy_id
+    await cleanup_tenant(tid)
+
+
+async def test_a_reforwarded_role_counts_once(agency_with_reforwarded_buddy) -> None:
+    """Two rows for the same open role in the same conversation are one piece
+    of work, not two. The count must be 2 (HR Specialist deduped + Admin),
+    not 3."""
+    tid, uid, _buddy_id = agency_with_reforwarded_buddy
+    async with await _client_for(tid, uid) as http:
+        body = (await http.get("/api/buddies")).json()
+    topaz = next(r for r in body["items"] if r["name"] == "Topaz")
+    assert topaz["referral_count"] == 2
+
+
+async def test_the_referrals_modal_lists_the_reforward_once(
+    agency_with_reforwarded_buddy,
+) -> None:
+    """The modal behind the count shows each role once: the earliest instance
+    of the re-forwarded conversation, not both days."""
+    tid, uid, buddy_id = agency_with_reforwarded_buddy
+    async with await _client_for(tid, uid) as http:
+        body = (await http.get(f"/api/buddies/{buddy_id}/referrals")).json()
+    titles = sorted(row["job_title_raw"] for row in body["items"])
+    assert titles == ["Admin Assistant", "HR Specialist"]
+    assert body["total"] == 2
