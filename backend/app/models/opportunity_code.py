@@ -20,7 +20,7 @@ not cascade away the evidence that it was once used.
 
 import uuid
 
-from sqlalchemy import ForeignKey, Integer, String, Text
+from sqlalchemy import ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID as PgUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -46,3 +46,18 @@ class OpportunityCode(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
     attribute: Mapped[str | None] = mapped_column(String(32))
     start_char: Mapped[int] = mapped_column(Integer, nullable=False)
     end_char: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    __table_args__ = (
+        # One row per detected occurrence: a re-extraction that re-runs the
+        # deterministic `detect()` finds the same spans, and without this guard
+        # it would write them again. Keyed on offset, not on code alone, because
+        # a code genuinely appearing twice in one email lands at two offsets and
+        # both are real, distinct occurrences.
+        UniqueConstraint(
+            "opportunity_id",
+            "code",
+            "start_char",
+            "end_char",
+            name="uq_opportunity_codes_once_per_span",
+        ),
+    )

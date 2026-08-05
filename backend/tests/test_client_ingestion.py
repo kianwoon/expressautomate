@@ -658,3 +658,58 @@ async def _seed_glossary(tenant_id: uuid.UUID, codes: list[tuple[str, str]]) -> 
                 },
             )
         await s.commit()
+
+
+async def test_re_extracting_an_email_does_not_duplicate_its_codes(agency) -> None:
+    """A retried extraction re-runs `detect()`, which is deterministic — it finds
+    the same spans. Without the `ON CONFLICT` guard on `_INSERT_CODE`, each
+    re-extraction would write a second row for every code at every offset. The
+    opportunity insert is safe (`ON CONFLICT DO NOTHING`); the code insert must
+    match it."""
+    from app.services.ingest.persist import persist
+
+    await _seed_glossary(agency, [("JD", "Job description")])
+
+    source = "Registration Callers at The Learning Lab. JD enclosed. $2000/month."
+    company_at = source.index("The Learning Lab")
+    title_at = source.index("Registration Callers")
+    job = {
+        "company": {
+            "value": "The Learning Lab",
+            "evidence": "The Learning Lab",
+            "start_char": company_at,
+            "end_char": company_at + len("The Learning Lab"),
+            "confidence": 0.95,
+        },
+        "job_title": {
+            "value": "Registration Callers",
+            "evidence": "Registration Callers",
+            "start_char": title_at,
+            "end_char": title_at + len("Registration Callers"),
+            "confidence": 0.95,
+        },
+    }
+    response = ExtractionResponse.model_validate({"jobs": [job]})
+    result = LLMResult(data={}, model="test/fast")
+
+    message_id = uuid.uuid4()
+    await _insert_message(agency, message_id)
+    # Re-extraction: the same email processed twice, exactly what a retry does.
+    await persist(agency, message_id, response, result, source=source)
+    await persist(agency, message_id, response, result, source=source)
+
+    async with tenant_session(agency) as s:
+        rows = (
+            await s.execute(
+                text(
+                    "SELECT code, start_char, end_char FROM opportunity_codes"
+                    " WHERE opportunity_id ="
+                    " (SELECT id FROM opportunities WHERE email_message_id = :m)"
+                ),
+                {"m": message_id},
+            )
+        ).all()
+    # One JD at one offset — not two, despite two extractions.
+    assert len(rows) == 1
+    assert rows[0].code == "JD"
+

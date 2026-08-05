@@ -30,6 +30,47 @@ export function codesOf(row: Opportunity): DecodedCode[] {
   return row.codes ?? [];
 }
 
+/** One entry per distinct code+meaning the email used, with how many times.
+
+ *  A bulk recruitment email can contain the same shorthand many times — eight
+ *  "JD" in one message is real, not a bug, but eight identical lines carry no
+ *  more information than one. Collapsing by what the recruiter actually sees
+ *  (the code and the glossary meaning) keeps the list a list of the codes used,
+ *  with a `(×N)` count when a code recurred. The per-occurrence offsets are
+ *  still in the raw data for anyone who needs them; they are just not the thing
+ *  to lay out one row each. */
+export type CollapsedCode = {
+  code: string;
+  meaning: string;
+  attribute: string | null;
+  count: number;
+};
+
+export function collapseCodes(codes: DecodedCode[]): CollapsedCode[] {
+  const out: CollapsedCode[] = [];
+  // Group key is the visible identity of a row: the code, the glossary meaning,
+  // and the protected-attribute tag. Two `C/F` rows with different meanings
+  // (an edited glossary, re-extracted) are genuinely different lines.
+  const seen = new Map<string, CollapsedCode>();
+  for (const entry of codes) {
+    const key = `${entry.code}\u0000${entry.meaning}\u0000${entry.attribute ?? ""}`;
+    const existing = seen.get(key);
+    if (existing) {
+      existing.count += 1;
+    } else {
+      const collapsed: CollapsedCode = {
+        code: entry.code,
+        meaning: entry.meaning,
+        attribute: entry.attribute,
+        count: 1,
+      };
+      seen.set(key, collapsed);
+      out.push(collapsed);
+    }
+  }
+  return out;
+}
+
 export function flagged(row: Opportunity): boolean {
   return row.references_protected_attribute === true;
 }
@@ -86,6 +127,9 @@ export function DecodedCodes({ row }: { row: Opportunity }) {
   // section only exists when the email actually used shorthand.
   if (codes.length === 0 && !isFlagged) return null;
 
+  // Collapsed: one line per distinct code+meaning, with a count when a code
+  // recurred. Eight "JD" in one email reads as one "JD (×8)", not eight lines.
+  const collapsed = collapseCodes(codes);
   const attributes = attributesOf(codes);
 
   return (
@@ -96,14 +140,14 @@ export function DecodedCodes({ row }: { row: Opportunity }) {
         your glossary&rsquo;s definition of that code, not anything the sender said.
       </p>
 
-      {codes.length === 0 ? (
+      {collapsed.length === 0 ? (
         <p className="body muted jo-codes-none">Not mentioned</p>
       ) : (
         <ul className="jo-codes-list">
-          {codes.map((entry) => (
+          {collapsed.map((entry) => (
             <li
               className="jo-code"
-              key={`${entry.start_char}-${entry.end_char}-${entry.code}`}
+              key={`${entry.code}-${entry.meaning}-${entry.attribute ?? ""}`}
               data-protected={entry.attribute ? "yes" : undefined}
             >
               <code className="jo-code-lit">
@@ -118,6 +162,11 @@ export function DecodedCodes({ row }: { row: Opportunity }) {
                 <span className="jo-sr">your glossary: </span>
                 <Breakable text={entry.meaning} />
               </span>
+              {entry.count > 1 && (
+                <span className="jo-code-count" title={`${entry.count} occurrences in this email`}>
+                  ×{entry.count}
+                </span>
+              )}
               {entry.attribute && (
                 <span className="jo-code-attr">{attributeLabel(entry.attribute)}</span>
               )}

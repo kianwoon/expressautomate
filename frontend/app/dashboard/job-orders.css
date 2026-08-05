@@ -362,6 +362,10 @@
 }
 .jo-code-arrow { color: var(--ink-300); flex: none; }
 .jo-code-mean { color: var(--ink-700); }
+/* How many times this code recurred in the email. Muted: it is a fact about
+   the email, not a warning, so it sits beside the meaning rather than as a
+   coloured pill like the protected-attribute tag. */
+.jo-code-count { color: var(--ink-400); font-size: 0.75rem; white-space: nowrap; }
 .jo-code-attr {
   font-size: 0.6875rem; font-weight: 650; padding: 2px 8px; border-radius: 999px;
   background: var(--amber-050); color: var(--amber-700);

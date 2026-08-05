@@ -175,6 +175,7 @@ _INSERT_CODE = text(
          start_char, end_char)
     VALUES (:id, :tenant_id, :opportunity_id, :code, :meaning, :attribute,
             :start_char, :end_char)
+    ON CONFLICT (opportunity_id, code, start_char, end_char) DO NOTHING
     """
 )
 
