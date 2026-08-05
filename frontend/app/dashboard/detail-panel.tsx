@@ -6,6 +6,7 @@ import { useAuth } from "../auth";
 import { Breakable } from "../breakable";
 import { type ClientMatch, ClientSearch } from "./client-search";
 import { DecodedCodes, ProtectedBadge, flagged } from "./codes";
+import { Dialog } from "./dialog";
 import { Salary, Value, day } from "./format";
 import { PlacementForm, placementFields, same } from "./job-order-placement";
 import { Shortlist } from "./job-orders-sourcing";
@@ -16,12 +17,12 @@ import { QualityNote, ReviewBadge } from "./quality";
 import { ShareDialog } from "./share-dialog";
 
 /**
- * One job order in full, beside the list.
+ * One job order in full, as a popup over the list.
  *
  * The table can only ever show the short fields; requirements and description
  * are paragraphs, and clamping them to four lines in a cell was always a
- * compromise. Here they are simply shown. That is the point of the split: the
- * list stays scannable because the long text has somewhere else to be.
+ * compromise. Here they are simply shown. As a modal the list keeps the whole
+ * width while it is closed and yields to it the moment a row is opened.
  *
  * The panel never invents a heading for a field the email did not mention. It
  * shows the field and says "Not mentioned" — an absence a recruiter can see is
@@ -44,9 +45,9 @@ type Ownership = {
     clientId: string | null,
     adopt: boolean,
   ) => Promise<MutationResult>;
-  /** The row went out from under the open panel — a share withdrawn, or an
-   *  owner reassigning. The panel closes itself; the list is told so it can
-   *  drop the selection rather than reopen what is gone. */
+  /** The row went out from under the open modal — a share withdrawn, or an
+   *  owner reassigning. The list is told so it can drop the selection; closing
+   *  the modal is the parent's job, since it owns the `selected` state. */
   onVanished: (id: string) => void;
 };
 
@@ -69,27 +70,18 @@ function forbiddenMessage(row: Opportunity): string {
 
 export function DetailPanel({
   row,
+  onClose,
   onReview,
   onClaim,
   onAssign,
   onClientSet,
   onVanished,
 }: {
-  row: Opportunity | null;
+  row: Opportunity;
+  /** Closes the modal. The parent owns the `selected` row; this just clears it. */
+  onClose: () => void;
   onReview: (id: string, reviewed: boolean) => Promise<string | null>;
 } & Ownership) {
-  if (!row) {
-    return (
-      <aside className="card jo-detail" aria-label="Job order details">
-        <span className="eyebrow">Details</span>
-        <p className="body jo-detail-empty">
-          Select a job order to read it in full — everything the email said, including the parts
-          too long for the table.
-        </p>
-      </aside>
-    );
-  }
-
   // Keyed on the row id so the pending state and any error reset when the
   // selection moves. Without the key, an error from marking one row reviewed
   // would still be sitting under the next row someone clicked.
@@ -97,6 +89,7 @@ export function DetailPanel({
     <Detail
       key={row.id}
       row={row}
+      onClose={onClose}
       onReview={onReview}
       onClaim={onClaim}
       onAssign={onAssign}
@@ -108,6 +101,7 @@ export function DetailPanel({
 
 function Detail({
   row,
+  onClose,
   onReview,
   onClaim,
   onAssign,
@@ -115,6 +109,7 @@ function Detail({
   onVanished,
 }: {
   row: Opportunity;
+  onClose: () => void;
   onReview: (id: string, reviewed: boolean) => Promise<string | null>;
 } & Ownership) {
   const auth = useAuth();
@@ -127,9 +122,6 @@ function Detail({
   // and would put a claim failure under the sentence about review state.
   const [moving, setMoving] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
-  // The closed state carries the server's own sentence rather than a second
-  // copy of it kept here, so the wording lives in exactly one place.
-  const [gone, setGone] = useState<string | null>(null);
 
   // The panel's own copy of the placement fields, so a save is reflected
   // immediately without waiting for the next page fetch to bring `row` back
@@ -189,16 +181,16 @@ function Detail({
   /** Runs one ownership move and decides what the reader is left looking at.
    *
    * Three outcomes, not two. A 404 is not an error to display beside the
-   * fields — the fields are stale the moment it arrives — so the panel closes
-   * and reports upward. A 403 is re-worded against the row. Everything else is
-   * the sentence the API already chose; nothing here re-derives copy.
+   * fields — the fields are stale the moment it arrives — so the modal is told
+   * to close and reports upward. A 403 is re-worded against the row. Everything
+   * else is the sentence the API already chose; nothing here re-derives copy.
    *
    * The branch is on `result.kind`, never on the sentence. Comparing copy made
    * the wording load-bearing: re-phrasing or translating one string would
-   * silently turn "close the panel" into "show a red line", with no type error
+   * silently turn "close the modal" into "show a red line", with no type error
    * and no failing test.
    *
-   * `say` is where the sentence lands, because the panel has two ownership
+   * `say` is where the sentence lands, because the modal has two ownership
    * controls in two places on the page. A failure from the client field
    * belongs under the client field: routing it to the claim block would put a
    * message about a company under a button about a person, and on a row whose
@@ -211,28 +203,20 @@ function Detail({
     setMoving(true);
     say(null);
     const result = await run();
-    // Released on every path, including the one that closes the panel. It is
+    // Released on every path, including the one that closes the modal. It is
     // only invisible there because the body unmounts, and a pending flag left
     // true is a trap for whatever renders next.
     setMoving(false);
     if (result.ok) return;
     if (result.kind === "gone") {
-      setGone(result.message);
+      // The parent clears `selected`, unmounting this modal in the same
+      // commit — so there is no message to render here, only the close to
+      // hand upward. (When this was an always-open panel, `gone` carried the
+      // sentence on a blank panel; now the modal simply disappears.)
       onVanished(row.id);
       return;
     }
     say(result.kind === "forbidden" ? forbiddenMessage(row) : result.message);
-  }
-
-  if (gone !== null) {
-    // One plain line. Stale fields under a red banner invite acting on a job
-    // order that is no longer there; a blank panel reads as a crash.
-    return (
-      <aside className="card jo-detail" aria-label="Job order details">
-        <span className="eyebrow">Details</span>
-        <p className="body jo-detail-empty">{gone}</p>
-      </aside>
-    );
   }
 
   // Who may hand this on: the agency owner, and whoever is holding it. A
@@ -245,8 +229,19 @@ function Detail({
   const canAssign =
     signedIn != null && (signedIn.role === "owner" || signedIn.id === row.assigned_user_id);
 
+  // Close is suppressed while a save or an ownership move is in flight, so
+  // Escape or a backdrop click cannot discard a review toggle or a claim that
+  // the server has not answered yet. The handlers below still run; only the
+  // modal refuses to leave until they settle.
+  const busy = saving || moving;
+
   return (
-    <aside className="card jo-detail" aria-label="Job order details">
+    <Dialog
+      title={<Value text={row.job_title_raw ?? "Job order"} />}
+      titleId="jo-detail-title"
+      onClose={busy ? () => {} : onClose}
+      className="dlg-modal-wide"
+    >
       <div className="jo-detail-head">
         <span className="eyebrow">Details</span>
         <ReviewBadge status={row.review_status} />
@@ -256,9 +251,6 @@ function Detail({
         {flagged(row) && <ProtectedBadge />}
       </div>
 
-      <h3 className="jo-detail-title">
-        <Value text={row.job_title_raw} />
-      </h3>
       <p className="jo-detail-company">
         <Value text={row.company_name_raw} />
       </p>
@@ -486,7 +478,7 @@ function Detail({
           {error}
         </p>
       )}
-    </aside>
+    </Dialog>
   );
 }
 

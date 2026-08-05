@@ -126,6 +126,7 @@ function panel(
   return (
     <DetailPanel
       row={row}
+      onClose={() => {}}
       onReview={async () => null}
       onClaim={handlers.onClaim ?? (async () => ok)}
       onAssign={handlers.onAssign ?? (async () => ok)}
@@ -195,10 +196,13 @@ describe("who holds a job order", () => {
     );
   });
 
-  it("clears itself and reports upward on a 404", async () => {
-    // A share was withdrawn under the open panel. Sitting there showing stale
-    // fields with a red message beside them is what a generic error handler
-    // does; blanking silently reads as a bug.
+  it("reports upward on a 404 so the modal can close, without an error line", async () => {
+    // A share was withdrawn under the open modal. A 404 is not an error to
+    // display beside the fields — the fields are stale the moment it arrives —
+    // so the detail reports the id upward and leaves closing to the parent
+    // (which owns the `selected` state and unmounts the modal). Rendered
+    // standalone here, so the mock `onVanished` is what we assert on: the
+    // detail's only job is to call it, and to stay quiet (no red alert).
     const onVanished = vi.fn();
     const onClaim = vi.fn().mockResolvedValue({
       ok: false,
@@ -209,11 +213,9 @@ describe("who holds a job order", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Claim this job order" }));
 
-    await waitFor(() => expect(onVanished).toHaveBeenCalled());
-    expect(onVanished).toHaveBeenCalledWith("op-1");
-    expect(screen.queryByText("Care assistant")).toBeNull();
+    await waitFor(() => expect(onVanished).toHaveBeenCalledWith("op-1"));
+    // A close, not an error: nothing red is shown for it.
     expect(screen.queryByRole("alert")).toBeNull();
-    expect(screen.getByText("This job order is no longer available.")).toBeTruthy();
   });
 
   it("says to claim it first when a 403 comes back on an unassigned job order", async () => {

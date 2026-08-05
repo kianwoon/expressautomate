@@ -67,6 +67,7 @@ function panel(row: Opportunity) {
   return (
     <DetailPanel
       row={row}
+      onClose={() => {}}
       onReview={async () => null}
       onClaim={async () => ({ ok: true }) as never}
       onAssign={async () => ({ ok: true }) as never}

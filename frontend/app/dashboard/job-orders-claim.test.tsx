@@ -147,6 +147,13 @@ describe("claiming a job order from the dashboard", () => {
 
     render(<JobOrders me={me()} />);
 
+    // The detail is a modal now, opened by clicking the row's accessible
+    // "show details" button — not an always-open panel. The claim button only
+    // exists once the row is open.
+    fireEvent.click(
+      await screen.findByRole("button", { name: /Show details for Acme/i }),
+    );
+
     const claim = await screen.findByRole("button", { name: "Claim this job order" });
     fireEvent.click(claim);
 

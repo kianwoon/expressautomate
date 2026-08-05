@@ -155,18 +155,11 @@ export function JobOrders({ me, heading = "h2" }: { me: Me; heading?: "h1" | "h2
     if (fresh && fresh !== selected) setSelected(fresh);
   }, [items, selected]);
 
-  // Open on the first row rather than on an empty panel: a panel that starts
-  // blank spends the first screenful asking to be clicked.
-  //
-  // Derived, never stored. An effect that selected the first row on seeing an
-  // empty selection would fire on the paging render too — `setOffset` and
-  // `setSelected(null)` batch together, so that render still holds the page
-  // being left, and the effect would store one of its rows just as the fetch
-  // for the next page began. Nothing would clear it afterwards, and the panel
-  // would sit on a row the table no longer lists. Falling back during render
-  // has nothing to go stale: while the next page loads there are no rows and
-  // the fallback is empty, and when it arrives the fallback is its first row.
-  const shown = selected ?? items[0] ?? null;
+  // The detail is a modal opened on demand, so there is no always-open panel
+  // to keep fed: `selected` is null until a row is clicked, and the modal is
+  // mounted only while it is set. The earlier "open on the first row" fallback
+  // existed to keep an always-visible panel from starting blank — no longer
+  // needed once the panel only appears when asked for.
 
   const total = state.status === "ready" ? state.page.total : 0;
   const limit = state.status === "ready" ? state.page.limit : OPPORTUNITIES_PAGE_SIZE;
@@ -353,79 +346,69 @@ export function JobOrders({ me, heading = "h2" }: { me: Me; heading?: "h1" | "h2
           )}
 
           {items.length > 0 && (
-            <div className="jo-split" aria-busy={refreshing || undefined}>
-              {/* The pager lives in this column, under the table it steps
-                  through. Below the split it sat under the detail panel too,
-                  which is sticky and a screen tall, so the control for the
-                  list ended up nowhere near the list. */}
-              <div className="jo-list">
+            <>
+              {/* Full width: the detail now opens as a modal over the list
+                  rather than sitting beside it in a split, so the table has the
+                  whole row to itself. The pager stays directly under the last
+                  row, where it belongs. */}
+              <div className="jo-list" aria-busy={refreshing || undefined}>
                 <JobOrdersTable
                   rows={items}
                   sort={sort}
                   onSort={setSort}
-                  selectedId={shown?.id ?? null}
+                  selectedId={selected?.id ?? null}
                   onSelect={setSelected}
                 />
                 {pager}
               </div>
-              {/* Reviewing the row the fallback offered pins it first. Under
-                  "Needs review" the act of reviewing takes it out of the list,
-                  and an unpinned fallback would slide the panel onto the next
-                  row mid-read — the same disappearing-panel the stored
-                  selection above exists to prevent. */}
-              <DetailPanel
-                row={shown}
-                onReview={(id, reviewed) => {
-                  if (!selected && shown) setSelected(shown);
-                  return review(id, reviewed);
-                }}
-                onClaim={(id) => {
-                  if (!selected && shown) setSelected(shown);
-                  return own(id, () => claimOpportunity(id));
-                }}
-                onAssign={(id, userId) => {
-                  if (!selected && shown) setSelected(shown);
-                  return own(id, () => assignOpportunity(id, userId));
-                }}
-                // Through `own` like the other two, and for the same reason:
-                // linking a client can hand an unassigned job order to that
-                // client's recruiter, so the row that comes back may name a
-                // different owner. Only the read-back knows.
-                onClientSet={(id, clientId, adopt) => {
-                  const before = selected ?? shown;
-                  if (!selected && shown) setSelected(shown);
-                  return own(id, async () => {
-                    const result = await setOpportunityClient(id, clientId, adopt);
-                    // The link itself, applied before the read-back and
-                    // regardless of whether the read-back arrives. It is the
-                    // one thing the response knows and the browser cannot
-                    // work out: the name behind the id it just sent. Without
-                    // this a failed read-back leaves a linked job order
-                    // looking exactly like an unlinked one.
-                    if (result.ok && before && result.clientName !== undefined) {
-                      const linked = {
-                        ...before,
-                        client_id: clientId,
-                        client_name: result.clientName,
-                      };
-                      patchRow(linked);
-                      setSelected(linked);
-                    }
-                    return result;
-                  });
-                }}
-                // The row went out from under the panel. Dropping the pinned
-                // selection is what lets the next poll choose a row that still
-                // exists, instead of the panel reopening on what is gone.
-                onVanished={() => setSelected(null)}
-              />
-            </div>
+              {/* Mounted only while a row is open. The modal owns nothing about
+                  the selection — clearing it (Escape, backdrop, paging, vanish)
+                  is the parent's job, done through `setSelected(null)`. */}
+              {selected && (
+                <DetailPanel
+                  key={selected.id}
+                  row={selected}
+                  onClose={() => setSelected(null)}
+                  onReview={(id, reviewed) => review(id, reviewed)}
+                  onClaim={(id) => own(id, () => claimOpportunity(id))}
+                  onAssign={(id, userId) => own(id, () => assignOpportunity(id, userId))}
+                  // Through `own` like the other two, and for the same reason:
+                  // linking a client can hand an unassigned job order to that
+                  // client's recruiter, so the row that comes back may name a
+                  // different owner. Only the read-back knows.
+                  onClientSet={(id, clientId, adopt) =>
+                    own(id, async () => {
+                      const result = await setOpportunityClient(id, clientId, adopt);
+                      // The link itself, applied before the read-back and
+                      // regardless of whether the read-back arrives. It is the
+                      // one thing the response knows and the browser cannot
+                      // work out: the name behind the id it just sent. Without
+                      // this a failed read-back leaves a linked job order
+                      // looking exactly like an unlinked one.
+                      if (result.ok && result.clientName !== undefined) {
+                        const linked = {
+                          ...selected,
+                          client_id: clientId,
+                          client_name: result.clientName,
+                        };
+                        patchRow(linked);
+                        setSelected(linked);
+                      }
+                      return result;
+                    })
+                  }
+                  // The row went out from under the modal. Dropping the selection
+                  // unmounts it, rather than leaving it open on what is gone.
+                  onVanished={() => setSelected(null)}
+                />
+              )}
+            </>
           )}
 
           {/* An empty page that is not the first one. A poll re-reads the
               offset the reader is standing on, so a colleague reviewing the
               last rows of page 2 under "Needs review" empties it underneath
-              them. The pager is how they get back, and it is inside the split
+              them. The pager is how they get back, and it is inside the list
               above, which this state does not render. */}
           {items.length === 0 && offset > 0 && pager}
         </>

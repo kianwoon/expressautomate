@@ -194,6 +194,17 @@ function link(): void {
   fireEvent.click(screen.getByRole("button", { name: "Link this client" }));
 }
 
+/** Opens the detail modal by clicking the row's accessible "show details" button.
+ *
+ * The detail is a modal now, not an always-open panel, so nothing in it is on
+ * the page until a row is opened. Every test below asserts on detail content,
+ * so every one opens the row first. */
+async function openDetail(): Promise<void> {
+  fireEvent.click(
+    await screen.findByRole("button", { name: /Show details for Sunrise Care Pte Ltd/i }),
+  );
+}
+
 afterEach(() => {
   cleanup();
   resetMembers();
@@ -206,11 +217,13 @@ describe("linking a job order to its client", () => {
     // The company name from the AI extraction sits directly above this field,
     // so a blank field alone implies the opposite of the truth.
     mount();
+    await openDetail();
     expect(await screen.findByText(/not linked to a client/i)).toBeTruthy();
   });
 
   it("does not say that when a client is linked", async () => {
     mount({ row: opportunity({ client_id: "c-1", client_name: "Sunrise Care Pte Ltd" }) });
+    await openDetail();
     await screen.findByLabelText("Client");
     expect(screen.queryByText(/not linked to a client/i)).toBeNull();
   });
@@ -220,12 +233,14 @@ describe("linking a job order to its client", () => {
     // alike, so the only way to check what was linked is the absence of a
     // sentence — which is not a way to audit eight rows.
     mount({ row: opportunity({ client_id: "c-1", client_name: "Sunrise Care Pte Ltd" }) });
+    await openDetail();
     const input = (await screen.findByLabelText("Client")) as HTMLInputElement;
     expect(input.value).toBe("Sunrise Care Pte Ltd");
   });
 
   it("leaves the picker empty on an unlinked job order", async () => {
     mount();
+    await openDetail();
     const input = (await screen.findByLabelText("Client")) as HTMLInputElement;
     expect(input.value).toBe("");
     expect(screen.getByText(/not linked to a client/i)).toBeTruthy();
@@ -235,6 +250,7 @@ describe("linking a job order to its client", () => {
     // The link response names the client, so the panel can show what it just
     // did even when the read-back fails.
     mount({ readBackFails: true });
+    await openDetail();
     await chooseClient();
     link();
 
@@ -247,6 +263,7 @@ describe("linking a job order to its client", () => {
 
   it("posts the chosen client with adopt defaulted on", async () => {
     const fetchMock = mount();
+    await openDetail();
     await chooseClient();
     link();
 
@@ -261,6 +278,7 @@ describe("linking a job order to its client", () => {
 
   it("sends adopt false when the checkbox is cleared", async () => {
     const fetchMock = mount();
+    await openDetail();
     await chooseClient();
     fireEvent.click(screen.getByLabelText("Also take on this client\u2019s recruiter"));
     link();
@@ -277,6 +295,7 @@ describe("linking a job order to its client", () => {
   it("shows who the job order went to after linking", async () => {
     // The response names the recruiter so ownership does not change silently.
     mount();
+    await openDetail();
     await chooseClient();
     link();
 
@@ -293,6 +312,7 @@ describe("linking a job order to its client", () => {
     // `patchRow` exists for exactly this; without it the list shows a stale
     // owner beside a correct panel.
     mount();
+    await openDetail();
     await chooseClient();
     link();
 
@@ -311,6 +331,7 @@ describe("linking a job order to its client", () => {
       }),
       clientStatus: 403,
     });
+    await openDetail();
     await chooseClient();
     link();
 
@@ -319,12 +340,18 @@ describe("linking a job order to its client", () => {
     );
   });
 
-  it("closes the panel on a 404", async () => {
+  it("closes the modal on a 404", async () => {
+    // A 404 is a close, not an error: the detail reports the id upward and the
+    // parent clears the selection, unmounting the modal. Nothing of the detail
+    // is left on the page — not the owner line, and not a stale message.
     mount({ clientStatus: 404 });
+    await openDetail();
     await chooseClient();
     link();
 
-    expect(await screen.findByText("This job order is no longer available.")).toBeTruthy();
+    await waitFor(() =>
+      expect(screen.queryByText("This job order is no longer available.")).toBeNull(),
+    );
     expect(screen.queryByTestId("jo-detail-owner")).toBeNull();
   });
 });
