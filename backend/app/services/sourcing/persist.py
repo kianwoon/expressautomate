@@ -149,6 +149,77 @@ async def parsed_text_keys(
     return {row.candidate_id: row.text_key for row in rows}
 
 
+async def semantic_neighbors(
+    session: AsyncSession,
+    *,
+    tenant_id: uuid.UUID,
+    query_vector: list[float],
+    candidate_ids: list[uuid.UUID] | None = None,
+    k: int,
+    model: str | None = None,
+) -> dict[uuid.UUID, float]:
+    """The candidates whose CV embeddings are nearest to a job order's.
+
+    The approximate-nearest-neighbour half of hybrid matching: pgvector's HNSW
+    index returns the top-`k` by cosine distance in sub-linear time, and the
+    cosine *similarity* (1 − distance) is what the scorer consumes. Both
+    vectors are L2-normalised at write/embed time, so cosine is the right
+    metric and the division the operator would otherwise do is already a
+    no-op.
+
+    `candidate_ids` scopes the search to a subset — the eligible roster — when
+    the caller already knows which candidates may be ranked. Optional because
+    the rescue path also wants neighbours the structured scorer had nothing
+    to say about, and those are not in any pre-filtered list.
+
+    `model` selects which embedding to compare against; a candidate may carry
+    several under different models. Defaults to the configured model so a run
+    compares like with like.
+
+    Returns `{candidate_id: similarity}` ordered by similarity descending, so
+    the first entry is the strongest CV match. Empty when no embeddings exist
+    for the tenant — which is the deployment that has not opted in, and the
+    scorer's graceful degradation depends on it returning empty rather than
+    raising.
+    """
+    if not query_vector or k <= 0:
+        return {}
+
+    from app.core.config import settings
+
+    model = model or settings.EMBEDDING_MODEL
+    # Raw SQL because pgvector's `<=>` (cosine distance) operator is an
+    # extension type, and the bound-parameter form `[...]::vector` is the
+    # reliable way to cast a Python list to it. SQLAlchemy's pgvector dialect
+    # can express this, but the raw statement is shorter and identical in
+    # effect — and this is a read, so no ORM bookkeeping is wanted.
+    vector_literal = "[" + ",".join(str(float(v)) for v in query_vector) + "]"
+    sql = """
+        SELECT candidate_id, 1 - (embedding <=> :q::vector) AS similarity
+        FROM candidate_embeddings
+        WHERE tenant_id = :tenant_id
+          AND model = :model
+    """
+    params: dict = {
+        "tenant_id": tenant_id,
+        "model": model,
+        "q": vector_literal,
+    }
+    if candidate_ids:
+        # Scope to the eligible roster when the caller passed one. The list is
+        # inlined as a parameter tuple rather than formatted into the string,
+        # so a candidate id containing unexpected characters cannot become SQL.
+        params["ids"] = tuple(candidate_ids)
+        sql += "  AND candidate_id IN :ids\n"
+    sql += "  ORDER BY embedding <=> :q::vector\n  LIMIT :k"
+    params["k"] = k
+
+    rows = (
+        await session.execute(sql, params)
+    ).all()
+    return {row.candidate_id: float(row.similarity) for row in rows}
+
+
 async def record_matches(
     session: AsyncSession,
     *,

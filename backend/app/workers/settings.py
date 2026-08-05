@@ -19,6 +19,7 @@ from app.services.graph.client import warn_if_unconfigured
 from app.workers.cv_jobs import parse_candidate_cv
 from app.workers.delivery_jobs import deliver_notification
 from app.workers.discovery_jobs import run_client_discovery
+from app.workers.embedding_jobs import compute_candidate_embedding
 from app.workers.import_jobs import run_candidate_import
 from app.workers.jobs import (
     backfill_mailbox_job,
@@ -129,6 +130,18 @@ class WorkerSettings:
             run_client_discovery,
             name="run_client_discovery",
             timeout=settings.CLIENT_DISCOVERY_JOB_TIMEOUT_SECONDS,
+        ),
+        # Embedding a CV is one provider call, bounded by `EMBEDDING_MAX_CHARS`
+        # so a very long CV cannot dominate the timeout. `name` is explicit and
+        # matches the constant in `embedding_jobs.JOB_COMPUTE_EMBEDDING`:
+        # producers enqueue the string "compute_candidate_embedding", and a
+        # wrapper registered under any other name would fail on the far side of
+        # the queue. The job is a no-op when embeddings are not configured, so
+        # a deployment that has not opted in pays only the queue dispatch.
+        func(
+            compute_candidate_embedding,
+            name="compute_candidate_embedding",
+            timeout=settings.EMBEDDING_TIMEOUT_SECONDS,
         ),
     ]
     # Every function above but the two classification jobs ends in a Graph call. Said once

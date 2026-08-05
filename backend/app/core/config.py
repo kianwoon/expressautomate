@@ -318,6 +318,35 @@ class Settings(BaseSettings):
     # correctly here in ~1.5s and at a fraction of the price.
     CEREBRAS_BASE_URL: str = ""
     CEREBRAS_API_KEY: str = ""
+
+    # --- Embeddings (semantic candidate matching) ---
+    # A separate provider from Cerebras, which serves completions only. The
+    # sourcing scorer embeds each candidate's CV once (at parse time, into the
+    # candidate_embeddings table) and embeds a job order's text once per run,
+    # then compares the two by cosine similarity. `text-embedding-3-small` is
+    # the default: 1536-dim, multilingual, and ~$0.02 per million tokens, so
+    # embedding an agency's whole CV library is a one-time cost in cents.
+    #
+    # Privacy parity: CV text already leaves the system for LLM explanations
+    # (Cerebras). Embeddings send the same text to one more provider and no
+    # further; the gate is a separate key precisely so the feature is inert
+    # until an operator opts in.
+    EMBEDDING_BASE_URL: str = "https://api.openai.com/v1"
+    EMBEDDING_API_KEY: str = ""
+    EMBEDDING_MODEL: str = "text-embedding-3-small"
+    EMBEDDING_DIM: int = 1536
+    # Truncate CV text before embedding. Bounding the input bounds the cost and
+    # keeps one very long CV from dominating a batch. 8000 chars is well past
+    # the discriminating detail of a CV and well under the model's context.
+    EMBEDDING_MAX_CHARS: int = Field(default=8000, gt=0)
+    # How many texts one embeddings call carries. The provider charges per
+    # call and per token, so batching is the saving; bounded because one bad
+    # input costs every text in the batch a retry.
+    EMBEDDING_BATCH_SIZE: int = Field(default=100, gt=0, le=2048)
+    # The wall clock one embedding job may take. A job is one candidate's
+    # assembled text in one provider call, so this is a ceiling on a transient
+    # provider stall rather than a budget for real work.
+    EMBEDDING_TIMEOUT_SECONDS: float = Field(default=60.0, gt=0)
     # How many emails one classification call covers. Batching is the whole
     # cost saving here: the per-call overhead (system prompt, instructions) is
     # paid once for the batch rather than once per email.
@@ -803,10 +832,28 @@ class Settings(BaseSettings):
     # components that had data, so the set never has to sum to anything.
     SOURCING_WEIGHT_TITLE: float = Field(default=3.0, ge=0)
     SOURCING_WEIGHT_SKILLS: float = Field(default=3.0, ge=0)
+    # CV-to-job-order semantic similarity. Sits between salary and employer
+    # because it is the signal that recovers candidates the structured fields
+    # miss — a "React" CV against a "ReactJS" vacancy — which is the whole
+    # reason the embedding layer exists.
+    SOURCING_WEIGHT_SEMANTIC: float = Field(default=2.0, ge=0)
     SOURCING_WEIGHT_EMPLOYER: float = Field(default=1.0, ge=0)
     SOURCING_WEIGHT_SALARY: float = Field(default=2.0, ge=0)
     SOURCING_WEIGHT_TENURE: float = Field(default=1.0, ge=0)
     SOURCING_WEIGHT_RECENCY: float = Field(default=1.0, ge=0)
+
+    # --- Semantic retrieval (the recall half of hybrid matching) ---
+    # How many nearest neighbours the ANN query surfaces for the rescue path.
+    # These are candidates the structured scorer may have dropped entirely
+    # (no title, no skills on record) whose CV nonetheless matches the job
+    # order. Bounded because the rescue re-scores each one, and a run that
+    # re-scores a thousand rows has stopped being a shortlist.
+    SOURCING_SEMANTIC_RECALL_K: int = Field(default=50, gt=0)
+    # The minimum cosine similarity at which a rescued candidate is kept.
+    # Below this the CV is too far from the job order to be worth showing on
+    # similarity alone; the candidate keeps nothing they did not earn from the
+    # structured components.
+    SOURCING_SEMANTIC_FLOOR: float = Field(default=0.35, ge=0, le=1)
 
     # The experience at which the tenure signal is already full marks. Beyond
     # it more years say nothing further about this job, and letting them keep
@@ -968,6 +1015,17 @@ class Settings(BaseSettings):
         if not (self.CEREBRAS_BASE_URL and self.CEREBRAS_API_KEY):
             return False
         return all(models)
+
+    def embedding_configured(self) -> bool:
+        """Can this process reach the embeddings provider?
+
+        Separate from `cerebras_configured` for the same reason it is separate
+        from `llm_configured`: embeddings are a different provider with
+        different credentials, and a sourcing run that falls back to the
+        six-component scorer when embeddings are absent is the correct,
+        graceful degradation — not a failure to detect.
+        """
+        return bool(self.EMBEDDING_BASE_URL and self.EMBEDDING_API_KEY)
 
     def graph_configured(self) -> bool:
         """Can this process actually reach Graph?

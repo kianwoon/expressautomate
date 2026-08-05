@@ -100,6 +100,7 @@ async def test_every_component_is_named_signed_and_weighted() -> None:
     assert total is not None
     assert {c.name for c in components} == {
         "title",
+        "semantic",
         "skills",
         "employer",
         "salary",

@@ -61,6 +61,7 @@ import {
  *  something rather than vanishing from the breakdown. */
 const COMPONENT_LABELS: Record<string, string> = {
   title: "Job title",
+  semantic: "CV match",
   skills: "Skills",
   employer: "Employer",
   salary: "Salary",

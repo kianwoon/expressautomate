@@ -34,6 +34,7 @@ this person yet.
 
 import uuid
 from datetime import UTC, date, datetime
+from decimal import Decimal
 
 from sqlalchemy import select, update
 
@@ -43,15 +44,18 @@ from app.db.rls import tenant_session
 from app.models.opportunity import Opportunity
 from app.models.opportunity_code import OpportunityCode
 from app.models.sourcing import SourcingRun
+from app.services.llm.embeddings import embed_one
 from app.services.sourcing.eligible import eligible_candidates
+from app.services.sourcing.embed import opportunity_text_for_embedding
 from app.services.sourcing.explain import MatchCandidate, explain_matches
 from app.services.sourcing.persist import (
     load_scoring_inputs,
     parsed_text_keys,
     record_matches,
+    semantic_neighbors,
     serialize_components,
 )
-from app.services.sourcing.score import score_candidate
+from app.services.sourcing.score import Component, score_candidate
 from app.services.storage.r2 import R2BodyStore
 
 log = get_logger(__name__)
@@ -77,6 +81,82 @@ def _today() -> date:
     unreproducible in the one module built to be reproducible.
     """
     return datetime.now(UTC).date()
+
+
+def _semantic_weight() -> Decimal:
+    """The configured semantic weight, as a Decimal for the rescue arithmetic."""
+    return Decimal(str(settings.SOURCING_WEIGHT_SEMANTIC))
+
+
+def _decimal_floor(value: float) -> Decimal:
+    """A similarity rounded to the scorer's agreed precision.
+
+    The rescue path synthesises a score from similarity, and it must land on
+    the same number of decimal places the scorer itself uses — otherwise a
+    recruiter reading two runs side by side would see a rescued candidate's
+    score carry more digits than a scored one, which reads as a different kind
+    of number rather than the same one.
+    """
+    quantum = Decimal(1).scaleb(-settings.SOURCING_SCORE_DECIMAL_PLACES)
+    return Decimal(str(value)).quantize(quantum)
+
+
+async def _semantic_scores(
+    session,
+    tenant: uuid.UUID,
+    opportunity,
+    candidate_ids: list[uuid.UUID] | None = None,
+) -> tuple[dict[uuid.UUID, float], list]:
+    """Candidate → cosine similarity for this job order, plus the codes loaded.
+
+    The whole semantic stage in one function, so `run_sourcing` reads as the
+    pipeline it is. Embeds the job order once (redacted of protected-attribute
+    codes), asks pgvector for the nearest CVs among the eligible roster, and
+    returns the similarity map plus the `OpportunityCode` rows it loaded for
+    redaction — the same rows `explain_matches` needs later, so the run loads
+    them once rather than twice.
+
+    Returns empty similarities — not raises — when embeddings are not
+    configured, when the JD has no text to embed, or when no candidate has an
+    embedding yet. Every one of those is the deployment that has not opted in,
+    and the run proceeds on the six structured components unchanged.
+
+    `candidate_ids` scopes the ANN search to the eligible roster, so the rescue
+    path never sees a neighbour that is archived, placed, or already submitted
+    to this client — those are filtered before the vector query, not after.
+    """
+    codes = list(
+        (
+            await session.execute(
+                select(OpportunityCode).where(
+                    OpportunityCode.opportunity_id == opportunity.id
+                )
+            )
+        ).scalars()
+    )
+    if not settings.embedding_configured():
+        return {}, codes
+    jd_text, _removed = opportunity_text_for_embedding(opportunity, codes)
+    if not jd_text.strip():
+        return {}, codes
+    try:
+        query_vector = await embed_one(jd_text)
+    except Exception:
+        # Classed, not fatal: a provider stall during the embedding call must
+        # not abort a run that can still rank on six structured components.
+        # Logged at warning so a persistent problem is visible.
+        log.warning("sourcing_jd_embed_failed", exc_info=True)
+        return {}, codes
+    if not query_vector:
+        return {}, codes
+    neighbours = await semantic_neighbors(
+        session,
+        tenant_id=tenant,
+        query_vector=query_vector,
+        candidate_ids=candidate_ids,
+        k=settings.SOURCING_SEMANTIC_RECALL_K,
+    )
+    return neighbours, codes
 
 
 async def run_sourcing(
@@ -202,22 +282,95 @@ async def run_sourcing(
             session, tenant_id=tenant, candidate_ids=candidate_ids
         )
 
+        # --- Semantic retrieval (the recall half of hybrid matching) ---
+        # Embed the job order once and find the nearest CVs. The result feeds
+        # two paths: the `semantic` score component (precision — a CV aligned
+        # with the JD ranks higher) and the rescue path below (recall — a CV
+        # that matches the JD even when no structured field did). Empty when
+        # embeddings are not configured or no candidate has one yet; both are
+        # graceful, and the six-component scorer runs unchanged. The codes
+        # returned are the protected-attribute rows loaded for redaction,
+        # reused by `explain_matches` below so they are fetched once per run.
+        semantic_scores, codes = await _semantic_scores(
+            session, tenant, opportunity, candidate_ids
+        )
+
         today = _today()
         scored: list[tuple[uuid.UUID, object, list]] = []
+        rescued: set[uuid.UUID] = set()
         for candidate_id in candidate_ids:
             entry = loaded.get(candidate_id)
             if entry is None:  # pragma: no cover - deleted between the two reads
                 continue
             candidate, roles, skills = entry
             total, components = score_candidate(
-                opportunity, candidate, roles, skills, today=today
+                opportunity,
+                candidate,
+                roles,
+                skills,
+                semantic_scores=semantic_scores,
+                today=today,
             )
             if total is None:
-                # Nothing about this person was comparable to this job order.
-                # Dropped rather than stored, both because the column is NOT
-                # NULL and because a zero here would libel them.
+                # Nothing about this person was comparable to this job order on
+                # the structured fields. The rescue path below may still keep
+                # them if their CV is close enough to the JD in meaning — the
+                # React-vs-ReactJS case the structured matcher cannot see.
                 continue
             scored.append((candidate_id, total, components))
+
+        # --- RRF rescue: candidates the structured scorer dropped but the CV
+        # matches. These are people with no title, no skills, no dated roles —
+        # nothing the six components could read — whose CV nonetheless lines up
+        # with the job order. They were invisible before embeddings; here they
+        # earn a floor score from similarity alone, annotated so a recruiter
+        # sees why someone with no structured record appears.
+        if semantic_scores:
+            already_scored = {c for c, _, _ in scored}
+            for candidate_id, similarity in semantic_scores.items():
+                if candidate_id in already_scored:
+                    continue
+                if similarity < settings.SOURCING_SEMANTIC_FLOOR:
+                    continue
+                entry = loaded.get(candidate_id)
+                if entry is None:
+                    # The neighbour is eligible but was not in the loaded set —
+                    # a deleted-between-reads race. Skip rather than crash.
+                    continue
+                candidate, roles, skills = entry
+                weight = _semantic_weight()
+                total, components = score_candidate(
+                    opportunity,
+                    candidate,
+                    roles,
+                    skills,
+                    semantic_scores=semantic_scores,
+                    today=today,
+                )
+                if total is not None:
+                    # They had structured data after all and were scored; the
+                    # `total is None` branch above was not their path. Keep the
+                    # real score, do not synthesise a floor.
+                    scored.append((candidate_id, total, components))
+                    continue
+                # Synthesise the floor: a score from semantic similarity alone,
+                # with a note a recruiter reads as "we have no structured
+                # record, but the CV matches." The floor weight is the
+                # configured semantic weight, so this candidate competes on the
+                # same scale as everyone else rather than at an arbitrary
+                # number.
+                floor = _decimal_floor(similarity * float(weight))
+                components = [
+                    Component(
+                        name="semantic",
+                        weight=weight,
+                        raw=_decimal_floor(similarity),
+                        contribution=floor,
+                        note="Matched by CV content; no structured fields on record.",
+                    )
+                ]
+                scored.append((candidate_id, floor, components))
+                rescued.add(candidate_id)
 
         # Descending by score, then by id, so the shortlist a run produces is
         # the same order the stored run reads back in. `explain_matches` sorts
@@ -236,15 +389,9 @@ async def run_sourcing(
         texts = await _cv_texts(
             session, tenant, [candidate_id for candidate_id, _, _ in shortlist]
         )
-        codes = list(
-            (
-                await session.execute(
-                    select(OpportunityCode).where(
-                        OpportunityCode.opportunity_id == opportunity_key
-                    )
-                )
-            ).scalars()
-        )
+        # `codes` were loaded once by `_semantic_scores` for redaction; the
+        # same rows are what `explain_matches` redacts with, so they are
+        # passed through rather than re-fetched.
 
         explanations, report = await explain_matches(
             opportunity,

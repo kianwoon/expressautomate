@@ -35,7 +35,9 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import UUID as PgUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
+from app.core.config import settings
 from app.db.base import Base, TenantScoped, Timestamps, UUIDPrimaryKey
+from app.models.vector_type import Vector
 
 
 class Candidate(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
@@ -735,6 +737,51 @@ class CandidateDocument(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
         CheckConstraint(
             "parse_state IN ('pending','parsing','parsed','empty','unreadable','failed')",
             name="ck_candidate_documents_parse_state",
+        ),
+    )
+
+
+class CandidateEmbedding(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
+    """A candidate's CV as a vector, for semantic matching against a job order.
+
+    A derivative artefact of the parsed CV text stored at
+    `CandidateDocument.text_key`: the vector is a recomputeable function of
+    text the system already holds, kept in its own table so re-embedding under
+    a different model is an upsert here rather than a churn of the candidate
+    row's `updated_at`. The `(tenant_id, candidate_id, model)` unique key is
+    what makes "one vector per candidate per model" the enforced shape.
+
+    Privacy: the text sent to the embedding provider is CV text that already
+    leaves the system for LLM explanations (Cerebras). Embeddings add no new
+    data boundary; they add a second provider, gated by `EMBEDDING_API_KEY`.
+    """
+
+    __tablename__ = "candidate_embeddings"
+
+    candidate_id: Mapped[uuid.UUID] = mapped_column(
+        PgUUID(as_uuid=True), nullable=False, index=True
+    )
+    # Which embedding produced the row. A model swap is a new row, not an
+    # overwrite — the old one stays until a backfill retires it, so a run can
+    # fall back if the new model misbehaves.
+    model: Mapped[str] = mapped_column(Text, nullable=False)
+    dim: Mapped[int] = mapped_column(Integer, nullable=False)
+    embedding: Mapped[list[float]] = mapped_column(
+        Vector(settings.EMBEDDING_DIM), nullable=False
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "candidate_id"],
+            ["candidates.tenant_id", "candidates.id"],
+            name="fk_candidate_embeddings_candidate_same_tenant",
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint(
+            "tenant_id",
+            "candidate_id",
+            "model",
+            name="uq_candidate_embeddings_once_per_model",
         ),
     )
 

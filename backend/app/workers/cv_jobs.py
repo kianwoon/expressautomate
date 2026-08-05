@@ -32,6 +32,8 @@ from app.services.cv.persist import persist_cv
 from app.services.cv.text import UnsupportedDocument, extract_text, sniff
 from app.services.llm.client import LLMInvalidJSON
 from app.services.storage.r2 import R2BodyStore, document_text_key
+from app.workers.embedding_jobs import JOB_COMPUTE_EMBEDDING
+from app.workers.queue import enqueue
 
 log = get_logger(__name__)
 
@@ -233,3 +235,16 @@ async def parse_candidate_cv(
             result=result,
             text=source,
         )
+
+    # The CV text and everything the parse extracted are committed now, so the
+    # candidate's row is visible to the embedding worker under the tenant
+    # policy. Enqueued rather than inlined because the parse is already done —
+    # its job was to read the document — and a provider call that fails here
+    # must never fail the parse retroactively. The worker is a no-op when
+    # embeddings are not configured, so this enqueue costs nothing on a
+    # deployment that has not opted in.
+    await enqueue(
+        JOB_COMPUTE_EMBEDDING,
+        tenant_id=str(tenant),
+        candidate_id=str(candidate),
+    )

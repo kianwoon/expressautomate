@@ -27,6 +27,7 @@ protected_attribute_noticed` for where a discriminatory *requirement* is
 recorded instead of being quietly obeyed.
 """
 
+import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date
@@ -39,6 +40,7 @@ from app.services.client_naming import normalize_company_name
 from app.services.sourcing.text import overlap, salary_fit
 
 TITLE = "title"
+SEMANTIC = "semantic"
 SKILLS = "skills"
 EMPLOYER = "employer"
 SALARY = "salary"
@@ -47,8 +49,11 @@ RECENCY = "recency"
 
 # The order the breakdown is rendered in: what the job asked for first, then
 # what the career shape says. Fixed so two runs over the same candidate
-# produce byte-identical output.
-COMPONENT_NAMES = (TITLE, SKILLS, EMPLOYER, SALARY, TENURE, RECENCY)
+# produce byte-identical output. Semantic sits second because it answers the
+# same question as title — does this person do this work — in a meaning space
+# the token matcher cannot reach, and reading the two together lets a
+# recruiter see the keyword match and the concept match side by side.
+COMPONENT_NAMES = (TITLE, SEMANTIC, SKILLS, EMPLOYER, SALARY, TENURE, RECENCY)
 
 _ZERO = Decimal(0)
 _ONE = Decimal(1)
@@ -83,6 +88,7 @@ def default_weights() -> dict[str, Decimal]:
     """
     return {
         TITLE: _decimal(settings.SOURCING_WEIGHT_TITLE),
+        SEMANTIC: _decimal(settings.SOURCING_WEIGHT_SEMANTIC),
         SKILLS: _decimal(settings.SOURCING_WEIGHT_SKILLS),
         EMPLOYER: _decimal(settings.SOURCING_WEIGHT_EMPLOYER),
         SALARY: _decimal(settings.SOURCING_WEIGHT_SALARY),
@@ -145,6 +151,31 @@ def _title_component(opportunity, candidate, roles: list, today: date, weight: D
     # Containment on the job side: a candidate whose title is *more* specific
     # than the vacancy still holds every word the vacancy asked for.
     return _scored(TITLE, weight, _decimal(overlap(job, theirs)))
+
+
+def _semantic_component(similarity: float | None, weight: Decimal):
+    """CV-to-job-order meaning overlap, where the token matcher cannot reach.
+
+    `similarity` is the cosine between the candidate's CV embedding and the
+    job order's, already in [0, 1]. It is the signal that recovers the
+    candidates the title and skills components miss: "React" and "ReactJS"
+    share no token `overlap` or `_skill_set` would catch, and they are one
+    concept in embedding space.
+
+    `None` means no embedding exists for this candidate — either the provider
+    is not configured or this CV predates the backfill — and the component
+    abstains, exactly as every other component abstains on missing data. A
+    zero here would read as "this CV is unrelated to this job" when the truth
+    is that nobody embedded it, and that is the libel the absent-not-bad rule
+    exists to prevent.
+    """
+    if similarity is None:
+        return _absent(SEMANTIC, weight, "No CV embedding on file.")
+    # Clamp defensively: cosine of L2-normalised vectors is in [0, 1] for the
+    # non-negative text embeddings in play, but a future model or a bug in the
+    # normalisation could land outside. The clamp keeps the score honest
+    # without silently rewarding or punishing an arithmetic error.
+    return _scored(SEMANTIC, weight, _decimal(max(0.0, min(1.0, similarity))))
 
 
 def _skill_set(values) -> set[str]:
@@ -277,6 +308,7 @@ def score_candidate(
     skills: list,
     *,
     weights: Mapping[str, float | Decimal] | None = None,
+    semantic_scores: Mapping[uuid.UUID, float] | None = None,
     today: date,
 ) -> tuple[Decimal | None, list[Component]]:
     """Rank one candidate against one job order.
@@ -288,6 +320,14 @@ def score_candidate(
     `today` is required rather than defaulted so a run is reproducible: the
     same inputs must give the same answer tomorrow, and a hidden `date.today()`
     would quietly break that for tenure and recency.
+
+    `semantic_scores` maps candidate id to a CV↔job-order cosine similarity,
+    the output of the ANN query in `sourcing_jobs`. Absent (None, or the
+    candidate missing from the map) means no embedding exists and the semantic
+    component abstains — the same rule every other component follows on
+    missing data. The caller passes the whole map rather than one score so
+    this function stays pure: it does not know where embeddings come from and
+    cannot reach for them, which is what keeps it testable without a database.
     """
     configured = default_weights()
     if weights:
@@ -295,9 +335,15 @@ def score_candidate(
             {k: v if isinstance(v, Decimal) else _decimal(v) for k, v in weights.items()}
         )
 
+    candidate_id = getattr(candidate, "id", None)
+    similarity = None
+    if semantic_scores and candidate_id is not None:
+        similarity = semantic_scores.get(candidate_id)
+
     spans = _spans(roles, today)
     components = [
         _title_component(opportunity, candidate, roles, today, configured[TITLE]),
+        _semantic_component(similarity, configured[SEMANTIC]),
         _skills_component(opportunity, skills, configured[SKILLS]),
         _employer_component(opportunity, roles, configured[EMPLOYER]),
         _salary_component(opportunity, candidate, configured[SALARY]),
