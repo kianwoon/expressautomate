@@ -316,6 +316,17 @@ async def list_buddies(
         order = _buddy_order(sort_by, descending, initial, referral_count)
         rows = (await session.execute(base.order_by(*order))).all()
 
+        # The grand total of referred job orders across ALL buddies — not just
+        # the ones the search or letter filter left on the page. Computed from
+        # the same per-buddy count subquery (which is filter-independent), so a
+        # recruiter searching for one buddy still sees how much work the whole
+        # network has sent. `period` is honoured because `counts` already folds
+        # the cutoff in.
+        total_referrals = int(
+            (await session.execute(select(func.coalesce(func.sum(counts.c.n), 0))))
+            .scalar_one()
+        )
+
     return {
         "items": [
             {
@@ -331,6 +342,7 @@ async def list_buddies(
         ],
         "total": len(rows),
         "initials": initials,
+        "total_referrals": total_referrals,
     }
 
 

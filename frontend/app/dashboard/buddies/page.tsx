@@ -26,6 +26,10 @@ type BuddyPage = {
   items: Buddy[];
   total: number;
   initials: string[];
+  /** Grand total of referred job orders across ALL buddies — independent of
+   *  the search/letter filter, so it stays honest while a recruiter narrows
+   *  the list. Period-scoped server-side. */
+  total_referrals: number;
 };
 
 /** The columns the table offers sort headers for. Mirrors the server's
@@ -222,7 +226,7 @@ function Workspace() {
     );
   }
 
-  const totalReferrals = buddies.reduce((sum, b) => sum + b.referral_count, 0);
+  const totalReferrals = page.total_referrals;
 
   return (
     <>

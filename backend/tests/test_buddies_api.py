@@ -179,6 +179,41 @@ async def test_a_buddy_with_no_job_orders_still_appears(agency_with_buddies) -> 
     assert zenith["referral_count"] == 0
 
 
+async def test_total_referrals_is_the_grand_total_across_all_buddies(
+    agency_with_buddies,
+) -> None:
+    """Acme 3 + Bora 2 + Beacon 1 + Zenith 0 = 6 — the whole network's work,
+    surfaced as one number on the page."""
+    tid, uid, _ids = agency_with_buddies
+    async with await _client_for(tid, uid) as http:
+        body = (await http.get("/api/buddies")).json()
+    assert body["total_referrals"] == 6
+
+
+async def test_total_referrals_ignores_the_search_and_letter_filter(
+    agency_with_buddies,
+) -> None:
+    """Searching for one buddy narrows the rows on the page, but the total
+    across the whole network must not move with it — a recruiter searching
+    'Acme' still wants to know the network has sent 6, not that Acme alone
+    sent 3."""
+    tid, uid, _ids = agency_with_buddies
+    async with await _client_for(tid, uid) as http:
+        by_search = (await http.get("/api/buddies?q=acm")).json()
+        by_letter = (await http.get("/api/buddies?initial=B")).json()
+    assert by_search["total_referrals"] == 6
+    assert by_letter["total_referrals"] == 6
+
+
+async def test_total_referrals_respects_the_period_filter(agency_with_buddies) -> None:
+    """The period filter scopes the count the same way it scopes each row's
+    count: at 30d the two 40-day-old job orders drop out (6 -> 4)."""
+    tid, uid, _ids = agency_with_buddies
+    async with await _client_for(tid, uid) as http:
+        body = (await http.get("/api/buddies?period=30d")).json()
+    assert body["total_referrals"] == 4
+
+
 async def test_search_matches_name_or_email(agency_with_buddies) -> None:
     tid, uid, _ids = agency_with_buddies
     async with await _client_for(tid, uid) as http:
