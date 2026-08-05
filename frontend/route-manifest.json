@@ -23,6 +23,9 @@
       "GET",
       "PATCH"
     ],
+    "/api/buddies/{buddy_id}/referrals": [
+      "GET"
+    ],
     "/api/candidates": [
       "GET",
       "POST"

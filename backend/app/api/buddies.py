@@ -6,15 +6,16 @@ forwarding parser must recognise them as "the user", not "a buddy".
 """
 
 import uuid
+from datetime import UTC, datetime, timedelta
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, EmailStr
-from sqlalchemy import func, or_, select, text, update
+from sqlalchemy import and_, func, or_, select, text, update
 
 from app.api.auth import _require_session
 from app.db.rls import tenant_session
-from app.models import Buddy, BuddyReferral, UserEmail
+from app.models import Buddy, BuddyReferral, Opportunity, UserEmail
 from app.services.name_index import initial_of as _initial_of
 from app.services.name_index import sorted_initials as _sorted_initials
 
@@ -31,6 +32,27 @@ InitialFilter = Query(default=None, pattern=r"^([A-Za-z]|#)$")
 # could silently ignore a typo. These are the four columns the table shows
 # headers for; Mobile (phone) is not worth sorting on.
 BuddySortBy = Literal["name", "email", "email_domain", "referral_count"]
+
+# A period the referral count and the referral list can be scoped to. The
+# recruiter's question is "who has been sending me work *lately*", not "who has
+# ever sent me the most" — a buddy who referred ten clients two years ago and
+# nothing since is not who this week's review is about. `None` is all time.
+BuddyPeriod = Literal["7d", "14d", "30d"]
+
+_PERIOD_DAYS: dict[BuddyPeriod, int] = {"7d": 7, "14d": 14, "30d": 30}
+
+
+def _period_cutoff(period: BuddyPeriod | None) -> datetime | None:
+    """The timestamp a referral's job order must land at or after to count.
+
+    `received_datetime` is the email's arrival — the moment the work actually
+    arrived in the mailbox — rather than the buddy→client link's `created_at`,
+    which is set once and never updated. A buddy who first referred Acme three
+    years ago and forwards a new Acme job order today should count *today*.
+    """
+    if period is None:
+        return None
+    return datetime.now(UTC) - timedelta(days=_PERIOD_DAYS[period])
 
 
 # ---------------------------------------------------------------------------
@@ -115,6 +137,42 @@ async def delete_user_email(request: Request, email_id: uuid.UUID) -> None:
 # Buddies
 # ---------------------------------------------------------------------------
 
+def _referral_counts_subquery(cutoff: datetime | None):
+    """One buddy → number of job orders they have referred, in a subquery.
+
+    A referral is a buddy→client link, but the number a recruiter cares about
+    is *work*, not bookkeeping: "how many job orders has this buddy sent me?".
+    So the count is `Opportunity.id` joined through the referral's `client_id`,
+    not `BuddyReferral.id`. A buddy who forwards five job orders for the same
+    client is five, not one — the same way the opportunities list attributes
+    each of those rows' `buddy_name`.
+
+    Computed in a subquery and LEFT JOINed so a buddy with no opportunities in
+    the period still appears with count 0. The `cutoff` lives in the JOIN
+    condition, not a WHERE: a WHERE on a LEFT JOIN's right table would turn it
+    back into an inner join and drop the zero-count buddies exactly when the
+    period filter is the thing being asked about.
+    """
+    joined = (
+        select(
+            BuddyReferral.buddy_id.label("buddy_id"),
+            func.count(Opportunity.id).label("n"),
+        )
+        .select_from(BuddyReferral)
+        .join(
+            Opportunity,
+            and_(
+                Opportunity.client_id == BuddyReferral.client_id,
+                Opportunity.tenant_id == BuddyReferral.tenant_id,
+            ),
+        )
+        .group_by(BuddyReferral.buddy_id)
+    )
+    if cutoff is not None:
+        joined = joined.where(Opportunity.received_datetime >= cutoff)
+    return joined.subquery()
+
+
 def _buddy_order(sort_by, descending, initial, referral_count):
     """The ORDER BY clauses for the buddies list, as a tuple SQLAlchemy spreads.
 
@@ -143,7 +201,7 @@ def _buddy_order(sort_by, descending, initial, referral_count):
             keys = (Buddy.email,)
         elif sort_by == "email_domain":
             keys = (Buddy.email_domain,)
-        else:  # "referral_count" — the aggregate, not a column
+        else:  # "referral_count" — the joined count column, not an aggregate
             keys = (referral_count,)
         ordered = tuple(
             k.desc().nullslast() if descending else k.asc().nullslast() for k in keys
@@ -163,6 +221,7 @@ async def list_buddies(
     initial: str | None = InitialFilter,
     sort_by: BuddySortBy | None = None,
     descending: bool = False,
+    period: BuddyPeriod | None = None,
 ) -> dict:
     """External recruiters who have referred clients, with referral counts.
 
@@ -170,19 +229,23 @@ async def list_buddies(
     clients there is no pagination: a tenant's buddy network is small (the
     partner-agency colleagues who forward job orders), so the whole filtered
     set is returned in one page rather than carving it with limit/offset.
+
+    `referral_count` is the number of job orders a buddy has brought in — the
+    work, not the buddy→client links — and `period` scopes it to a window so a
+    recruiter can ask "who has been sending me work lately".
     """
     _user_uuid, tenant_uuid = _require_session(request)
+    cutoff = _period_cutoff(period)
 
-    # The referral count is the aggregate this query is built around, computed
-    # once here and reused by the SELECT, the ORDER BY and the count. Naming it
-    # keeps the three references reading the same thing.
-    referral_count = func.count(BuddyReferral.id)
+    # The referral count, once, as a LEFT JOINed column. Buddies with no
+    # opportunities in the period coalesce to 0 rather than disappearing.
+    counts = _referral_counts_subquery(cutoff)
+    referral_count = func.coalesce(counts.c.n, 0).label("referral_count")
 
     async with tenant_session(tenant_uuid) as session:
         base = (
-            select(Buddy, referral_count.label("referral_count"))
-            .outerjoin(BuddyReferral, BuddyReferral.buddy_id == Buddy.id)
-            .group_by(Buddy.id)
+            select(Buddy, referral_count)
+            .outerjoin(counts, counts.c.buddy_id == Buddy.id)
         )
 
         if q:
@@ -312,4 +375,67 @@ async def get_buddy(request: Request, buddy_id: uuid.UUID) -> dict:
             {"client_id": str(r.client_id)}
             for r in referrals
         ],
+    }
+
+
+@router.get("/buddies/{buddy_id}/referrals")
+async def list_buddy_referrals(
+    request: Request,
+    buddy_id: uuid.UUID,
+    period: BuddyPeriod | None = None,
+) -> dict:
+    """The job orders a buddy has referred, for the count → modal.
+
+    Resolved through the same chain the count uses — a referral's client → its
+    opportunities — so the list and the number on the row agree. `period` is
+    the same window the count is scoped to, passed through so opening the modal
+    shows exactly the job orders behind the number the recruiter clicked.
+
+    Returns a compact shape rather than the full opportunity payload: the modal
+    is a scan-and-recognise list, not a detail view, and the columns a recruiter
+    uses to tell one forwarded job order from another are position, company,
+    when it arrived, the salary and where it is.
+    """
+    _user_uuid, tenant_uuid = _require_session(request)
+    cutoff = _period_cutoff(period)
+
+    async with tenant_session(tenant_uuid) as session:
+        buddy = (
+            await session.execute(select(Buddy).where(Buddy.id == buddy_id))
+        ).scalar_one_or_none()
+        if buddy is None:
+            raise HTTPException(status_code=404, detail="Buddy not found")
+
+        stmt = (
+            select(Opportunity)
+            .join(
+                BuddyReferral,
+                and_(
+                    BuddyReferral.client_id == Opportunity.client_id,
+                    BuddyReferral.tenant_id == Opportunity.tenant_id,
+                ),
+            )
+            .where(BuddyReferral.buddy_id == buddy_id)
+            .order_by(Opportunity.received_datetime.desc().nullslast(), Opportunity.id.desc())
+        )
+        if cutoff is not None:
+            stmt = stmt.where(Opportunity.received_datetime >= cutoff)
+        rows = (await session.execute(stmt)).scalars().all()
+
+    return {
+        "buddy": {"id": str(buddy.id), "name": buddy.name},
+        "items": [
+            {
+                "id": str(o.id),
+                "job_title_raw": o.job_title_raw,
+                "company_name_raw": o.company_name_raw,
+                "received_datetime": (
+                    o.received_datetime.isoformat() if o.received_datetime else None
+                ),
+                "location_raw": o.location_raw,
+                "salary_raw": o.salary_raw,
+            }
+            for o in rows
+        ],
+        "total": len(rows),
     }

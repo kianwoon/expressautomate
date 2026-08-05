@@ -1,11 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useId, useState } from "react";
 
 import { BUDDIES_API_PATH, LANDING_PATH } from "../../api";
 import { useAuth } from "../../auth";
 import { SiteFooter } from "../../site-footer";
 import { SiteNav } from "../../site-nav";
+import { day } from "../format";
+import { Dialog } from "../dialog";
 
 type Buddy = {
   id: string;
@@ -41,6 +43,38 @@ type BuddySort = { key: BuddySortKey; descending: boolean };
  *  UI and the server decides the rest of the tiebreak. */
 const DEFAULT_SORT: BuddySort = { key: "referral_count", descending: true };
 
+/** A window the referral count and the referral list can be scoped to. Mirrors
+ *  the server's `BuddyPeriod`. `null` is all time — the whole-history view. */
+type BuddyPeriod = "7d" | "14d" | "30d";
+
+/** The period chips above the table. `null` first because "All time" is the
+ *  default and the rest are in ascending recency, the order a recruiter scans
+ *  them in. */
+const PERIODS: { key: BuddyPeriod | null; label: string }[] = [
+  { key: null, label: "All time" },
+  { key: "7d", label: "This week" },
+  { key: "14d", label: "2 weeks" },
+  { key: "30d", label: "1 month" },
+];
+
+/** One row of the referral modal — a compact view of a referred job order.
+ *  Carries only the fields a recruiter uses to tell one forwarded job order
+ *  from another at a glance, not the full opportunity payload. */
+type ReferredJobOrder = {
+  id: string;
+  job_title_raw: string | null;
+  company_name_raw: string | null;
+  received_datetime: string | null;
+  location_raw: string | null;
+  salary_raw: string | null;
+};
+
+type ReferralPage = {
+  buddy: { id: string; name: string };
+  items: ReferredJobOrder[];
+  total: number;
+};
+
 const NO_INITIALS: string[] = [];
 
 // The A–Z bar mirrors the candidates and clients pages. `#` is every name
@@ -52,7 +86,7 @@ const INITIALS: string[] = [
   NON_ALPHA_INITIAL,
 ];
 
-function listUrl(q: string, initial: string | null, sort: BuddySort): string {
+function listUrl(q: string, initial: string | null, sort: BuddySort, period: BuddyPeriod | null): string {
   const params = new URLSearchParams();
   if (q.trim()) params.set("q", q.trim());
   if (initial) params.set("initial", initial);
@@ -63,6 +97,7 @@ function listUrl(q: string, initial: string | null, sort: BuddySort): string {
   // recruiter sorting while standing on a letter gets what they asked for.
   params.set("sort_by", sort.key);
   params.set("descending", String(sort.descending));
+  if (period) params.set("period", period);
   return `${BUDDIES_API_PATH}?${params.toString()}`;
 }
 
@@ -121,6 +156,10 @@ function Workspace() {
   const [q, setQ] = useState("");
   const [initial, setInitial] = useState<string | null>(null);
   const [sort, setSort] = useState<BuddySort>(DEFAULT_SORT);
+  const [period, setPeriod] = useState<BuddyPeriod | null>(null);
+  // The buddy whose referral modal is open, or null. Carries the row snapshot
+  // so the dialog title renders before the fetch resolves.
+  const [openBuddy, setOpenBuddy] = useState<Buddy | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -130,7 +169,7 @@ function Workspace() {
     setPage((prev) => prev);
     (async () => {
       try {
-        const res = await fetch(listUrl(q, initial, sort), {
+        const res = await fetch(listUrl(q, initial, sort, period), {
           credentials: "include",
           signal: controller.signal,
         });
@@ -145,7 +184,7 @@ function Workspace() {
       }
     })();
     return () => controller.abort();
-  }, [q, initial, sort]);
+  }, [q, initial, sort, period]);
 
   const pickInitial = useCallback((next: string | null) => setInitial(next), []);
   const onSort = useCallback((next: BuddySort) => setSort(next), []);
@@ -203,6 +242,26 @@ function Workspace() {
           placeholder="Search name or email…"
           aria-label="Search buddies"
         />
+      </div>
+
+      <div className="jo-controls" style={{ marginTop: 12 }}>
+        <div className="jo-chips" role="group" aria-label="Filter referrals by period">
+          {PERIODS.map((chip) => {
+            const active = period === chip.key;
+            return (
+              <button
+                key={chip.label}
+                type="button"
+                className="jo-chip"
+                data-active={active ? "yes" : undefined}
+                aria-pressed={active}
+                onClick={() => setPeriod(chip.key)}
+              >
+                {chip.label}
+              </button>
+            );
+          })}
+        </div>
       </div>
 
       <nav className="jo-index" aria-label="Jump to buddies by first letter">
@@ -269,7 +328,22 @@ function Workspace() {
                       <td className="jo-td" style={{ whiteSpace: "nowrap" }}>
                         {b.email_domain ?? <span className="muted">—</span>}
                       </td>
-                      <td className="jo-td" data-nowrap="yes">{b.referral_count}</td>
+                      <td className="jo-td" data-nowrap="yes">
+                        {b.referral_count > 0 ? (
+                          <button
+                            type="button"
+                            className="jo-rowbtn"
+                            style={{ fontSize: "0.9375rem" }}
+                            aria-label={`Show the ${b.referral_count} job orders referred by ${b.name}`}
+                            onClick={() => setOpenBuddy(b)}
+                          >
+                            {b.referral_count}
+                          </button>
+                        ) : (
+                          // A zero is not a link: there is nothing behind it.
+                          <span className="muted">0</span>
+                        )}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -278,6 +352,14 @@ function Workspace() {
           </>
         )}
       </div>
+
+      {openBuddy && (
+        <ReferralDialog
+          buddy={openBuddy}
+          period={period}
+          onClose={() => setOpenBuddy(null)}
+        />
+      )}
     </>
   );
 }
@@ -376,5 +458,107 @@ function PhoneCell({ buddy }: { buddy: Buddy }) {
     >
       {saved || <span className="muted">Add</span>}
     </button>
+  );
+}
+
+function ReferralDialog({
+  buddy,
+  period,
+  onClose,
+}: {
+  buddy: Buddy;
+  period: BuddyPeriod | null;
+  onClose: () => void;
+}) {
+  const titleId = useId();
+  const [state, setState] = useState<
+    | { status: "loading" }
+    | { status: "ready"; page: ReferralPage }
+    | { status: "error" }
+  >({ status: "loading" });
+
+  // Fetched once per open. The `period` is the same window the count on the
+  // row was scoped to, passed through so the list behind the number agrees
+  // with the number the recruiter clicked — opening the modal under a "2
+  // weeks" filter shows exactly the two weeks of job orders.
+  useEffect(() => {
+    const controller = new AbortController();
+    (async () => {
+      try {
+        const params = new URLSearchParams();
+        if (period) params.set("period", period);
+        const qs = params.toString();
+        const url = `${BUDDIES_API_PATH}/${buddy.id}/referrals${qs ? `?${qs}` : ""}`;
+        const res = await fetch(url, {
+          credentials: "include",
+          signal: controller.signal,
+        });
+        if (!res.ok) throw new Error();
+        const data = (await res.json()) as ReferralPage;
+        setState({ status: "ready", page: data });
+      } catch {
+        if (!controller.signal.aborted) setState({ status: "error" });
+      }
+    })();
+    return () => controller.abort();
+    // `buddy.id` and `period` are the inputs; `buddy` is stable for an open
+    // dialog (closing remounts it with a new buddy).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [buddy.id, period]);
+
+  return (
+    <Dialog
+      titleId={titleId}
+      onClose={onClose}
+      className="dlg-modal-wide"
+      title={`Job orders referred by ${buddy.name}`}
+    >
+      {state.status === "loading" ? (
+        <p className="body jo-note">Loading referrals.</p>
+      ) : state.status === "error" ? (
+        <p className="body jo-detail-error" role="alert">
+          We could not load those referrals just now.
+        </p>
+      ) : state.page.items.length === 0 ? (
+        <p className="body jo-note">
+          {buddy.name} has not referred any job orders in this period.
+        </p>
+      ) : (
+        <div className="card jo-table-card" style={{ marginTop: 0 }}>
+          <table className="jo-table" style={{ tableLayout: "auto" }}>
+            <thead>
+              <tr>
+                <th className="row-k jo-th">Position</th>
+                <th className="row-k jo-th">Company</th>
+                <th className="row-k jo-th">Received</th>
+                <th className="row-k jo-th">Salary</th>
+                <th className="row-k jo-th">Location</th>
+              </tr>
+            </thead>
+            <tbody>
+              {state.page.items.map((o) => (
+                <tr key={o.id} className="jo-row">
+                  <td className="jo-td jo-td-strong">
+                    {o.job_title_raw ?? <span className="muted">—</span>}
+                  </td>
+                  <td className="jo-td">
+                    {o.company_name_raw ?? <span className="muted">—</span>}
+                  </td>
+                  <td className="jo-td" data-nowrap="yes">
+                    {day(o.received_datetime) ?? <span className="muted">—</span>}
+                  </td>
+                  <td className="jo-td">
+                    {o.salary_raw ?? <span className="muted">—</span>}
+                  </td>
+                  <td className="jo-td">
+                    {o.location_raw ?? <span className="muted">—</span>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </Dialog>
   );
 }
