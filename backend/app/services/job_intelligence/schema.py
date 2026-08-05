@@ -146,16 +146,25 @@ def json_schema() -> dict:
 
 
 def _schema_for(fields: tuple[str, ...], *, confidence: bool = False) -> dict:
-    """One stage's schema, every field a string array unless noted.
+    """One stage's schema, every field typed to match its Pydantic model field.
 
     `required` lists every property because strict mode allows nothing less, and
     a stage that omits a field from its answer should say so with an empty value
     rather than by silence.
+
+    Each field's JSON type must agree with the Pydantic model: a mismatch sends
+    the model one shape and parses it against another, and the model follows the
+    schema it was given (it returned `["1"]` for `priority` when the schema said
+    array-of-strings but the parser wanted int). Strings in `_SCALAR_FIELDS`,
+    integers in `_INTEGER_FIELDS`, `confidence` is the lone number, everything
+    else is an array of strings.
     """
     properties: dict[str, object] = {}
     for name in fields:
         if confidence and name == "confidence":
             properties[name] = {"type": "number"}
+        elif name in _INTEGER_FIELDS:
+            properties[name] = {"type": "integer"}
         elif name in _SCALAR_FIELDS:
             properties[name] = {"type": "string"}
         else:
@@ -166,6 +175,13 @@ def _schema_for(fields: tuple[str, ...], *, confidence: bool = False) -> dict:
         "required": list(fields),
         "additionalProperties": False,
     }
+
+
+# Fields whose Pydantic type is `int`, not `str` or `list[str]`. Named once so
+# the schema and the Pydantic model agree — see the warning in `_schema_for`.
+_INTEGER_FIELDS = {
+    "priority",
+}
 
 
 # Fields that are single strings, not arrays. Named once so the schema and the

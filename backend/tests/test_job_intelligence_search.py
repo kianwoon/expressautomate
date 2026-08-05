@@ -104,3 +104,32 @@ async def test_plan_search_refuses_protected_characteristic_filters():
     llm = FakeLLM(payload)
     await plan_search(_CONTEXT, _understanding(), _persona(), llm=llm)
     assert "protected characteristic" in llm.prompts[0]
+
+
+def test_search_schema_types_priority_as_integer():
+    """`priority` is an int in the Pydantic model, so the schema must ask for an integer.
+
+    Regression test: the schema once treated `priority` as an array of strings
+    (the default), so the model returned `["1"]` and the parser rejected it with
+    "Input should be a valid integer". The schema and the Pydantic model must
+    agree on every field's type.
+    """
+    from app.services.job_intelligence.schema import json_schema
+
+    search = json_schema()["search"]
+    assert search["properties"]["priority"] == {"type": "integer"}
+    # And the surrounding fields keep their own types.
+    assert search["properties"]["platform"] == {"type": "string"}
+    assert search["properties"]["queries"] == {
+        "type": "array",
+        "items": {"type": "string"},
+    }
+
+
+async def test_plan_search_parses_a_bare_integer_priority():
+    """A model that returns `priority: 1` (the integer the schema asks for) parses."""
+    payload = _search_payload(priority=1)
+    llm = FakeLLM(payload)
+    result, _ = await plan_search(_CONTEXT, _understanding(), _persona(), llm=llm)
+    assert result.priority == 1
+    assert isinstance(result.priority, int)
