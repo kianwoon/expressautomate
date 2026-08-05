@@ -135,23 +135,27 @@ export function JobOrdersTable({
                 <Td nowrap title={day(row.received_datetime) ?? undefined}>
                   {dayShort(row.received_datetime)}
                 </Td>
-                <td className="jo-td jo-td-strong">
+                <td className="jo-td jo-td-strong jo-company-cell">
                   {/* Whose job order it is: the buddy who referred the client
                       owns the account. Falls back to the internal assignee
                       only when no buddy is linked. Outside the button on
                       purpose — the owner is a fact about the row, not part of
-                      the "show details" action. */}
+                      the "show details" action. Larger than it was: at 18px the
+                      disc read as a coloured speck beside the name, and the
+                      one piece of per-row identity in the table vanished at a
+                      glance. 26px is legible against the cell without crowding
+                      the company name onto a second line. */}
                   <span
                     className="jo-owner"
                     title={row.buddy_name ?? row.assignee_name ?? "Unassigned"}
                   >
                     {row.buddy_name ? (
-                      <Initials name={row.buddy_name} seed={row.buddy_name} size={18} />
+                      <Initials name={row.buddy_name} seed={row.buddy_name} size={26} />
                     ) : row.assigned_user_id ? (
                       <Initials
                         name={row.assignee_name ?? "?"}
                         seed={row.assigned_user_id}
-                        size={18}
+                        size={26}
                       />
                     ) : (
                       <span className="jo-owner-empty" role="img" aria-label="Unassigned" />
@@ -174,13 +178,13 @@ export function JobOrdersTable({
                     <Value text={row.company_name_raw} />
                   </button>
                 </td>
-                <Td>{row.job_title_raw}</Td>
+                <Td clamp>{row.job_title_raw}</Td>
                 <td className="jo-td">
                   <Salary row={row} />
                 </td>
                 <Td clamp>{row.working_hours_raw}</Td>
                 <Td clamp>{row.duration_raw}</Td>
-                <Td>{row.location_raw}</Td>
+                <Td clamp>{row.location_raw}</Td>
                 <td className="jo-td">
                   <QualityBadge row={row} />
                   {/* No column of its own — there is no width left for one at

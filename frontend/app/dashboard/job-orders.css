@@ -128,18 +128,25 @@
    the gap says they belong together without saying they are the same list. */
 .jo-scopes { margin-top: 10px; }
 
-/* Who owns the row, drawn inside the company cell. `middle` rather than the
-   baseline a disc has none of: aligned on the text baseline an 18px circle
-   sits low enough to look like it has slipped out of the line. */
-.jo-owner { margin-right: 6px; }
+/* Who owns the row, drawn inside the company cell. The cell is a flex row so
+   the disc and the name line up on their centres rather than on a baseline a
+   circle has none of — aligned on the text baseline a disc sat low enough to
+   look like it had slipped out of the line, and the bigger the disc the worse
+   that got. `align-items: center` also keeps them level when a long company
+   name wraps to a second line. */
+.jo-company-cell { display: flex; align-items: center; gap: 10px; }
+.jo-owner { flex: none; display: inline-flex; }
 .jo-owner-empty {
   display: inline-block;
-  width: 18px;
-  height: 18px;
+  width: 26px;
+  height: 26px;
   border-radius: 50%;
   border: 1px dashed var(--ink-300);
-  vertical-align: middle;
 }
+/* The name takes whatever is left and breaks inside it rather than pushing the
+   disc around. `min-width: 0` is what lets a flex item shrink below its
+   content's intrinsic width, same trick `.row` and `.cand-list` use. */
+.jo-company-cell .jo-rowbtn { min-width: 0; }
 
 /* The list column is what the table has to fit into, and it is narrower than
    the viewport by a factor the table cannot see — `.jo-split` gives it 1.85 of
