@@ -96,6 +96,8 @@ def serialize_run(run: SourcingRun) -> dict:
         "shortlisted": run.shortlisted,
         "protected_attribute_noticed": run.protected_attribute_noticed,
         "protected_attribute_note": run.protected_attribute_note,
+        "sex_prefilter_applied": run.sex_prefilter_applied,
+        "sex_prefilter_value": run.sex_prefilter_value,
         "failure_reason": run.failure_reason,
         "created_at": run.created_at.isoformat() if run.created_at else None,
     }

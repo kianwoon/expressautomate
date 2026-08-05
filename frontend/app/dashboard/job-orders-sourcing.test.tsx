@@ -82,6 +82,8 @@ function run(overrides: Partial<SourcingRun> = {}): SourcingRun {
     shortlisted: 0,
     protected_attribute_noticed: false,
     protected_attribute_note: null,
+    sex_prefilter_applied: false,
+    sex_prefilter_value: null,
     failure_reason: null,
     created_at: "2026-07-30T00:00:00Z",
     ...overrides,

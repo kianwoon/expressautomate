@@ -388,10 +388,30 @@ function Safeguards({ row, run }: { row: Opportunity; run: SourcingRun }) {
   // email; the model catches a requirement written out in prose that no code
   // covers. Neither is a superset of the other.
   const protectedNoticed = run.protected_attribute_noticed || flagged(row);
+  // A run that acted on a coded sex preference is a different sentence from
+  // one that only noticed one. The "ignored" copy below is true only when no
+  // prefilter ran; once the pool was narrowed, leading with "ignored" would
+  // state the opposite of what happened.
+  const narrowed = run.sex_prefilter_applied && run.sex_prefilter_value;
 
   return (
     <>
-      {protectedNoticed && (
+      {narrowed && (
+        <div className="src-notice" data-kind="narrowed">
+          <p className="body">
+            This job order&rsquo;s email states a sex preference ({run.sex_prefilter_value}). The
+            shortlist was <strong>narrowed</strong> to {run.sex_prefilter_value} candidates before
+            ranking — candidates of another sex were not included. This is the client&rsquo;s
+            preference, not a legal occupational requirement, so it is acted on here and never
+            recorded against the job order itself.
+          </p>
+          {run.protected_attribute_note && (
+            <p className="body src-sub">{run.protected_attribute_note}</p>
+          )}
+        </div>
+      )}
+
+      {protectedNoticed && !narrowed && (
         <div className="src-notice" data-kind="protected">
           <p className="body">
             This job order asks for a protected characteristic. The shortlist <strong>ignored</strong>{" "}

@@ -456,6 +456,7 @@
   background: var(--surface-alt);
 }
 .src-notice[data-kind="protected"] { border-left-color: #8a5be1; }
+.src-notice[data-kind="narrowed"] { border-left-color: var(--amber-700); }
 .src-notice[data-kind="client"] { border-left-color: var(--amber-700); }
 
 .src-notice .src-sub { margin-top: 4px; color: var(--ink-500); font-size: 0.75rem; }

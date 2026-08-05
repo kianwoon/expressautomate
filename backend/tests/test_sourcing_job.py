@@ -99,15 +99,17 @@ async def _opportunity(tenant_id: uuid.UUID, **fields) -> uuid.UUID:
     return opportunity_id
 
 
-async def _candidate(tenant_id: uuid.UUID, *, name: str, title: str, skills=()) -> uuid.UUID:
+async def _candidate(
+    tenant_id: uuid.UUID, *, name: str, title: str, skills=(), sex: str | None = None
+) -> uuid.UUID:
     cid = uuid.uuid4()
     async with AdminSessionLocal() as s:
         await s.execute(
             text(
                 "INSERT INTO candidates (id, tenant_id, full_name, current_title,"
-                " record_status, pipeline_stage) VALUES (:i, :t, :n, :c, 'active', 'new')"
+                " record_status, pipeline_stage, sex) VALUES (:i, :t, :n, :c, 'active', 'new', :x)"
             ),
-            {"i": cid, "t": tenant_id, "n": name, "c": title},
+            {"i": cid, "t": tenant_id, "n": name, "c": title, "x": sex},
         )
         for skill in skills:
             await s.execute(
@@ -119,6 +121,37 @@ async def _candidate(tenant_id: uuid.UUID, *, name: str, title: str, skills=()) 
             )
         await s.commit()
     return cid
+
+
+async def _code(
+    tenant_id: uuid.UUID,
+    opportunity_id: uuid.UUID,
+    *,
+    code: str,
+    meaning: str,
+    attribute: str | None,
+) -> None:
+    """One detected shorthand code on a job order — the row `implied_sex` reads."""
+    # Distinct offsets: `ck_opportunity_codes_span` requires end_char > start_char.
+    start, end = 0, max(1, len(code))
+    async with AdminSessionLocal() as s:
+        await s.execute(
+            text(
+                "INSERT INTO opportunity_codes (id, tenant_id, opportunity_id, code, meaning,"
+                " attribute, start_char, end_char) VALUES (:i, :t, :o, :c, :m, :a, :s, :e)"
+            ),
+            {
+                "i": uuid.uuid4(),
+                "t": tenant_id,
+                "o": opportunity_id,
+                "c": code,
+                "m": meaning,
+                "a": attribute,
+                "s": start,
+                "e": end,
+            },
+        )
+        await s.commit()
 
 
 async def _run(tenant_id: uuid.UUID, opportunity_id: uuid.UUID, **fields) -> uuid.UUID:
@@ -147,7 +180,8 @@ async def _row(run_id: uuid.UUID):
             await s.execute(
                 text(
                     "SELECT state, attempts, candidates_considered, shortlisted,"
-                    " protected_attribute_noticed, protected_attribute_note"
+                    " protected_attribute_noticed, protected_attribute_note,"
+                    " sex_prefilter_applied, sex_prefilter_value"
                     " FROM sourcing_runs WHERE id = :i"
                 ),
                 {"i": run_id},
@@ -471,3 +505,105 @@ async def test_a_run_keeps_only_the_best_of_what_it_scored(agency, monkeypatch):
     # Everyone was looked at; only the best two were kept.
     assert row.candidates_considered == 5
     assert row.shortlisted == 2
+
+
+async def test_a_run_narrows_to_female_when_the_email_says_cf_or_of(agency):
+    """The client's coded preference is honoured by who is *in* the shortlist.
+
+    C/F and O/F both imply female. A male candidate who would otherwise match is
+    dropped before scoring; a female candidate and an unknown-sex candidate are
+    kept (missing data is not a disqualification — see `eligibility.py`). The
+    run records both the narrowing and a sentence a recruiter can read.
+    """
+    tenant_id = agency
+    opportunity_id = await _opportunity(tenant_id)
+    await _code(tenant_id, opportunity_id, code="C/F", meaning="Chinese, female", attribute="race")
+    await _code(
+        tenant_id, opportunity_id, code="O/F", meaning="Any race, female", attribute="gender"
+    )
+    female = await _candidate(
+        tenant_id, name="Jane Tan", title="staff nurse", skills=("triage",), sex="female"
+    )
+    male = await _candidate(
+        tenant_id, name="Bob Lee", title="staff nurse", skills=("triage",), sex="male"
+    )
+    unknown = await _candidate(
+        tenant_id, name="Sam Goh", title="staff nurse", skills=("triage",), sex=None
+    )
+    run_id = await _run(tenant_id, opportunity_id)
+
+    await run_sourcing(
+        None,
+        tenant_id=str(tenant_id),
+        opportunity_id=str(opportunity_id),
+        run_id=str(run_id),
+    )
+
+    row = await _row(run_id)
+    assert row.state == SourcingRun.DONE
+    assert row.sex_prefilter_applied is True
+    assert row.sex_prefilter_value == "female"
+    # The narrowing is visible in the note, in words a recruiter reads.
+    assert "female" in row.protected_attribute_note
+
+    kept = {m.candidate_id for m in await _matches(tenant_id, run_id)}
+    assert female in kept
+    assert unknown in kept
+    # The definite mismatch was removed; the unknown was not.
+    assert male not in kept
+
+
+async def test_a_run_does_not_narrow_when_no_sex_is_implied(agency):
+    """Codes that carry no sex (nationality, or conflicting sexes) narrow nothing.
+
+    A run with only a nationality code, or with both C/F and O/M, leaves the
+    pool untouched and stamps `sex_prefilter_applied = false` — the absence of
+    an action is a real state, distinct from "narrowed to female".
+    """
+    tenant_id = agency
+    opportunity_id = await _opportunity(tenant_id)
+    await _code(
+        tenant_id, opportunity_id, code="SC", meaning="Singapore Citizen", attribute="nationality"
+    )
+    await _candidate(
+        tenant_id, name="Bob Lee", title="staff nurse", skills=("triage",), sex="male"
+    )
+    run_id = await _run(tenant_id, opportunity_id)
+
+    await run_sourcing(
+        None,
+        tenant_id=str(tenant_id),
+        opportunity_id=str(opportunity_id),
+        run_id=str(run_id),
+    )
+
+    row = await _row(run_id)
+    assert row.sex_prefilter_applied is False
+    assert row.sex_prefilter_value is None
+    # The male candidate was not filtered out, because nothing said he should be.
+    assert len(await _matches(tenant_id, run_id)) == 1
+
+
+async def test_conflicting_sex_codes_do_not_narrow(agency):
+    tenant_id = agency
+    opportunity_id = await _opportunity(tenant_id)
+    await _code(tenant_id, opportunity_id, code="C/F", meaning="Chinese, female", attribute="race")
+    await _code(tenant_id, opportunity_id, code="O/M", meaning="Any race, male", attribute="gender")
+    await _candidate(
+        tenant_id, name="Bob Lee", title="staff nurse", skills=("triage",), sex="male"
+    )
+    run_id = await _run(tenant_id, opportunity_id)
+
+    await run_sourcing(
+        None,
+        tenant_id=str(tenant_id),
+        opportunity_id=str(opportunity_id),
+        run_id=str(run_id),
+    )
+
+    row = await _row(run_id)
+    # Both sexes named: narrowing to either would be guessing which role the
+    # client meant, so the pool stays whole.
+    assert row.sex_prefilter_applied is False
+    assert len(await _matches(tenant_id, run_id)) == 1
+

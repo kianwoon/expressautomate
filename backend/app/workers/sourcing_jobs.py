@@ -49,12 +49,14 @@ from app.services.sourcing.eligible import eligible_candidates
 from app.services.sourcing.embed import opportunity_text_for_embedding
 from app.services.sourcing.explain import MatchCandidate, explain_matches
 from app.services.sourcing.persist import (
+    candidate_sexes,
     load_scoring_inputs,
     parsed_text_keys,
     record_matches,
     semantic_neighbors,
     serialize_components,
 )
+from app.services.sourcing.preference import implied_sex
 from app.services.sourcing.score import Component, score_candidate
 from app.services.storage.r2 import R2BodyStore
 
@@ -106,6 +108,7 @@ async def _semantic_scores(
     tenant: uuid.UUID,
     opportunity,
     candidate_ids: list[uuid.UUID] | None = None,
+    codes: list | None = None,
 ) -> tuple[dict[uuid.UUID, float], list]:
     """Candidate → cosine similarity for this job order, plus the codes loaded.
 
@@ -116,6 +119,11 @@ async def _semantic_scores(
     redaction — the same rows `explain_matches` needs later, so the run loads
     them once rather than twice.
 
+    `codes` are the `OpportunityCode` rows the caller already loaded for the sex
+    prefilter (see `run_sourcing`). When passed, this function reuses them and
+    does not re-fetch; when omitted it loads them itself, so the helper stays
+    usable on its own. The rows are needed here for redaction regardless.
+
     Returns empty similarities — not raises — when embeddings are not
     configured, when the JD has no text to embed, or when no candidate has an
     embedding yet. Every one of those is the deployment that has not opted in,
@@ -125,15 +133,16 @@ async def _semantic_scores(
     path never sees a neighbour that is archived, placed, or already submitted
     to this client — those are filtered before the vector query, not after.
     """
-    codes = list(
-        (
-            await session.execute(
-                select(OpportunityCode).where(
-                    OpportunityCode.opportunity_id == opportunity.id
+    if codes is None:
+        codes = list(
+            (
+                await session.execute(
+                    select(OpportunityCode).where(
+                        OpportunityCode.opportunity_id == opportunity.id
+                    )
                 )
-            )
-        ).scalars()
-    )
+            ).scalars()
+        )
     if not settings.embedding_configured():
         return {}, codes
     jd_text, _removed = opportunity_text_for_embedding(opportunity, codes)
@@ -278,6 +287,43 @@ async def run_sourcing(
         candidate_ids = await eligible_candidates(
             session, tenant_id=tenant, client_id=client
         )
+
+        # Load the opportunity's shorthand codes once here, ahead of the sex
+        # prefilter, so the same rows feed both the narrowing decision and the
+        # redaction `_semantic_scores` and `explain_matches` do later — fetched
+        # once per run, never twice.
+        codes = list(
+            (
+                await session.execute(
+                    select(OpportunityCode).where(
+                        OpportunityCode.opportunity_id == opportunity.id
+                    )
+                )
+            ).scalars()
+        )
+
+        # --- Client sex preference: narrow the pool, don't record a
+        # requirement. The client's C/F or O/F is a preference, not a legal
+        # occupational requirement, so it is honoured in who the shortlist
+        # contains rather than written to `opportunities.sex_requirement`
+        # (which exists for genuine occupational requirements and is human-set
+        # with a written reason). Missing sex on a candidate is not a
+        # disqualification — see `_narrow_by_sex`.
+        prefilter_sex: str | None = None
+        prefilter_dropped = 0
+        implied = implied_sex(codes)
+        if implied is not None:
+            candidate_ids, prefilter_dropped = await _narrow_by_sex(
+                session, tenant, candidate_ids, implied
+            )
+            prefilter_sex = implied
+            log.info(
+                "sourcing_sex_prefilter_applied",
+                sourcing_run_id=run_id,
+                sex=implied,
+                dropped=prefilter_dropped,
+            )
+
         loaded = await load_scoring_inputs(
             session, tenant_id=tenant, candidate_ids=candidate_ids
         )
@@ -289,10 +335,10 @@ async def run_sourcing(
         # that matches the JD even when no structured field did). Empty when
         # embeddings are not configured or no candidate has one yet; both are
         # graceful, and the six-component scorer runs unchanged. The codes
-        # returned are the protected-attribute rows loaded for redaction,
+        # passed in are the protected-attribute rows loaded for redaction,
         # reused by `explain_matches` below so they are fetched once per run.
-        semantic_scores, codes = await _semantic_scores(
-            session, tenant, opportunity, candidate_ids
+        semantic_scores, _ = await _semantic_scores(
+            session, tenant, opportunity, candidate_ids, codes=codes
         )
 
         today = _today()
@@ -446,6 +492,25 @@ async def run_sourcing(
             report.noticed or report.requirements or report.redacted_codes
         )
         run.protected_attribute_note = _note(report)
+        # The sex prefilter is an action taken, not something noticed: it has
+        # its own flag so a reviewer reads "the pool was narrowed" off the row
+        # rather than inferring it from a sentence. The note alongside the
+        # protected-attribute report says plainly what happened and why, so the
+        # banner can quote it without the reader having to know the mechanism.
+        run.sex_prefilter_applied = prefilter_sex is not None
+        run.sex_prefilter_value = prefilter_sex
+        if prefilter_sex is not None:
+            # allow-hardcode: a recruiter-facing sentence, not configuration.
+            prefilter_note = (
+                f"Shortlist narrowed to {prefilter_sex} candidates based on the "
+                f"client's shorthand in the source email; {prefilter_dropped} "
+                f"candidate(s) of another sex were not ranked."
+            )
+            run.protected_attribute_note = (
+                prefilter_note
+                if not run.protected_attribute_note
+                else f"{run.protected_attribute_note} {prefilter_note}"
+            )
         run.state = SourcingRun.DONE
         await session.commit()
 
@@ -492,6 +557,48 @@ def _note(report) -> str | None:
             + ", ".join(report.redacted_codes)
         )
     return " ".join(parts) or None
+
+
+async def _narrow_by_sex(
+    session,
+    tenant: uuid.UUID,
+    candidate_ids: list[uuid.UUID],
+    sex: str,
+) -> tuple[list[uuid.UUID], int]:
+    """Drop candidates whose recorded sex conflicts with `sex`; keep unknowns.
+
+    Honours a client's coded preference (C/F, O/F, ...) in the only way that
+    actually reaches the recruiter — by who is *in* the shortlist, not by a
+    field on the job order. Done before scoring so no work is spent on people
+    who will be excluded, and so the semantic/embedding stages never see them
+    either.
+
+    **Missing data is not a disqualification**, mirroring `eligibility.py`'s
+    `unknown` outcome: a candidate with no recorded sex is kept for the
+    recruiter to check, not silently excluded on the strength of an absence.
+    Only a definite mismatch (recorded sex is the *other* value) is removed.
+
+    Returns the narrowed id list and how many were dropped, so the run can
+    record both `candidates_considered` (pre-filter, what the system looked at)
+    and a note saying how many the preference removed — the narrowing visible by
+    arithmetic, not by the reader having to know it happened.
+    """
+    if not candidate_ids:
+        return [], 0
+    sex_by_id = await candidate_sexes(
+        session, tenant_id=tenant, candidate_ids=candidate_ids
+    )
+    kept: list[uuid.UUID] = []
+    dropped = 0
+    # Preserve the stable id order `eligible_candidates` returned, so a rerun
+    # narrows the same list the same way regardless of row fetch order.
+    for candidate_id in candidate_ids:
+        recorded = sex_by_id.get(candidate_id)
+        if recorded is not None and recorded != sex:
+            dropped += 1
+            continue
+        kept.append(candidate_id)
+    return kept, dropped
 
 
 async def _cv_texts(session, tenant: uuid.UUID, candidate_ids: list[uuid.UUID]) -> dict:

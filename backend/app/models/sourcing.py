@@ -155,6 +155,21 @@ class SourcingRun(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
     )
     protected_attribute_note: Mapped[str | None] = mapped_column(Text)
 
+    # Whether this run's candidate pool was narrowed to a single sex because the
+    # source email's shorthand (C/F, O/F, ...) implied one — and, if so, which.
+    # Distinct from `protected_attribute_noticed`/`_note`: those report what the
+    # explanation model *noticed*; these record an action the orchestrator
+    # *took*. A run that noticed a coded preference but did not narrow (the
+    # codes conflicted, or no sex was implied) has `noticed=True` and
+    # `applied=False`, which is a real state a reviewer needs to be able to read
+    # off the row rather than infer. `value` is constrained to the candidate-sex
+    # vocabulary so a future code path cannot write a sex this system never
+    # records.
+    sex_prefilter_applied: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    sex_prefilter_value: Mapped[str | None] = mapped_column(String(16))
+
     created_by: Mapped[uuid.UUID | None] = mapped_column(
         PgUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL")
     )
@@ -173,6 +188,18 @@ class SourcingRun(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
         CheckConstraint(
             "state IN ('pending','running','done','failed')",
             name="ck_sourcing_runs_state",
+        ),
+        # A run either applied a sex prefilter (and recorded which) or did not.
+        # The pairing rule mirrors `ck_opportunities_sex_requirement_has_reason`:
+        # an action with no recorded value is an undefendable narrowing, and a
+        # value with `applied=false` is a column the row's own flag contradicts.
+        CheckConstraint(
+            "(sex_prefilter_applied) = (sex_prefilter_value IS NOT NULL)",
+            name="ck_sourcing_runs_sex_prefilter_value_when_applied",
+        ),
+        CheckConstraint(
+            "sex_prefilter_value IS NULL OR sex_prefilter_value IN ('female', 'male')",
+            name="ck_sourcing_runs_sex_prefilter_value_known",
         ),
     )
 

@@ -113,6 +113,37 @@ async def load_scoring_inputs(
     return {c.id: (c, roles[c.id], skills[c.id]) for c in candidates}
 
 
+async def candidate_sexes(
+    session: AsyncSession,
+    *,
+    tenant_id: uuid.UUID,
+    candidate_ids: list[uuid.UUID],
+) -> dict[uuid.UUID, str | None]:
+    """Recorded sex for each id, for the client-preference narrowing step.
+
+    Reads only `id` and `sex` — the one column the prefilter in
+    `sourcing_jobs._narrow_by_sex` needs to drop candidates whose recorded sex
+    conflicts with the client's coded preference. The `tenant_id` predicate is
+    stated as well as enforced by RLS, matching `load_scoring_inputs` above.
+
+    Lives here, in the sourcing-persistence module that the candidate-visibility
+    guard already exempts (sourcing is agency-wide by design; disclosure is
+    bounded per-viewer at read), rather than in the worker — so the disclosure
+    boundary stays where the guard and `test_sourcing_match_redaction.py`
+    already vouch for it.
+    """
+    if not candidate_ids:
+        return {}
+    rows = (
+        await session.execute(
+            select(Candidate.id, Candidate.sex).where(
+                Candidate.tenant_id == tenant_id, Candidate.id.in_(candidate_ids)
+            )
+        )
+    ).all()
+    return {row[0]: row[1] for row in rows}
+
+
 async def parsed_text_keys(
     session: AsyncSession,
     *,

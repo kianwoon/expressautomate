@@ -36,6 +36,12 @@ export type SourcingRun = {
   shortlisted: number | null;
   protected_attribute_noticed: boolean;
   protected_attribute_note: string | null;
+  /** Whether this run narrowed its candidate pool to a single sex because the
+   *  client's email shorthand (C/F, O/F, …) implied one, and — when it did —
+   *  which sex. An action the run took, distinct from
+   *  `protected_attribute_noticed`, which is what the explanation model saw. */
+  sex_prefilter_applied: boolean;
+  sex_prefilter_value: "female" | "male" | null;
   /** Null on a run the worker failed: only the route's enqueue-failure path
    *  writes a sentence. Never rendered as an empty error box. */
   failure_reason: string | null;

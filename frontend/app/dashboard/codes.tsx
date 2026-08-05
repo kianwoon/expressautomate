@@ -34,6 +34,28 @@ export function flagged(row: Opportunity): boolean {
   return row.references_protected_attribute === true;
 }
 
+/** The single sex a job order's coded shorthand implies, or null.
+
+ *  Mirrors `implied_sex` in the backend's `sourcing/preference.py`: reads the
+ *  human-readable `meaning` of each detected code (the `attribute` column can't
+ *  be used — `C/F` is filed under `race`), returns the sex only when every
+ *  sex-bearing code agrees, and returns null on conflict, absence, or when no
+ *  code names a sex. Used only to show an honest hint under the PlacementForm —
+ *  the actual narrowing is done server-side, stamped on the run, and quoted in
+ *  the shortlist's Safeguards banner. */
+export function impliedSex(codes: DecodedCode[]): "female" | "male" | null {
+  const implied = new Set<"female" | "male">();
+  for (const entry of codes) {
+    const meaning = entry.meaning ?? "";
+    // `\bmale\b` does not fire inside "female"; female is tested first so its
+    // longer spelling is claimed before male can match its tail.
+    if (/\bfemale\b/i.test(meaning)) implied.add("female");
+    else if (/\bmale\b/i.test(meaning)) implied.add("male");
+  }
+  if (implied.size !== 1) return null;
+  return [...implied][0];
+}
+
 /** The distinct attributes referred to, in the order they were found. */
 function attributesOf(codes: DecodedCode[]): string[] {
   const seen: string[] = [];
