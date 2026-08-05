@@ -503,7 +503,6 @@ function ReferralDialog({
     return () => controller.abort();
     // `buddy.id` and `period` are the inputs; `buddy` is stable for an open
     // dialog (closing remounts it with a new buddy).
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [buddy.id, period]);
 
   return (

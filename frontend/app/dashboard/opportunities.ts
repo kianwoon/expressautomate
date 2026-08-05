@@ -168,6 +168,8 @@ type Page = {
   limit: number;
   offset: number;
   counts: Counts;
+  /** How many later re-forwards the dedupe filter hid. Zero when off. */
+  hidden: number;
 };
 
 export type ListState =
@@ -188,6 +190,7 @@ function listUrl(
   sort: Sort,
   limit: number,
   scope: Scope,
+  dedupe: boolean,
 ): string {
   const params = new URLSearchParams({
     limit: String(limit),
@@ -198,6 +201,7 @@ function listUrl(
   if (filter) params.set("status", filter);
   if (q.trim()) params.set("q", q.trim());
   if (scope !== "all") params.set("scope", scope);
+  if (dedupe) params.set("dedupe", "true");
   return `${OPPORTUNITIES_PATH}?${params.toString()}`;
 }
 
@@ -224,6 +228,12 @@ export type Opportunities = {
    *  laggy. What actually reaches the server is `debouncedQ`, below. */
   q: string;
   sort: Sort;
+  /** Whether later re-forwards of open job orders are hidden. Off by default —
+   *  the list does not change unless a recruiter opts in. */
+  dedupe: boolean;
+  /** How many later re-forwards the dedupe filter hid on the last load, so the
+   *  page can say "N duplicates hidden" rather than silently dropping rows. */
+  hidden: number;
   /** The last counts we were told, kept across a reload so the chips do not
    *  blink back to nothing every time a filter changes. */
   counts: Counts;
@@ -238,6 +248,7 @@ export type Opportunities = {
   setLimit: (limit: number) => void;
   setQ: (q: string) => void;
   setSort: (sort: Sort) => void;
+  setDedupe: (dedupe: boolean) => void;
   /** Marks one row reviewed or not, and reports whether it worked. */
   review: (id: string, reviewed: boolean) => Promise<string | null>;
   /** Replaces one row on the current page with a freshly-read copy, for a
@@ -270,6 +281,8 @@ export function useOpportunities(): Opportunities {
   const [sort, setSortRaw] = useState<Sort>(DEFAULT_SORT);
   const [counts, setCounts] = useState<Counts>(ZERO_COUNTS);
   const [refreshing, setRefreshing] = useState(true);
+  const [dedupe, setDedupe] = useState(false);
+  const [hidden, setHidden] = useState(0);
 
   // The value that actually reaches the server, held back from every
   // keystroke by `SEARCH_DEBOUNCE_MS`. Cleared on unmount of the timer, not
@@ -282,8 +295,8 @@ export function useOpportunities(): Opportunities {
   // What the current request is for, readable from a callback that must not
   // change identity when the filter does. Assigned during render so a poll
   // firing between renders can never ask for the page we have just left.
-  const asked = useRef({ filter, offset, q: debouncedQ, sort, limit, scope });
-  asked.current = { filter, offset, q: debouncedQ, sort, limit, scope };
+  const asked = useRef({ filter, offset, q: debouncedQ, sort, limit, scope, dedupe });
+  asked.current = { filter, offset, q: debouncedQ, sort, limit, scope, dedupe };
 
   // Every load takes a ticket, and only the newest one is allowed to write.
   // Three things race here — a filter change, a page change, and the poll — and
@@ -339,8 +352,9 @@ export function useOpportunities(): Opportunities {
         sort: forSort,
         limit: forLimit,
         scope: forScope,
+        dedupe: forDedupe,
       } = asked.current;
-      const res = await fetch(listUrl(forFilter, forOffset, forQ, forSort, forLimit, forScope), {
+      const res = await fetch(listUrl(forFilter, forOffset, forQ, forSort, forLimit, forScope, forDedupe), {
         credentials: "include",
         headers: { Accept: "application/json" },
       });
@@ -360,6 +374,7 @@ export function useOpportunities(): Opportunities {
       if (superseded()) return;
       setState({ status: "ready", page });
       setCounts(page.counts);
+      setHidden(page.hidden ?? 0);
     } catch {
       // A dropped connection on a poll is silent for the same reason: nothing
       // has changed about what we know, only about what we could confirm.
@@ -377,7 +392,7 @@ export function useOpportunities(): Opportunities {
     return () => {
       generation.current += 1;
     };
-  }, [filter, offset, debouncedQ, sort, limit, scope, load]);
+  }, [filter, offset, debouncedQ, sort, limit, scope, dedupe, load]);
 
   // The table keeps up because the server says when to look, not because a timer
   // fired. `extraction` is the only kind that can add a row here — `mail` means
@@ -535,6 +550,8 @@ export function useOpportunities(): Opportunities {
     limit,
     q,
     sort,
+    dedupe,
+    hidden,
     counts,
     refreshing,
     setFilter,
@@ -543,6 +560,7 @@ export function useOpportunities(): Opportunities {
     setLimit,
     setQ,
     setSort,
+    setDedupe,
     review,
     patchRow,
     addRow,

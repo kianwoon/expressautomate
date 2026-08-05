@@ -21,6 +21,7 @@ from sqlalchemy.exc import DBAPIError
 
 from app.core.config import settings
 from app.db.rls import tenant_session
+from app.models import Opportunity
 from tests.conftest import AdminSessionLocal, sign_in
 
 NOW = datetime(2026, 7, 27, 9, 0, tzinfo=UTC)
@@ -704,3 +705,166 @@ async def test_tenant_isolation_holds_with_q_and_sort_applied(client, seeded) ->
     ).json()
 
     assert [row["company_name_raw"] for row in body["items"]] == ["Acme Pte Ltd"]
+
+
+# ---------------------------------------------------------------------------
+# Duplicate collapse — ?dedupe=true
+# ---------------------------------------------------------------------------
+# A buddy who forwards the same job order again a few days later creates a
+# second Opportunity row: a different email, a different received_datetime, but
+# the same Graph conversation_id (a forward keeps the conversation it came
+# from). Verified against production: internet_message_id never survives a
+# forward (0 repeats), conversation_id does. The dedupe keeps the earliest
+# open instance per conversation and hides the later re-forwards.
+
+@pytest.fixture
+async def agency_with_forwarded_duplicates(seeded):
+    """One agency, one conversation forwarded on two days, plus a control.
+
+    The conversation 'HR Specialist' arrives on day 1 and is forwarded again on
+    day 5 — both open (no placement). The dedupe should keep day 1, hide day 5.
+    A second conversation with multiple roles in ONE email stays fully visible
+    (the multi-role case the dedupe must not collapse).
+    """
+    make_tenant, _make_opportunity, _make_evidence = seeded
+    tenant_id, user_id, mailbox_id = await make_tenant("dedupe-agency")
+    day1 = datetime(2026, 8, 4, 7, 38, tzinfo=UTC)
+    day5 = datetime(2026, 8, 9, 7, 15, tzinfo=UTC)
+
+    async def _opp(conversation_id: str, received: datetime, title: str) -> uuid.UUID:
+        email_id, opp_id = uuid.uuid4(), uuid.uuid4()
+        async with AdminSessionLocal() as s:
+            await s.execute(
+                text(
+                    "INSERT INTO email_messages"
+                    " (id, tenant_id, mailbox_id, graph_message_id,"
+                    " internet_message_id, conversation_id, received_datetime)"
+                    " VALUES (:i, :t, :m, :g, :n, :c, :r)"
+                ),
+                {
+                    "i": email_id, "t": tenant_id, "m": mailbox_id,
+                    "g": f"graph-{email_id.hex}",
+                    "n": f"<{email_id.hex}@example.sg>",
+                    "c": conversation_id, "r": received,
+                },
+            )
+            s.add(
+                Opportunity(
+                    id=opp_id, tenant_id=tenant_id, email_message_id=email_id,
+                    received_datetime=received, job_title_raw=title,
+                )
+            )
+            await s.commit()
+        return opp_id
+
+    conv = "AAMkAAG-dedupe-conversation"
+    earliest = await _opp(conv, day1, "HR Specialist")
+    duplicate = await _opp(conv, day5, "HR Specialist")
+    # A separate conversation with two roles in one email — both must stay.
+    multi = "AAMkAAG-multi-role-conversation"
+    role_a = await _opp(multi, day1, "Admin Assistant")
+    role_b = await _opp(multi, day1, "Receptionist")
+    # A standalone job order, no conversation threading.
+    lone = await _opp("different-conv", day1, "Lone Role")
+
+    yield tenant_id, user_id, {
+        "earliest": earliest, "duplicate": duplicate,
+        "role_a": role_a, "role_b": role_b, "lone": lone,
+    }
+
+
+async def test_without_dedupe_all_rows_show(client, agency_with_forwarded_duplicates) -> None:
+    """The default view is unchanged: the later re-forward is still visible
+    until a recruiter opts in. A filter that silently dropped rows would be a
+    regression of the very control it offers."""
+    tenant_id, user_id, ids = agency_with_forwarded_duplicates
+    sign_in(client, user_id, tenant_id)
+    body = (await client.get("/api/opportunities")).json()
+    shown = {row["id"] for row in body["items"]}
+    assert str(ids["duplicate"]) in shown
+    assert body["hidden"] == 0
+
+
+async def test_dedupe_hides_the_later_forward_keeping_the_earliest(
+    client, agency_with_forwarded_duplicates,
+) -> None:
+    """The re-forward (day 5) is hidden; the original (day 1) stays."""
+    tenant_id, user_id, ids = agency_with_forwarded_duplicates
+    sign_in(client, user_id, tenant_id)
+    body = (await client.get("/api/opportunities?dedupe=true")).json()
+    shown = {row["id"] for row in body["items"]}
+    assert str(ids["earliest"]) in shown
+    assert str(ids["duplicate"]) not in shown
+    assert body["hidden"] == 1
+
+
+async def test_dedupe_does_not_collapse_multiple_roles_in_one_email(
+    client, agency_with_forwarded_duplicates,
+) -> None:
+    """Two distinct roles forwarded in the same email share a conversation AND a
+    received_datetime. The dedupe partitions by (conversation, received_time),
+    so both survive — collapsing them would hide a real role."""
+    tenant_id, user_id, ids = agency_with_forwarded_duplicates
+    sign_in(client, user_id, tenant_id)
+    body = (await client.get("/api/opportunities?dedupe=true")).json()
+    shown = {row["id"] for row in body["items"]}
+    assert str(ids["role_a"]) in shown
+    assert str(ids["role_b"]) in shown
+
+
+async def test_dedupe_keeps_a_placed_role_visible_and_its_reforwards_too(
+    client, seeded,
+) -> None:
+    """A role that has since been placed is finished — a later forward of it is
+    new work, not a duplicate, so neither is hidden. The dedupe only collapses
+    re-forwards of an OPEN role (the one 'never fulfilled yet')."""
+    make_tenant, _make_opportunity, _make_evidence = seeded
+    tenant_id, user_id, mailbox_id = await make_tenant("placed-agency")
+    day1 = datetime(2026, 8, 4, 7, 38, tzinfo=UTC)
+    day5 = datetime(2026, 8, 9, 7, 15, tzinfo=UTC)
+    conv = "AAMkAAG-placed-conversation"
+
+    async def _opp(received, title, placement=None):
+        email_id, opp_id = uuid.uuid4(), uuid.uuid4()
+        async with AdminSessionLocal() as s:
+            await s.execute(
+                text(
+                    "INSERT INTO email_messages"
+                    " (id, tenant_id, mailbox_id, graph_message_id,"
+                    " internet_message_id, conversation_id, received_datetime)"
+                    " VALUES (:i, :t, :m, :g, :n, :c, :r)"
+                ),
+                {"i": email_id, "t": tenant_id, "m": mailbox_id,
+                 "g": f"g-{email_id.hex}", "n": f"<{email_id.hex}@e.sg>",
+                 "c": conv, "r": received},
+            )
+            s.add(Opportunity(
+                id=opp_id, tenant_id=tenant_id, email_message_id=email_id,
+                received_datetime=received, job_title_raw=title,
+                placement_type=placement,
+            ))
+            await s.commit()
+        return opp_id
+
+    original = await _opp(day1, "Placed Role", placement="local_hire")
+    later = await _opp(day5, "Placed Role")
+
+    sign_in(client, user_id, tenant_id)
+    body = (await client.get("/api/opportunities?dedupe=true")).json()
+    shown = {row["id"] for row in body["items"]}
+    # The earliest is placed (fulfilled), so the later forward is NOT a dup.
+    assert str(original) in shown
+    assert str(later) in shown
+    assert body["hidden"] == 0
+
+
+async def test_dedupe_reports_how_many_were_hidden(
+    client, agency_with_forwarded_duplicates,
+) -> None:
+    """The hidden count is returned so the list can say 'N duplicates hidden'
+    rather than silently dropping rows — a recruiter must know the list was
+    filtered."""
+    tenant_id, user_id, _ids = agency_with_forwarded_duplicates
+    sign_in(client, user_id, tenant_id)
+    body = (await client.get("/api/opportunities?dedupe=true")).json()
+    assert body["hidden"] == 1

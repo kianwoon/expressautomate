@@ -78,6 +78,8 @@ export function JobOrders({ me, heading = "h2" }: { me: Me; heading?: "h1" | "h2
     limit: pageSize,
     q,
     sort,
+    dedupe,
+    hidden,
     counts,
     refreshing,
     setFilter,
@@ -86,6 +88,7 @@ export function JobOrders({ me, heading = "h2" }: { me: Me; heading?: "h1" | "h2
     setLimit,
     setQ,
     setSort,
+    setDedupe,
     review,
     patchRow,
     addRow,
@@ -285,6 +288,21 @@ export function JobOrders({ me, heading = "h2" }: { me: Me; heading?: "h1" | "h2
               </button>
             );
           })}
+          {/* A list filter, not a search or a scope: a buddy who re-forwards an
+              open job order days later creates a second row for the same role.
+              This collapses those later re-forwards, keeping the earliest open
+              instance. A separate control from scope because "whose" and
+              "deduped" are independent questions. */}
+          <button
+            type="button"
+            className="jo-chip"
+            data-active={dedupe ? "yes" : undefined}
+            aria-pressed={dedupe}
+            onClick={() => setDedupe(!dedupe)}
+            title="Hide job orders forwarded again that are still open"
+          >
+            <span>Hide duplicates</span>
+          </button>
         </div>
       </div>
 
@@ -311,6 +329,16 @@ export function JobOrders({ me, heading = "h2" }: { me: Me; heading?: "h1" | "h2
                 ? `${total.toLocaleString()} match${total === 1 ? "" : "es"} “${q.trim()}”, including the requirements and description.`
                 : `Showing ${offset + 1}–${offset + items.length} of ${total.toLocaleString()}.`}
           </p>
+
+          {dedupe && hidden > 0 && (
+            // The dedupe filter must not drop rows in silence: a recruiter who
+            // does not know the list was filtered cannot tell "fewer because
+            // filtered" from "fewer because gone".
+            <p className="body jo-note muted">
+              {hidden} duplicate{hidden === 1 ? "" : "s"} hidden — re-forwards of job
+              orders already here and still open. Turn off “Hide duplicates” to see them.
+            </p>
+          )}
 
           {items.length === 0 && searched && (
             <div className="card jo-note-card">
