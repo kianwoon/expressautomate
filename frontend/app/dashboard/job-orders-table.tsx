@@ -1,7 +1,7 @@
 "use client";
 
 import { ProtectedBadge, flagged } from "./codes";
-import { Salary, Value, day } from "./format";
+import { Salary, Value, day, dayShort } from "./format";
 import type { Opportunity } from "./opportunities";
 import { Initials } from "./person";
 import { QualityBadge } from "./quality";
@@ -36,18 +36,24 @@ export type Sort = { key: SortKey; descending: boolean };
  *  user somewhere they cannot get back from by clicking Received again. */
 export const DEFAULT_SORT: Sort = { key: "received", descending: true };
 
-/** Every width is measured against the table's 1040px floor, which is the
+/** Every width is measured against the table's 1000px floor, which is the
  *  narrowest it is ever drawn — under that, `.jo-table-card` scrolls.
  *
  *  Each column is sized against the widest thing it actually holds, because
  *  `table-layout: fixed` means a column cannot ask for more later:
  *
- *  - Quality, 17%: the "Needs review 7/9" pill is 138px and the cell adds 28px
- *    of padding, so it needs 166px and gets 177. At the 10% it had, it got 96
+ *  - Received, 8%: the date is shown short ("30 Jul", via `dayShort`) because
+ *    this column is also the table's tightest, and the five characters the
+ *    year cost were the difference between the floor and the list column on a
+ *    13" laptop. The full date with year is the cell's `title` and lives in
+ *    the panel; in a list scanned by recency the day and month are what the
+ *    eye sorts on.
+ *  - Quality, 19%: the "Needs review 7/9" pill is 138px and the cell adds 28px
+ *    of padding, so it needs 166px and gets 190. At the 10% it had, it got 96
  *    and the pill folded into a four-line block — the column read as chopped
  *    off, and it set the height of every row carrying that state.
  *  - Location, 12%: "Not mentioned" is 96px of italic, so the cell needs 124px
- *    and gets 125. It is the commonest value in the column; at 9% it wrapped
+ *    and gets 120. It is the commonest value in the column; at 9% it wrapped
  *    to three lines.
  *  - Hours and Duration are the raw paragraphs, clamped to two lines (see
  *    `.jo-clamp`). They need enough width for two lines to say something: at
@@ -55,16 +61,16 @@ export const DEFAULT_SORT: Sort = { key: "received", descending: true };
  *    came out as "Not mention / ed" — too narrow to break between words, so it
  *    broke inside one.
  *
- *  The floor moved from 960 rather than taking Quality's room from the others,
- *  which had none to give.
+ *  The floor moved down from 1040 once Received gave up the year, rather than
+ *  taking Quality's room from the others, which had none to give.
  *
- *  1040px is more than the list column is ever given: `.jo-split` hands it
- *  1.85 of 2.85 parts, so even a 1440px screen leaves it about 900px and the
- *  last column sat off the edge behind a scrollbar nobody found. Rather than
- *  crush eight columns, the two prose ones — Hours and Duration — are dropped
- *  below that width by a container query in `job-orders.css`, which takes the
- *  floor to 780px. They are the two already clamped to two lines here and
- *  shown whole in the panel, so nothing becomes unreachable.
+ *  1000px is still more than the list column is ever given: `.jo-split` hands
+ *  it 1.85 of 2.85 parts, so even a 1440px screen leaves it about 900px and
+ *  the last column would sit off the edge behind a scrollbar nobody found.
+ *  Rather than crush eight columns, the two prose ones — Hours and Duration —
+ *  are dropped below that width by a container query in `job-orders.css`,
+ *  which takes the floor to 730px. They are the two already clamped to two
+ *  lines here and shown whole in the panel, so nothing becomes unreachable.
  *
  *  The widths live in CSS rather than inline, because the narrow case has to
  *  override them and an inline style cannot be overridden by a stylesheet. */
@@ -126,7 +132,9 @@ export function JobOrdersTable({
                 // does the same thing, and it is not the only way in.
                 onClick={() => onSelect(row)}
               >
-                <Td nowrap>{day(row.received_datetime)}</Td>
+                <Td nowrap title={day(row.received_datetime) ?? undefined}>
+                  {dayShort(row.received_datetime)}
+                </Td>
                 <td className="jo-td jo-td-strong">
                   {/* Whose job order it is: the buddy who referred the client
                       owns the account. Falls back to the internal assignee
@@ -247,13 +255,15 @@ function Td({
   children,
   nowrap = false,
   clamp = false,
+  title,
 }: {
   children: string | null;
   nowrap?: boolean;
   clamp?: boolean;
+  title?: string;
 }) {
   return (
-    <td className="jo-td" data-nowrap={nowrap ? "yes" : undefined}>
+    <td className="jo-td" data-nowrap={nowrap ? "yes" : undefined} title={title}>
       {clamp ? (
         <div className="jo-clamp" title={children ?? undefined}>
           <Value text={children} />

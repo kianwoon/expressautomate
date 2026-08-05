@@ -33,6 +33,19 @@ export function day(iso: string | null): string | null {
   });
 }
 
+/** "30 Jul" — the compact form for a list column that is scanned by recency.
+ *  The year stays in `day()`, used by the detail panel and as a `title` tooltip
+ *  on the cell; in a list of recent rows the day and month are what the eye
+ *  sorts on, and the column is also the widest fixed-layout table's tightest
+ *  column, so dropping five characters buys room for the column after it. */
+export function dayShort(iso: string | null): string | null {
+  if (!iso) return null;
+  return new Date(iso).toLocaleDateString(undefined, {
+    day: "numeric",
+    month: "short",
+  });
+}
+
 export function when(iso: string | null): string | null {
   if (!iso) return null;
   return new Date(iso).toLocaleString(undefined, {
