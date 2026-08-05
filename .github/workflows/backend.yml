@@ -141,8 +141,10 @@ jobs:
     services:
       postgres:
         # Throwaway Postgres, never the live database — the suite creates roles
-        # and toggles RLS.
-        image: postgres:16
+        # and toggles RLS. The pgvector image (not plain postgres:16) because
+        # candidate_embeddings requires the `vector` extension; the migration
+        # that creates it fails on a stock image.
+        image: pgvector/pgvector:pg16
         env:
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: expressautomate
@@ -246,7 +248,9 @@ jobs:
     # ban signal.
     services:
       postgres:
-        image: postgres:16
+        # pgvector image, same reason as the test job: this service runs the
+        # full migration set, which now includes the vector extension.
+        image: pgvector/pgvector:pg16
         env:
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: wa_gateway_test
