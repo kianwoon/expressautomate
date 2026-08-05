@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import { BUDDIES_API_PATH, LANDING_PATH } from "../../api";
 import { useAuth } from "../../auth";
@@ -16,6 +16,55 @@ type Buddy = {
   source: string;
   referral_count: number;
 };
+
+/** The server's list response — a dict, not the bare array the endpoint used
+ *  to return. `total` is the length of the filtered set (no pagination here:
+ *  a buddy network is small), and `initials` drives the A–Z bar. */
+type BuddyPage = {
+  items: Buddy[];
+  total: number;
+  initials: string[];
+};
+
+/** The columns the table offers sort headers for. Mirrors the server's
+ *  `BuddySortBy` whitelist (`backend/app/api/buddies.py`): the two must
+ *  agree. Mobile (phone) is deliberately absent — it is an inline-edit cell,
+ *  not something a recruiter scans the list by. */
+type BuddySortKey = "name" | "email" | "email_domain" | "referral_count";
+
+type BuddySort = { key: BuddySortKey; descending: boolean };
+
+/** The default view — the buddies who send the most work at the top. The
+ *  server falls back to this when no `sort_by` is sent, so the table's
+ *  active-column highlight starts honest. `referral_count` rather than the
+ *  server's twin-key referral/name: there is one column for referrals in the
+ *  UI and the server decides the rest of the tiebreak. */
+const DEFAULT_SORT: BuddySort = { key: "referral_count", descending: true };
+
+const NO_INITIALS: string[] = [];
+
+// The A–Z bar mirrors the candidates and clients pages. `#` is every name
+// whose first character is not a Latin letter — digits, punctuation, CJK —
+// exactly the bucket the server folds such names into.
+const NON_ALPHA_INITIAL = "#";
+const INITIALS: string[] = [
+  ...Array.from({ length: 26 }, (_, i) => String.fromCharCode(65 + i)),
+  NON_ALPHA_INITIAL,
+];
+
+function listUrl(q: string, initial: string | null, sort: BuddySort): string {
+  const params = new URLSearchParams();
+  if (q.trim()) params.set("q", q.trim());
+  if (initial) params.set("initial", initial);
+  // Always sent, even on the default view: the server's own default order
+  // agrees with `DEFAULT_SORT`, so sending it changes nothing there, and it
+  // keeps the table's active-column highlight honest. An explicit sort also
+  // wins over the letter-browse alphabetical fallback on the server, so a
+  // recruiter sorting while standing on a letter gets what they asked for.
+  params.set("sort_by", sort.key);
+  params.set("descending", String(sort.descending));
+  return `${BUDDIES_API_PATH}?${params.toString()}`;
+}
 
 export default function BuddiesPage() {
   const auth = useAuth();
@@ -56,32 +105,53 @@ function Notice({ heading, body }: { heading: string; body: string }) {
   );
 }
 
-const COLUMNS = [
+const COLUMNS: { key: BuddySortKey; label: string }[] = [
   { key: "name", label: "Name" },
   { key: "email", label: "Email" },
-  { key: "phone", label: "Mobile" },
+  // Mobile has no sort header — it is an inline-edit cell, not a column a
+  // recruiter scans the list by. Kept out of COLUMNS so it renders as a plain
+  // `<th>` alongside the sortable ones.
   { key: "email_domain", label: "Agency" },
   { key: "referral_count", label: "Referrals" },
-] as const;
+];
 
 function Workspace() {
-  const [buddies, setBuddies] = useState<Buddy[] | null>(null);
+  const [page, setPage] = useState<BuddyPage | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [q, setQ] = useState("");
+  const [initial, setInitial] = useState<string | null>(null);
+  const [sort, setSort] = useState<BuddySort>(DEFAULT_SORT);
 
   useEffect(() => {
-    let cancelled = false;
+    const controller = new AbortController();
+    // Rows already on screen stay on screen while the refetch runs — the same
+    // reasoning as `useClients`. Dropping to `loading` on every keystroke
+    // would unmount the inline-edit cell a recruiter might be mid-edit in.
+    setPage((prev) => prev);
     (async () => {
       try {
-        const res = await fetch(BUDDIES_API_PATH, { credentials: "include" });
+        const res = await fetch(listUrl(q, initial, sort), {
+          credentials: "include",
+          signal: controller.signal,
+        });
         if (!res.ok) throw new Error();
-        const data = (await res.json()) as Buddy[];
-        if (!cancelled) { setBuddies(data); setError(null); }
+        const data = (await res.json()) as BuddyPage;
+        setPage(data);
+        setError(null);
       } catch {
-        if (!cancelled) setError("We could not load your buddies just now.");
+        if (!controller.signal.aborted) {
+          setError("We could not load your buddies just now.");
+        }
       }
     })();
-    return () => { cancelled = true; };
-  }, []);
+    return () => controller.abort();
+  }, [q, initial, sort]);
+
+  const pickInitial = useCallback((next: string | null) => setInitial(next), []);
+  const onSort = useCallback((next: BuddySort) => setSort(next), []);
+
+  const buddies = page?.items ?? [];
+  const initials = page?.initials ?? NO_INITIALS;
 
   if (error) {
     return (
@@ -92,7 +162,7 @@ function Workspace() {
     );
   }
 
-  if (buddies === null) {
+  if (page === null) {
     return (
       <>
         <h1 style={{ fontSize: "clamp(1.75rem, 3.4vw, 2.5rem)" }}>Buddies</h1>
@@ -101,7 +171,7 @@ function Workspace() {
     );
   }
 
-  if (buddies.length === 0) {
+  if (buddies.length === 0 && !q && initial === null) {
     return (
       <>
         <h1 style={{ fontSize: "clamp(1.75rem, 3.4vw, 2.5rem)" }}>Buddies</h1>
@@ -124,38 +194,133 @@ function Workspace() {
         {totalReferrals === 1 ? "client" : "clients"}.
       </p>
 
-      <div style={{ marginTop: 24 }}>
-        <p className="body jo-note" aria-live="polite">
-          Showing {buddies.length} {buddies.length === 1 ? "buddy" : "buddies"}.
-        </p>
-        <div className="card jo-table-card">
-          <table className="jo-table" style={{ tableLayout: "auto" }}>
-            <thead>
-              <tr>
-                {COLUMNS.map((col) => (
-                  <th key={col.key} className="row-k jo-th">{col.label}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {buddies.map((b) => (
-                <tr key={b.id} className="jo-row">
-                  <td className="jo-td jo-td-strong">{b.name}</td>
-                  <td className="jo-td" style={{ overflowWrap: "break-word", whiteSpace: "nowrap" }}>{b.email}</td>
-                  <td className="jo-td">
-                    <PhoneCell buddy={b} />
-                  </td>
-                  <td className="jo-td" style={{ whiteSpace: "nowrap" }}>
-                    {b.email_domain ?? <span className="muted">—</span>}
-                  </td>
-                  <td className="jo-td" data-nowrap="yes">{b.referral_count}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+      <div className="jo-controls" style={{ marginTop: 24 }}>
+        <input
+          className="jo-search"
+          type="search"
+          value={q}
+          onChange={(event) => setQ(event.target.value)}
+          placeholder="Search name or email…"
+          aria-label="Search buddies"
+        />
+      </div>
+
+      <nav className="jo-index" aria-label="Jump to buddies by first letter">
+        <button
+          type="button"
+          className="jo-index-key"
+          data-active={initial === null ? "yes" : undefined}
+          aria-pressed={initial === null}
+          onClick={() => pickInitial(null)}
+        >
+          All
+        </button>
+        {INITIALS.map((letter) => {
+          const active = initial === letter;
+          return (
+            <button
+              key={letter}
+              type="button"
+              className="jo-index-key"
+              data-active={active ? "yes" : undefined}
+              aria-pressed={active}
+              // `initials` is the server's word on which letters have rows, so
+              // a letter with none is disabled rather than hidden: the bar is a
+              // map of the alphabet, and gaps in it would read as bugs.
+              disabled={!initials.includes(letter)}
+              onClick={() => pickInitial(letter)}
+            >
+              {letter}
+            </button>
+          );
+        })}
+      </nav>
+
+      <div style={{ marginTop: 16 }}>
+        {buddies.length === 0 ? (
+          <p className="body jo-note" aria-live="polite">
+            No buddies match “{q}”.
+          </p>
+        ) : (
+          <>
+            <p className="body jo-note" aria-live="polite">
+              Showing {buddies.length} {buddies.length === 1 ? "buddy" : "buddies"}.
+            </p>
+            <div className="card jo-table-card">
+              <table className="jo-table" style={{ tableLayout: "auto" }}>
+                <thead>
+                  <tr>
+                    <Th column={COLUMNS[0]} sort={sort} onSort={onSort} />
+                    <Th column={COLUMNS[1]} sort={sort} onSort={onSort} />
+                    {/* Mobile: a plain header, not a sort target. */}
+                    <th className="row-k jo-th">Mobile</th>
+                    <Th column={COLUMNS[2]} sort={sort} onSort={onSort} />
+                    <Th column={COLUMNS[3]} sort={sort} onSort={onSort} />
+                  </tr>
+                </thead>
+                <tbody>
+                  {buddies.map((b) => (
+                    <tr key={b.id} className="jo-row">
+                      <td className="jo-td jo-td-strong">{b.name}</td>
+                      <td className="jo-td" style={{ overflowWrap: "break-word", whiteSpace: "nowrap" }}>{b.email}</td>
+                      <td className="jo-td">
+                        <PhoneCell buddy={b} />
+                      </td>
+                      <td className="jo-td" style={{ whiteSpace: "nowrap" }}>
+                        {b.email_domain ?? <span className="muted">—</span>}
+                      </td>
+                      <td className="jo-td" data-nowrap="yes">{b.referral_count}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
+        )}
       </div>
     </>
+  );
+}
+
+function Th({
+  column,
+  sort,
+  onSort,
+}: {
+  column: { key: BuddySortKey; label: string };
+  sort: BuddySort;
+  onSort: (sort: BuddySort) => void;
+}) {
+  const active = sort.key === column.key;
+  return (
+    <th
+      className="row-k jo-th"
+      // The arrow is invisible to a screen reader, and a table that has
+      // silently reordered itself is indistinguishable from one that lost rows.
+      aria-sort={active ? (sort.descending ? "descending" : "ascending") : "none"}
+      data-active={active ? "yes" : undefined}
+    >
+      <button
+        type="button"
+        className="jo-sort"
+        // Re-clicking the sorted column reverses it; moving to a new column
+        // starts ascending — except Referrals, where descending (most first)
+        // is what anyone clicking a count column means. The same rule
+        // `clients-table.tsx` applies to its Last seen column.
+        onClick={() =>
+          onSort(
+            active
+              ? { key: column.key, descending: !sort.descending }
+              : { key: column.key, descending: column.key === "referral_count" },
+          )
+        }
+      >
+        <span>{column.label}</span>
+        <span className="jo-arrow" aria-hidden="true">
+          {active ? (sort.descending ? "↓" : "↑") : ""}
+        </span>
+      </button>
+    </th>
   );
 }
 
