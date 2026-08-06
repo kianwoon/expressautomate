@@ -853,6 +853,7 @@
    `.btn`, which dominates the title row. Subtle until interacted with. */
 .jo-detail-run {
   flex: 0 0 auto;
+  width: max-content;
   font: inherit;
   font-size: 0.8125rem;
   font-weight: 650;
