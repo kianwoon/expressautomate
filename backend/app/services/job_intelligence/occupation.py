@@ -75,20 +75,33 @@ THE JOB ORDER (for context):
 """
 
 # allow-hardcode: a prompt, not configuration.
-_PICK_PROMPT = """You are a labour-market analyst. Below is a structured occupation profile and a
-list of candidate standard occupations (with their survey wage percentiles).
-Pick the ONE occupation that best represents this work.
+_PICK_PROMPT = """You are a labour-market analyst. Below is the actual job order, a structured
+occupation profile, and a list of candidate standard occupations ranked by a
+weak semantic search. Your job is to pick the ONE occupation that genuinely
+represents this work — or reject all of them.
 
 Rules:
-- Choose from the listed candidates only. Do not invent a title.
-- `title` must be exactly one of the candidate titles.
-- `confidence` (0.0-1.0) is how well the chosen title fits the profile — be
-  honest; a weak fit is more useful than a confident wrong one.
-- `rationale` is ONE sentence explaining the choice (or why no candidate fits,
-  in which case still pick the closest and set confidence low).
+- Read the JOB ORDER first. The candidate list comes from a fuzzy title search
+  and frequently contains near-misses that share a word but not the work
+  (e.g. "account executive" in sales vs accounting). Reason about what the
+  person actually does day to day, not about word overlap in the titles.
+- Choose from the listed candidates only. `title` must be exactly one of the
+  candidate titles. Do not invent or paraphrase a title.
+- If NONE of the candidates is a genuine fit for the work described, choose the
+  closest one anyway but set `confidence` below 0.5 — a low confidence signals
+  "no good match" to the system, which will then hide the benchmark rather
+  than show a misleading one.
+- `confidence` (0.0-1.0) is how well the chosen title fits the ACTUAL WORK,
+  not how similar the strings are. A sales role matched to an accounting title
+  is confidence 0.1, not 0.7, even if the words overlap.
+- `rationale` is ONE sentence: name the closest candidate and say why it fits
+  or why it does not.
 
 Return JSON matching this schema:
 {schema}
+
+JOB ORDER:
+{context}
 
 PROFILE:
 {profile}
@@ -107,7 +120,9 @@ def build_profile_prompt(context: str, understanding_text_block: str) -> str:
     )
 
 
-def build_pick_prompt(profile: OccupationProfile, candidates: list[dict]) -> str:
+def build_pick_prompt(
+    context: str, profile: OccupationProfile, candidates: list[dict]
+) -> str:
     """Separate from `rerank_occupation` for prompt-only testing."""
     lines = []
     for c in candidates:
@@ -116,6 +131,7 @@ def build_pick_prompt(profile: OccupationProfile, candidates: list[dict]) -> str
         )
     return _PICK_PROMPT.format(
         schema=json_schema()["occupation_pick"],
+        context=context,
         profile=_profile_text(profile),
         candidates="\n".join(lines),
     )
@@ -239,21 +255,36 @@ async def search_occupations(
     ]
 
 
+# A match the model is less than this confident about is suppressed: no
+# benchmark is shown rather than a misleading one. The semantic search returns
+# near-misses that share a word but not the work (sales "account executive" vs
+# accounting), and a benchmark against the wrong occupation misleads a
+# recruiter into the wrong salary expectation. Below the floor, the chart hides.
+# allow-hardcode: a quality threshold, not configuration.
+_MIN_CONFIDENCE = 0.5
+
+
 async def rerank_occupation(
-    profile: OccupationProfile, candidates: list[dict], *, llm=None
+    context: str,
+    profile: OccupationProfile,
+    candidates: list[dict],
+    *,
+    llm=None,
 ) -> tuple[OccupationMatch, LLMResult] | None:
     """Step 3: pick the best occupation from the candidates (LLM).
 
     Returns the chosen `OccupationMatch` (wages filled from the candidate row,
-    never the model) plus the LLM result, or None when the model's chosen title
-    does not appear among the candidates — a refusal that should not become a
-    fabricated benchmark.
+    never the model) plus the LLM result. Returns None when the model's chosen
+    title does not appear among the candidates, or when the model's confidence
+    is below the quality floor — both are refusals that should not become a
+    benchmark, because a benchmark against the wrong occupation is worse than
+    no benchmark at all.
     """
     if not candidates:
         return None
 
     resolve = llm or complete_json
-    prompt = build_pick_prompt(profile, candidates)
+    prompt = build_pick_prompt(context, profile, candidates)
     result = await resolve(
         prompt,
         model=model(),
@@ -268,6 +299,8 @@ async def rerank_occupation(
 
     picked = result.data
     title = (picked.get("title") or "").strip()
+    confidence = float(picked.get("confidence") or 0.0)
+
     # The model is told to choose from the list only; a title it invented (or
     # misspelled) is a non-match rather than a benchmark we cannot ground.
     by_title = {c["title"]: c for c in candidates}
@@ -278,6 +311,14 @@ async def rerank_occupation(
     )
     if match is None:
         log.info("occupation_rerank_unmatched", picked_title=title)
+        return None
+
+    if confidence < _MIN_CONFIDENCE:
+        log.info(
+            "occupation_rerank_low_confidence",
+            picked_title=title,
+            confidence=confidence,
+        )
         return None
 
     return (
@@ -316,7 +357,7 @@ async def classify_occupation(
     candidates = await search_occupations(session, profile)
     if not candidates:
         return None, r1
-    picked = await rerank_occupation(profile, candidates, llm=llm)
+    picked = await rerank_occupation(context, profile, candidates, llm=llm)
     if picked is None:
         return None, r1
     match, r2 = picked

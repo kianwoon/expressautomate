@@ -26,7 +26,7 @@ vi.mock("../api", async () => ({
 // allow-hardcode: a no-salary offer the WorkStage tests render with — the
 // benchmark chart only renders when an `occupation` is present, and these
 // tests assert on the understanding fields, so the offer is inert here.
-const NO_OFFER = { min: null, max: null, currency: null, period: null };
+const NO_OFFER = { min: null, max: null, currency: null, period: null, raw: null };
 
 function analysis(overrides: Partial<Intelligence> = {}): Intelligence {
   return {

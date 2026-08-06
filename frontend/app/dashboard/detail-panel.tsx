@@ -611,6 +611,7 @@ function Detail({
             max: row.salary_max,
             currency: row.salary_currency,
             period: row.salary_period,
+            raw: row.salary_raw,
           }}
         />
       )}
