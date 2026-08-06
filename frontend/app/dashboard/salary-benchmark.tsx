@@ -50,21 +50,70 @@ const PERIOD_TO_MONTHLY: Record<string, number> = {
   hour: 12 / (52 * 44),
 };
 
+/**
+ * Parse a min/max pair from the raw salary text when the structured fields are
+ * absent. Extraction doesn't always populate salary_min/max (e.g. "S$4800 to
+ * S$5200"), but the numbers are right there in the raw text — leaving the chart
+ * without an offer bar because of an upstream parse gap is worse than reading
+ * them here. Returns [min, max] or null when no numbers are found.
+ *
+ * Looks for patterns like "4800 to 5200", "4800-5200", "$5,000", "S$4800".
+ */
+export function parseRawSalary(raw: string | null | undefined): [number, number] | null {
+  if (!raw) return null;
+  // Strip thousands separators so "5,000" parses as 5000, not a list of 5 and 0.
+  const cleaned = raw.replace(/[, ]/g, " ");
+  const nums = cleaned.match(/\d[\d.]*\d|\d/g);
+  if (!nums || nums.length === 0) return null;
+  const values = nums.map(Number).filter((n) => !isNaN(n) && n > 0);
+  if (values.length === 0) return null;
+  if (values.length === 1) return [values[0], values[0]];
+  // A range: take the first two distinct values.
+  return [values[0], values[1]];
+}
+
 export function monthlyGrossSGD(offer: Offer): number | null {
   if (!offer.currency || offer.currency.toUpperCase() !== "SGD") return null;
-  if (!offer.period) return null;
-  const factor = PERIOD_TO_MONTHLY[offer.period.toLowerCase()];
-  if (!factor) return null;
-  // Use the midpoint of the range, or whichever end exists. A range is one
-  // offer band, so its comparable point is the midpoint.
+  // Fall back to the raw text when structured min/max are absent.
   const min = offer.min;
   const max = offer.max;
+  if (min == null && max == null) {
+    const parsed = parseRawSalary(offer.raw);
+    if (!parsed) return null;
+    const mid = (parsed[0] + parsed[1]) / 2;
+    return mid; // raw SGD text is already monthly unless it says otherwise
+  }
+  if (!offer.period) {
+    // No period but we have numbers — assume monthly (the survey's unit).
+    const point = min != null && max != null ? (min + max) / 2 : (min ?? max);
+    return point;
+  }
+  const factor = PERIOD_TO_MONTHLY[offer.period.toLowerCase()];
+  if (!factor) return null;
   const point =
     min != null && max != null
       ? (min + max) / 2
       : (min ?? max);
   if (point == null) return null;
   return point * factor;
+}
+
+/**
+ * Extract the offer range as [min, max] in monthly gross SGD, for drawing the
+ * overlay bar. Uses structured fields, falls back to raw text, returns null
+ * when nothing usable exists.
+ */
+function offerRangeSGD(offer: Offer): [number, number] | null {
+  // Try structured fields first.
+  if (offer.currency?.toUpperCase() === "SGD") {
+    const min = offer.min;
+    const max = offer.max;
+    if (min != null && max != null) {
+      return [min, max];
+    }
+  }
+  // Fall back to raw text.
+  return parseRawSalary(offer.raw);
 }
 
 /** The competitiveness bands the design doc defines. */
@@ -169,12 +218,13 @@ export function SalaryBenchmark({
   const pct = marketPercentile(offerMonthly, p25, median, p75);
   const comparable = offerMonthly != null;
 
-  // The offer as a range (min→max), or a single point if only one end exists.
-  // When the structured min/max are absent, we can't draw a range bar — the
-  // raw text label still shows in the legend below.
-  const offerMin = comparable ? monthlyGrossSGD({ ...offer, max: null }) : null;
-  const offerMax = comparable ? monthlyGrossSGD({ ...offer, min: null }) : null;
-  const hasOfferRange = comparable && offerMin != null && offerMax != null && offerMin > 0;
+  // The offer range for drawing the overlay bar. Uses structured min/max,
+  // falls back to parsing the raw salary text (extraction doesn't always
+  // populate the structured fields, but the numbers are in the text).
+  const offerRange = offerRangeSGD(offer);
+  const offerMin = offerRange?.[0] ?? null;
+  const offerMax = offerRange?.[1] ?? null;
+  const hasOfferRange = offerMin != null && offerMax != null && offerMin > 0;
 
   // Scale from 0 to 110% of the largest value, so both bars fit with headroom.
   const scaleMax = Math.max(p75, offerMax ?? offerMonthly ?? 0) * 1.1;
