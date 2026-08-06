@@ -851,7 +851,11 @@
    btn-primary treatment) sized for the header row: narrower padding than the
    body buttons and constrained to its label width so a short label does not
    stretch across the row. */
-.jo-detail-run {
+/* Scoped under the modal class so it beats `.btn`'s single-class specificity
+   regardless of how the bundler orders globals.css against this page's CSS —
+   the unscoped version lost the cascade in production and the button rendered
+   at .btn's 42px instead of this ~28px. */
+.jo-detail-modal .jo-detail-run {
   flex: 0 0 auto;
   width: max-content;
   padding: 5px 12px;
