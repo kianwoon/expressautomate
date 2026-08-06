@@ -33,7 +33,7 @@ from app.api.candidates import _load
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.db.rls import tenant_session
-from app.models.candidate import CandidateDocument
+from app.models.candidate import Candidate, CandidateDocument
 from app.services.cv.text import sniff
 from app.services.storage.r2 import BodyStore, R2BodyStore, document_key
 from app.services.visibility import (
@@ -251,6 +251,110 @@ async def upload_document(
         document_id=str(document_id),
     ):
         log.warning("cv_upload_enqueue_failed", candidate_document_id=str(document_id))
+        async with tenant_session(tenant_uuid) as session:
+            document = await session.get(CandidateDocument, document_id)
+            if document is not None:
+                document.parse_state = CandidateDocument.FAILED
+                document.parse_error = _ENQUEUE_FAILED
+                await session.commit()
+                return serialize(document)
+
+    async with tenant_session(tenant_uuid) as session:
+        stored = await session.get(CandidateDocument, document_id)
+        if stored is None:  # pragma: no cover - deleted between two statements
+            raise HTTPException(status_code=404, detail="Document not found")
+        return serialize(stored)
+
+
+@router.post("/candidates/documents", status_code=202)
+async def upload_document_no_candidate(
+    request: Request,
+    file: Annotated[UploadFile, File()],
+    store: Annotated[BodyStore, Depends(body_store)],
+) -> dict:
+    """Accept a CV and resolve its own candidate.
+
+    The sibling `upload_document` route requires a candidate id, because the
+    recruiter already knew who the CV belonged to. This one is the drop-a-CV-in
+    path: the platform reads the document's contact details and matches them to
+    an existing person or creates a new one. The bytes are accepted the same
+    hostile-until-proven way — computed key, sniffed type, daily quota checked
+    before a byte is read — and the document is parked at `ingest_pending`
+    against a placeholder candidate, because the foreign key is NOT NULL and
+    identity has not been read yet. The ingest job re-binds the document to the
+    resolved candidate (and deletes the placeholder when it is left empty).
+
+    Declared before `/candidates/{candidate_id}/documents` would be enough on
+    its own (different path depth), but the router is included before
+    `candidates` in `main.py` so the LITERAL `documents` segment is never
+    swallowed by `/candidates/{candidate_id}`.
+    """
+    user_uuid, tenant_uuid, _ = await _require_session_with_role(request)
+
+    async with tenant_session(tenant_uuid) as session:
+        if not await _within_daily_quota(session):
+            raise HTTPException(
+                status_code=429,
+                detail=(
+                    f"This agency has uploaded its {settings.CV_DAILY_PARSE_QUOTA} "
+                    "CVs for today. The limit resets at midnight UTC."
+                ),
+            )
+
+    content = await _read_within_limit(file)
+
+    kind = sniff(content)
+    if kind is None:
+        raise HTTPException(
+            status_code=415,
+            detail="Only PDF and Word (.docx) files can be read, whatever this was named.",
+        )
+
+    # A placeholder candidate holds the NOT NULL foreign key until the ingest
+    # job reads identity and re-binds the document. It carries no contact
+    # details and the default `new` stage — the exact shape `_delete_if_ghost`
+    # looks for, so a placeholder left empty by a successful re-bind is removed
+    # rather than seeded into the candidate list. Created up front rather than
+    # in the job so this route's commit is self-contained: a document row never
+    # exists without its candidate.
+    document_id = uuid.uuid4()
+    async with tenant_session(tenant_uuid) as session:
+        placeholder = Candidate(
+            tenant_id=tenant_uuid,
+            full_name=_safe_filename(file.filename, kind)[:1000] or "Uploaded CV",
+            pipeline_stage=Candidate.STAGES[0],
+            record_status=Candidate.ACTIVE,
+            owner_id=user_uuid,
+            created_by=user_uuid,
+            updated_by=user_uuid,
+        )
+        session.add(placeholder)
+        await session.flush()
+        candidate_id = placeholder.id
+
+        key = document_key(tenant_uuid, candidate_id, document_id, kind)
+        await store.put_bytes(key, content, _MIME_FOR_KIND[kind])
+        document = CandidateDocument(
+            id=document_id,
+            tenant_id=tenant_uuid,
+            candidate_id=candidate_id,
+            filename=_safe_filename(file.filename, kind),
+            content_type=_MIME_FOR_KIND[kind],
+            byte_size=len(content),
+            object_key=key,
+            parse_state=CandidateDocument.INGEST_PENDING,
+            origin=CandidateDocument.INGEST,
+            uploaded_by=user_uuid,
+        )
+        session.add(document)
+        await session.commit()
+
+    if not await enqueue(
+        "ingest_candidate_cv",
+        tenant_id=str(tenant_uuid),
+        document_id=str(document_id),
+    ):
+        log.warning("cv_ingest_enqueue_failed", candidate_document_id=str(document_id))
         async with tenant_session(tenant_uuid) as session:
             document = await session.get(CandidateDocument, document_id)
             if document is not None:

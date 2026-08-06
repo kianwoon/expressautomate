@@ -178,10 +178,18 @@ api.include_router(candidate_shares.router)
 # this is tidiness rather than a live bug — but it keeps every candidate
 # sub-router in one place, declared before the generic one.
 api.include_router(candidate_merge.router)
+# Before `candidates`, for the reason the comment below gives: `candidates`
+# owns `/candidates/{candidate_id}`, and this router now owns the LITERAL
+# path `/candidates/documents` (the no-candidate-named CV ingest). Declared
+# after `/candidates/{candidate_id}`, FastAPI would hand `documents` to that
+# generic route as a path parameter and answer 422 "not a valid UUID". No
+# `POST /candidates/{candidate_id}` exists today, so the shadowing is latent
+# rather than live — but declaring it first keeps it that way, the same
+# convention every sibling above follows.
+api.include_router(candidate_documents.router)
 api.include_router(candidates.router)
 api.include_router(candidate_roles.router)
 api.include_router(candidates_avatar.router)
-api.include_router(candidate_documents.router)
 # `/client-discovery` shares no prefix with `/clients/{client_id}`, so order
 # next to the client routers is tidiness, not shadowing-avoidance.
 api.include_router(client_discovery.router)

@@ -414,6 +414,17 @@ SET_SWEEP_EXEMPT: dict[str, str] = {
         "does — a duplicate is a duplicate whoever holds it — and discloses "
         "at the edge rather than in the query."
     ),
+    # allow-hardcode: human-reviewed disclosure justification, same shape as the
+    # entries above — not a matching oracle.
+    "workers/ingest_jobs.py": (
+        "The no-candidate CV ingest matches tenant-wide for the same reason the "
+        "matcher and the import path do — identity is email-or-phone across the "
+        "whole tenant, so a visibility-filtered match would let a document "
+        "create a duplicate of a colleague's candidate instead of attaching to "
+        "it. It discloses at the edge: a match held by a colleague the uploader "
+        "cannot see is checked against `visible_candidates` and routed to "
+        "`needs_review` rather than silently attached."
+    ),
 }
 
 

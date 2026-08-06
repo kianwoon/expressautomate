@@ -21,6 +21,7 @@ from app.workers.delivery_jobs import deliver_notification
 from app.workers.discovery_jobs import run_client_discovery
 from app.workers.embedding_jobs import compute_candidate_embedding
 from app.workers.import_jobs import run_candidate_import
+from app.workers.ingest_jobs import ingest_candidate_cv
 from app.workers.job_intelligence_jobs import run_job_intelligence
 from app.workers.jobs import (
     backfill_mailbox_job,
@@ -96,6 +97,19 @@ class WorkerSettings:
             parse_candidate_cv,
             name="parse_candidate_cv",
             timeout=settings.CV_PARSE_TIMEOUT_SECONDS,
+        ),
+        # The ingest front half: a CV uploaded with no candidate named is read,
+        # its identity extracted, and a candidate matched or created before the
+        # roles/skills parse runs. Same timeout ceiling as the parse — a
+        # FlateDecode bomb inflates inside `pypdf` here too — and the same
+        # explicit `name`, because producers enqueue the string
+        # "ingest_candidate_cv" and a wrapper under any other name fails on the
+        # far side of the queue. `rescan_stuck` routes `ingest_pending` and
+        # `ingesting` rows to this name; a mismatch would strand the document.
+        func(
+            ingest_candidate_cv,
+            name="ingest_candidate_cv",
+            timeout=settings.CV_INGEST_TIMEOUT_SECONDS,
         ),
         # An import is database work rather than a model call, but it is
         # database work whose size the uploader chooses: five hundred rows,

@@ -683,6 +683,14 @@ class CandidateDocument(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
 
     __tablename__ = "candidate_documents"
 
+    # A CV uploaded with no candidate named starts here: the ingest job has not
+    # yet read its identity and resolved it to a candidate. Distinct from
+    # `pending` so `rescan_stuck` can route a stranded row to the right job —
+    # `ingest_candidate_cv` for this state, `parse_candidate_cv` for `pending`
+    # and `parsing` — and so the per-candidate upload path (which has always
+    # named its candidate) never enters it by accident.
+    INGEST_PENDING = "ingest_pending"
+    INGESTING = "ingesting"
     PENDING = "pending"
     PARSING = "parsing"
     PARSED = "parsed"
@@ -693,7 +701,16 @@ class CandidateDocument(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
     EMPTY = "empty"
     UNREADABLE = "unreadable"
     FAILED = "failed"
-    PARSE_STATES = (PENDING, PARSING, PARSED, EMPTY, UNREADABLE, FAILED)
+    # Identity was resolved but the resolved candidate belongs to a colleague
+    # this recruiter cannot see (or two keys pointed at two people). Terminal,
+    # because neither is a transient failure: a person must look at it. The
+    # roles/skills parse is not run while the document's candidate is in
+    # dispute, so nothing the parse found gets attached to the wrong person.
+    NEEDS_REVIEW = "needs_review"
+    PARSE_STATES = (
+        INGEST_PENDING, INGESTING, PENDING, PARSING, PARSED,
+        EMPTY, UNREADABLE, FAILED, NEEDS_REVIEW,
+    )
 
     candidate_id: Mapped[uuid.UUID] = mapped_column(
         PgUUID(as_uuid=True), nullable=False, index=True
@@ -727,6 +744,15 @@ class CandidateDocument(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
         PgUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL")
     )
 
+    # Where this document entered the platform. `upload` is the per-candidate
+    # drop-zone; `ingest` is a CV uploaded with no candidate named, resolved by
+    # reading its identity. Cloud sources (`onedrive`, `sharepoint`, `gdrive`)
+    # arrive later with the storage-connections feature and share this column
+    # so a document's provenance has one home rather than two.
+    UPLOAD = "upload"
+    INGEST = "ingest"
+    origin: Mapped[str] = mapped_column(String(16), nullable=False, default=UPLOAD)
+
     __table_args__ = (
         ForeignKeyConstraint(
             ["tenant_id", "candidate_id"],
@@ -735,7 +761,8 @@ class CandidateDocument(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
             ondelete="CASCADE",
         ),
         CheckConstraint(
-            "parse_state IN ('pending','parsing','parsed','empty','unreadable','failed')",
+            "parse_state IN ('ingest_pending','ingesting','pending','parsing',"
+            "'parsed','empty','unreadable','failed','needs_review')",
             name="ck_candidate_documents_parse_state",
         ),
     )

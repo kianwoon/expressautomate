@@ -56,7 +56,7 @@ const ACCEPT =
   ".pdf,.docx,application/pdf," +
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 
-const IN_FLIGHT: ParseState[] = ["pending", "parsing"];
+const IN_FLIGHT: ParseState[] = ["ingest_pending", "ingesting", "pending", "parsing"];
 
 function isInFlight(document: CandidateDocument): boolean {
   return IN_FLIGHT.includes(document.parse_state);
@@ -95,6 +95,20 @@ type Description = {
  */
 function describe(document: CandidateDocument): Description {
   switch (document.parse_state) {
+    case "ingest_pending":
+      // A CV that arrived with no candidate named, queued for identity
+      // resolution before the roles/skills read. Lives on the placeholder
+      // candidate the ingest route created; once identity resolves the row
+      // moves to `pending` under the resolved candidate.
+      return {
+        tone: "working",
+        headline: "Queued. Reading this CV's contact details to match a candidate…",
+      };
+    case "ingesting":
+      return {
+        tone: "working",
+        headline: "Reading this CV's contact details to match a candidate…",
+      };
     case "pending":
       return { tone: "working", headline: "Queued for reading." };
     case "parsing":
@@ -136,6 +150,19 @@ function describe(document: CandidateDocument): Description {
         // broke, and no message written here could.
         detail: document.parse_error ?? "Nothing was changed on the candidate.",
         retry: true,
+      };
+    case "needs_review":
+      // Identity resolved to a candidate this recruiter cannot see (held by a
+      // colleague), or to two different people. A person must decide, so the
+      // roles/skills parse is deliberately not run and nothing the CV said is
+      // attached. No retry: re-uploading produces the same collision.
+      return {
+        tone: "warn",
+        headline: "This CV needs a person to look at it.",
+        detail:
+          document.parse_error ??
+          "This CV's contact details match a candidate held by a colleague or belong to two " +
+            "different people. Ask the colleague, or correct the details and upload it again.",
       };
   }
 }

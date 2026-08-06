@@ -33,6 +33,9 @@
     "/api/candidates/access-requests": [
       "GET"
     ],
+    "/api/candidates/documents": [
+      "POST"
+    ],
     "/api/candidates/imports": [
       "GET",
       "POST"

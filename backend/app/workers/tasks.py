@@ -189,12 +189,20 @@ async def rescan_stuck() -> int:
             requeued += 1
 
     for row in documents:
-        # No resume map: a document has exactly one job, and both non-terminal
-        # states resume at it. `parse_candidate_cv` accepts `parsing` as well
-        # as `pending` precisely so a row a killed worker left mid-parse is
-        # picked up rather than skipped as already answered.
+        # A document resumes at the job its state belongs to. `ingest_pending`
+        # and `ingesting` are the front half — the identity read and candidate
+        # resolution — and route to `ingest_candidate_cv`; `pending` and
+        # `parsing` are the roles/skills parse and route to `parse_candidate_cv`
+        # exactly as before. The resolver now returns `parse_state` (and
+        # `origin`) so this routing needs no second read; a row is never sent to
+        # the wrong job, which would re-read identity on a document mid-parse or
+        # re-parse a document that has no candidate resolved yet.
+        if row.parse_state in ("ingest_pending", "ingesting"):
+            job = "ingest_candidate_cv"
+        else:
+            job = "parse_candidate_cv"
         if await enqueue(
-            "parse_candidate_cv",
+            job,
             tenant_id=str(row.tenant_id),
             candidate_id=str(row.candidate_id),
             document_id=str(row.id),
