@@ -3,7 +3,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { PersonStage, SearchStage, WorkStage, type StageState } from "./job-intelligence-panel";
 import { type Intelligence, type IntelligenceView, useJobIntelligence } from "./job-intelligence";
-import type { Opportunity } from "./opportunities";
 
 /**
  * The panel split into a hook (`useJobIntelligence`) and three presentational
@@ -23,35 +22,6 @@ vi.mock("../api", async () => ({
   ...(await vi.importActual<typeof import("../api")>("../api")),
   SOURCING_POLL_MS: 10,
 }));
-
-function opportunity(overrides: Partial<Opportunity> = {}): Opportunity {
-  return {
-    id: "op-1",
-    received_datetime: "2026-08-06T00:00:00Z",
-    company_name_raw: "Acme",
-    job_title_raw: "Logistics Manager",
-    salary_raw: null,
-    salary_min: null,
-    salary_max: null,
-    salary_currency: null,
-    salary_period: null,
-    working_hours_raw: null,
-    requirements: null,
-    job_description: null,
-    duration_raw: null,
-    location_raw: null,
-    quality_state: "verified",
-    review_status: "new",
-    internet_message_id: null,
-    graph_message_id: null,
-    verified_fields: 0,
-    total_fields: 0,
-    placement_type: null,
-    sex_requirement: null,
-    sex_requirement_reason: null,
-    ...overrides,
-  } as Opportunity;
-}
 
 function analysis(overrides: Partial<Intelligence> = {}): Intelligence {
   return {
