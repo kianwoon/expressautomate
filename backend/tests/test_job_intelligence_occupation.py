@@ -13,6 +13,7 @@ allow-hardcode: the fixtures below are test content, not an oracle.
 import uuid
 
 import pytest
+from sqlalchemy import text as sa_text
 
 from app.core.config import settings
 from app.db.rls import tenant_session
@@ -241,9 +242,47 @@ async def test_classify_returns_none_when_search_yields_nothing():
 # This test runs the raw pgvector SQL through a real tenant session. It is the
 # guard against the class of bug that shipped to prod: a `text()` / asyncpg
 # incompatibility in the vector cast that the unit tests (session=None) could
-# not catch because they short-circuit before the query. It requires the seed
-# script to have populated `mom_occupations` in the test DB (the test-env
-# migration + a one-off `seed_mom_occupations.py --write`).
+# not catch because they short-circuit before the query. It seeds its own
+# occupation rows (CI's test DB has an empty mom_occupations — the migration
+# creates the table but the seed script is a manual deploy step), then cleans
+# them up.
+
+
+def _vec_literal(values: list[float]) -> str:
+    return "[" + ",".join(str(float(v)) for v in values) + "]"
+
+
+async def _seed_occupations(admin_session, rows: list[dict]) -> None:
+    """Insert test occupation rows under the admin role (BYPASSRLS).
+
+    `mom_occupations` has no DML policy (writes are the seed script's job under
+    the admin role), so a tenant session cannot insert — the admin session is
+    the only writer, matching production. The vector literal is inlined (not
+    bound) for the same asyncpg reason as the search query: the `::vector` cast
+    in a bound parameter is a syntax error under asyncpg.
+    """
+    for r in rows:
+        emb_literal = _vec_literal(r["embedding"])
+        await admin_session.execute(
+            sa_text(
+                "INSERT INTO mom_occupations "
+                "(id, year, title, gross_p25, gross_p50, gross_p75, "
+                " basic_p25, basic_p50, basic_p75, embedding) "
+                "VALUES (:id, :year, :title, :gp25, :gp50, :gp75, "
+                f"        :bp25, :bp50, :bp75, '{emb_literal}'::vector)"
+            ),
+            {
+                "id": str(r["id"]),
+                "year": r["year"],
+                "title": r["title"],
+                "gp25": r["gross_p25"],
+                "gp50": r["gross_p50"],
+                "gp75": r["gross_p75"],
+                "bp25": r["basic_p25"],
+                "bp50": r["basic_p50"],
+                "bp75": r["basic_p75"],
+            },
+        )
 
 
 @pytest.fixture(autouse=True)
@@ -251,19 +290,18 @@ def _embeddings_enabled(monkeypatch):
     """Force `embedding_configured()` true so the search path isn't skipped.
 
     Also stubs `embed_one` to return a fixed vector, so the test exercises the
-    SQL query (its real purpose) without making a network call to the embedding
-    provider. The fixed vector is arbitrary — it need only be the right
-    dimension to satisfy the `::vector(1536)` cast.
+    SQL query (its real purpose) without a network call. The fixed vector is a
+    unit vector pointing the same way as the seeded rows, so the cosine search
+    returns them ranked.
     """
     monkeypatch.setattr(settings, "EMBEDDING_BASE_URL", "https://embed.test/v1")
     monkeypatch.setattr(settings, "EMBEDDING_API_KEY", "test-key")
 
     from app.services.job_intelligence import occupation as occ_module
 
-    # allow-hardcode: a 1536-dim vector of zeroes — not a meaningful search
-    # query, just enough to exercise the SQL cast and ordering without a real
-    # embedding. The test asserts on structure, not ranking.
-    fixed = [0.01] * settings.EMBEDDING_DIM
+    # allow-hardcode: a 1536-dim unit vector. The seeded rows share this
+    # direction, so cosine similarity is ~1.0 and the search returns them.
+    fixed = [1.0] + [0.0] * (settings.EMBEDDING_DIM - 1)
 
     async def _fake_embed_one(_text, **_kwargs):
         return fixed
@@ -271,29 +309,55 @@ def _embeddings_enabled(monkeypatch):
     monkeypatch.setattr(occ_module, "embed_one", _fake_embed_one)
 
 
-async def test_search_runs_the_vector_query_against_a_real_session():
+async def test_search_runs_the_vector_query_against_a_real_session(admin_session):
     """The raw SQL executes under a tenant session and returns ranked rows.
 
     A regression here (ArgumentError from a bare string, asyncpg syntax error
     from a `::vector` bind param, NULL embeddings wiped by a bad upsert) fails
     this test rather than the recruiter's Run-analysis button in prod.
     """
-    profile = OccupationProfile(
-        occupation="Software Developer",
-        functions={"Development": 100},
-        seniority="Mid",
-        people_management=False,
-        industry="Technology",
-    )
-    async with tenant_session(uuid.uuid4()) as session:
-        results = await search_occupations(session, profile, k=5)
+    # allow-hardcode: two occupations aligned with the stubbed query vector.
+    seeded = [
+        {
+            "id": uuid.uuid4(), "year": 2024, "title": "software developer",
+            "gross_p25": 6658, "gross_p50": 8888, "gross_p75": 13513,
+            "basic_p25": 6599, "basic_p50": 8750, "basic_p75": 12574,
+            "embedding": [1.0] + [0.0] * (settings.EMBEDDING_DIM - 1),
+        },
+        {
+            "id": uuid.uuid4(), "year": 2024, "title": "data scientist",
+            "gross_p25": 6890, "gross_p50": 9047, "gross_p75": 12132,
+            "basic_p25": 6867, "basic_p50": 8992, "basic_p75": 12055,
+            "embedding": [0.9] + [0.1] + [0.0] * (settings.EMBEDDING_DIM - 2),
+        },
+    ]
+    seeded_ids = [str(r["id"]) for r in seeded]
+    await _seed_occupations(admin_session, seeded)
+    await admin_session.commit()
 
-    assert len(results) > 0
-    assert len(results) <= 5
-    # Every result carries the wage columns the chart plots.
-    first = results[0]
-    assert "title" in first and first["title"]
-    assert "gross_p25" in first and isinstance(first["gross_p25"], float)
-    assert "gross_p50" in first
-    assert "gross_p75" in first
-    assert "similarity" in first and 0.0 <= first["similarity"] <= 1.0
+    try:
+        profile = OccupationProfile(
+            occupation="Software Developer",
+            functions={"Development": 100},
+            seniority="Mid",
+            people_management=False,
+            industry="Technology",
+        )
+        async with tenant_session(uuid.uuid4()) as session:
+            results = await search_occupations(session, profile, k=5)
+
+        assert len(results) > 0
+        assert len(results) <= 5
+        # Every result carries the wage columns the chart plots.
+        first = results[0]
+        assert "title" in first and first["title"]
+        assert "gross_p25" in first and isinstance(first["gross_p25"], float)
+        assert "gross_p50" in first
+        assert "gross_p75" in first
+        assert "similarity" in first and 0.0 <= first["similarity"] <= 1.0
+    finally:
+        await admin_session.execute(
+            sa_text("DELETE FROM mom_occupations WHERE id = ANY(:ids)"),
+            {"ids": seeded_ids},
+        )
+        await admin_session.commit()
