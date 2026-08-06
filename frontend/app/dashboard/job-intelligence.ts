@@ -112,8 +112,13 @@ export async function getIntelligence(
   return (await res.json()) as IntelligenceView | NoIntelligence;
 }
 
-/** Whether a view is still working and worth polling for. */
+/** Whether a view is still working and worth polling for.
+
+  A `pending` or `running` row has `intelligence: null` (the results are not
+  written yet), so checking `intelligence` would wrongly stop the poller the
+  moment a run starts — leaving the panel stuck on "starting" until the modal
+  was reopened. The `state` field is what decides: `NoIntelligence` has none. */
 export function inFlight(view: IntelligenceView | NoIntelligence | null): boolean {
-  if (!view || view.intelligence === null) return false;
+  if (!view || !("state" in view)) return false;
   return view.state === "pending" || view.state === "running";
 }

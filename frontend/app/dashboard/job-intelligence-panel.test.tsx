@@ -5,6 +5,12 @@ import { JobIntelligence } from "./job-intelligence-panel";
 import type { Intelligence, IntelligenceView } from "./job-intelligence";
 import type { Opportunity } from "./opportunities";
 
+// Poll quickly in tests so the polling-flow test does not wait the real 4s.
+vi.mock("../api", async () => ({
+  ...(await vi.importActual<typeof import("../api")>("../api")),
+  SOURCING_POLL_MS: 10,
+}));
+
 /**
  * Mocks the data module the panel depends on, following the pattern in
  * `job-orders-sourcing.test.tsx`: the component's fetches are stubbed directly
@@ -17,14 +23,17 @@ import type { Opportunity } from "./opportunities";
 const getIntelligence = vi.fn();
 const runIntelligence = vi.fn();
 
-vi.mock("./job-intelligence", () => ({
-  getIntelligence: () => getIntelligence(),
-  runIntelligence: (id: string) => runIntelligence(id),
-  inFlight: (view: unknown) => {
-    const v = view as { state?: string } | null;
-    return !!v && (v.state === "pending" || v.state === "running");
-  },
-}));
+vi.mock("./job-intelligence", async () => {
+  // Use the REAL `inFlight`, not a stub: a stub that disagrees with the real
+  // one hid a bug where a `pending` row (intelligence: null) stopped the
+  // poller the instant a run started. The fetches are still stubbed.
+  const actual = await vi.importActual<typeof import("./job-intelligence")>("./job-intelligence");
+  return {
+    ...actual,
+    getIntelligence: () => getIntelligence(),
+    runIntelligence: (id: string) => runIntelligence(id),
+  };
+});
 
 function opportunity(overrides: Partial<Opportunity> = {}): Opportunity {
   return {
@@ -133,8 +142,12 @@ describe("JobIntelligence panel", () => {
     expect(screen.getByText('"logistics manager" AND dispatch')).toBeDefined();
   });
 
-  it("starts the analysis with a POST that returns pending", async () => {
-    getIntelligence.mockResolvedValue({ intelligence: null });
+  it("renders the result by polling, without reopening the modal", async () => {
+    // Regression: a `pending` row has intelligence: null, and the poller once
+    // treated that as "not in flight", so the result never arrived until the
+    // modal was closed and reopened (which remounted the panel). Now the poller
+    // keys off `state`, so a run flows pending → done in place.
+    getIntelligence.mockResolvedValue({ intelligence: null }); // mount: nothing yet
     runIntelligence.mockResolvedValue({
       id: "row-1",
       state: "pending",
@@ -150,10 +163,23 @@ describe("JobIntelligence panel", () => {
     await waitFor(() => {
       expect(runIntelligence).toHaveBeenCalledWith("op-1");
     });
-    // The panel shows the analysing state, not the result (it arrives on a poll).
-    await waitFor(() => {
-      expect(screen.getByText(/Analysing this job order/i)).toBeDefined();
+
+    // The first poll returns pending (still working)...
+    getIntelligence.mockResolvedValueOnce({
+      id: "row-1",
+      state: "pending",
+      failure_reason: null,
+      analysed_at: null,
+      intelligence: null,
     });
+    // ...the next poll returns done with the analysis.
+    getIntelligence.mockResolvedValueOnce(doneView());
+
+    // The result appears without any remount — no close/reopen.
+    await waitFor(() => {
+      expect(screen.getByText("Understanding the work")).toBeDefined();
+    });
+    expect(screen.getByText("Logistics Manager")).toBeDefined();
   });
 
   it("shows the failure reason when the row is failed", async () => {
