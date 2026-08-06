@@ -209,7 +209,7 @@ async def _token_for_user(session, tenant_id: uuid.UUID, owner: uuid.UUID, *, ab
             ),
             timeout=settings.GRAPH_TIMEOUT_SECONDS,
         )
-    except asyncio.TimeoutError as exc:
+    except TimeoutError as exc:
         raise MailboxNotAuthorised("token refresh timed out") from exc
     if "access_token" not in result:
         raise MailboxNotAuthorised(result.get("error_description", "refresh token rejected"))
