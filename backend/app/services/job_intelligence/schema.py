@@ -60,6 +60,27 @@ _SEARCH_FIELDS = (
     "employment_type",
 )
 
+# allow-hardcode: the LLM-extracted occupation profile (Module 4 step 1). The
+# `functions` field is a free-form object of {activity: percentage}; rendered
+# as an additional-property object in the schema because the activity names are
+# not enumerable ahead of time.
+_OCCUPATION_PROFILE_FIELDS = (
+    "occupation",
+    "seniority",
+    "people_management",
+    "industry",
+)
+
+# allow-hardcode: the re-ranked occupation match (Module 4 step 3). The model
+# picks one title from the candidate list and returns confidence + rationale;
+# the wage figures and similarity are filled from the candidate row, not the
+# model, so only the choice and its justification are asked for.
+_OCCUPATION_PICK_FIELDS = (
+    "title",
+    "confidence",
+    "rationale",
+)
+
 
 class JDUnderstanding(BaseModel):
     """What the work is — Module 1 of the design doc."""
@@ -116,12 +137,60 @@ class SearchPlan(BaseModel):
     employment_type: str
 
 
+class OccupationProfile(BaseModel):
+    """A structured work profile for occupation matching — Module 4 step 1.
+
+    The LLM distils the job order into the facets that distinguish one MOM
+    occupation from another: the canonical role name, seniority, whether the
+    role manages people, and the industry. `functions` is a free-form weighting
+    of activity areas (e.g. {"Recruitment": 40, "Administration": 30}), kept as
+    a dict rather than a list so the embedder sees the proportional emphasis,
+    not just the labels.
+    """
+
+    occupation: str
+    functions: dict[str, int] = Field(default_factory=dict)
+    seniority: str
+    people_management: bool = False
+    industry: str
+
+
+class OccupationMatch(BaseModel):
+    """The matched MOM occupation and its wage percentiles — Module 4 result.
+
+    `title`/`year`/the six wage figures come from the `mom_occupations` row the
+    re-ranker selected (never from the model — the survey is ground truth, and
+    asking the model for wages would invite fabrication). `similarity` is the
+    cosine score from the pgvector search; `confidence` and `rationale` are the
+    re-ranker's own judgement of how well the title fits the extracted profile.
+    """
+
+    title: str
+    year: int
+    gross_p25: float
+    gross_p50: float
+    gross_p75: float
+    basic_p25: float
+    basic_p50: float
+    basic_p75: float
+    similarity: float = 0.0
+    confidence: float = 0.0
+    rationale: str = ""
+
+
 class JobIntelligenceResult(BaseModel):
-    """All three stages, as the API returns and the row stores them."""
+    """All four stages, as the API returns and the row stores them.
+
+    `occupation` is optional because the match stage degrades to None when the
+    reference library is empty or embeddings are unconfigured — the rest of the
+    analysis is still useful without a salary benchmark, so a missing match
+    fails soft rather than failing the whole run.
+    """
 
     understanding: JDUnderstanding
     persona: CandidatePersona
     search_plan: SearchPlan
+    occupation: OccupationMatch | None = None
 
 
 def json_schema() -> dict:
@@ -142,6 +211,8 @@ def json_schema() -> dict:
         "understanding": _schema_for(_UNDERSTANDING_FIELDS, confidence=True),
         "persona": _schema_for(_PERSONA_FIELDS),
         "search": _schema_for(_SEARCH_FIELDS),
+        "occupation_profile": _occupation_profile_schema(),
+        "occupation_pick": _schema_for(_OCCUPATION_PICK_FIELDS, confidence=True),
     }
 
 
@@ -156,8 +227,8 @@ def _schema_for(fields: tuple[str, ...], *, confidence: bool = False) -> dict:
     the model one shape and parses it against another, and the model follows the
     schema it was given (it returned `["1"]` for `priority` when the schema said
     array-of-strings but the parser wanted int). Strings in `_SCALAR_FIELDS`,
-    integers in `_INTEGER_FIELDS`, `confidence` is the lone number, everything
-    else is an array of strings.
+    integers in `_INTEGER_FIELDS`, booleans in `_BOOLEAN_FIELDS`, `confidence`
+    is the lone number, everything else is an array of strings.
     """
     properties: dict[str, object] = {}
     for name in fields:
@@ -165,6 +236,8 @@ def _schema_for(fields: tuple[str, ...], *, confidence: bool = False) -> dict:
             properties[name] = {"type": "number"}
         elif name in _INTEGER_FIELDS:
             properties[name] = {"type": "integer"}
+        elif name in _BOOLEAN_FIELDS:
+            properties[name] = {"type": "boolean"}
         elif name in _SCALAR_FIELDS:
             properties[name] = {"type": "string"}
         else:
@@ -177,10 +250,43 @@ def _schema_for(fields: tuple[str, ...], *, confidence: bool = False) -> dict:
     }
 
 
+def _occupation_profile_schema() -> dict:
+    """The occupation-profile schema, with its free-form `functions` object.
+
+    Unlike the other stages, this one carries a `dict[str, int]` — the
+    proportional weighting of activity areas, whose keys are not enumerable
+    ahead of time. It is rendered as an additional-properties object so the
+    model can name whatever activities the work involves, with integer values
+    summing (ideally) to 100. The scalar fields reuse `_SCALAR_FIELDS` typing.
+    """
+    properties: dict[str, object] = {
+        name: {"type": "boolean"} if name in _BOOLEAN_FIELDS else {"type": "string"}
+        for name in _OCCUPATION_PROFILE_FIELDS
+    }
+    properties["functions"] = {
+        "type": "object",
+        # The keys are activity names; the values are integer weights.
+        "additionalProperties": {"type": "integer"},
+    }
+    required = list(_OCCUPATION_PROFILE_FIELDS) + ["functions"]
+    return {
+        "type": "object",
+        "properties": properties,
+        "required": required,
+        "additionalProperties": False,
+    }
+
+
 # Fields whose Pydantic type is `int`, not `str` or `list[str]`. Named once so
 # the schema and the Pydantic model agree — see the warning in `_schema_for`.
 _INTEGER_FIELDS = {
     "priority",
+}
+
+
+# Fields whose Pydantic type is `bool`. Named once for the same lockstep reason.
+_BOOLEAN_FIELDS = {
+    "people_management",
 }
 
 
@@ -202,4 +308,11 @@ _SCALAR_FIELDS = {
     "salary",
     "location",
     "employment_type",
+    # occupation profile
+    "occupation",
+    "seniority",
+    "industry",
+    # occupation pick
+    "title",
+    "rationale",
 }

@@ -833,6 +833,149 @@
   font-style: italic;
 }
 
+/* ---- Salary benchmark chart ----
+   The first chart in the app. Library-free: a horizontal bar whose segments
+   are the P25/Median/P75 bands and whose marker is the client offer. Every
+   value is a survey percentile or the recruiter's own figure — no decorative
+   shape, consistent with the project's anti-fake-data stance. Colours are
+   tokens, never hex: the band washes are --blue-050/--teal-050, the offer
+   marker is --blue-600, the verdict badges tone by band. */
+.jo-benchmark {
+  /* Inherits .jo-intel-stage's top border + padding via its class. */
+}
+.jo-benchmark-match {
+  margin-bottom: 12px;
+}
+.jo-benchmark-title {
+  text-transform: capitalize;
+  font-weight: 650;
+  color: var(--ink-900);
+}
+
+/* The track is a relative-positioned bar the segments and marker sit in.
+   Fixed height so the offer marker's vertical line spans it exactly. */
+.jo-benchmark-track {
+  position: relative;
+  height: 28px;
+  border-radius: 6px;
+  background: var(--surface-alt);
+  border: 1px solid var(--line);
+  overflow: visible;
+  margin-bottom: 8px;
+}
+/* Three contiguous segments: p25 (lightest), median (mid), p75 (teal wash).
+   They sit left-to-right and their widths are percentages of the scale max, so
+   the bar reads as a market distribution growing toward the right. The two
+   available washes (--blue-050, --teal-050) plus the track's own --surface-alt
+   give three distinct steps without inventing a token between them. */
+.jo-benchmark-seg {
+  position: absolute;
+  top: 0;
+  height: 100%;
+}
+.jo-benchmark-p25 {
+  left: 0;
+  background: var(--blue-050);
+  border-radius: 5px 0 0 5px;
+}
+.jo-benchmark-med {
+  background: var(--teal-050);
+}
+.jo-benchmark-p75 {
+  background: var(--teal-050);
+  opacity: 0.6;
+}
+/* A thin separator between segments so the bands read as steps, not a blur. */
+.jo-benchmark-med,
+.jo-benchmark-p75 {
+  border-left: 1px solid var(--line);
+}
+
+/* The offer marker: a vertical line + dot at the offer's true position. Hidden
+   when the offer is not comparable (left unset by the component). */
+.jo-benchmark-offer {
+  position: absolute;
+  top: -4px;
+  bottom: -4px;
+  width: 2px;
+  background: var(--blue-600);
+  transform: translateX(-1px); /* centre on the position, not left-edge it */
+}
+.jo-benchmark-offer::before {
+  content: "";
+  position: absolute;
+  top: -3px;
+  left: -3.5px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--blue-600);
+}
+
+/* Legend: four figures in a row, the survey percentiles + the offer. */
+.jo-benchmark-legend {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  margin: 0 0 10px;
+}
+.jo-benchmark-legend div {
+  display: grid;
+  gap: 2px;
+}
+.jo-benchmark-legend dt {
+  font-size: 0.75rem;
+  color: var(--ink-500);
+}
+.jo-benchmark-legend dd {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--ink-900);
+}
+
+/* Verdict: a coloured badge + the percentile line. Toned by band so a glance
+   reads below-market (amber) vs strong/premium (teal/blue). */
+.jo-benchmark-verdict {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.jo-benchmark-band {
+  font-size: 0.8125rem;
+  font-weight: 650;
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+.jo-benchmark-band-below {
+  background: var(--amber-050);
+  color: var(--amber-700);
+}
+.jo-benchmark-band-competitive {
+  background: var(--amber-050);
+  color: var(--amber-700);
+}
+.jo-benchmark-band-strong {
+  background: var(--teal-050);
+  color: var(--teal-500);
+}
+.jo-benchmark-band-premium {
+  background: var(--blue-050);
+  color: var(--blue-600);
+}
+.jo-benchmark-note {
+  font-style: italic;
+}
+
+/* Rationale + confidence from the re-ranker, in the muted sub style. */
+.jo-benchmark-rationale {
+  margin-top: 6px;
+  line-height: 1.45;
+}
+.jo-benchmark-conf {
+  white-space: nowrap;
+}
+
 /* ---- Job order modal: header run button + tab bar ---- */
 
 /* The title and the Run-analysis button sit on one row. The title keeps its

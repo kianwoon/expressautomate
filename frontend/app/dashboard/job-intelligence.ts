@@ -64,11 +64,30 @@ export type SearchPlan = {
   employment_type: string;
 };
 
-/** All three stages, present only when `state === "done"`. */
+/** Module 4 — the matched MOM occupation and its wage percentiles.
+ *  Mirrors `OccupationMatch` on the server. Present only when the occupation
+ *  stage found a match; absent when it degraded (empty library, no embeddings). */
+export type OccupationMatch = {
+  title: string;
+  year: number;
+  gross_p25: number;
+  gross_p50: number;
+  gross_p75: number;
+  basic_p25: number;
+  basic_p50: number;
+  basic_p75: number;
+  similarity: number;
+  confidence: number;
+  rationale: string;
+};
+
+/** All four stages, present only when `state === "done"`. */
 export type Intelligence = {
   understanding: Understanding;
   persona: Persona;
   search_plan: SearchPlan;
+  /** `null` when the occupation stage degraded to no match. */
+  occupation?: OccupationMatch | null;
 };
 
 /** The full row, as GET and POST return it. */

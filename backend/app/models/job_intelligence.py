@@ -86,6 +86,14 @@ class JobIntelligence(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
     persona: Mapped[dict | None] = mapped_column(JSONB)
     search_plan: Mapped[dict | None] = mapped_column(JSONB)
 
+    # The occupation benchmark match (Module 4): the MOM occupation the
+    # analysis matched the work to, with its P25/Median/P75 and the LLM's
+    # confidence/rationale. JSONB for the same reason as the three above: read
+    # as a unit, never queried on individually. NULL when the match stage
+    # degraded (no embeddings configured, empty library) rather than an empty
+    # object — distinguishes "ran and found nothing" from "never ran".
+    occupation: Mapped[dict | None] = mapped_column(JSONB)
+
     # The model name recorded on the *last* of the three calls. The three calls
     # normally share one model, so one name suffices; recording three would be
     # detail the button never shows.

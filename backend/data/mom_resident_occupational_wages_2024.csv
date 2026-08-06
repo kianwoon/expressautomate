@@ -1,0 +1,563 @@
+year,occ_desc,mthly_gross_wage_75_pctile,mthly_gross_wage_50_pctile,mthly_gross_wage_25_pctile,mthly_basic_wage_75_pctile,mthly_basic_wage_50_pctile,mthly_basic_wage_25_pctile
+2024,accountant (excluding tax accountant),6695,5498,4600,6620,5434,4552
+2024,actuary,13484,7572,4987,12790,7460,4970
+2024,administration manager,8431,6388,4569,8351,6320,4480
+2024,advertising salesman,6120,5500,4651,6120,5500,4651
+2024,advertising/public relations manager,13333,8514,5943,13218,8429,5900
+2024,aeronautical engineer,8142,6046,4729,8063,5998,4702
+2024,aeronautical engineering technician,6054,4481,3235,5553,4220,3029
+2024,after sales adviser/client account service executive,9583,5620,4054,9500,5500,4000
+2024,aged care services manager,9997,7759,6091,9840,7719,6000
+2024,air cargo officer,5362,4201,3425,5322,4117,3300
+2024,air transport clerk,3800,3160,2714,3800,3160,2714
+2024,air transport equipment project executive,7735,4555,2811,7684,4555,2811
+2024,air transport service supervisor,7536,5552,4425,7536,4890,3940
+2024,air-conditioning/refrigeration engineer,9106,6503,5419,8704,6487,5346
+2024,air-conditioning/refrigeration engineering technician,5750,4141,2900,5750,4141,2900
+2024,air-conditioning/refrigeration equipment mechanic,4003,3263,2475,4003,3070,2475
+2024,aircraft loader (e.g. airport baggage/cargo handler),3775,3216,2402,3775,3211,2373
+2024,airport mobile equipment operator,3935,3081,2526,3746,2940,2347
+2024,ambulance driver,3129,2386,1848,2837,2213,1704
+2024,anaesthesiologist,7633,6712,6195,7158,6182,5687
+2024,applications/systems programmer,7660,6500,6050,7585,6500,6050
+2024,appraiser/valuer (excluding intangible asset valuer),8251,5281,3140,8251,5281,3140
+2024,aquarium fish farm worker,4069,3630,3165,4060,3630,3165
+2024,architectural draughtsman,5400,4135,3300,5363,4135,3300
+2024,art and craft instructor (extracurriculum),4183,3300,2400,4183,3300,2400
+2024,"artistic director (stage, film, television, game and radio)",7280,5500,4260,7280,5500,4260
+2024,arts and cultural centre manager (including gallery and museum manager),6650,4550,3800,6650,4550,3800
+2024,assessor,6777,5100,3926,6670,5082,3914
+2024,assistant accountant,4575,3885,3300,4500,3811,3285
+2024,assistant civil and structural engineer,5838,4110,3300,5572,3849,3100
+2024,assistant electrical engineer,6579,4871,3800,6533,4782,3575
+2024,assistant electronics engineer,7078,4632,3600,6000,4352,3500
+2024,assistant manufacturing engineer,5544,4003,3328,4605,3500,3015
+2024,assistant mechanical engineer,4800,3983,3272,4472,3659,3000
+2024,athlete/sportsman,4000,2658,2415,4000,2485,2300
+2024,attractions guide,2497,2000,1289,2497,2000,1289
+2024,attractions manager,8080,6195,4300,8080,6195,4300
+2024,audio and video equipment engineer,6540,4837,3921,6540,4800,3920
+2024,audio and video equipment technician,5235,3869,3012,5229,3790,2981
+2024,audiologist,5800,4884,3963,5800,4884,3890
+2024,audit associate professional,5750,5050,4500,5750,4900,4500
+2024,audit clerk,4443,3875,3525,4431,3850,3500
+2024,audit manager,14166,10041,7692,13922,9888,7450
+2024,auditor (accounting),7693,5575,4875,7530,5500,4800
+2024,author,7000,4000,3500,7000,4000,3500
+2024,automation engineer (including robotics engineer),12539,8588,6350,12539,8588,6310
+2024,automation technician,4836,3449,2799,4000,3178,2575
+2024,automotive engineering technician,4953,3778,2800,3720,2950,2454
+2024,automotive mechanic,3400,2776,2160,2900,2571,2060
+2024,auxiliary police officer,3577,3396,3159,3577,3396,3159
+2024,baker,3083,2210,1500,2668,1958,1363
+2024,bank operations clerk,6850,5150,4055,6752,5076,3989
+2024,bank teller,4560,3965,3194,4401,3890,2967
+2024,barista,2600,2064,1400,2418,1992,1302
+2024,bartender/mixologist,3900,2976,2500,3900,2935,2400
+2024,beautician,4853,3500,2474,3726,2684,1921
+2024,bell captain,2720,2427,2284,2720,2408,2284
+2024,bellboy/hotel porter,2654,2255,2078,2596,2243,2041
+2024,bill collector,5950,4087,2497,5870,4070,2497
+2024,billing clerk,4050,3100,2200,3961,3038,2154
+2024,biochemist,7114,6264,5500,5691,4868,4026
+2024,biologist,10202,8352,6704,10133,8281,6666
+2024,biomedical engineer,7209,5346,4171,7000,5248,4167
+2024,bookkeeper,5788,3200,1792,5700,3144,1710
+2024,bookmaker/croupier/casino dealer and related gaming worker,3363,2991,2730,2940,2536,2417
+2024,budgeting and financial accounting manager (including financial controller),14200,9203,6550,13950,9129,6458
+2024,building architect,10366,6798,5250,10000,6750,5200
+2024,building caretaker/watchman,3200,2564,1682,3166,2542,1612
+2024,building construction engineer,6000,4800,4000,5767,4680,3900
+2024,building maintenance worker,4461,3245,2438,3909,2954,2151
+2024,building painter,2450,1600,1600,2440,1600,1600
+2024,building technician,3960,3623,3029,3892,3515,2965
+2024,bus attendant,1600,1400,1400,1600,1400,1400
+2024,bus driver,5137,3782,2289,2706,2179,1325
+2024,business and financial project management professional,11006,7693,5500,10907,7504,5400
+2024,business consultant,11875,8662,4095,11875,8662,4095
+2024,business development executive,7455,5000,3975,7000,4761,3815
+2024,business development manager,13189,8669,5957,12600,8216,5747
+2024,business valuer,16560,9708,5200,16560,9708,5200
+2024,"butcher, fishmonger and related food preparer",3142,2772,2593,3026,2727,2562
+2024,buyer,6115,4694,3608,5815,4448,3250
+2024,cabin attendant/steward,4727,3730,2903,4718,3714,2871
+2024,cage/count supervisor,4817,4484,4140,3820,3690,3590
+2024,call centre manager,8310,5968,4114,8310,5926,4000
+2024,captain waiter/waiter supervisor,3473,2837,2024,3062,2361,1701
+2024,car park attendant,3889,3126,1992,3656,2780,1300
+2024,cardiothoracic surgeon,6882,6294,5938,6352,5764,5408
+2024,career coach (counselling),6630,4415,3826,6565,4300,3660
+2024,carpenter,4209,2902,2110,3300,2760,1837
+2024,cashier (general),2588,2151,1600,2300,1936,1472
+2024,catering manager,6160,4697,3675,6160,4697,3675
+2024,chauffeur,3593,2743,2033,2986,2387,1740
+2024,chef,4850,3850,3105,4661,3630,3000
+2024,chemical engineering technician,6153,4925,3951,5994,4608,3632
+2024,chemical engineering technician (petrochemicals),7446,5738,4589,7446,5738,4589
+2024,chemist,11430,6357,4500,11339,6104,4341
+2024,chemistry technician,6199,4765,3554,6128,4471,3200
+2024,chief engineer/second engineer (ship),11456,8339,6231,11304,8162,6120
+2024,chief information officer/chief technology officer/chief security officer,20000,15258,10949,20000,15016,10694
+2024,chief operating officer/general manager,16100,12750,8470,15790,12510,8050
+2024,chief steward,8216,6890,5631,8216,6890,5631
+2024,child/after school care centre worker,4373,2648,1750,4373,2600,1750
+2024,civil engineer,8165,6500,4900,8100,6460,4860
+2024,civil engineering technician,5720,4310,2990,5600,4119,2800
+2024,civil engineering/building construction labourer,1660,1550,1400,1610,1500,1400
+2024,civil/structural engineering draughtsman,4000,2819,2471,3932,2819,2471
+2024,cleaning supervisor,2976,2210,1600,2455,1882,1376
+2024,clearing and forwarding agent,4823,4047,3504,4758,3978,3400
+2024,clinical psychologist,7024,5495,4850,7013,5495,4850
+2024,clinical research coordinator,5986,4500,3905,5900,4500,3894
+2024,clinical research professional,13632,8990,6632,12705,8818,6632
+2024,cloud specialist,15176,9583,7001,14774,9494,7000
+2024,commercial airline pilot,17003,13878,11594,17003,13878,11594
+2024,commodities and freight derivatives broker,18662,12000,8205,18662,12000,8205
+2024,commodities trader (excluding oil and bunker),20000,16000,8800,20000,16000,8800
+2024,community health worker,4425,3103,3000,4270,3103,3000
+2024,"community, partnership and relations manager",7585,6250,5140,7500,6180,5086
+2024,company director,16602,11000,5200,16150,10620,5000
+2024,compliance officer/risk analyst (financial),13048,7395,5500,13003,7341,5450
+2024,computer engineer,6679,6061,5572,6679,6061,5572
+2024,computer systems operator,8143,5425,4357,7821,5168,3156
+2024,concierge (hotel),3488,3002,2580,3300,2821,2450
+2024,concrete mix truck driver,3268,2666,1600,2350,1913,1216
+2024,construction manager,11154,7600,5200,10900,7450,5000
+2024,contact centre information clerk,4418,3150,2513,4314,3025,2443
+2024,content writer,8097,5250,4327,8097,5250,4300
+2024,cook (e.g. commis cook 2/3),2955,2028,1500,2760,1979,1398
+2024,counsellor (family),5300,4350,3700,5278,4350,3650
+2024,crane operator (on-site),3368,3117,2953,3366,3117,2953
+2024,crane/hoist operator (excluding port),6496,4979,3390,4750,3200,2320
+2024,creative advertising professional,10415,7089,4975,10325,7053,4930
+2024,crewing executive (ship),6167,4377,3539,6070,4053,3196
+2024,curator,8000,5595,4610,7840,5595,4610
+2024,customer service manager,13015,8470,5925,12607,8311,5800
+2024,customer service officer/clerk,4264,3190,2349,4128,3036,2209
+2024,cyber risk specialist,13583,10071,7579,13562,10005,7532
+2024,cybersecurity architect,11236,7826,5738,11236,7783,5618
+2024,dairy and confectionery products machine operator,4514,2553,1748,4495,2475,1690
+2024,data centre engineer,6361,4863,3870,6151,4240,3650
+2024,data entry clerk,2925,2000,1500,2800,1900,1500
+2024,data processing control clerk,4929,3480,2598,4200,3059,2377
+2024,data scientist,12132,9047,6890,12055,8992,6867
+2024,database administrator,10264,6717,3440,10264,6630,3339
+2024,database architect,14942,11153,7410,14942,11153,7300
+2024,deckhand (including lighterman),2206,1740,1630,2206,1740,1630
+2024,delivery man using motorised personal mobility aids/devices,2000,1985,1700,2000,1970,1666
+2024,dental aide/assistant,3272,2700,2300,3258,2700,2298
+2024,dental technician,3649,3032,2642,3649,3032,2642
+2024,dermatologist,9982,9035,6776,8841,8005,6246
+2024,diagnostic radiologist,9282,7016,6486,8278,6486,5956
+2024,dietitian,6232,4708,4044,6220,4708,4038
+2024,"digital marketing professional (e.g. online, social media, e-commerce marketing professional)",8235,5300,3679,8200,5300,3671
+2024,"director (stage, film, television, game, commercial, video and radio)",15657,11998,9479,15376,11824,9000
+2024,dishwasher,2091,1684,1430,1915,1526,1316
+2024,doorman,2890,2534,2380,2856,2500,2369
+2024,driving instructor/tester,3818,3342,2970,3674,3300,2890
+2024,early intervention teacher for infants and children,4951,4019,3300,4951,4019,3300
+2024,economist,20000,6080,4848,20000,6080,4848
+2024,editor (news and periodicals),15038,10800,7444,14980,10797,7425
+2024,"editor (radio, television and video)",9859,6909,5246,9660,6881,5232
+2024,educarer,3968,3391,3090,3570,2965,2686
+2024,electrical engineer,8155,6000,4687,8000,5891,4607
+2024,electrical engineering technician,5461,4235,3081,5331,4039,2838
+2024,electrical fitter,3429,2200,1750,3101,2097,1725
+2024,electrical household appliance repairer,3323,2797,1900,3181,2594,1900
+2024,"electrical lift, escalator and related equipment fitter",5152,4108,3072,3467,2850,2526
+2024,electrical/electronics draughtsman,4400,3518,2400,4285,3250,1800
+2024,electrician,4300,3000,2145,3980,3000,2006
+2024,electronic equipment/component assembler,2520,2017,1847,1980,1770,1630
+2024,electronics engineer,9135,7861,6092,8832,7472,5601
+2024,electronics engineering technician,5374,4071,3287,5218,3881,3088
+2024,embedded systems engineer (including port systems engineer),10443,8085,6110,10357,8026,6019
+2024,emergency physician,7185,6575,6131,6655,6045,5601
+2024,employment agent/labour contractor,7335,4522,3084,7296,4367,2300
+2024,energy engineer,20000,12425,7883,19542,12400,7883
+2024,enrolled/assistant nurse (excluding registered nurse),6705,4904,3344,6670,4835,3326
+2024,enterprise/solution architect,16737,12137,7950,16276,11645,7750
+2024,enumerator/market research interviewer,3249,2701,1788,3023,2524,1674
+2024,environmental engineer,7127,5710,4963,7123,5667,4900
+2024,environmental inspector (environmental public health),10408,7373,4794,10408,7373,4690
+2024,environmental officer (environmental protection),11550,7210,5500,11250,7150,5208
+2024,environmental officer (public health),11000,8752,6528,11000,7786,6528
+2024,event manager,7920,5960,4820,7897,5900,4745
+2024,excavating/trench digging machine operator,4998,3098,2000,4998,2440,1790
+2024,executive search consultant,8000,5709,4750,7612,5709,4500
+2024,exhibition/conference/event planner (including wedding planner/coordinator),4861,3740,3000,4750,3638,2922
+2024,fashion designer,4868,3500,2552,4639,3220,2475
+2024,fast food preparer,2712,1854,1600,2159,1452,1262
+2024,"financial analyst (e.g. equities analyst, credit analyst, investment research analyst)",10784,7500,5460,10583,7408,5416
+2024,financial markets back office administrator,6700,5366,4000,6666,5356,3937
+2024,financial product structurer,17053,12321,8120,17053,12321,8120
+2024,financial risk manager,18658,12924,9275,18333,12801,9160
+2024,financial services manager,16569,8750,5380,16445,8726,5357
+2024,financial/investment adviser (e.g. relationship manager),13165,8000,5225,13063,7959,5210
+2024,fire and safety inspector,7464,3810,2504,7464,3461,2470
+2024,flight operations officer,5200,3778,2848,5025,3709,2767
+2024,floor/wall tiler,2878,1600,1400,2828,1600,1400
+2024,flying instructor (except air force),30000,20000,8050,30000,20000,8050
+2024,food and beverage establishments general cleaner,1819,1600,1401,1788,1600,1400
+2024,food and beverage operations manager,8364,5286,3839,7608,4770,3605
+2024,food and drink technologist,6520,4261,3187,6360,4009,3119
+2024,food service counter attendant,2495,1939,1400,2307,1790,1260
+2024,food/drink stall assistant,2056,1638,1400,1980,1544,1344
+2024,foreign exchange broker,27266,19750,15010,27266,19750,15010
+2024,foreign exchange dealer,20000,13583,8863,20000,13500,8725
+2024,fork lift truck operator,3163,2500,1807,2721,2128,1557
+2024,fumigator and other pest and weed controller,2507,2300,2050,2500,2300,2040
+2024,fund/portfolio manager (including asset allocator),19500,12060,7700,19178,11839,7650
+2024,gardener and horticultural worker,1900,1800,1750,1881,1782,1733
+2024,general dental practitioner,5540,5163,5001,5540,5163,4973
+2024,general practitioner/physician,10021,6335,5749,9743,5817,5237
+2024,general surgeon,6290,5580,4530,5760,5050,4500
+2024,"general waste collection, recycling and material recovery worker",2320,1750,1550,1804,1435,1232
+2024,graphic designer,4496,3765,3010,4441,3740,3000
+2024,hair stylist/hairdresser,4773,3756,2915,4588,3483,2400
+2024,hand launderer/presser (non-household),2022,1600,1400,2022,1600,1400
+2024,hand packer,1906,1600,1538,1800,1600,1456
+2024,harbour pilot,10052,8833,7093,9028,7886,6274
+2024,health services manager,13690,9839,6262,13690,9830,6170
+2024,healthcare assistant (e.g. therapy aide/assistant),2870,2432,2084,2811,2398,2060
+2024,hospital/clinic attendant,2817,2459,2138,2607,2144,1956
+2024,hotel cleaner,2274,2019,1800,2207,2019,1800
+2024,hotel executive (including hotel reservation and front desk executive),3600,3164,2674,3510,3020,2550
+2024,hotel operations/lodging services manager,7020,4970,4019,6800,4880,3953
+2024,hotel receptionist (including hotel reservation and front desk clerk),3379,2687,2076,3108,2475,1908
+2024,house steward,6049,5287,4538,6049,5287,4533
+2024,housekeeper (hotels and other establishments),4606,3233,2312,4540,3140,2272
+2024,housekeeping matron,5427,3491,3150,5280,3248,3000
+2024,housekeeping/linen room attendant,2307,1950,1600,2195,1899,1555
+2024,human resource consultant (excluding executive search consultant),20000,8800,6196,20000,8650,6150
+2024,hydrographic surveyor,7882,5450,3975,7882,5450,3975
+2024,ict auditor,15582,12311,10512,15582,12311,10512
+2024,ict business process consultant/business analyst,11043,8500,6264,10812,8281,6200
+2024,ict quality assurance specialist,14424,7666,4797,14364,7645,4784
+2024,ict sales and services professional,16132,8433,4300,13685,7153,3776
+2024,ict service manager,13226,9503,7280,13000,9390,7209
+2024,industrial and organisational psychologist,8762,6706,5277,8642,6706,5277
+2024,industrial machinery and tools engineer,7620,6000,4642,7532,5623,4500
+2024,industrial relations manager,14997,9176,6490,14975,9122,6425
+2024,industrial relations officer,6528,5292,4078,5479,4634,3771
+2024,industrial safety engineer,9009,6602,4649,8713,6110,4300
+2024,industrial/office machinery mechanic,4974,4012,3254,4810,4000,3087
+2024,information technology trainer (extracurriculum),8550,6119,4249,8515,6000,4227
+2024,"in-house legal counsel (except judiciary, ministries and statutory boards)",22218,17972,12000,22035,17650,12000
+2024,instrumentation engineer,8775,6945,4142,8553,6841,4012
+2024,instrumentation technician,4580,3626,2826,3923,3172,2719
+2024,insurance investigator,6727,6125,4697,6727,6081,4697
+2024,insurance sales agent/broker (including independent financial planner),6887,5780,4350,6800,5780,4330
+2024,insurance services manager,16338,10466,6657,16338,10391,6592
+2024,insurance underwriter,12200,6991,4800,12068,6926,4800
+2024,insurance/underwriting clerk,7333,5045,3791,6967,4789,3618
+2024,intellectual property agent,5300,4464,3111,5266,4060,3111
+2024,interaction designer,11400,7883,5913,11291,7791,5900
+2024,interior designer,6000,4700,3430,6000,4700,3430
+2024,internal medicine physician,8186,6391,6071,7228,5861,5541
+2024,international market agent/representative (e.g. junket operator),19300,9530,5124,19300,8500,5108
+2024,it infrastructure specialist,10740,7881,5718,10662,7811,5616
+2024,it infrastructure technician,5249,4100,3200,5200,4000,3090
+2024,it security technician,7000,4542,3859,7000,4542,3859
+2024,it support technician (including it user helpdesk technician),7447,5148,3760,7245,4860,3500
+2024,joiner,3615,2411,1600,3600,2142,1600
+2024,journalist,8423,6000,4779,8370,6000,4771
+2024,"keeper/trainer in zoological, bird and aquatic parks",3387,2803,2552,3387,2803,2552
+2024,kitchen assistant,2192,1600,1400,1990,1419,1204
+2024,kitchen operations head/supervisor,4000,3949,3329,4000,3829,3150
+2024,laboratory attendant,4093,2651,1850,3605,2578,1850
+2024,land surveying technician,5494,3400,2560,5494,3400,2560
+2024,land surveyor,6351,5000,3185,5410,3300,1600
+2024,land transport clerk,3995,2909,1742,3290,2500,1600
+2024,landscape and plant nursery supervisor,3500,2575,1750,3379,2501,1698
+2024,landscape architect,10102,6145,5500,10102,6120,5500
+2024,landscape manager,6000,4300,2800,6000,4300,2800
+2024,landscape operations officer,3903,3325,2830,3903,3220,2706
+2024,landscape worker,1902,1800,1750,1881,1782,1733
+2024,language instructor (extracurriculum),4900,4329,3905,4600,4070,3650
+2024,leaflet and newspaper distributor/deliverer,2244,1600,1600,2142,1600,1600
+2024,ledger and accounts clerk,4403,3340,2300,4232,3201,2200
+2024,legal associate professional (e.g. paralegal),7200,4557,3535,7131,4507,3515
+2024,legal clerk,6000,4250,3045,5849,4195,3000
+2024,librarian,8470,6659,5352,8448,6545,5310
+2024,library clerk,2531,2426,2080,2464,2390,2000
+2024,library officer,3312,2936,2300,3290,2920,2300
+2024,lifeguard,3200,2790,2586,3200,2790,2586
+2024,lift engineer,6622,4842,3811,6560,4560,3764
+2024,lift supervisor,6730,4813,4142,4839,4140,3612
+2024,lift technician,5669,4374,3207,4931,3808,2758
+2024,load control officer (aircraft),4797,4229,3335,4797,4229,3335
+2024,locksmith,4609,3285,3131,4609,3285,3131
+2024,logistics/production planner,5815,4282,3331,5705,4150,3201
+2024,lorry driver,3000,2159,1600,2610,1894,1353
+2024,machinery mechanic,4100,2910,1800,4000,2856,1780
+2024,machining/tooling technician,4900,3641,2695,3708,2870,2400
+2024,maintenance planner,8740,6540,4475,8629,5905,4425
+2024,management consultant,17995,10799,6053,17938,10624,6000
+2024,management executive,4535,3913,3300,4461,3864,3232
+2024,managing director/chief executive officer,20000,13000,6065,20000,12662,6000
+2024,manicurist,3000,2100,1400,3000,2100,1400
+2024,manufacturing engineer,6860,4589,2596,6708,4325,2528
+2024,manufacturing engineering technician,4670,3750,3151,3761,3075,2461
+2024,manufacturing manager,11110,8571,6126,10750,8395,5800
+2024,marine draughtsman,5600,4400,3760,5600,4400,3760
+2024,marine engineer,5700,4603,4130,5500,4550,4000
+2024,"marine engineering officer (including third, fourth and fifth engineer)",5324,4173,3278,5324,4108,3278
+2024,marine superintendent,14426,9600,6580,14426,9130,6200
+2024,marine superintendent (engineer),10240,7638,5800,9950,7583,5600
+2024,marine surveyor (ship and nautical),6744,5089,3867,6040,3867,1798
+2024,market research professional,9167,7000,5437,9166,7000,5437
+2024,marketing and sales executive (food & beverage services),4330,3500,1750,4071,3400,1750
+2024,marketing manager,13061,8841,6000,12897,8595,5900
+2024,marketing strategy/planning professional,11785,8060,4600,11760,8060,4567
+2024,martial arts instructor,4280,4100,4100,4100,4100,4000
+2024,massage therapist,3600,2690,1600,3000,1892,1400
+2024,masseur (non-medical) (including foot reflexologist),1945,1600,1550,1871,1600,1500
+2024,material planning clerk,9089,5907,4190,8928,5819,4008
+2024,materials engineer,10805,8643,6592,10790,8626,6555
+2024,mechanical draughtsman,5646,3800,2700,5450,3728,2700
+2024,mechanical engineer,8678,6205,4900,8322,6030,4775
+2024,mechanical engineering technician,4402,3748,3056,4402,3724,3042
+2024,mechanical equipment/component assembler,3025,2084,1481,3025,2068,1481
+2024,mechanical products quality checker and tester,5496,4354,3157,5290,3511,2599
+2024,media and broadcasting engineer,8631,6049,5012,8631,6049,5012
+2024,media and broadcasting manager,8074,6010,4745,8020,6000,4745
+2024,media and broadcasting operations technician,5230,4153,3540,5200,4126,3460
+2024,medical and pathology laboratory technician,4880,4280,3853,4873,4280,3853
+2024,medical and pharmaceutical products sales professional,11385,7259,5524,11385,7259,5524
+2024,medical device assembler/repairer,5076,3714,2791,5070,3714,2791
+2024,medical diagnostic radiographer,7253,5716,4606,7031,5562,4565
+2024,medical laboratory scientist,7443,5979,5412,7443,5979,5412
+2024,medical scientist,6500,5833,5400,6500,5833,5400
+2024,medical social worker,6513,4915,4203,6495,4882,4200
+2024,medical x-ray technician,7427,3540,2815,7427,3540,2815
+2024,medical/dental receptionist,3197,2810,2460,3140,2699,2306
+2024,merchandising/category executive,4000,3197,2468,4000,3100,2250
+2024,merchandising/category manager,13320,8746,6000,13000,8500,5792
+2024,metal heat treating plant operator,7480,4652,3240,7480,4652,2867
+2024,"metal melter, caster and rolling mill operator",3000,2671,2568,3000,2670,2498
+2024,metal moulder and coremaker,3940,3384,2626,3940,3359,2550
+2024,metalworking machine setter-operator,4045,2809,2178,3290,2512,2010
+2024,minister of religion,12804,6637,4472,11770,6050,4300
+2024,mobile machinery supervisor and general foreman,2820,2522,2457,2205,1987,1980
+2024,money changer,5876,3750,2812,5876,3750,2812
+2024,motor vehicle cleaner/polisher,2100,1700,1400,1800,1600,1400
+2024,motorcycle delivery man,2626,2080,1537,2366,1880,1358
+2024,mover,3500,2223,1700,3000,2170,1600
+2024,multimedia (including games) designer,7584,5319,4497,7500,5319,4390
+2024,multimedia (including games) developer,9496,6331,5422,9496,6331,5422
+2024,multimedia artist and animator,8177,5000,3775,8177,4996,3775
+2024,music instructor (extracurriculum),3880,3000,2600,3880,3000,2600
+2024,"network, communications and infrastructure manager",14724,10750,8493,14515,10730,8461
+2024,"network, servers and computer systems administrator",6920,4765,3688,6755,4750,3614
+2024,non-ordained religious associate professional,4437,3611,2771,4413,3600,2750
+2024,nursing aide/assistant,3381,3000,2432,3263,2800,2315
+2024,nutritionist,8074,4684,3232,7745,4400,3000
+2024,obstetrician/gynaecologist,7002,5965,4741,6483,5450,4698
+2024,occupational health and safety inspector,6775,5403,3926,6500,5124,3757
+2024,occupational health and safety professional,7313,5000,3263,7042,4867,3250
+2024,occupational therapist,6488,4933,4085,6440,4923,4085
+2024,odd job person,1800,1600,1600,1800,1600,1500
+2024,office clerk (including filing and copying),3050,1822,1420,3000,1800,1400
+2024,office supervisor,5000,3743,2836,4630,3486,2565
+2024,"office, commercial and industrial establishments indoor cleaner",1801,1641,1440,1750,1600,1400
+2024,"office, commercial and industrial establishments multi-skilled cleaner cum machine operator",2873,2270,1908,2270,2010,1672
+2024,"office, commercial and industrial establishments outdoor cleaner",2125,1942,1753,2060,1800,1668
+2024,office/library attendant,3080,2118,1600,3020,2099,1600
+2024,oil and bunker trader,20000,14896,8610,20000,14729,8610
+2024,online sales channel executive,4500,3500,2881,4360,3500,2870
+2024,online sales channel manager,12500,7614,5731,12203,7483,5701
+2024,operations officer (except transport operations),4880,3970,3200,4644,3800,3000
+2024,operations research analyst,9530,6352,4760,9400,6200,4656
+2024,ophthalmologist,10257,6804,6205,9227,6289,5718
+2024,optician,5091,4357,4098,4415,3806,3413
+2024,optometrist,6191,5241,4342,6083,5113,4100
+2024,orthopaedic surgeon,6539,5836,5580,6011,5419,5050
+2024,"otorhinolaryngologist/ear, nose, throat (ent) specialist",9707,6624,6097,8677,6138,5719
+2024,packing/bottling/labelling machine operator,3020,2101,1600,1951,1614,1397
+2024,paediatrician,6752,5789,4530,6225,5274,4500
+2024,paramedic,3984,2954,1871,3863,2600,1871
+2024,parking valet,2800,2372,2000,2500,2300,1970
+2024,passenger services agent,3544,2570,1500,3141,2071,1150
+2024,pastry and confectionery maker,3236,2413,1500,3171,2389,1470
+2024,pastry chef,4600,3034,2503,4500,3000,2420
+2024,pawnbroker,6471,5192,4638,6410,5159,4638
+2024,payroll/wages clerk,5950,4256,3000,5600,4017,2880
+2024,personnel/human resource clerk,4183,2950,1740,4062,2821,1644
+2024,personnel/human resource manager,12919,8197,5777,12650,8082,5709
+2024,personnel/human resource officer,4605,4000,3370,4580,3930,3300
+2024,petrol station attendant,3453,2165,1870,2649,2105,1752
+2024,pharmacist (patient care),7346,5466,4504,7328,5448,4450
+2024,pharmacologist,13118,6706,4313,13118,6706,4313
+2024,pharmacy technician,4119,3240,2654,4095,3225,2636
+2024,photographer,8651,5120,3495,8618,5110,3495
+2024,physical fitness instructor (including yoga instructor and aerobics instructor),3350,2550,2400,2600,2400,2100
+2024,physiotherapist,6200,4814,4235,6153,4809,4231
+2024,plumber,2880,2400,1600,2880,2400,1600
+2024,podiatrist,6956,5054,4498,6956,5054,4498
+2024,policy administration professional (e.g. policy analyst),8858,5179,4100,8761,5127,4040
+2024,policy manager,15278,12053,9098,15197,11988,9081
+2024,port limit helmsman/steersman/engine driver/tugmaster,3284,2683,2334,3130,2617,2332
+2024,port/shipping operations manager,10894,8695,7382,10877,8655,7380
+2024,port/shipping operations supervisor (including post-fixture and planner),4614,3830,3354,4495,3798,3312
+2024,porter (except hotel),2018,1712,1536,2018,1712,1536
+2024,postal service counter clerk,3012,2392,2073,2530,2057,1674
+2024,postal service manager,12414,7910,5550,12300,7824,5550
+2024,postman,3472,2706,2128,2542,2050,1650
+2024,power generation and distribution engineer,12139,9131,6947,11855,9015,6696
+2024,precision grinding machine setter-operator,3882,3227,2740,2955,2630,2481
+2024,premises and facilities maintenance manager (excluding building security manager),8704,6542,5000,8490,6456,4900
+2024,premises and facilities maintenance officer,4715,3875,3200,4630,3805,3100
+2024,pre-press trades worker,3967,3568,3118,3711,3250,2945
+2024,pre-primary education teacher,4800,4000,3600,4500,3790,3400
+2024,pre-school education manager,8434,6080,2749,8009,5555,2736
+2024,printing machine operator,3452,2229,1700,3150,1950,1600
+2024,private security officer,2971,2748,2250,2710,2643,2036
+2024,private tutor (academic),5370,4250,2600,5370,4250,2600
+2024,process engineer,7600,5833,4990,7493,5811,4970
+2024,process engineering technician,5309,4461,3784,5206,4344,3683
+2024,procurement engineer,8956,6500,4906,8689,6365,4906
+2024,procurement/purchasing clerk,3878,2850,1600,3808,2785,1600
+2024,procurement/purchasing manager,12248,8367,6000,12034,8209,5918
+2024,"producer (stage, film, television, game, commercial, video and radio)",9273,6736,5000,9223,6728,5000
+2024,product and industrial designer,7782,5710,4218,7500,5420,4172
+2024,production engineer,10083,6251,4862,9874,6070,4708
+2024,production engineering technician,5893,4380,3343,3942,3327,2692
+2024,production manager in agriculture and fisheries,10389,6930,5580,10080,6900,5450
+2024,production planning clerk,4908,3538,2193,4681,3344,2119
+2024,proofreading clerk,7000,5000,3600,7000,5000,3600
+2024,psychiatrist,9312,6886,6489,8266,6356,5959
+2024,public relations/corporate communications professional,5500,4305,3630,5413,4282,3609
+2024,purchasing agent,5237,4248,3570,5105,4194,3500
+2024,quality assurance technician,5651,4292,3300,5246,3998,2867
+2024,quality control/assurance engineer,8471,6310,4794,8251,6105,4742
+2024,quality control/assurance manager,14094,9100,6174,13750,8987,6109
+2024,quantity surveyor,6322,5030,4000,6250,5000,3920
+2024,radiation therapist,7186,5629,4424,7184,5628,4424
+2024,rail station service assistant,3312,2810,1500,3312,2810,1500
+2024,real estate agent,6109,3800,2966,5800,3774,2850
+2024,receptionist (general),3349,2724,1977,3217,2629,1850
+2024,regional sales manager,17850,11000,7245,16940,10410,6829
+2024,"registered nurse and other nursing professional (e.g. clinical nurse, nurse educator, excluding enrolled nurse)",6835,5276,4261,6668,5212,4233
+2024,relief teacher,3332,2765,1732,3332,2765,1732
+2024,research and development manager,17189,10896,7061,16911,10838,7001
+2024,research officer (non-statistical),6812,5200,4500,6807,5200,4478
+2024,resident technical officer,4921,3800,2888,4800,3500,2634
+2024,residential and open areas general cleaner,2060,1750,1600,1900,1740,1590
+2024,restaurant manager,4710,4000,3000,4500,3850,2854
+2024,retail manager,6420,4500,3517,5950,4000,3184
+2024,revenue specialist,11000,6387,4340,11000,6370,4208
+2024,risk management manager,18332,11946,7558,18176,11913,7508
+2024,road transport operations officer,5881,4507,3875,4681,4000,3400
+2024,rolling stock engineer,7939,6795,5444,7897,6527,5313
+2024,rolling stock engineering technician,3436,2970,2567,3436,2970,2561
+2024,safety and security consultant,14833,8318,6175,14833,8208,6000
+2024,"safety inspector (vehicles, processes and products)",5378,3964,3300,5000,3737,3156
+2024,sales demonstrator,4216,2550,1750,2691,2060,1600
+2024,sales manager,10353,7049,5000,9678,6500,4536
+2024,sales professional (institutional sales of financial products),16750,9583,6331,16423,9467,6200
+2024,sales supervisor,4080,3220,2532,3592,2772,2129
+2024,salesperson (door-to-door),7900,3811,1600,7500,2521,1600
+2024,school counsellor,6830,3497,2252,6830,3497,2252
+2024,school principal,8853,6967,5755,8599,6832,5522
+2024,script writer and editor,6737,3945,3369,6582,3600,3200
+2024,secretary,6840,5035,3728,6708,4874,3571
+2024,securities and finance broker,14351,8508,5817,13836,8508,5817
+2024,securities and finance dealer,17203,7896,5200,17182,7836,5200
+2024,securities clerk,7046,5972,4545,7046,5972,4545
+2024,security manager,10000,6729,3800,9878,6669,3784
+2024,security operations specialist,12250,7700,5375,12114,7700,5032
+2024,security supervisor,3450,3236,2750,3278,3062,2595
+2024,semi-conductor engineer,8723,6600,5638,8686,6581,5597
+2024,semi-conductor technician,8770,4462,3217,8770,4409,3200
+2024,"senior cook (e.g. station chef, commis cook 1, station cook)",4297,3425,2678,4085,3135,2455
+2024,senior private security officer,3366,3082,2950,3000,2950,2744
+2024,senior security supervisor,4249,3720,3346,3752,3418,3055
+2024,service designer,12890,8557,5162,12890,8543,5162
+2024,sewing machine operator,3000,2267,1738,3000,2059,1738
+2024,ship broker (e.g. charter or sales & purchase),17700,9000,4180,17700,9000,4180
+2024,ship charterer,18360,12399,6860,17160,12399,6860
+2024,shipping agent/boarding officer,5370,4046,3307,4540,3781,3066
+2024,shipping clerk,4218,3320,2600,4018,3141,2442
+2024,shop sales assistant,2800,2359,1600,2578,2030,1400
+2024,slimming consultant,5621,4081,3115,2030,2000,2000
+2024,social science researcher,8917,6600,6250,8917,6600,6250
+2024,social service manager,8319,5643,4130,8319,5643,4130
+2024,social work associate,4014,3378,2835,3920,3320,2800
+2024,social worker (general),5374,4405,3920,5327,4370,3900
+2024,software and applications manager,15816,10779,7620,15666,10729,7500
+2024,software developer,13513,8888,6658,12574,8750,6599
+2024,sonographer,8247,5200,3950,7810,5200,3950
+2024,speech therapist,6167,4764,4381,6167,4764,4381
+2024,"sports and recreational attendant (e.g. golf marshal, golf caddie, fun fair attendant, bowling alley attendant, swimming pool attendant)",3800,2980,2350,3309,2589,2144
+2024,sports centre manager,7308,4895,3598,6850,4000,2888
+2024,sports coach,7100,4896,3380,6592,4654,3000
+2024,stationary plant and machine supervisor/general foreman,7753,4705,3343,7556,3882,2417
+2024,statistical clerk,5000,4401,4000,5000,4401,4000
+2024,statistical officer/data analyst,12201,8356,5807,12106,8305,5800
+2024,statistician,6465,4720,3887,6465,4720,3887
+2024,stock records clerk,3933,2716,1950,3633,2576,1800
+2024,storekeeper,3080,2500,2000,2938,2379,1900
+2024,strategic planning manager,19546,12936,8185,19122,12779,8119
+2024,supervisor/general foreman (building and related trades),4800,3480,2000,4500,3330,2000
+2024,"supervisor/general foreman (electrical and electronic trades, excluding lift)",6750,4796,3383,6500,4557,3200
+2024,"supervisor/general foreman (food processing, woodworking, garment, leather and related trades)",4000,3861,3449,4000,3432,2949
+2024,"supervisor/general foreman (metal, machinery and related trades)",9090,7712,4048,9053,7537,3213
+2024,"supervisor/general foreman (precision, handicraft, printing and related trades)",6489,4739,3345,6127,4040,2931
+2024,supervisor/general foreman of assemblers and quality checkers,8000,5775,3964,7600,5396,3500
+2024,supply and distribution/logistics/warehousing manager,9882,6650,5050,9677,6550,4959
+2024,systems designer/analyst,9500,6966,5772,9300,6915,5734
+2024,table-top cleaner,1840,1670,1420,1800,1600,1380
+2024,tailor/dressmaker,3500,2098,1450,3500,2098,1450
+2024,tax accountant,14893,9726,6595,14800,9700,6527
+2024,tax associate professional,5025,4300,3600,5000,4295,3600
+2024,"tea server/steward (excluding bartender, barista and food/drink stall assistant)",2084,1725,1570,2050,1660,1490
+2024,teacher aide,3130,2500,2200,3047,2377,1990
+2024,teaching assistant/tutor in university,6000,5800,4500,6000,5800,4500
+2024,technical sales professional,10250,6850,5104,9511,6331,4700
+2024,technical writer,9392,5891,4368,9392,5793,4359
+2024,technical/engineering services manager (excluding transport),12391,8684,6034,12166,8394,5931
+2024,technical/vocational/commercial education institute teacher and trainer,4542,3800,3360,4542,3800,3360
+2024,telecommunications engineer,10106,6158,4865,10051,6158,4703
+2024,telecommunications technician,3998,3421,2961,3967,3411,2961
+2024,telemarketer,5000,4072,2900,4692,3500,2563
+2024,telephone operator,3645,2523,1890,3579,2485,1795
+2024,tool and die maker,4763,4017,3380,4399,3305,2958
+2024,tour guide,3857,2881,2525,3828,2650,2500
+2024,trade broker,20000,13500,5768,20000,12667,5768
+2024,traditional chinese medicine practitioner,7120,4289,2452,4870,3700,2360
+2024,trailer-truck driver (including prime mover driver),3837,2860,2056,2996,2368,1517
+2024,train operations officer,3992,3385,2742,3521,3138,2615
+2024,train operator,3258,2774,2542,2701,2325,2124
+2024,train service supervisor,4027,3272,2698,3477,2799,2296
+2024,training and staff development professional,6171,4490,3751,5901,4439,3660
+2024,training manager,7270,5960,5214,7162,5910,5190
+2024,translator,8924,6456,4776,8724,6456,4400
+2024,transport/technical operations manager (except port/shipping operations),12650,7679,5381,11799,7490,5365
+2024,travel agency manager,11580,7770,5630,10896,7713,5630
+2024,travel consultant/reservation executive,5057,3810,2500,4962,3727,2500
+2024,treasury manager,11795,9405,7750,11761,9401,7750
+2024,tree worker/technician,2100,1921,1878,1963,1850,1850
+2024,typist and word processing operator,3800,2803,2160,3770,2803,2138
+2024,undertaker,4735,4137,3000,4735,4137,3000
+2024,underwater diver,5975,4030,3320,5975,3790,3200
+2024,university lecturer,17850,12990,9434,17788,12858,9270
+2024,urban planner,7500,5382,4382,7350,5290,4278
+2024,urologist,9696,6729,6071,8666,6199,5541
+2024,van driver,2886,2148,1500,2403,1764,1264
+2024,vehicle attendant,3129,2620,2000,2844,2320,1850
+2024,veterinarian,11390,8500,5492,11390,8500,5175
+2024,veterinary technician/assistant,4851,3531,2905,4812,3446,2814
+2024,video camera operator,6842,5434,3900,6842,5434,3900
+2024,visual merchandiser,7032,4736,3614,6963,4691,3265
+2024,volunteer executive,4367,3565,2600,4367,3542,2600
+2024,waiter,2099,1565,1400,1850,1360,1190
+2024,warehouse worker,3114,2458,2070,2750,2200,1880
+2024,waste recycling sorter,3639,2110,1801,2320,2010,1200
+2024,waste truck driver (including hooklift trucks with roll-on containers),4780,4140,3441,4006,2620,2620
+2024,watch and clock assembler/repairer,6016,4500,2925,5608,4400,2850
+2024,web and mobile applications developer,9314,7000,6050,9299,7000,6050
+2024,website administrator/webmaster,8166,4500,3200,7500,4498,3200
+2024,welder and flame cutter,4443,3050,2300,3415,2877,2210
+2024,wellness centre manager (e.g. hair/beauty/slimming/spa/manicure/massage),8725,5635,3800,8556,4636,3000
+2024,wholesale trade manager,14500,8905,6199,14239,8811,5218
+2024,youth work associate,2800,2500,2400,2800,2500,2400

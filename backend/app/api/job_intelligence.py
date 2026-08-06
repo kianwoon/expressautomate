@@ -153,6 +153,7 @@ def _serialize(row: JobIntelligence) -> dict:
             "understanding": row.understanding,
             "persona": row.persona,
             "search_plan": row.search_plan,
+            "occupation": row.occupation,
         }
         body["removed_codes"] = row.removed_codes
     else:

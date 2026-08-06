@@ -3,6 +3,7 @@
 import { type ReactNode } from "react";
 
 import { type Intelligence, type IntelligenceView, type NoIntelligence } from "./job-intelligence";
+import { SalaryBenchmark, type Offer } from "./salary-benchmark";
 
 /**
  * The three Job Intelligence stage panels — presentational only.
@@ -64,24 +65,31 @@ function StageNotice({ state }: { state: StageState }) {
 export function WorkStage({
   intelligence,
   state,
+  offer,
 }: {
   intelligence: Intelligence | null;
   state: StageState;
+  offer: Offer;
 }) {
   if (!intelligence) return <StageNotice state={state} />;
   const u = intelligence.understanding;
   return (
-    <Stage title="Understanding the work">
-      <Field label="Role" value={u.role} />
-      <Field label="Purpose" value={u.business_purpose} />
-      <List label="Daily activities" items={u.daily_activities} />
-      <Field label="Environment" value={u.work_environment} />
-      <Field label="Conditions" value={u.working_conditions} />
-      <List label="Must have" items={u.must_have_requirements} />
-      <List label="Nice to have" items={u.preferred_requirements} />
-      <List label="What success looks like" items={u.success_characteristics} />
-      <List label="Potential challenges" items={u.potential_challenges} />
-    </Stage>
+    <>
+      <Stage title="Understanding the work">
+        <Field label="Role" value={u.role} />
+        <Field label="Purpose" value={u.business_purpose} />
+        <List label="Daily activities" items={u.daily_activities} />
+        <Field label="Environment" value={u.work_environment} />
+        <Field label="Conditions" value={u.working_conditions} />
+        <List label="Must have" items={u.must_have_requirements} />
+        <List label="Nice to have" items={u.preferred_requirements} />
+        <List label="What success looks like" items={u.success_characteristics} />
+        <List label="Potential challenges" items={u.potential_challenges} />
+      </Stage>
+      {intelligence.occupation && (
+        <SalaryBenchmark occupation={intelligence.occupation} offer={offer} />
+      )}
+    </>
   );
 }
 
