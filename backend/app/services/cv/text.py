@@ -1,4 +1,9 @@
-"""Extract text from CV files (PDF and DOCX)."""
+"""Extract text from CV files (PDF and DOCX).
+
+DOCX extraction reads body paragraphs and tables together, since a CV's work
+history is often laid out as a table; PDF extraction reads the text layer only
+(scanned/image-only PDFs yield empty text and surface as `unreadable` upstream).
+"""
 
 import io
 import zipfile
