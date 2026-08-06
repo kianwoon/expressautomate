@@ -201,6 +201,21 @@ async def _run(args: argparse.Namespace) -> int:
         async with AdminSession() as session:
             for r in rows:
                 vec = vectors.get(r["title"])
+                # Build the conflict-update set conditionally: only overwrite
+                # the embedding when a fresh vector was generated for this row.
+                # Including "embedding": None when vec is None would NULL out a
+                # previously-embedded row on a no-op re-run (rows present, none
+                # needing re-embed → vectors is empty → vec is None for all).
+                conflict_set = {
+                    "gross_p25": r["gross_p25"],
+                    "gross_p50": r["gross_p50"],
+                    "gross_p75": r["gross_p75"],
+                    "basic_p25": r["basic_p25"],
+                    "basic_p50": r["basic_p50"],
+                    "basic_p75": r["basic_p75"],
+                }
+                if vec is not None:
+                    conflict_set["embedding"] = vec
                 stmt = (
                     pg_insert(MomOccupation)
                     .values(
@@ -217,15 +232,7 @@ async def _run(args: argparse.Namespace) -> int:
                     )
                     .on_conflict_do_update(
                         constraint="uq_mom_occupations_year_title",
-                        set_={
-                            "gross_p25": r["gross_p25"],
-                            "gross_p50": r["gross_p50"],
-                            "gross_p75": r["gross_p75"],
-                            "basic_p25": r["basic_p25"],
-                            "basic_p50": r["basic_p50"],
-                            "basic_p75": r["basic_p75"],
-                            "embedding": vec,
-                        },
+                        set_=conflict_set,
                     )
                 )
                 result = await session.execute(stmt)

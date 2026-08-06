@@ -27,6 +27,7 @@ The semantic-search step takes an optional session: None in tests or when the
 library is absent skips retrieval and yields no candidates.
 """
 
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -199,20 +200,27 @@ async def search_occupations(
 
     # allow-hardcode: raw SQL selecting the model's wage columns by name. The
     # vector literal is built the same way `semantic_neighbors` builds it.
+    # The vector literal is built entirely from str(float(...)) — digits, dots,
+    # minus, exponent, commas, brackets — so it is injection-safe to inline.
+    # Binding it as a :param fails: SQLAlchemy's text() parser misreads the
+    # Postgres `::vector` cast, and asyncpg rejects the `:` it leaves behind.
+    # Inlining the literal sidesteps both, the same way pgvector's own docs show.
     vector_literal = "[" + ",".join(str(float(v)) for v in query_vector) + "]"
-    sql = """
+    # allow-hardcode: raw SQL selecting the wage columns by name; the vector
+    # literal is interpolated (safe — see above), the limit is bound.
+    sql = text(f"""
         SELECT title, year,
                gross_p25, gross_p50, gross_p75,
                basic_p25, basic_p50, basic_p75,
-               1 - (embedding <=> :q::vector) AS similarity
+               1 - (embedding <=> '{vector_literal}'::vector) AS similarity
         FROM mom_occupations
         WHERE embedding IS NOT NULL
-        ORDER BY embedding <=> :q::vector
+        ORDER BY embedding <=> '{vector_literal}'::vector
         LIMIT :k
-    """
+    """)
     rows = (
         await session.execute(
-            sql, {"q": vector_literal, "k": k}
+            sql, {"k": k}
         )
     ).mappings().all()
     return [
