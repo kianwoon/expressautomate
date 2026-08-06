@@ -61,6 +61,30 @@ const PERIODS: { key: BuddyPeriod | null; label: string }[] = [
   { key: "30d", label: "1 month" },
 ];
 
+/** localStorage key for the remembered period chip. Follows the `ea.<screen>.<preference>`
+ *  convention used by the page-size hook (`ea.pageSize.<screen>`). Browser-only —
+ *  the server never sees it, there is no user-preferences table to lean on. */
+const BUDDIES_PERIOD_KEY = "ea.buddies.period";
+/** `null` ("All time") is a valid selection but not a storable string key, so it
+ *  is serialized as this sentinel rather than relying on the empty string. */
+const PERIOD_ALL_SENTINEL = "all";
+
+/** Reads and validates the remembered period against the offered chips, so a
+ *  stale or hand-edited value (or Safari private mode, where reads throw) falls
+ *  back to the default instead of selecting a chip that does not exist. */
+function readStoredPeriod(key: string): BuddyPeriod | null {
+  let raw: string | null;
+  try {
+    raw = window.localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+  if (raw === null) return null;
+  if (raw === PERIOD_ALL_SENTINEL) return null;
+  const allowed = PERIODS.map((p) => p.key).filter((k): k is BuddyPeriod => k !== null);
+  return allowed.includes(raw as BuddyPeriod) ? (raw as BuddyPeriod) : null;
+}
+
 /** One row of the referral modal — a compact view of a referred job order.
  *  Carries only the fields a recruiter uses to tell one forwarded job order
  *  from another at a glance, not the full opportunity payload. */
@@ -160,7 +184,24 @@ function Workspace() {
   const [q, setQ] = useState("");
   const [initial, setInitial] = useState<string | null>(null);
   const [sort, setSort] = useState<BuddySort>(DEFAULT_SORT);
-  const [period, setPeriod] = useState<BuddyPeriod | null>(null);
+  const [period, setPeriod] = useState<BuddyPeriod | null>(() => {
+    // Lazy initialiser so the remembered period is known before the first
+    // fetch — an effect would fetch "All time" then refetch the remembered
+    // window, a wasted request and a visible flash of the wrong row counts.
+    // The `typeof window` guard covers the prerender/build pass under Node.
+    if (typeof window === "undefined") return null;
+    return readStoredPeriod(BUDDIES_PERIOD_KEY);
+  });
+  const choosePeriod = useCallback((next: BuddyPeriod | null) => {
+    setPeriod(next);
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(BUDDIES_PERIOD_KEY, next ?? PERIOD_ALL_SENTINEL);
+    } catch {
+      // Safari private mode, quota full, or storage disabled — the chip keeps
+      // working for the rest of this session, it just stops remembering past a reload.
+    }
+  }, []);
   // The buddy whose referral modal is open, or null. Carries the row snapshot
   // so the dialog title renders before the fetch resolves.
   const [openBuddy, setOpenBuddy] = useState<Buddy | null>(null);
@@ -259,7 +300,7 @@ function Workspace() {
                 className="jo-chip"
                 data-active={active ? "yes" : undefined}
                 aria-pressed={active}
-                onClick={() => setPeriod(chip.key)}
+                onClick={() => choosePeriod(chip.key)}
               >
                 {chip.label}
               </button>
