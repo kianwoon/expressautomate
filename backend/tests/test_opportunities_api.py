@@ -21,7 +21,7 @@ from sqlalchemy.exc import DBAPIError
 
 from app.core.config import settings
 from app.db.rls import tenant_session
-from app.models import Opportunity
+from app.models import Buddy, BuddyReferral, Client, Opportunity
 from tests.conftest import AdminSessionLocal, sign_in
 
 NOW = datetime(2026, 7, 27, 9, 0, tzinfo=UTC)
@@ -868,3 +868,85 @@ async def test_dedupe_reports_how_many_were_hidden(
     sign_in(client, user_id, tenant_id)
     body = (await client.get("/api/opportunities?dedupe=true")).json()
     assert body["hidden"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Buddy fan-out — one job order per row, even when its client has many buddies
+# ---------------------------------------------------------------------------
+# A client can be referred by more than one buddy (`uq_buddy_referrals_once`
+# is per buddy+client, not per client). The list query resolves the Owner
+# column by joining buddy_referral on client_id, and a plain join there
+# returns one row per referring buddy — so every job order filed under that
+# client appeared once per buddy. "Operations Assistant (Driver)" showed
+# twice on the same page, same date, with a buddy avatar on each. The join
+# is now a LATERAL that picks one buddy, so a job order is one row.
+
+@pytest.fixture
+async def agency_with_two_buddies_one_client(seeded):
+    """One agency, one client referred by two buddies, and one job order on
+    that client — the minimal setup that used to render the job order twice."""
+    make_tenant, make_opportunity, _make_evidence = seeded
+    tenant_id, user_id, mailbox_id = await make_tenant("two-buddy-agency")
+
+    async with AdminSessionLocal() as s:
+        client = Client(
+            id=uuid.uuid4(), tenant_id=tenant_id,
+            name="Acme Pte Ltd", name_normalized="acme pte ltd",
+            assigned_user_id=user_id,
+        )
+        buddy_a = Buddy(
+            id=uuid.uuid4(), tenant_id=tenant_id,
+            name="Wei Ling", email="weiling@partner.sg",
+        )
+        buddy_b = Buddy(
+            id=uuid.uuid4(), tenant_id=tenant_id,
+            name="Hafiz", email="hafiz@partner.sg",
+        )
+        s.add_all([client, buddy_a, buddy_b])
+        await s.flush()
+        # Two referrals for the SAME client from different buddies — legal
+        # under the unique constraint, and exactly what used to fan the join.
+        s.add_all([
+            BuddyReferral(
+                tenant_id=tenant_id, buddy_id=buddy_a.id, client_id=client.id,
+                email_message_id=None,
+            ),
+            BuddyReferral(
+                tenant_id=tenant_id, buddy_id=buddy_b.id, client_id=client.id,
+                email_message_id=None,
+            ),
+        ])
+        await s.commit()
+        client_id = client.id
+
+    opp_id = await make_opportunity(
+        tenant_id, mailbox_id,
+        company_name_raw="Acme Pte Ltd", job_title_raw="Operations Assistant (Driver)",
+    )
+    # Link the job order to the multi-referral client — the join condition.
+    async with AdminSessionLocal() as s:
+        await s.execute(
+            text("UPDATE opportunities SET client_id = :c WHERE id = :o"),
+            {"c": client_id, "o": opp_id},
+        )
+        await s.commit()
+
+    yield tenant_id, user_id, opp_id
+
+
+async def test_a_client_with_two_buddies_shows_each_job_order_once(
+    client, agency_with_two_buddies_one_client,
+) -> None:
+    """The bug: the same job order appeared twice, once per referring buddy.
+
+    The fix resolves the Owner column through a LATERAL that picks one buddy,
+    so the join cannot multiply rows. One job order on a client with two
+    buddies must come back as one row."""
+    tenant_id, user_id, opp_id = agency_with_two_buddies_one_client
+    sign_in(client, user_id, tenant_id)
+    body = (await client.get("/api/opportunities")).json()
+
+    ids = [row["id"] for row in body["items"]]
+    # Exactly one row for the one job order — not one per buddy.
+    assert ids.count(str(opp_id)) == 1
+    assert len(body["items"]) == 1
