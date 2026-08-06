@@ -323,7 +323,7 @@ async def list_opportunities(
     q: str | None = None,
     sort: SortKey = "received",
     descending: bool = True,
-    dedupe: bool = False,
+    dedupe: bool = True,
 ) -> dict:
     """The signed-in user's agency's vacancies, newest first.
 
@@ -353,6 +353,20 @@ async def list_opportunities(
     # — the failure is visible, but it is still a failure, and a plain
     # `SessionLocal()` here would be one edit away from a cross-agency leak.
     async with tenant_session(tenant_uuid) as session:
+        # Hide later re-forwards of job orders already held open. Computed
+        # before the chip counts so the counts and the list agree: a recruiter
+        # who sees "96" in the chips and 86 rows on screen reads the gap as a
+        # bug, and with dedupe on by default it would be the first thing they
+        # see. The count hidden is returned so it is visible, not silent.
+        hidden = 0
+        dupe_ids: set[uuid.UUID] = set()
+        if dedupe:
+            dupe_ids = await _duplicate_opportunity_ids(session, visible)
+            hidden = len(dupe_ids)
+        dedupe_clause = (
+            Opportunity.id.not_in(dupe_ids) if dupe_ids else None
+        )
+
         # The chips are counted over everything visible to this caller, in
         # their own query,
         # before any filter or window is applied. A count that moved with the
@@ -361,11 +375,15 @@ async def list_opportunities(
         # a different question than the one the chip appears to answer.
         counts = {name: 0 for name in _FILTER_TO_STORED}
         counts["all"] = 0
-        for stored, n in await session.execute(
+        count_q = (
             select(Opportunity.review_status, func.count())
             .where(visible)
             .where(scope_clause)
-            .group_by(Opportunity.review_status)
+        )
+        if dedupe_clause is not None:
+            count_q = count_q.where(dedupe_clause)
+        for stored, n in await session.execute(
+            count_q.group_by(Opportunity.review_status)
         ):
             counts["all"] += n
             # A stored value this API has no name for (a future state written
@@ -379,15 +397,8 @@ async def list_opportunities(
         if status is not None:
             base = base.where(Opportunity.review_status == _FILTER_TO_STORED[status])
 
-        # Hide later re-forwards of job orders already held open. Off by
-        # default — the list a recruiter has today does not change unless they
-        # ask — and the count hidden is returned so it is visible, not silent.
-        hidden = 0
-        if dedupe:
-            dupe_ids = await _duplicate_opportunity_ids(session, visible)
-            if dupe_ids:
-                base = base.where(Opportunity.id.not_in(dupe_ids))
-                hidden = len(dupe_ids)
+        if dedupe_clause is not None:
+            base = base.where(dedupe_clause)
 
         if q:
             # Escape LIKE metacharacters (%, _) with backslash so they are

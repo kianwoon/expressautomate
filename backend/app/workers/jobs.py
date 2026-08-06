@@ -154,8 +154,17 @@ _EXTRACT_CLAIM = text(
     " FROM email_messages WHERE id = :id AND mailbox_id = :mailbox_id"
 )
 
-_START_EXTRACTING = text(
-    "UPDATE email_messages SET processing_status = 'extracting' WHERE id = :id"
+# Compare-and-set: only the worker that moves a `classified` row to
+# `extracting` wins the claim. A second job that read the same `classified`
+# row before the first wrote (two enqueues for one email, an arq retry landing
+# while the first is still in flight) gets `claimed = false` and bows out,
+# rather than paying for the same model call twice. A row already at
+# `extracting` is left alone here — that is the recovery case below, handled
+# by the status check above this runs.
+_CLAIM_EXTRACTING = text(
+    "UPDATE email_messages SET processing_status = 'extracting'"
+    " WHERE id = :id AND processing_status = 'classified'"
+    " RETURNING id"
 )
 
 _FINISH_EXTRACTION = text(
@@ -618,8 +627,22 @@ async def extract_email(
         )
         return
 
-    async with tenant_session(tenant) as session:
-        await session.execute(_START_EXTRACTING, {"id": email_message_id})
+    # Claim the row so a second job reading the same `classified` email bows
+    # out instead of paying for the same extraction. Only a `classified` row
+    # can be claimed; a row already at `extracting` is a rescan recovery (a
+    # worker died mid-call and the sweep re-enqueued it), so that path proceeds
+    # without a claim — the deterministic opportunity ids make a re-run safe.
+    if row.processing_status == "classified":
+        async with tenant_session(tenant) as session:
+            claimed = (
+                await session.execute(_CLAIM_EXTRACTING, {"id": email_message_id})
+            ).one_or_none()
+        if claimed is None:
+            log.info(
+                "extract_skipped_already_claimed",
+                email_message_id=email_message_id,
+            )
+            return
 
     html = await body_store().get(row.body_html_r2_key) or ""
     # `to_text` is the single source of truth for the text the model's offsets

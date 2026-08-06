@@ -774,15 +774,27 @@ async def agency_with_forwarded_duplicates(seeded):
 
 
 async def test_without_dedupe_all_rows_show(client, agency_with_forwarded_duplicates) -> None:
-    """The default view is unchanged: the later re-forward is still visible
-    until a recruiter opts in. A filter that silently dropped rows would be a
-    regression of the very control it offers."""
+    """A recruiter who turns the filter off sees every row, including later
+    re-forwards. A filter that silently dropped rows would be a regression of
+    the very control it offers."""
+    tenant_id, user_id, ids = agency_with_forwarded_duplicates
+    sign_in(client, user_id, tenant_id)
+    body = (await client.get("/api/opportunities?dedupe=false")).json()
+    shown = {row["id"] for row in body["items"]}
+    assert str(ids["duplicate"]) in shown
+    assert body["hidden"] == 0
+
+
+async def test_dedupe_is_the_default(client, agency_with_forwarded_duplicates) -> None:
+    """Re-forwards are hidden by default — the list a recruiter opens is the
+    deduped one, not a raw dump of every forwarded copy. Turning it off is the
+    deliberate choice, not the starting point."""
     tenant_id, user_id, ids = agency_with_forwarded_duplicates
     sign_in(client, user_id, tenant_id)
     body = (await client.get("/api/opportunities")).json()
     shown = {row["id"] for row in body["items"]}
-    assert str(ids["duplicate"]) in shown
-    assert body["hidden"] == 0
+    assert str(ids["duplicate"]) not in shown
+    assert body["hidden"] == 1
 
 
 async def test_dedupe_hides_the_later_forward_keeping_the_earliest(
