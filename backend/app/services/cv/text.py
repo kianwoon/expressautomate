@@ -144,18 +144,41 @@ def _extract_docx(data: bytes, *, max_chars: int) -> str:
     function's only job on top of that is translating the archive module's
     format-neutral `BoundedArchiveTooLarge` into the `UnsupportedDocument`
     that every caller of this module already expects.
+
+    Tables are read alongside paragraphs: many real CVs lay out work history
+    or skills in a table rather than in body prose, and `python-docx` exposes
+    `doc.paragraphs` and `doc.tables` as separate collections, so a loop over
+    paragraphs alone would silently drop that content. Both collections share
+    the single `max_chars` budget — a table-heavy CV is bounded the same way
+    a prose one is.
     """
     try:
         budget = max(max_chars * _DOCX_BOMB_MULTIPLIER, _DOCX_MIN_BUDGET_BYTES)
         doc = Document(bounded_archive(data, budget=budget))
-        text_parts = []
+        text_parts: list[str] = []
         total_len = 0
         for para in doc.paragraphs:
+            if total_len >= max_chars:
+                break
             if para.text:
                 text_parts.append(para.text)
                 total_len += len(para.text) + 1  # +1 for the joining newline
+        for table in doc.tables:
             if total_len >= max_chars:
                 break
+            for row in table.rows:
+                if total_len >= max_chars:
+                    break
+                # A cell may itself contain paragraphs; take the cell's text
+                # rather than recursing, so a heavily nested cell cannot run
+                # away. Cells on a row are tab-separated to preserve the
+                # column structure the LLM reads as employment history.
+                cells = [cell.text.strip() for cell in row.cells if cell.text.strip()]
+                if not cells:
+                    continue
+                line = "\t".join(cells)
+                text_parts.append(line)
+                total_len += len(line) + 1
         return "\n".join(text_parts)[:max_chars]
     except BoundedArchiveTooLarge as e:
         raise UnsupportedDocument(str(e)) from e
