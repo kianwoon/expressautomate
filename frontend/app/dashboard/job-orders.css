@@ -851,17 +851,32 @@
    btn-primary treatment) sized for the header row: narrower padding than the
    body buttons and constrained to its label width so a short label does not
    stretch across the row. */
-/* Scoped under the modal class so it beats `.btn`'s single-class specificity
-   regardless of how the bundler orders globals.css against this page's CSS —
-   the unscoped version lost the cascade in production and the button rendered
-   at .btn's 42px instead of this ~28px. */
-.jo-detail-modal .jo-detail-run {
+/* The Run-analysis action beside the title. Self-contained — does NOT use
+   `.btn`, so there is no cascade fight with `.btn`'s 11px 20px padding. A
+   compact gradient pill (~28px tall) using the brand gradient, sized to its
+   label width. */
+.jo-detail-run {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   flex: 0 0 auto;
   width: max-content;
-  padding: 5px 12px;
+  font: inherit;
   font-size: 0.8125rem;
+  font-weight: 600;
   line-height: 1.2;
+  padding: 5px 12px;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: var(--brand-gradient);
+  color: #fff;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: filter 0.15s ease;
 }
+.jo-detail-run:hover { filter: brightness(1.08); }
+.jo-detail-run:disabled { opacity: 0.55; cursor: default; }
+.jo-detail-run:focus-visible { outline: 2px solid var(--blue-500); outline-offset: 2px; }
 
 /* The four-section tab bar. Mirrors the settings `.nt-tabs` visual (flex row,
    gap, transparent bottom border on inactive, currentColor on active, opacity
