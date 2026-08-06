@@ -1,9 +1,10 @@
-"""The orchestrator — all three stages in sequence, one fake model.
+"""The orchestrator — all four stages in sequence, one fake model.
 
-`analyze` threads one `llm` through all three stages, so a single `FakeLLM`
-queued with three responses runs the whole pipeline. This is the test that
-keeps the stages honest as a pipeline: a change to the understanding must flow
-into the persona prompt, and from there into the search prompt.
+`analyze` threads one `llm` through all stages, so a single `FakeLLM` queued
+with four responses runs the whole pipeline (the occupation stage's re-rank
+step is skipped here because `session=None` yields no candidates). This is the
+test that keeps the stages honest as a pipeline: a change to the understanding
+must flow into the persona prompt, and from there into the search prompt.
 
 allow-hardcode: the fixtures below are test content, not an oracle.
 """
@@ -75,6 +76,18 @@ def _persona_payload():
     }
 
 
+def _occupation_profile_payload():
+    # Consumed between understand and persona. The re-rank step never runs in
+    # these tests (session=None → no candidates), so only the profile call fires.
+    return {
+        "occupation": "Logistics Manager",
+        "seniority": "Mid",
+        "people_management": True,
+        "industry": "General",
+        "functions": {"Operations": 50, "Planning": 30, "Team management": 20},
+    }
+
+
 def _search_payload():
     return {
         "platform": "LinkedIn",
@@ -87,23 +100,34 @@ def _search_payload():
     }
 
 
-async def test_analyze_runs_all_three_stages_in_sequence():
-    llm = FakeLLM(_understanding_payload(), _persona_payload(), _search_payload())
+async def test_analyze_runs_all_stages_in_sequence():
+    llm = FakeLLM(
+        _understanding_payload(),
+        _occupation_profile_payload(),
+        _persona_payload(),
+        _search_payload(),
+    )
     outcome = await analyze(_Opp(), codes=(), llm=llm)
 
     assert outcome.result.understanding.role == "Logistics Manager"
     assert outcome.result.persona.likely_backgrounds == ["Logistics coordinator"]
     assert outcome.result.search_plan.platform == "LinkedIn"
-    # Three calls, one per stage.
-    assert len(llm.prompts) == 3
+    # Four calls: understand, occupation profile, persona, search. The
+    # occupation re-rank does not fire (session=None → no candidates).
+    assert len(llm.prompts) == 4
     # The understanding's role flowed into the persona prompt, and the persona's
     # background into the search prompt — the pipeline property.
-    assert "Logistics Manager" in llm.prompts[1]
-    assert "Logistics coordinator" in llm.prompts[2]
+    assert "Logistics Manager" in llm.prompts[2]
+    assert "Logistics coordinator" in llm.prompts[3]
 
 
 async def test_analyze_aggregates_token_counts_across_stages():
-    llm = FakeLLM(_understanding_payload(), _persona_payload(), _search_payload())
+    llm = FakeLLM(
+        _understanding_payload(),
+        _occupation_profile_payload(),
+        _persona_payload(),
+        _search_payload(),
+    )
     outcome = await analyze(_Opp(), codes=(), llm=llm)
     # FakeLLM returns prompt_tokens=None; the engine treats None as zero, so the
     # aggregate is 0 rather than a TypeError on None + None.
@@ -114,7 +138,12 @@ async def test_analyze_aggregates_token_counts_across_stages():
 
 async def test_analyze_records_removed_codes():
     """The redaction audit flows out of the orchestrator."""
-    llm = FakeLLM(_understanding_payload(), _persona_payload(), _search_payload())
+    llm = FakeLLM(
+        _understanding_payload(),
+        _occupation_profile_payload(),
+        _persona_payload(),
+        _search_payload(),
+    )
     outcome = await analyze(_Opp(), codes=(), llm=llm)
     # No codes in this fixture, so nothing was removed.
     assert outcome.removed_codes == []

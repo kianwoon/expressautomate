@@ -14,6 +14,7 @@ from app.models.glossary import GlossaryCode, GlossarySeedMark
 from app.models.graph_subscription import GraphSubscription
 from app.models.job_intelligence import JobIntelligence
 from app.models.mailbox import Mailbox
+from app.models.mom_occupation import MomOccupation
 from app.models.ms_token import MicrosoftToken
 from app.models.notification import (
     NotificationDelivery,
@@ -52,6 +53,7 @@ __all__ = [
     "JobIntelligence",
     "Mailbox",
     "MicrosoftToken",
+    "MomOccupation",
     "NotificationDelivery",
     "NotificationDestination",
     "NotificationLinkToken",

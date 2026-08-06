@@ -602,7 +602,18 @@ function Detail({
               one tab, each fed by the same `ji` hook. Each panel owns its own
               empty/loading/failed notice via `stageState`, so a tab never looks
               blank before the analysis has run. ---- */}
-      {activeTab === "work" && <WorkStage intelligence={ji.analysis} state={stageState} />}
+      {activeTab === "work" && (
+        <WorkStage
+          intelligence={ji.analysis}
+          state={stageState}
+          offer={{
+            min: row.salary_min,
+            max: row.salary_max,
+            currency: row.salary_currency,
+            period: row.salary_period,
+          }}
+        />
+      )}
       {activeTab === "person" && <PersonStage intelligence={ji.analysis} state={stageState} />}
       {activeTab === "search" && (
         <SearchStage intelligence={ji.analysis} state={stageState} view={ji.view} />

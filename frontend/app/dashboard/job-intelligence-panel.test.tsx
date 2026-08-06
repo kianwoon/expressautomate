@@ -23,6 +23,11 @@ vi.mock("../api", async () => ({
   SOURCING_POLL_MS: 10,
 }));
 
+// allow-hardcode: a no-salary offer the WorkStage tests render with — the
+// benchmark chart only renders when an `occupation` is present, and these
+// tests assert on the understanding fields, so the offer is inert here.
+const NO_OFFER = { min: null, max: null, currency: null, period: null };
+
 function analysis(overrides: Partial<Intelligence> = {}): Intelligence {
   return {
     understanding: {
@@ -172,14 +177,16 @@ describe("stage panels", () => {
 
   it("WorkStage shows the understanding fields when analysis exists", () => {
     const a = analysis();
-    render(<WorkStage intelligence={a} state={{ ...empty, hasAnalysis: true }} />);
+    render(
+      <WorkStage intelligence={a} state={{ ...empty, hasAnalysis: true }} offer={NO_OFFER} />,
+    );
     expect(screen.getByText("Understanding the work")).toBeDefined();
     expect(screen.getByText("Logistics Manager")).toBeDefined();
     expect(screen.getByText("Plan dispatch")).toBeDefined();
   });
 
   it("WorkStage shows the nothing-yet notice when no analysis", () => {
-    render(<WorkStage intelligence={null} state={empty} />);
+    render(<WorkStage intelligence={null} state={empty} offer={NO_OFFER} />);
     expect(screen.getByText(/No analysis yet/i)).toBeDefined();
   });
 
@@ -218,7 +225,7 @@ describe("stage panels", () => {
       failed: true,
       failureReason: "This job order has no title to analyse.",
     };
-    render(<WorkStage intelligence={null} state={failed} />);
+    render(<WorkStage intelligence={null} state={failed} offer={NO_OFFER} />);
     expect(screen.getByText(/no title to analyse/i)).toBeDefined();
   });
 });

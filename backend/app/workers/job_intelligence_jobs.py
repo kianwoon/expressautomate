@@ -134,7 +134,12 @@ async def run_job_intelligence(
         )
 
     try:
-        outcome = await analyze(opportunity, codes)
+        # A second session is opened for the pipeline so the occupation stage
+        # can semantic-search `mom_occupations` (a global table readable under
+        # any tenant session). Held open for the whole analysis rather than
+        # only the search, because the search runs mid-pipeline.
+        async with tenant_session(tenant) as session:
+            outcome = await analyze(opportunity, codes, session=session)
     except (LLMInvalidJSON, Exception) as exc:
         # A bad model answer, or a transport failure reaching Cerebras. Either
         # is a failed run the recruiter can retry; neither is retried here,
@@ -165,6 +170,11 @@ async def run_job_intelligence(
                 understanding=result.understanding.model_dump(mode="json"),
                 persona=result.persona.model_dump(mode="json"),
                 search_plan=result.search_plan.model_dump(mode="json"),
+                occupation=(
+                    result.occupation.model_dump(mode="json")
+                    if result.occupation is not None
+                    else None
+                ),
                 model_name=outcome.stats.model,
                 prompt_tokens=outcome.stats.prompt_tokens,
                 completion_tokens=outcome.stats.completion_tokens,
