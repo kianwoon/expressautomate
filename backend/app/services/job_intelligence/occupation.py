@@ -123,9 +123,18 @@ def build_profile_prompt(context: str, understanding_text_block: str) -> str:
 def build_pick_prompt(
     context: str, profile: OccupationProfile, candidates: list[dict]
 ) -> str:
-    """Separate from `rerank_occupation` for prompt-only testing."""
+    """Separate from `rerank_occupation` for prompt-only testing.
+
+    Candidates are deliberately presented in an order unrelated to their search
+    similarity: listing the highest-similarity first anchors the model on the
+    same near-miss the search surfaced (e.g. "after sales adviser" at 0.59 for
+    an accounting role). An alphabetical ordering gives the model a neutral
+    set to evaluate on the work's merits, not on whichever string happened to
+    score highest against a fuzzy title embedding.
+    """
+    by_title = sorted(candidates, key=lambda c: c["title"])
     lines = []
-    for c in candidates:
+    for c in by_title:
         lines.append(
             f"- {c['title']} | {c['gross_p25']} / {c['gross_p50']} / {c['gross_p75']}"
         )
@@ -263,15 +272,6 @@ async def search_occupations(
 # allow-hardcode: a quality threshold, not configuration.
 _MIN_CONFIDENCE = 0.5
 
-# The semantic similarity floor. Below this, the best candidate is too far from
-# the query for the match to be trustworthy regardless of LLM confidence — the
-# model can be fooled by word overlap ("account" in sales vs accounting) into a
-# high confidence that the vector distance contradicts. A sparse JD with no
-# duties produces a flat similarity field (all candidates 0.4–0.6), and the
-# honest answer there is "no benchmark" rather than a guess.
-# allow-hardcode: a quality threshold, not configuration.
-_MIN_SIMILARITY = 0.65
-
 
 async def rerank_occupation(
     context: str,
@@ -326,18 +326,6 @@ async def rerank_occupation(
         log.info(
             "occupation_rerank_low_confidence",
             picked_title=title,
-            confidence=confidence,
-        )
-        return None
-
-    if match["similarity"] < _MIN_SIMILARITY:
-        # The vector distance contradicts the LLM's confidence. This happens on
-        # sparse JDs (title only, no duties) where the model latches onto word
-        # overlap and the embedding field is flat. Suppress rather than guess.
-        log.info(
-            "occupation_rerank_low_similarity",
-            picked_title=title,
-            similarity=match["similarity"],
             confidence=confidence,
         )
         return None
