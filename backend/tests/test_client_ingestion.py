@@ -147,13 +147,17 @@ def _three_job_extraction(*, companies: list[str]) -> tuple[ExtractionResponse, 
 
     Each job reuses the same source sentence positions; only the company value
     differs per job, which is all `match_client`'s "first non-empty company"
-    logic needs to see a disagreement.
+    logic needs to see a disagreement. The titles differ too, so the three jobs
+    are three genuinely distinct vacancies — `persist`'s dedup collapses jobs
+    identical on their distinguishing columns, and three identical jobs would
+    become one row, which is not what these client-matching tests are about.
     """
     source = "Vacancy at Acme Pte Ltd. Finance officer role, up to $3500 per month."
     salary_at = source.index("up to $3500")
     period_at = source.index("per month")
+    titles = ["Finance officer", "Operations lead", "Warehouse manager"]
 
-    def _job(company_name: str) -> dict:
+    def _job(company_name: str, title: str) -> dict:
         return {
             "company": {
                 "value": company_name,
@@ -163,7 +167,7 @@ def _three_job_extraction(*, companies: list[str]) -> tuple[ExtractionResponse, 
                 "confidence": 0.9,
             },
             "job_title": {
-                "value": "Finance officer",
+                "value": title,
                 "evidence": "Finance officer",
                 "start_char": source.index("Finance officer"),
                 "end_char": source.index("Finance officer") + len("Finance officer"),
@@ -185,7 +189,9 @@ def _three_job_extraction(*, companies: list[str]) -> tuple[ExtractionResponse, 
             },
         }
 
-    response = ExtractionResponse.model_validate({"jobs": [_job(c) for c in companies]})
+    response = ExtractionResponse.model_validate(
+        {"jobs": [_job(c, t) for c, t in zip(companies, titles, strict=True)]}
+    )
     result = LLMResult(data={}, model="test/fast")
     return response, result, source
 

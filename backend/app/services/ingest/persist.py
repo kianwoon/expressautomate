@@ -263,6 +263,40 @@ def _value(field: ExtractedField | None) -> str | None:
     return field.value
 
 
+# The fields two jobs must share to count as the same vacancy, not two. A model
+# that reads "Operations Assistant (Driver) x 2" as two vacancies emits two jobs
+# that are byte-identical on these columns — the "x 2" was a headcount on one
+# role, not a second role. Requirements and description are deliberately left
+# out: two genuinely distinct roles can share a boilerplate requirements block,
+# and matching on it would collapse them. These six are the columns a recruiter
+# compares to tell rows apart on the list, so they are the columns a dedup that
+# runs before insert has to agree on.
+_DEDUP_FIELDS = ("job_title", "company", "salary", "location", "working_hours", "duration")
+
+
+def _dedup_jobs(jobs: list[ExtractedJob]) -> list[ExtractedJob]:
+    """Drop jobs identical on the columns that distinguish a vacancy.
+
+    First occurrence wins, so the deterministic `(email, index)` ids below stay
+    stable for the jobs that survive — a job at index 2 keeps index 2's id, not
+    index 1's, which matters for a retry that must land on the same ids. Only
+    exact agreement on every `_DEDUP_FIELDS` column counts; one differing field
+    makes two jobs distinct and both are kept.
+    """
+    seen: set[tuple] = set()
+    kept: list[ExtractedJob] = []
+    for job in jobs:
+        key = tuple(
+            (_value(getattr(job, name)) or "").strip().casefold()
+            for name in _DEDUP_FIELDS
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        kept.append(job)
+    return kept
+
+
 async def persist(
     tenant_id: uuid.UUID,
     email_message_id: uuid.UUID,
@@ -335,7 +369,14 @@ async def persist(
         # An email describing three vacancies becomes three rows. They share
         # one extraction, because they came from one model call — that is what
         # makes "what did this run cost, and what did it produce" answerable.
-        for index, job in enumerate(response.jobs):
+        #
+        # First, collapse jobs the model split that are one vacancy: a posting
+        # that says "Operations Assistant (Driver) x 2" is one role with a
+        # headcount of two, and a model that reads the "x 2" as two vacancies
+        # emits two jobs identical on every distinguishing column. `_dedup_jobs`
+        # drops those before the ids are minted, so one role is one row.
+        jobs = _dedup_jobs(response.jobs)
+        for index, job in enumerate(jobs):
             opportunity_id = _opportunity_id(email_message_id, index)
             opportunity_ids.append(opportunity_id)
             await _insert_opportunity(
@@ -346,12 +387,12 @@ async def persist(
                 job,
                 source,
                 codes,
-                len(response.jobs),
+                len(jobs),
                 client_id=matched.client_id if matched else None,
                 assigned_user_id=matched.assigned_user_id if matched else None,
             )
             await _insert_evidence(session, tenant_id, extraction_id, opportunity_id, job, source)
-            await _insert_codes(session, tenant_id, opportunity_id, job, codes, len(response.jobs))
+            await _insert_codes(session, tenant_id, opportunity_id, job, codes, len(jobs))
 
             # Inside the same transaction that created the opportunity, so a
             # notification for a job order that rolled back can never exist —

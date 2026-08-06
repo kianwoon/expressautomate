@@ -33,6 +33,11 @@ PROMPT = """Extract every job vacancy described in this email.
 
 Rules:
 - One entry in `jobs` per distinct vacancy. An email may describe several, or none.
+- A headcount is not a second vacancy. "Operations Assistant x 2", "2 positions",
+  "x2" or a similar multiplier means one role with multiple openings — emit ONE
+  entry for it, never one per opening. Two entries are only correct when the
+  roles themselves differ (different title, different company, or a different
+  location/schedule that makes them genuinely separate posts).
 - For each field, `evidence` must be text copied VERBATIM from the EMAIL below —
   character for character, with nothing added, shortened or paraphrased. This is
   checked against the email; a quote that is not in it is discarded.

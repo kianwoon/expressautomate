@@ -269,7 +269,36 @@ async def test_replay_never_overwrites_a_human_correction(admin_session, email_r
     assert override == "Raffles Place"
 
 
-async def test_three_jobs_in_one_email_become_three_rows(admin_session, email_row):
+async def test_three_distinct_jobs_in_one_email_become_three_rows(admin_session, email_row):
+    tid, _, eid = email_row
+    one = _payload()["jobs"][0]
+    # Genuinely distinct roles — different titles, not the same role repeated.
+    # The old version of this test fed three identical jobs and expected three
+    # rows, which is exactly the "x 3" headcount mistake the dedup exists to
+    # catch: three identical jobs are one vacancy, not three.
+    two = {**one, "job_title": {"value": "Operations Manager",
+            "evidence": "Operations Manager", "start_char": 0, "end_char": 19,
+            "confidence": 0.9}}
+    three = {**one, "job_title": {"value": "Warehouse Lead",
+              "evidence": "Warehouse Lead", "start_char": 0, "end_char": 14,
+              "confidence": 0.9}}
+    response = ExtractionResponse.model_validate({"jobs": [one, two, three]})
+
+    ids = await persist(
+        tid, eid, response, LLMResult(data={}, model="test/fast"), SOURCE
+    )
+
+    assert len(ids) == 3
+
+
+async def test_identical_jobs_in_one_email_collapse_to_one_row(admin_session, email_row):
+    """The 'Operations Assistant (Driver) x 2' bug: a posting that names a
+    headcount of two for one role made the model emit two byte-identical jobs,
+    and each became a row. A recruiter saw the same vacancy twice on the list.
+
+    Identical on every distinguishing column (title, company, salary, location,
+    hours, duration) is one vacancy, so `persist` must keep one row — not one
+    per copy the model emitted."""
     tid, _, eid = email_row
     one = _payload()["jobs"][0]
     response = ExtractionResponse.model_validate({"jobs": [one, one, one]})
@@ -278,7 +307,7 @@ async def test_three_jobs_in_one_email_become_three_rows(admin_session, email_ro
         tid, eid, response, LLMResult(data={}, model="test/fast"), SOURCE
     )
 
-    assert len(ids) == 3
+    assert len(ids) == 1
 
 
 async def test_a_retried_extraction_produces_one_opportunity_and_one_delivery(
@@ -531,6 +560,17 @@ async def test_the_email_text_reaches_the_prompt():
     await extract(SOURCE, llm=spy)
 
     assert SOURCE in captured[0]
+
+
+def test_the_prompt_tells_the_model_a_headcount_is_not_a_second_vacancy():
+    """The 'Operations Assistant (Driver) x 2' duplicate: the model read a
+    headcount multiplier as two vacancies and emitted two identical jobs. The
+    prompt now states the rule the model broke, so a model that follows it
+    emits one entry for one role regardless of how many openings it lists."""
+    from app.services.ingest.extract import PROMPT
+
+    assert "headcount" in PROMPT.lower()
+    assert "one entry" in PROMPT.lower()
 
 
 # --- the job ----------------------------------------------------------------
