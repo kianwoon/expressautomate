@@ -296,7 +296,9 @@ function Detail({
     <Dialog
       title={
         <span className="jo-detail-title-row">
-          <Value text={row.job_title_raw ?? "Job order"} />
+          <span className="jo-detail-title-text">
+            <Value text={row.job_title_raw ?? "Job order"} />
+          </span>
           {/* "Run analysis" beside the title so it is always reachable, whatever
               tab is showing. The state it drives lives in the `ji` hook; this
               button only calls it and reflects its flags. */}

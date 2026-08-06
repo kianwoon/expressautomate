@@ -843,7 +843,7 @@
   gap: 12px;
   width: 100%;
 }
-.jo-detail-title-row > :first-child {
+.jo-detail-title-text {
   flex: 1 1 auto;
   min-width: 0;
 }
