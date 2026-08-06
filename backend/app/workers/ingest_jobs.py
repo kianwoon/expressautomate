@@ -41,6 +41,7 @@ from app.models.tenant import User
 from app.services.candidate_matching import find_candidate
 from app.services.candidate_naming import normalize_email, normalize_phone
 from app.services.cv.identity import extract_identity
+from app.services.cv.ocr import OCRUnavailable, ocr_text
 from app.services.cv.text import UnsupportedDocument, extract_text, sniff
 from app.services.llm.client import LLMInvalidJSON
 from app.services.storage.r2 import R2BodyStore
@@ -65,6 +66,12 @@ _UNNAMED = "Uploaded CV"
 def body_store():
     """Indirection point, so tests can swap in the in-memory store."""
     return R2BodyStore()
+
+
+# Injectable OCR seam — see `cv_jobs.ocr_extract` for the rationale. Shared name
+# would couple the two modules; each holds its own so a test patches the one it
+# is exercising.
+ocr_extract = ocr_text
 
 
 async def _terminal(
@@ -260,13 +267,40 @@ async def ingest_candidate_cv(
         return
 
     if not source.strip():
-        await _terminal(
-            tenant, document, CandidateDocument.UNREADABLE,
-            "No text could be read from this file. A scanned or photographed "
-            "CV has no text layer to extract; a text-based PDF or Word file "
-            "can be read.",
-        )
-        return
+        # A scanned CV yields no text layer; OCR recovers it when configured, so
+        # the identity read that follows sees real contact details rather than
+        # an empty string. Same fallback shape as `parse_candidate_cv`.
+        if settings.ocr_configured():
+            try:
+                ocrd = await ocr_extract(
+                    data,
+                    languages=settings.CV_OCR_LANGUAGES,
+                    max_pages=settings.CV_OCR_MAX_PAGES,
+                    timeout=settings.CV_OCR_TIMEOUT_SECONDS,
+                )
+            except OCRUnavailable as exc:
+                await _terminal(
+                    tenant, document, CandidateDocument.UNREADABLE,
+                    f"This scanned CV could not be read by OCR: {exc}",
+                )
+                return
+            if not ocrd.strip():
+                await _terminal(
+                    tenant, document, CandidateDocument.UNREADABLE,
+                    "No text could be read from this file, even after OCR. The "
+                    "scan may be too faint, low-resolution, or of a page with no "
+                    "text on it.",
+                )
+                return
+            source = ocrd
+        else:
+            await _terminal(
+                tenant, document, CandidateDocument.UNREADABLE,
+                "No text could be read from this file. A scanned or photographed "
+                "CV has no text layer to extract; a text-based PDF or Word file "
+                "can be read.",
+            )
+            return
 
     try:
         identity, _ = await extract_identity(source)

@@ -262,6 +262,28 @@ class Settings(BaseSettings):
     # How many CVs one agency may upload in a UTC day. Each upload buys a
     # model call, so this is a spend ceiling before it is anything else.
     CV_DAILY_PARSE_QUOTA: int = Field(default=200, gt=0)
+    # --- OCR fallback for scanned CVs ---
+    # Off by default: a deployment that has not installed the Tesseract/
+    # Ghostscript/QPDF toolchain (the Dockerfile layer) gets the current
+    # `unreadable` behavior byte-for-byte. On, the empty-text branch in
+    # `parse_candidate_cv` runs Tesseract via `app.services.cv.ocr` and flows
+    # the recovered text through the same parse. `ocr_configured()` ANDs this
+    # with a binary probe so a flag set without the toolchain degrades to the
+    # same `unreadable` path with a named cause rather than a crash.
+    CV_OCR_ENABLED: bool = False
+    # Wall clock one OCR run may take. Well under the parse job's own timeout,
+    # because OCR runs inside it: a scanned CV that takes the full parse budget
+    # on OCR alone leaves nothing for the model call that follows.
+    CV_OCR_TIMEOUT_SECONDS: float = Field(default=120.0, gt=0)
+    # A ceiling on the pages OCR will touch. A genuine CV is a handful of pages;
+    # a scanned document longer than this is almost certainly not a CV, and the
+    # bound is what stops a hostile PDF from running Tesseract for an hour.
+    CV_OCR_MAX_PAGES: int = Field(default=10, gt=0)
+    # Tesseract language codes, `+`-joined (`eng`, `eng+chi_sim+tam`). English
+    # ships with the base `tesseract-ocr` package; further codes need the
+    # matching `tesseract-ocr-<code>` in the image. Carried as one string so the
+    # orchestrator receives it verbatim.
+    CV_OCR_LANGUAGES: str = "eng"
 
     # --- Candidate spreadsheet imports ---
     # The largest spreadsheet the API will accept, counted as the bytes
@@ -1070,6 +1092,21 @@ class Settings(BaseSettings):
         pass the configured gate and then fail the request.
         """
         return self.EMBEDDING_API_KEY or self.OPENROUTER_API_KEY
+
+    def ocr_configured(self) -> bool:
+        """Is the scanned-PDF OCR fallback actually runnable here?
+
+        ANDs the flag with a binary probe so a flag set without the toolchain
+        degrades to the same `unreadable` path with a named cause rather than a
+        crash inside `ocrmypdf`. The probe (`ocr_available`) is imported lazily
+        so this module — which loads early — does not pull the OCR toolchain's
+        Python deps at config import time.
+        """
+        if not self.CV_OCR_ENABLED:
+            return False
+        from app.services.cv.ocr import ocr_available
+
+        return ocr_available()
 
     def graph_configured(self) -> bool:
         """Can this process actually reach Graph?

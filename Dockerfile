@@ -21,6 +21,17 @@ ENV PYTHONUNBUFFERED=1 \
 
 COPY --from=ghcr.io/astral-sh/uv:0.5.11 /uv /usr/local/bin/uv
 
+# System OCR toolchain for scanned-PDF fallback (`app/services/cv/ocr.py`). The
+# Python `ocrmypdf` wrapper orchestrates these three binaries; without any one
+# of them it refuses to start. English ships in the base `tesseract-ocr` pack;
+# additional languages are added via `tesseract-ocr-<code>` and surfaced through
+# `CV_OCR_LANGUAGES`. Installed in the single shared image so the arq worker —
+# the only process that runs OCR — has them; the api/supervisor carry the weight
+# too, but never invoke them.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      tesseract-ocr ghostscript qpdf \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 # Dependency layer first — application edits do not invalidate it.
