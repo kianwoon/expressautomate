@@ -867,8 +867,8 @@
   line-height: 1.2;
   padding: 5px 12px;
   border: 1px solid transparent;
-  border-radius: var(--radius);
-  background: var(--brand-gradient);
+  border-radius: 10px;
+  background: linear-gradient(135deg, #1d4ed8 0%, #14a89a 100%);
   color: #fff;
   cursor: pointer;
   white-space: nowrap;
@@ -876,7 +876,7 @@
 }
 .jo-detail-run:hover { filter: brightness(1.08); }
 .jo-detail-run:disabled { opacity: 0.55; cursor: default; }
-.jo-detail-run:focus-visible { outline: 2px solid var(--blue-500); outline-offset: 2px; }
+.jo-detail-run:focus-visible { outline: 2px solid #2563eb; outline-offset: 2px; }
 
 /* The four-section tab bar. Mirrors the settings `.nt-tabs` visual (flex row,
    gap, transparent bottom border on inactive, currentColor on active, opacity
