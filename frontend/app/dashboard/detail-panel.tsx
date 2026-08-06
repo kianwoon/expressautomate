@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { useAuth } from "../auth";
 import { Breakable } from "../breakable";
@@ -185,6 +185,28 @@ function Detail({
   // that keeps `placement` alive); resets when a different row is opened.
   const [activeTab, setActiveTab] = useState<TabKey>("origin");
 
+  // The Origin tab is the tallest (it carries the facts, actions, prose and
+  // shortlist). Once measured, its height is locked as the panel's min-height
+  // so switching to a shorter Work/Person/Search tab does not collapse the
+  // modal — every tab renders against the same canvas, and the height stops
+  // jumping. A ResizeObserver tracks Origin's height as it settles (the
+  // shortlist arrives after mount and grows the panel), and only while Origin
+  // is the active tab. The locked height persists across tab switches.
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  const [panelMinHeight, setPanelMinHeight] = useState<number | null>(null);
+  useLayoutEffect(() => {
+    if (activeTab !== "origin" || !panelRef.current) return;
+    const el = panelRef.current;
+    const measure = () => {
+      const h = el.scrollHeight;
+      if (h > 0) setPanelMinHeight(h);
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [activeTab]);
+
   async function runAnalysis() {
     await ji.run();
     // Jump to the Work tab so the recruiter watches the result arrive, rather
@@ -345,6 +367,11 @@ function Detail({
           Intelligence stages, each fed by the one `ji` hook. The bar is always
           visible so a recruiter can step between them without scrolling. */}
       <TabBar active={activeTab} onSelect={setActiveTab} />
+
+      {/* One container for every tab's content. `minHeight` is the Origin
+          height (measured once it renders), locked so the modal stops
+          collapsing and re-growing on every tab switch. */}
+      <div ref={panelRef} className="jo-tab-panel" style={panelMinHeight ? { minHeight: panelMinHeight } : undefined}>
 
       {/*
         Two columns, not one. The modal has 880px of width, and the content
@@ -578,6 +605,7 @@ function Detail({
       {activeTab === "search" && (
         <SearchStage intelligence={ji.analysis} state={stageState} view={ji.view} />
       )}
+      </div>
 
       {/* A failure has to say so. Silently leaving the badge unchanged would
           let someone believe they had signed off a row they had not. */}
