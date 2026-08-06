@@ -65,11 +65,20 @@ def mailbox_scopes() -> list[str]:
 
 @lru_cache(maxsize=1)
 def client() -> msal.ConfidentialClientApplication:
-    """One long-lived client; MSAL caches Entra's OIDC metadata on it."""
+    """One long-lived client; MSAL caches Entra's OIDC metadata on it.
+
+    `timeout` is a per-request socket timeout MSAL patches onto its internal
+    `requests.Session` (via `functools.partial`). Without it, a stalled read on
+    Entra's `/token` endpoint blocks the worker thread forever — the only bound
+    was arq's 300s job timeout, which a single hung TLS read consumed in full.
+    Reuses `GRAPH_TIMEOUT_SECONDS` because Entra reachability is the same
+    operator concern as Graph reachability: one timeout knob for one cloud.
+    """
     return msal.ConfidentialClientApplication(
         settings.MS_CLIENT_ID,
         client_credential=settings.MS_CLIENT_SECRET,
         authority=authority(),
+        timeout=settings.GRAPH_TIMEOUT_SECONDS,
     )
 
 
@@ -183,14 +192,25 @@ async def _token_for_user(session, tenant_id: uuid.UUID, owner: uuid.UUID, *, ab
     if encrypted is None:
         raise MailboxNotAuthorised(absent)
 
-    result = await asyncio.to_thread(
-        client().acquire_token_by_refresh_token,
-        decrypt(encrypted),
-        # The full mailbox set — identity scopes included. Asking for
-        # only the new permission returns a token narrower than the grant
-        # already held, which is why `mailbox_scopes()` unions them.
-        scopes=mailbox_scopes(),
-    )
+    # Defence-in-depth on top of the client() socket timeout: if a future
+    # MSAL build changes the wiring or an `http_client=` is ever passed,
+    # this wait_for still bounds the blocking call to GRAPH_TIMEOUT_SECONDS.
+    # Raising MailboxNotAuthorised lets the caller stop cleanly (mark
+    # `needs_reauth`) instead of burning the whole 300s arq job budget.
+    try:
+        result = await asyncio.wait_for(
+            asyncio.to_thread(
+                client().acquire_token_by_refresh_token,
+                decrypt(encrypted),
+                # The full mailbox set — identity scopes included. Asking for
+                # only the new permission returns a token narrower than the grant
+                # already held, which is why `mailbox_scopes()` unions them.
+                scopes=mailbox_scopes(),
+            ),
+            timeout=settings.GRAPH_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError as exc:
+        raise MailboxNotAuthorised("token refresh timed out") from exc
     if "access_token" not in result:
         raise MailboxNotAuthorised(result.get("error_description", "refresh token rejected"))
 

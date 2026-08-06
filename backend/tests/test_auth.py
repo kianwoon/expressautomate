@@ -7,6 +7,7 @@ happens before any tenant context exists, and RLS is the part most likely to
 break silently, so those statements run for real.
 """
 
+import time
 import uuid
 from datetime import UTC, datetime, timedelta
 from urllib.parse import parse_qs, quote, urlparse
@@ -259,7 +260,47 @@ async def test_refresh_token_is_stored_encrypted(client, monkeypatch, cleanup) -
     assert decrypt(stored) == "refresh-token-value"
 
 
-async def test_second_sign_in_is_idempotent(client, monkeypatch, cleanup) -> None:
+async def test_a_stalled_token_refresh_fails_fast_instead_of_blocking_the_job(
+    client, monkeypatch, cleanup
+) -> None:
+    """The production bug this guards.
+
+    `delta_sync_mailbox` hung the full 300s arq job timeout because MSAL's POST
+    to Entra's `/token` endpoint had no socket timeout — a single stalled TLS
+    read blocked the worker thread, and `_token_for_user` had no bound of its
+    own, so arq's global timeout was the only thing that cancelled it. The fix
+    bounds the call to GRAPH_TIMEOUT_SECONDS and raises MailboxNotAuthorised,
+    which the caller already handles by marking `needs_reauth` and stopping.
+
+    This test reproduces the symptom directly: a blocking token call that would
+    never return on its own. It must fail fast (under the timeout window), not
+    hang — and it must raise MailboxNotAuthorised, not a raw TimeoutError.
+    """
+    tid, oid = str(uuid.uuid4()), uuid.uuid4().hex
+    cleanup.append(uuid.UUID(tid))
+    await sign_in(client, monkeypatch, token_response(tid, oid, "rachel@agency-a.sg"))
+
+    async with tenant_session(uuid.UUID(tid)) as s:
+        user_id = (await s.execute(text("SELECT id FROM users"))).scalar_one()
+
+    # Shrink the timeout so the test is fast — the guard reads this setting.
+    monkeypatch.setattr(settings, "GRAPH_TIMEOUT_SECONDS", 0.2)
+
+    class _BlockingMsal:
+        def acquire_token_by_refresh_token(self, *args, **kwargs):
+            # The production symptom: a POST to Entra that never returns.
+            time.sleep(5)
+            raise AssertionError("should have timed out before reaching here")
+
+    monkeypatch.setattr(ms_auth, "client", lambda: _BlockingMsal())
+
+    started = time.monotonic()
+    with pytest.raises(ms_auth.MailboxNotAuthorised, match="timed out"):
+        await ms_auth.access_token_for_user(uuid.UUID(tid), user_id)
+    # Failed in well under the 5s the blocking call would have taken — proves
+    # the wait_for guard fired, not that sleep finished.
+    assert time.monotonic() - started < 1.0
+
     tid, oid = str(uuid.uuid4()), uuid.uuid4().hex
     cleanup.append(uuid.UUID(tid))
     result = token_response(tid, oid, "rachel@agency-a.sg")
