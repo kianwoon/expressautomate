@@ -832,3 +832,63 @@
   color: var(--ink-500);
   font-style: italic;
 }
+
+/* ---- Job order modal: header run button + tab bar ---- */
+
+/* The title and the Run-analysis button sit on one row. The title keeps its
+   flex: 1 so a long role name wraps rather than pushing the button off-card. */
+.jo-detail-title-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+}
+.jo-detail-title-row > :first-child {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.jo-detail-run {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+/* The four-section tab bar. Mirrors the settings `.nt-tabs` visual (flex row,
+   gap, transparent bottom border on inactive, currentColor on active, opacity
+   dimming) but under `jo-` classes with a light-surface border — the settings
+   version's white-alpha line is for a dark panel. */
+.jo-tabs {
+  display: flex;
+  gap: 22px;
+  margin-top: 6px;
+  border-bottom: 1px solid var(--line);
+}
+.jo-tab {
+  padding: 0 2px 10px;
+  font: inherit;
+  font-size: 0.95rem;
+  font-weight: 500;
+  background: none;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  color: var(--ink-500);
+  cursor: pointer;
+  transition: color 150ms ease, opacity 150ms ease, border-color 150ms ease;
+}
+.jo-tab:hover { color: var(--ink-700); }
+.jo-tab-on {
+  color: var(--ink-900);
+  font-weight: 650;
+  border-bottom-color: var(--blue-500);
+}
+.jo-tab:focus-visible {
+  outline: 2px solid var(--blue-500);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* The intelligence stage panels sit inside the tab area, below the bar. The
+   grid gap from `.dlg-modal` gives them their top spacing. */
+.jo-detail-modal .jo-intel-stage:first-child {
+  border-top: none;
+  padding-top: 0;
+}

@@ -23,7 +23,22 @@ import type { Opportunity } from "./opportunities";
  */
 
 vi.mock("./job-orders-sourcing", () => ({ Shortlist: () => null }));
-vi.mock("./job-intelligence-panel", () => ({ JobIntelligence: () => null }));
+vi.mock("./job-intelligence-panel", () => ({
+  WorkStage: () => null,
+  PersonStage: () => null,
+  SearchStage: () => null,
+}));
+vi.mock("./job-intelligence", () => ({
+  useJobIntelligence: () => ({
+    phase: { status: "idle", view: { intelligence: null } },
+    run: async () => {},
+    starting: false,
+    waiting: false,
+    runError: null,
+    view: null,
+    analysis: null,
+  }),
+}));
 
 vi.mock("../auth", () => ({
   useAuth: () => ({ user: { id: "u-1", role: "recruiter" } }),

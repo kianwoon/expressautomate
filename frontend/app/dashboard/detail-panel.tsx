@@ -7,8 +7,10 @@ import { Breakable } from "../breakable";
 import { type ClientMatch, ClientSearch } from "./client-search";
 import { DecodedCodes, ProtectedBadge, flagged } from "./codes";
 import { Dialog } from "./dialog";
+import { type TabKey, TabBar } from "./detail-panel-tabs";
 import { Salary, Value, day } from "./format";
-import { JobIntelligence } from "./job-intelligence-panel";
+import { PersonStage, SearchStage, WorkStage, type StageState } from "./job-intelligence-panel";
+import { useJobIntelligence } from "./job-intelligence";
 import { PlacementForm, placementFields, same } from "./job-order-placement";
 import { Shortlist } from "./job-orders-sourcing";
 import { MemberSelect } from "./member-picker";
@@ -171,6 +173,25 @@ function Detail({
   // Its own line, not the ownership block's. See `move`.
   const [clientNotice, setClientNotice] = useState<string | null>(null);
 
+  // Job Intelligence: one hook owns the analysis so the header button (Run) and
+  // the three stage tabs (Work / Person / Search) share one source of truth —
+  // one `run()`, one polling loop, one result. The hook is keyed on `row.id`
+  // implicitly (it takes the id, not the row), so it follows the same
+  // remount-on-row-change lifecycle the `key={row.id}` above gives this whole
+  // component.
+  const ji = useJobIntelligence(row.id);
+  // Which tab is showing. Lives here, not in the hook: the hook owns the
+  // analysis, the modal owns the layout. Survives row polls (same `key` rule
+  // that keeps `placement` alive); resets when a different row is opened.
+  const [activeTab, setActiveTab] = useState<TabKey>("origin");
+
+  async function runAnalysis() {
+    await ji.run();
+    // Jump to the Work tab so the recruiter watches the result arrive, rather
+    // than left looking at the Origin tab wondering where the analysis went.
+    setActiveTab("work");
+  }
+
   async function toggle() {
     if (saving) return;
     setSaving(true);
@@ -236,13 +257,53 @@ function Detail({
   // modal refuses to leave until they settle.
   const busy = saving || moving;
 
+  // The shared state every intelligence stage reads to decide empty vs loading
+  // vs failed. Derived once from the hook so the three stage panels render
+  // consistently.
+  const stageState: StageState = {
+    hasAnalysis: !!ji.analysis,
+    waiting: ji.waiting,
+    failed: ji.view !== null && "state" in ji.view && ji.view.state === "failed",
+    failureReason:
+      ji.view !== null && "failure_reason" in ji.view ? ji.view.failure_reason : null,
+    loading: ji.phase.status === "loading",
+    readError: ji.phase.status === "error" ? ji.phase.message : null,
+  };
+
   return (
     <Dialog
-      title={<Value text={row.job_title_raw ?? "Job order"} />}
+      title={
+        <span className="jo-detail-title-row">
+          <Value text={row.job_title_raw ?? "Job order"} />
+          {/* "Run analysis" beside the title so it is always reachable, whatever
+              tab is showing. The state it drives lives in the `ji` hook; this
+              button only calls it and reflects its flags. */}
+          <button
+            type="button"
+            className="btn btn-secondary jo-detail-run"
+            onClick={() => void runAnalysis()}
+            disabled={ji.starting || ji.waiting}
+          >
+            {ji.starting
+              ? "Starting…"
+              : ji.waiting
+                ? "Analysing…"
+                : ji.analysis
+                  ? "Re-run analysis"
+                  : "Run analysis"}
+          </button>
+        </span>
+      }
       titleId="jo-detail-title"
       onClose={busy ? () => {} : onClose}
       className="dlg-modal-wide jo-detail-modal"
     >
+      {ji.runError && (
+        <p className="body jo-detail-error" role="alert">
+          {ji.runError}
+        </p>
+      )}
+
       {/* Header strip: the badges and the two lines that identify the row,
           across the full width so the title the Dialog rendered above reads
           as the heading of the whole record, not of one column. */}
@@ -279,6 +340,12 @@ function Detail({
         {row.shared_with_me && <span className="jo-detail-shared">Shared with you</span>}
       </p>
 
+      {/* The four sections of the record. Origin is the operational core (facts,
+          actions, prose, shortlist); Work / Person / Search are the three Job
+          Intelligence stages, each fed by the one `ji` hook. The bar is always
+          visible so a recruiter can step between them without scrolling. */}
+      <TabBar active={activeTab} onSelect={setActiveTab} />
+
       {/*
         Two columns, not one. The modal has 880px of width, and the content
         falls into two kinds: what the email said (the facts, read-only) and
@@ -295,6 +362,7 @@ function Detail({
         The grid collapses to one column under ~640px (see the CSS), where
         two narrow columns would wrap every control inside itself.
       */}
+      {activeTab === "origin" && (
       <div className="jo-modal-grid">
         {/* ---- Left: the email's facts ---- */}
         <div className="jo-modal-col">
@@ -498,16 +566,18 @@ function Detail({
           key={`${placement.placement_type ?? ""}-${placement.sex_requirement ?? ""}`}
           row={row}
         />
-
-        {/* Job Intelligence sits below the shortlist, full-width like it. The
-            analysis is an answer to "what is this role, really", read after the
-            requirements above and the shortlist it informed — so it belongs at
-            the foot of the record rather than among the actions. Keyed by the
-            row id (via the DetailPanel's own key) so moving the selection
-            starts it over rather than showing one job order's analysis under
-            another's title. */}
-        <JobIntelligence row={row} />
       </div>
+      )}
+
+      {/* ---- Work / Person / Search: the three Job Intelligence stages, each
+              one tab, each fed by the same `ji` hook. Each panel owns its own
+              empty/loading/failed notice via `stageState`, so a tab never looks
+              blank before the analysis has run. ---- */}
+      {activeTab === "work" && <WorkStage intelligence={ji.analysis} state={stageState} />}
+      {activeTab === "person" && <PersonStage intelligence={ji.analysis} state={stageState} />}
+      {activeTab === "search" && (
+        <SearchStage intelligence={ji.analysis} state={stageState} view={ji.view} />
+      )}
 
       {/* A failure has to say so. Silently leaving the badge unchanged would
           let someone believe they had signed off a row they had not. */}

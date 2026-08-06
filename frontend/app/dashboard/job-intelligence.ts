@@ -1,6 +1,8 @@
 "use client";
 
-import { opportunityIntelligencePath } from "../api";
+import { useCallback, useEffect, useState } from "react";
+
+import { opportunityIntelligencePath, SOURCING_POLL_MS } from "../api";
 import { ApiError, readError } from "./candidates";
 
 /**
@@ -122,3 +124,86 @@ export function inFlight(view: IntelligenceView | NoIntelligence | null): boolea
   if (!view || !("state" in view)) return false;
   return view.state === "pending" || view.state === "running";
 }
+
+/**
+ * The analysis state for one job order, owned in one place.
+ *
+ * Extracted from the panel so the "Run analysis" button can live in the modal
+ * header while the three stage tabs read the same result — both need the same
+ * `run()`, the same `starting`/`waiting` flags, and the same polling loop, and
+ * duplicating that across the header and the tabs is how they drift. One hook,
+ * called once from `Detail`, returns everything both need.
+ *
+ * `tab` is the caller's current tab string — returned only so the hook can
+ * report it back, never set by the hook itself. Tab selection is the caller's
+ * concern (it owns the `activeTab` state); the hook owns only the analysis.
+ */
+export type JobIntelligencePhase =
+  | { status: "loading" }
+  | { status: "idle"; view: IntelligenceView | NoIntelligence }
+  | { status: "error"; message: string };
+
+export function useJobIntelligence(rowId: string): {
+  phase: JobIntelligencePhase;
+  run: () => Promise<void>;
+  starting: boolean;
+  waiting: boolean;
+  runError: string | null;
+  view: IntelligenceView | NoIntelligence | null;
+  analysis: Intelligence | null;
+} {
+  const [phase, setPhase] = useState<JobIntelligencePhase>({ status: "loading" });
+  const [starting, setStarting] = useState(false);
+  const [runError, setRunError] = useState<string | null>(null);
+
+  // Stable across renders unless the row changes, so the mount effect fires
+  // once per row and the poll effect's interval is not torn down each render.
+  const refetch = useCallback(async () => {
+    try {
+      const v = await getIntelligence(rowId);
+      setPhase({ status: "idle", view: v });
+    } catch (err) {
+      setPhase({
+        status: "error",
+        message: err instanceof Error ? err.message : "We could not read this analysis just now.",
+      });
+    }
+  }, [rowId]);
+
+  useEffect(() => {
+    void refetch();
+  }, [refetch]);
+
+  const view = phase.status === "idle" ? phase.view : null;
+  const waiting = inFlight(view);
+
+  // Poll only while the row is `pending` or `running`. A `done` or `failed`
+  // row is a finished record — asking again is a request whose answer cannot
+  // change, every open panel, forever, for nothing.
+  useEffect(() => {
+    if (!waiting) return;
+    const timer = setInterval(() => void refetch(), SOURCING_POLL_MS);
+    return () => clearInterval(timer);
+  }, [waiting, refetch]);
+
+  const run = useCallback(async () => {
+    setStarting(true);
+    setRunError(null);
+    try {
+      const started = await runIntelligence(rowId);
+      setPhase({ status: "idle", view: started });
+    } catch (err) {
+      setRunError(
+        err instanceof Error ? err.message : "The analysis could not start just now.",
+      );
+    } finally {
+      setStarting(false);
+    }
+  }, [rowId]);
+
+  const analysis =
+    view && "intelligence" in view && view.intelligence ? view.intelligence : null;
+
+  return { phase, run, starting, waiting, runError, view, analysis };
+}
+
