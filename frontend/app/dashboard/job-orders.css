@@ -895,21 +895,15 @@
    when the offer is not comparable (left unset by the component). */
 .jo-benchmark-offer {
   position: absolute;
-  top: -4px;
-  bottom: -4px;
-  width: 2px;
+  top: 50%;
+  width: 14px;
+  height: 14px;
   background: var(--blue-600);
-  transform: translateX(-1px); /* centre on the position, not left-edge it */
-}
-.jo-benchmark-offer::before {
-  content: "";
-  position: absolute;
-  top: -3px;
-  left: -3.5px;
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-  background: var(--blue-600);
+  border: 2px solid var(--surface);
+  border-radius: 3px;
+  box-shadow: 0 1px 3px rgba(var(--shadow-rgb), 0.3);
+  transform: translate(-50%, -50%); /* centre the square on the offer position */
+  z-index: 1;
 }
 
 /* Legend: four figures in a row, the survey percentiles + the offer. */
