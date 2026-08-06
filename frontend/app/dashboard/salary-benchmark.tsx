@@ -27,6 +27,8 @@ export type Offer = {
   max: number | null;
   currency: string | null;
   period: string | null;
+  /** The sender's original salary text, shown when min/max weren't parsed. */
+  raw?: string | null;
 };
 
 /**
@@ -135,11 +137,16 @@ function sgd(value: number): string {
   return "$" + value.toLocaleString(undefined, { maximumFractionDigits: 0 });
 }
 
-/** Format the offer for display, with its original currency/period. */
+/** Format the offer for display, with its original currency/period.
+ *  Falls back to the raw salary text when the structured min/max were never
+ *  parsed (a common extraction gap), so the chart never shows a bare "—". */
 function offerLabel(offer: Offer): string {
   const min = offer.min;
   const max = offer.max;
-  if (min == null && max == null) return "—";
+  if (min == null && max == null) {
+    // The raw text is the sender's own words — always more useful than a dash.
+    return offer.raw || "—";
+  }
   const amount =
     min != null && max != null && min !== max
       ? `${min.toLocaleString()}–${max.toLocaleString()}`

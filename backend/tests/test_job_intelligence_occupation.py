@@ -147,20 +147,22 @@ async def test_search_returns_empty_without_session():
 # Step 3 — re-rank
 # --------------------------------------------------------------------------- #
 
+# allow-hardcode: a JD context stub the re-rank tests pass; the tests assert on
+# the pick/confidence logic, not on prompt wording.
+_CTX = "Senior Accounts Executive at an energy trading firm."
+
+_PROF = OccupationProfile(
+    occupation="Software Developer",
+    functions={},
+    seniority="Mid",
+    people_management=False,
+    industry="Technology",
+)
+
 
 async def test_rerank_picks_matching_title_and_folds_wages():
     llm = FakeLLM({"title": "software developer", "confidence": 0.9, "rationale": "fits"})
-    picked = await rerank_occupation(
-        OccupationProfile(
-            occupation="Software Developer",
-            functions={},
-            seniority="Mid",
-            people_management=False,
-            industry="Technology",
-        ),
-        _candidates(),
-        llm=llm,
-    )
+    picked = await rerank_occupation(_CTX, _PROF, _candidates(), llm=llm)
     assert picked is not None
     match, result = picked
     # Wages come from the candidate row, never the model.
@@ -174,48 +176,25 @@ async def test_rerank_picks_matching_title_and_folds_wages():
 async def test_rerank_returns_none_for_fabricated_title():
     """A title the model invented (not in the list) is a non-match."""
     llm = FakeLLM({"title": "Software Engineer", "confidence": 0.8, "rationale": "x"})
-    picked = await rerank_occupation(
-        OccupationProfile(
-            occupation="Software Developer",
-            functions={},
-            seniority="Mid",
-            people_management=False,
-            industry="Technology",
-        ),
-        _candidates(),
-        llm=llm,
-    )
+    picked = await rerank_occupation(_CTX, _PROF, _candidates(), llm=llm)
     assert picked is None
 
 
 async def test_rerank_returns_none_for_empty_candidates():
-    picked = await rerank_occupation(
-        OccupationProfile(
-            occupation="Software Developer",
-            functions={},
-            seniority="Mid",
-            people_management=False,
-            industry="Technology",
-        ),
-        [],
-        llm=FakeLLM(),
-    )
+    picked = await rerank_occupation(_CTX, _PROF, [], llm=FakeLLM())
+    assert picked is None
+
+
+async def test_rerank_returns_none_below_confidence_floor():
+    """A sub-threshold confidence hides the benchmark rather than mislead."""
+    llm = FakeLLM({"title": "software developer", "confidence": 0.3, "rationale": "weak"})
+    picked = await rerank_occupation(_CTX, _PROF, _candidates(), llm=llm)
     assert picked is None
 
 
 async def test_rerank_matches_case_insensitively():
     llm = FakeLLM({"title": "Software Developer", "confidence": 0.7, "rationale": "ok"})
-    picked = await rerank_occupation(
-        OccupationProfile(
-            occupation="Software Developer",
-            functions={},
-            seniority="Mid",
-            people_management=False,
-            industry="Technology",
-        ),
-        _candidates(),
-        llm=llm,
-    )
+    picked = await rerank_occupation(_CTX, _PROF, _candidates(), llm=llm)
     assert picked is not None
     assert picked[0].title == "software developer"  # the survey's lower-cased title
 
