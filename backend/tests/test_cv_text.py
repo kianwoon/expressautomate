@@ -179,6 +179,45 @@ def test_ordinary_docx_extracts_at_a_small_max_chars():
     assert result != ""
 
 
+def test_a_docx_table_is_extracted_not_dropped():
+    """A CV that lays out its work history in a table must still yield text.
+
+    `python-docx` exposes paragraphs and tables as separate collections, and a
+    loop over paragraphs alone returns "" for a table-only document — which the
+    pipeline would then mark `unreadable`. A table is a common CV layout, so
+    this is the case that most directly loses a real candidate.
+    """
+    from docx import Document as DocxDocument
+
+    doc = DocxDocument()
+    doc.add_paragraph("Priya Raman")  # a heading line in body prose
+    table = doc.add_table(rows=3, cols=3)
+    headers = ("Employer", "Title", "Years")
+    for col, name in enumerate(headers):
+        table.rows[0].cells[col].text = name
+    rows = [
+        ("Acme Logistics", "Operations Lead", "2019-2021"),
+        ("Globex", "Warehouse Supervisor", "2021-Present"),
+    ]
+    for r, (employer, title, years) in enumerate(rows, start=1):
+        table.rows[r].cells[0].text = employer
+        table.rows[r].cells[1].text = title
+        table.rows[r].cells[2].text = years
+    buf = io.BytesIO()
+    doc.save(buf)
+    docx_bytes = buf.getvalue()
+
+    assert sniff(docx_bytes) == "docx"
+    result = extract_text(docx_bytes, "docx", max_chars=20000)
+    # The body heading survives...
+    assert "Priya Raman" in result
+    # ...and so does every cell the table held — the whole point of the change.
+    assert "Acme Logistics" in result
+    assert "Operations Lead" in result
+    assert "Globex" in result
+    assert "Warehouse Supervisor" in result
+
+
 def _pdf_with_text_pages(page_count: int, line: str) -> bytes:
     """Build a PDF whose every page carries real, extractable text.
 
