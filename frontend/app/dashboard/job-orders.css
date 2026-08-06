@@ -847,31 +847,12 @@
   flex: 1 1 auto;
   min-width: 0;
 }
-/* Compact primary action beside the title. Uses the brand gradient like
-   `.btn-primary`, but sized for the header row — the full 11px 20px `.btn`
-   padding would dominate the title. */
+/* The Run-analysis button beside the title. Same `.btn btn-primary` family as
+   the Claim/Share/Review buttons below — same height, padding and font — so it
+   belongs to the modal rather than reading as a separate control. This class
+   only owns the layout in the title row; the dimensions come from `.btn`. */
 .jo-detail-run {
   flex: 0 0 auto;
-  white-space: nowrap;
-  padding: 6px 14px;
-  font-size: 0.8125rem;
-  font-weight: 600;
-  border-radius: var(--radius);
-  border: 1px solid transparent;
-  background: var(--brand-gradient);
-  color: #fff;
-  cursor: pointer;
-  transition: filter 0.15s ease;
-}
-.jo-detail-run:hover { filter: brightness(1.08); }
-.jo-detail-run:disabled {
-  opacity: 0.6;
-  cursor: default;
-  filter: none;
-}
-.jo-detail-run:focus-visible {
-  outline: 2px solid var(--blue-500);
-  outline-offset: 2px;
 }
 
 /* The four-section tab bar. Mirrors the settings `.nt-tabs` visual (flex row,
