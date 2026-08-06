@@ -28,6 +28,7 @@ from app.core.logging import get_logger
 from app.db.rls import tenant_session
 from app.models.candidate import CandidateDocument
 from app.services.cv.extract import extract_cv
+from app.services.cv.ocr import OCRUnavailable, ocr_text
 from app.services.cv.persist import persist_cv
 from app.services.cv.text import UnsupportedDocument, extract_text, sniff
 from app.services.llm.client import LLMInvalidJSON
@@ -49,6 +50,13 @@ _RESUMABLE = (CandidateDocument.PENDING, CandidateDocument.PARSING)
 def body_store():
     """Indirection point, so tests can swap in the in-memory store."""
     return R2BodyStore()
+
+
+# Injectable OCR seam, the same shape as `extract_cv`'s `llm=None` default: a
+# module-level name tests monkeypatch so the suite never depends on Tesseract
+# being installed. Bound by `settings.CV_OCR_*` at the call site, not here —
+# this is indirection, not configuration.
+ocr_extract = ocr_text
 
 
 async def _terminal(
@@ -179,16 +187,45 @@ async def parse_candidate_cv(
 
     if not source.strip():
         # A PDF of scanned images parses cleanly and yields nothing. Asking a
-        # model about an empty string would bill for a confident nothing.
-        await _terminal(
-            tenant,
-            document,
-            CandidateDocument.UNREADABLE,
-            "No text could be read from this file. A scanned or photographed "
-            "CV has no text layer to extract; a text-based PDF or Word file "
-            "can be read.",
-        )
-        return
+        # model about an empty string would bill for a confident nothing, so the
+        # text is either recovered by OCR here or the document stops.
+        if settings.ocr_configured():
+            try:
+                ocrd = await ocr_extract(
+                    data,
+                    languages=settings.CV_OCR_LANGUAGES,
+                    max_pages=settings.CV_OCR_MAX_PAGES,
+                    timeout=settings.CV_OCR_TIMEOUT_SECONDS,
+                )
+            except OCRUnavailable as exc:
+                await _terminal(
+                    tenant,
+                    document,
+                    CandidateDocument.UNREADABLE,
+                    f"This scanned CV could not be read by OCR: {exc}",
+                )
+                return
+            if not ocrd.strip():
+                await _terminal(
+                    tenant,
+                    document,
+                    CandidateDocument.UNREADABLE,
+                    "No text could be read from this file, even after OCR. The "
+                    "scan may be too faint, low-resolution, or of a page with no "
+                    "text on it.",
+                )
+                return
+            source = ocrd
+        else:
+            await _terminal(
+                tenant,
+                document,
+                CandidateDocument.UNREADABLE,
+                "No text could be read from this file. A scanned or photographed "
+                "CV has no text layer to extract; a text-based PDF or Word file "
+                "can be read.",
+            )
+            return
 
     # Stored before the model is asked, and stored rather than re-derived,
     # because every evidence span this run records is an offset into exactly
