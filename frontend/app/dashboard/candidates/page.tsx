@@ -19,6 +19,7 @@ import type { Opportunity } from "../opportunities";
 import { CandidateForm } from "./candidate-form";
 import { CandidateImports } from "./candidate-imports";
 import { CandidatePanel } from "./candidate-panel";
+import { CvIngestDialog } from "./cv-ingest-dialog";
 import { AccessRequestInbox } from "./candidate-share";
 import { CandidatesTable } from "./candidates-table";
 
@@ -164,6 +165,11 @@ function Workspace({ role }: { role: string }) {
   const [detail, setDetail] = useState<Candidate | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
   const [view, setView] = useState<View>({ mode: "list" });
+  // The CV ingest dialog opens over the list, like the form does, and reloads
+  // the list on close — the resolved candidate appears there once the ingest
+  // job finishes. Separate from `view` because it is not an edit mode: it does
+  // not replace the list and does not select a row on close.
+  const [uploadOpen, setUploadOpen] = useState(false);
 
   // The candidates endpoint has no reason to know a job order's title — the
   // banner does, so it is fetched separately, the same split `detail` above
@@ -384,11 +390,30 @@ function Workspace({ role }: { role: string }) {
         />
       )}
 
-      <div className="jo-head" style={{ marginTop: 24 }}>
+      <div className="jo-head" style={{ marginTop: 24, display: "flex", gap: 10 }}>
         <button type="button" className="btn btn-primary" onClick={() => setView({ mode: "create" })}>
           Add candidate
         </button>
+        <button
+          type="button"
+          className="btn btn-secondary"
+          onClick={() => setUploadOpen(true)}
+        >
+          Upload CV
+        </button>
       </div>
+
+      {uploadOpen && (
+        <CvIngestDialog
+          onClose={() => {
+            setUploadOpen(false);
+            // A 202 costs nothing to refresh, and a resolved candidate may have
+            // appeared while the dialog was open. The page's own SSE/poll keeps
+            // the list fresh afterwards as the ingest job finishes.
+            reload();
+          }}
+        />
+      )}
 
       {/* Above the filters rather than inside the table: an import acts on the
           whole list, and most of what it does is create people no filter is

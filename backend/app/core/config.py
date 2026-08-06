@@ -244,6 +244,12 @@ class Settings(BaseSettings):
     # inflates inside `pypdf` where nothing is watching. This is the only
     # thing standing between one hostile page and a worker slot held forever.
     CV_PARSE_TIMEOUT_SECONDS: float = Field(default=300.0, gt=0)
+    # The ingest front half: read text, one identity model call, a match query.
+    # Bounded by the same FlateDecode risk as the parse, plus a single model
+    # call, so it shares the parse's ceiling rather than carrying one of its
+    # own. A timed-out job leaves the row at `ingesting`, which `rescan_stuck`
+    # routes back to `ingest_candidate_cv`.
+    CV_INGEST_TIMEOUT_SECONDS: float = Field(default=300.0, gt=0)
     # The largest upload the API will accept, counted as the bytes arrive
     # rather than trusted from `Content-Length`. Generous next to a real CV
     # and far below `CV_TEXT_MAX_CHARS`, so the bound that actually bites a

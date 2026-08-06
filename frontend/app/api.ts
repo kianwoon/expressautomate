@@ -585,6 +585,13 @@ export function candidateDocumentDownloadPath(id: string, documentId: string): s
  *  GET lists the recent ones; both live here. */
 export const CANDIDATE_IMPORTS_PATH = `${CANDIDATES_PATH}/imports`;
 
+/** The no-candidate-named CV ingest. POST (multipart) a CV here and the backend
+ *  reads its contact details, matches or creates a candidate, and queues the
+ *  roles/skills parse. A literal sibling of `/api/candidates/{id}/documents`,
+ *  not nested under a candidate — declared in `main.py` before the `{id}`
+ *  routes so FastAPI never hands `documents` to a path parameter. */
+export const CANDIDATES_DOCUMENTS_PATH = `${CANDIDATES_PATH}/documents`;
+
 /**
  * How many recent imports the list asks for.
  *

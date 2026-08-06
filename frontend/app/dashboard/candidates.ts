@@ -6,6 +6,7 @@ import {
   CANDIDATE_ACCESS_REQUESTS_PATH,
   CANDIDATE_IMPORTS_LIMIT,
   CANDIDATE_IMPORTS_PATH,
+  CANDIDATES_DOCUMENTS_PATH,
   CANDIDATES_PAGE_SIZE,
   CANDIDATES_PAGE_SIZES,
   CANDIDATES_PATH,
@@ -106,7 +107,16 @@ export type CandidateRole = {
  * that survived checking. `failed` is transient and worth retrying. The
  * difference between them is the whole difference between a product that is
  * broken and one that is telling you what happened. */
-export type ParseState = "pending" | "parsing" | "parsed" | "unreadable" | "empty" | "failed";
+export type ParseState =
+  | "ingest_pending"
+  | "ingesting"
+  | "pending"
+  | "parsing"
+  | "parsed"
+  | "unreadable"
+  | "empty"
+  | "failed"
+  | "needs_review";
 
 /** One CV uploaded against a candidate.
  *
@@ -781,6 +791,27 @@ export async function uploadCandidateDocument(
   // Oversized, wrong type and over-quota all arrive as a readable sentence the
   // server wrote; `readError` surfaces it rather than replacing it with a
   // guess about which of the three it was.
+  if (!res.ok) throw new ApiError(await readError(res));
+  return (await res.json()) as CandidateDocument;
+}
+
+/** Uploads a CV with no candidate named. The backend reads the document's
+ *  contact details, matches an existing candidate by email/phone or creates a
+ *  new one, then queues the roles/skills parse. Returns the document row in
+ *  `ingest_pending` — the candidate is resolved asynchronously by the ingest
+ *  job, so the caller re-lists candidates rather than expecting a finished one.
+ *  202, like the per-candidate path: the file is stored and queued, not read. */
+export async function uploadCandidateDocumentNoCandidate(
+  file: File,
+): Promise<CandidateDocument> {
+  const form = new FormData();
+  form.append("file", file);
+  const res = await fetch(CANDIDATES_DOCUMENTS_PATH, {
+    method: "POST",
+    credentials: "include",
+    headers: { Accept: "application/json" },
+    body: form,
+  });
   if (!res.ok) throw new ApiError(await readError(res));
   return (await res.json()) as CandidateDocument;
 }
