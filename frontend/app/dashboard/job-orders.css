@@ -860,12 +860,12 @@
   align-items: center;
   justify-content: center;
   flex: 0 0 auto;
-  width: max-content;
+  align-self: center;
   font: inherit;
   font-size: 0.8125rem;
   font-weight: 600;
   line-height: 1.2;
-  padding: 5px 12px;
+  padding: 5px 10px;
   border: 1px solid transparent;
   border-radius: 10px;
   background: linear-gradient(135deg, #1d4ed8 0%, #14a89a 100%);
