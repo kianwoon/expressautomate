@@ -51,6 +51,22 @@ const PERIOD_TO_MONTHLY: Record<string, number> = {
 };
 
 /**
+ * Infer SGD when the structured currency field is absent. This is a Singapore
+ * recruitment platform — "$3400", "S$4800", "SGD 5000" in the raw text all
+ * mean SGD. Only an explicit foreign currency (USD, MYR, etc.) would mean
+ * otherwise, and those are vanishingly rare in this dataset.
+ */
+function isSGD(offer: Offer): boolean {
+  if (offer.currency && offer.currency.toUpperCase() === "SGD") return true;
+  if (offer.currency && offer.currency.toUpperCase() !== "SGD") return false;
+  // Currency is null — infer from the raw text.
+  const raw = (offer.raw ?? "").toUpperCase();
+  if (/\b(USD|US\$|RM|MYR|GBP|EUR|AUD)\b/.test(raw)) return false;
+  // "$", "S$", "SGD", or no currency marker at all → SGD.
+  return true;
+}
+
+/**
  * Parse a min/max pair from the raw salary text when the structured fields are
  * absent. Extraction doesn't always populate salary_min/max (e.g. "S$4800 to
  * S$5200"), but the numbers are right there in the raw text — leaving the chart
@@ -73,7 +89,7 @@ export function parseRawSalary(raw: string | null | undefined): [number, number]
 }
 
 export function monthlyGrossSGD(offer: Offer): number | null {
-  if (!offer.currency || offer.currency.toUpperCase() !== "SGD") return null;
+  if (!isSGD(offer)) return null;
   // Fall back to the raw text when structured min/max are absent.
   const min = offer.min;
   const max = offer.max;
@@ -200,7 +216,8 @@ function offerLabel(offer: Offer): string {
     min != null && max != null && min !== max
       ? `${min.toLocaleString()}–${max.toLocaleString()}`
       : (min ?? max)!.toLocaleString();
-  const currency = offer.currency ? `${offer.currency} ` : "";
+  // Show S$ when the offer is SGD (explicitly or inferred from $ in raw text).
+  const currency = isSGD(offer) ? "S$ " : offer.currency ? `${offer.currency} ` : "";
   const period = offer.period ? ` / ${offer.period}` : "";
   return `${currency}${amount}${period}`;
 }
