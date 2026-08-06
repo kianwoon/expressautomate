@@ -847,12 +847,15 @@
   flex: 1 1 auto;
   min-width: 0;
 }
-/* The Run-analysis button beside the title. Same `.btn btn-primary` family as
-   the Claim/Share/Review buttons below — same height, padding and font — so it
-   belongs to the modal rather than reading as a separate control. This class
-   only owns the layout in the title row; the dimensions come from `.btn`. */
+/* The Run-analysis button beside the title. Inherits `.btn btn-primary` for
+   theme (gradient, radius, focus, hover) but overrides padding and font-size
+   to compact it for the header row — the full 11px 20px / 0.9375rem body-button
+   size dominates the title. Header-appropriate proportions only; the colours,
+   border and shape stay with the family. */
 .jo-detail-run {
   flex: 0 0 auto;
+  padding: 7px 14px;
+  font-size: 0.8125rem;
 }
 
 /* The four-section tab bar. Mirrors the settings `.nt-tabs` visual (flex row,
