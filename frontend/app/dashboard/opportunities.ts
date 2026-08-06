@@ -281,7 +281,7 @@ export function useOpportunities(): Opportunities {
   const [sort, setSortRaw] = useState<Sort>(DEFAULT_SORT);
   const [counts, setCounts] = useState<Counts>(ZERO_COUNTS);
   const [refreshing, setRefreshing] = useState(true);
-  const [dedupe, setDedupe] = useState(false);
+  const [dedupe, setDedupeRaw] = useState(false);
   const [hidden, setHidden] = useState(0);
 
   // The value that actually reaches the server, held back from every
@@ -431,6 +431,12 @@ export function useOpportunities(): Opportunities {
   // on nothing.
   const setLimit = useCallback((next: number) => {
     setLimitRaw(next);
+    setOffset(0);
+  }, []);
+  // Hiding duplicates shrinks the list, so the same reset applies: staying on
+  // offset 40 of a list that just lost its re-forwards can land past the end.
+  const setDedupe = useCallback((next: boolean) => {
+    setDedupeRaw(next);
     setOffset(0);
   }, []);
 
