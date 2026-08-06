@@ -272,8 +272,9 @@ function Workspace() {
   return (
     <>
       <h1 style={{ fontSize: "clamp(1.75rem, 3.4vw, 2.5rem)" }}>Buddies</h1>
-      <p className="lede" style={{ marginTop: 18 }}>
-        External recruiters who forward job orders into your mailbox. {buddies.length}{" "}
+      <p className="lede" style={{ marginTop: 18, maxWidth: "none" }}>
+        External recruiters who forward job orders into your mailbox.{" "}
+        <mark className="jo-highlight"> {buddies.length} </mark>{" "}
         {buddies.length === 1 ? "buddy has" : "buddies have"} referred{" "}
         <mark className="jo-highlight"> {totalReferrals} </mark>{" "}
         {totalReferrals === 1 ? "job order" : "job orders"}.
