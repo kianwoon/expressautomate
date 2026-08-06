@@ -847,16 +847,26 @@
   flex: 1 1 auto;
   min-width: 0;
 }
-/* The Run-analysis button beside the title. Inherits `.btn btn-primary` for
-   theme (gradient, radius, focus, hover) but overrides padding and font-size
-   to compact it for the header row — the full 11px 20px / 0.9375rem body-button
-   size dominates the title. Header-appropriate proportions only; the colours,
-   border and shape stay with the family. */
+/* The Run-analysis action beside the title. A borderless text link in the same
+   shape as `.src-start` (the action-beside-a-heading pattern this codebase
+   already uses for the Shortlist and the old intelligence panel) — NOT a filled
+   `.btn`, which dominates the title row. Subtle until interacted with. */
 .jo-detail-run {
   flex: 0 0 auto;
-  padding: 7px 14px;
+  font: inherit;
   font-size: 0.8125rem;
+  font-weight: 650;
+  padding: 2px 6px;
+  border: 0;
+  background: none;
+  color: var(--blue-500);
+  cursor: pointer;
+  border-radius: 4px;
+  transition: color 150ms ease;
 }
+.jo-detail-run:hover { color: var(--ink-900); }
+.jo-detail-run:disabled { cursor: default; opacity: 0.5; }
+.jo-detail-run:focus-visible { outline: 2px solid var(--blue-500); outline-offset: 2px; }
 
 /* The four-section tab bar. Mirrors the settings `.nt-tabs` visual (flex row,
    gap, transparent bottom border on inactive, currentColor on active, opacity
