@@ -302,7 +302,7 @@ function Detail({
               button only calls it and reflects its flags. */}
           <button
             type="button"
-            className="btn btn-secondary jo-detail-run"
+            className="jo-detail-run"
             onClick={() => void runAnalysis()}
             disabled={ji.starting || ji.waiting}
           >
