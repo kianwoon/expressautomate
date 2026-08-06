@@ -88,15 +88,22 @@ export function salaryRange(row: Opportunity): string | null {
  * across rows, and "5-6k neg." is what they will recognise from the email and
  * can defend to a client. Showing only our parse would present it as a
  * quotation.
+ *
+ * Each line is its own block (`jo-salary-line`): without that, the raw text ran
+ * on from the range as "2,500 per month$2500" — two inline runs with nothing to
+ * separate them. The block forces the raw onto its own line in both the table
+ * cell (which clamps to two lines) and the panel.
  */
 export function Salary({ row }: { row: Opportunity }) {
   const range = salaryRange(row);
   if (!range) return <Value text={row.salary_raw} />;
   return (
     <>
-      <Breakable text={range} />
+      <span className="jo-salary-line">
+        <Breakable text={range} />
+      </span>
       {row.salary_raw && (
-        <span className="muted jo-sub">
+        <span className="jo-salary-line muted jo-sub">
           <Breakable text={row.salary_raw} />
         </span>
       )}

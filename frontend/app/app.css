@@ -12,6 +12,10 @@
 /* One shared muted-secondary size, so a caption under a stat and a caption in
    the detail panel are the same thing rather than two near-misses. */
 .jo-sub { font-size: 0.8125rem; color: var(--ink-500); }
+/* Each salary line on its own row, so the sender's words never run on from the
+   normalised range ("2,500 per month$2500"). Used by the shared `Salary`
+   component in the table cell and the detail panel. */
+.jo-salary-line { display: block; }
 .jo-note { margin-top: 14px; font-size: 0.875rem; color: var(--ink-500); }
 
 .jo-controls {
