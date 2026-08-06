@@ -851,6 +851,14 @@
   font-weight: 650;
   color: var(--ink-900);
 }
+.jo-benchmark-source {
+  color: var(--blue-600);
+  text-decoration: none;
+  white-space: nowrap;
+}
+.jo-benchmark-source:hover {
+  text-decoration: underline;
+}
 
 /* The track is a relative-positioned bar the segments and marker sit in.
    Fixed height so the offer marker's vertical line spans it exactly. */

@@ -238,7 +238,15 @@ export function SalaryBenchmark({
           <span className="jo-benchmark-title">{occupation.title}</span>
         </span>
         <span className="jo-sub">
-          {" "}· MOM {occupation.year} resident wages (monthly gross SGD)
+          {" "}· MOM {occupation.year} resident wages (monthly gross SGD) ·{" "}
+          <a
+            href="https://data.gov.sg/datasets/d_9917e751f7498502f70052a940a3f312/view"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="jo-benchmark-source"
+          >
+            data.gov.sg ↗
+          </a>
         </span>
       </div>
 
