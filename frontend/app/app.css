@@ -37,6 +37,15 @@
 }
 .jo-chip-n { font-variant-numeric: tabular-nums; opacity: 0.75; }
 
+/* A number highlighted inside running prose — currently the job-orders
+   count in the buddies lede. Amber is the system's "this stands out"
+   tint (see the quality badges), and -200 is the marker fill, -700 the
+   only amber dark enough to read as text on it. */
+.jo-highlight {
+  background: var(--amber-200); color: var(--amber-700);
+  border-radius: 4px; font-variant-numeric: tabular-nums; font-weight: 600;
+}
+
 /* The A–Z bar. Twenty-seven targets, so they wrap rather than scroll
    sideways — a horizontal scroller hides half the alphabet on a phone, and a
    letter you cannot see is a letter you cannot jump to. */
