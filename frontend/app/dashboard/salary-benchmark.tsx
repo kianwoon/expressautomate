@@ -169,9 +169,15 @@ export function SalaryBenchmark({
   const pct = marketPercentile(offerMonthly, p25, median, p75);
   const comparable = offerMonthly != null;
 
-  // The bar's scale spans from 0 to the larger of (P75, offer), so an offer
-  // above P75 is always visible rather than clipped off the end.
-  const scaleMax = Math.max(p75, offerMonthly ?? 0) * 1.1;
+  // The offer as a range (min→max), or a single point if only one end exists.
+  // When the structured min/max are absent, we can't draw a range bar — the
+  // raw text label still shows in the legend below.
+  const offerMin = comparable ? monthlyGrossSGD({ ...offer, max: null }) : null;
+  const offerMax = comparable ? monthlyGrossSGD({ ...offer, min: null }) : null;
+  const hasOfferRange = comparable && offerMin != null && offerMax != null && offerMin > 0;
+
+  // Scale from 0 to 110% of the largest value, so both bars fit with headroom.
+  const scaleMax = Math.max(p75, offerMax ?? offerMonthly ?? 0) * 1.1;
   const pctOf = (v: number) => `${(v / scaleMax) * 100}%`;
 
   return (
@@ -187,18 +193,24 @@ export function SalaryBenchmark({
       </div>
 
       <div className="jo-benchmark-track" role="img" aria-label="Salary benchmark">
-        {/* The three percentile ticks span the full scale. */}
-        <div className="jo-benchmark-seg jo-benchmark-p25" style={{ width: pctOf(p25) }} />
-        <div className="jo-benchmark-seg jo-benchmark-med" style={{ width: pctOf(median - p25) }} />
-        <div className="jo-benchmark-seg jo-benchmark-p75" style={{ width: pctOf(p75 - median) }} />
+        {/* Market range: a single filled bar from P25 to P75. */}
+        <div
+          className="jo-benchmark-market"
+          style={{ left: pctOf(p25), width: pctOf(p75 - p25) }}
+        />
 
-        {/* The offer marker sits at its true position, or is hidden when not
-            comparable. */}
-        {comparable && offerMonthly! > 0 && (
+        {/* Median tick line inside the market bar. */}
+        <div
+          className="jo-benchmark-median"
+          style={{ left: pctOf(median) }}
+        />
+
+        {/* Offer range: an overlaid bar from offer min to offer max. */}
+        {hasOfferRange && (
           <div
             className="jo-benchmark-offer"
-            style={{ left: pctOf(offerMonthly!) }}
-            aria-label={`Your offer ${sgd(offerMonthly!)}`}
+            style={{ left: pctOf(offerMin!), width: pctOf(offerMax! - offerMin!) }}
+            aria-label={`Your offer ${sgd(offerMin!)} to ${sgd(offerMax!)}`}
           />
         )}
       </div>

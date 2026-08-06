@@ -863,46 +863,43 @@
   overflow: visible;
   margin-bottom: 8px;
 }
-/* Three contiguous segments: p25 (lightest), median (mid), p75 (teal wash).
-   They sit left-to-right and their widths are percentages of the scale max, so
-   the bar reads as a market distribution growing toward the right. The two
-   available washes (--blue-050, --teal-050) plus the track's own --surface-alt
-   give three distinct steps without inventing a token between them. */
-.jo-benchmark-seg {
+
+/* The market range bar: a single filled rectangle from P25 to P75, showing the
+   middle 50% of the market at a glance. Taller than the offer bar so the two
+   layers read as "market" (back) and "your offer" (front). */
+.jo-benchmark-market {
   position: absolute;
-  top: 0;
-  height: 100%;
-}
-.jo-benchmark-p25 {
-  left: 0;
-  background: var(--blue-050);
-  border-radius: 5px 0 0 5px;
-}
-.jo-benchmark-med {
-  background: var(--teal-050);
-}
-.jo-benchmark-p75 {
-  background: var(--teal-050);
-  opacity: 0.6;
-}
-/* A thin separator between segments so the bands read as steps, not a blur. */
-.jo-benchmark-med,
-.jo-benchmark-p75 {
-  border-left: 1px solid var(--line);
+  top: 3px;
+  bottom: 3px;
+  background: var(--blue-600);
+  border-radius: 4px;
+  opacity: 0.85;
 }
 
-/* The offer marker: a vertical line + dot at the offer's true position. Hidden
-   when the offer is not comparable (left unset by the component). */
+/* The median line: a vertical divider inside the market bar, marking the 50th
+   percentile so the recruiter sees where the offer sits relative to the middle. */
+.jo-benchmark-median {
+  position: absolute;
+  top: 1px;
+  bottom: 1px;
+  width: 2px;
+  background: var(--surface);
+  transform: translateX(-1px);
+  z-index: 1;
+}
+
+/* The offer range bar: a shorter, brighter rectangle overlaid on top of the
+   market bar, showing exactly where the client's offer band falls. Yellow on
+   blue makes it pop instantly. */
 .jo-benchmark-offer {
   position: absolute;
   top: 50%;
-  width: 20px;
-  height: 20px;
+  height: 12px;
   background: var(--yellow-400);
-  border: 3px solid var(--ink-900);
-  border-radius: 4px;
-  box-shadow: 0 2px 6px rgba(var(--shadow-rgb), 0.4);
-  transform: translate(-50%, -50%);
+  border: 2px solid var(--ink-900);
+  border-radius: 3px;
+  transform: translateY(-50%);
+  box-shadow: 0 1px 4px rgba(var(--shadow-rgb), 0.4);
   z-index: 2;
 }
 
