@@ -11,6 +11,7 @@ constraint, and what lets the sort match exactly.
 
 import pytest
 
+from app.services.ingest.evidence import _IRREGULAR_PERIODS, _SALARY_PERIODS
 from app.services.ingest.persist import _salary_period
 from app.services.ingest.schema import NOT_MENTIONED, ExtractedField
 
@@ -75,8 +76,6 @@ def test_nothing_outside_the_vocabulary_can_be_returned() -> None:
     NULL, so a normaliser that could return a sixth value would turn an odd
     model answer into a failed ingestion rather than a missing period.
     """
-    from app.services.ingest.persist import _IRREGULAR_PERIODS, _SALARY_PERIODS
-
     answers = [
         *_SALARY_PERIODS,
         *_IRREGULAR_PERIODS,

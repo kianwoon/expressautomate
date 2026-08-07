@@ -269,7 +269,9 @@ async def test_extraction_goes_to_cerebras_with_a_configured_budget():
 def test_the_schema_names_every_key_it_expects_back():
     schema = cv_json_schema()
 
-    assert set(schema["properties"]) == {"roles", "skills"}
+    assert set(schema["properties"]) == {
+        "roles", "skills", "last_drawn_salary", "expected_salary",
+    }
     role = schema["properties"]["roles"]["items"]
     assert set(role["required"]) == set(role["properties"])
     assert "precision" in role["properties"]["start_date"]["properties"]
@@ -281,3 +283,12 @@ def test_a_value_that_quotes_nothing_is_rejected():
         CVResponse.model_validate(
             {"roles": [{"title": {"value": "Head of Talent", "confidence": 0.9}}]}
         )
+
+
+def test_the_prompt_instructs_salary_extraction():
+    """Both salary fields ride the same two-pass call as roles and skills."""
+    from app.services.cv.extract import build_prompt
+
+    prompt = build_prompt(CV)
+    assert "last_drawn_salary" in prompt
+    assert "expected_salary" in prompt

@@ -100,6 +100,9 @@ export type FormState = {
   expected_salary: string;
   salary_currency: string;
   salary_period: string;
+  last_drawn_salary: string;
+  last_drawn_currency: string;
+  last_drawn_period: string;
   available_from: string;
   notice_period_raw: string;
   employment_type: string;
@@ -126,6 +129,9 @@ export function toFormState(row: Candidate | null): FormState {
     expected_salary: row?.expected_salary != null ? String(row.expected_salary) : "",
     salary_currency: row?.salary_currency ?? "",
     salary_period: row?.salary_period ?? "",
+    last_drawn_salary: row?.last_drawn_salary != null ? String(row.last_drawn_salary) : "",
+    last_drawn_currency: row?.last_drawn_currency ?? "",
+    last_drawn_period: row?.last_drawn_period ?? "",
     available_from: row?.available_from ?? "",
     notice_period_raw: row?.notice_period_raw ?? "",
     employment_type: row?.employment_type ?? "",
@@ -163,6 +169,9 @@ export function toSubmitBody(form: FormState) {
     expected_salary: form.expected_salary.trim() === "" ? null : Number(form.expected_salary),
     salary_currency: orNull(form.salary_currency),
     salary_period: orNull(form.salary_period),
+    last_drawn_salary: form.last_drawn_salary.trim() === "" ? null : Number(form.last_drawn_salary),
+    last_drawn_currency: orNull(form.last_drawn_currency),
+    last_drawn_period: orNull(form.last_drawn_period),
     available_from: orNull(form.available_from),
     notice_period_raw: orNull(form.notice_period_raw),
     employment_type: orNull(form.employment_type),
@@ -344,6 +353,31 @@ export function CandidateForm({
             value={form.years_experience}
             onChange={(e) => set("years_experience", e.target.value)}
             placeholder="3"
+          />
+        </Field>
+        <Field label="Last drawn salary">
+          <input
+            className="jo-search"
+            type="number"
+            value={form.last_drawn_salary}
+            onChange={(e) => set("last_drawn_salary", e.target.value)}
+            placeholder="2500"
+          />
+        </Field>
+        <Field label="Last drawn currency">
+          <input
+            className="jo-search"
+            value={form.last_drawn_currency}
+            onChange={(e) => set("last_drawn_currency", e.target.value)}
+            placeholder="SGD"
+          />
+        </Field>
+        <Field label="Last drawn period">
+          <input
+            className="jo-search"
+            value={form.last_drawn_period}
+            onChange={(e) => set("last_drawn_period", e.target.value)}
+            placeholder="month"
           />
         </Field>
         <Field label="Expected salary">

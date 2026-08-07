@@ -115,6 +115,13 @@ class Candidate(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
     # Without the period a monthly and an annual figure average into nonsense
     # — see the comment on `opportunities.salary_period`.
     salary_period: Mapped[str | None] = mapped_column(String(16))
+    # What the candidate last earned, quoted from the CV rather than asserted by
+    # a recruiter — so it is a shared fact, not a judgement reading. Its own
+    # currency/period pair because a candidate can quote current and expected in
+    # different units (e.g. current in MYR, expected in SGD).
+    last_drawn_salary: Mapped[float | None] = mapped_column(Numeric(12, 2))
+    last_drawn_currency: Mapped[str | None] = mapped_column(String(8))
+    last_drawn_period: Mapped[str | None] = mapped_column(String(16))
     available_from: Mapped[date | None] = mapped_column(Date)
     notice_period_raw: Mapped[str | None] = mapped_column(Text)
     employment_type: Mapped[str | None] = mapped_column(String(32))

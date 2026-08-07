@@ -197,6 +197,13 @@ def _serialize(
         ),
         "salary_currency": candidate.salary_currency,
         "salary_period": candidate.salary_period,
+        "last_drawn_salary": (
+            float(candidate.last_drawn_salary)
+            if candidate.last_drawn_salary is not None
+            else None
+        ),
+        "last_drawn_currency": candidate.last_drawn_currency,
+        "last_drawn_period": candidate.last_drawn_period,
         "available_from": (
             candidate.available_from.isoformat() if candidate.available_from else None
         ),
@@ -811,6 +818,9 @@ class CandidateIn(_CandidateFieldRules, BaseModel):
     expected_salary: float | None = None
     salary_currency: str | None = None
     salary_period: str | None = None
+    last_drawn_salary: float | None = None
+    last_drawn_currency: str | None = None
+    last_drawn_period: str | None = None
     available_from: date | None = None
     notice_period_raw: str | None = None
     employment_type: str | None = None
@@ -848,6 +858,9 @@ class CandidateUpdate(_CandidateFieldRules, BaseModel):
     expected_salary: float | None = None
     salary_currency: str | None = None
     salary_period: str | None = None
+    last_drawn_salary: float | None = None
+    last_drawn_currency: str | None = None
+    last_drawn_period: str | None = None
     available_from: date | None = None
     notice_period_raw: str | None = None
     employment_type: str | None = None
@@ -871,7 +884,9 @@ class CandidateUpdate(_CandidateFieldRules, BaseModel):
 _OVERRIDABLE = (
     "full_name", "email", "phone_raw", "current_title", "current_employer",
     "location", "years_experience", "expected_salary", "salary_currency",
-    "salary_period", "available_from", "notice_period_raw", "employment_type",
+    "salary_period",
+    "last_drawn_salary", "last_drawn_currency", "last_drawn_period",
+    "available_from", "notice_period_raw", "employment_type",
     "sex", "race", "race_detail", "nationality", "date_of_birth",
     "education_years",
     "notes",

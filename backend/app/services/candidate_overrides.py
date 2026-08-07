@@ -53,6 +53,13 @@ SHARED_FACT_FIELDS: frozenset[str] = frozenset(
         # history and education record every recruiter can see.
         "years_experience",
         "education_years",
+        # Quoted from the CV, so a shared fact the candidate stated — not a
+        # recruiter's private reading. A separate trio from `expected_salary`
+        # (which is judgement) because current and expected can be heard in
+        # different conversations and stated in different units.
+        "last_drawn_salary",
+        "last_drawn_currency",
+        "last_drawn_period",
         # The avatar is one image of one person.
         "avatar_key",
         "avatar_updated_at",

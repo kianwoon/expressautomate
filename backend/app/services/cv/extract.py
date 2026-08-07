@@ -22,7 +22,7 @@ import json
 
 from app.core.config import settings
 from app.core.logging import get_logger
-from app.services.cv.schema import CVResponse, ExtractedRole, cv_json_schema
+from app.services.cv.schema import CVResponse, ExtractedField, ExtractedRole, cv_json_schema
 from app.services.ingest.evidence import verify
 from app.services.ingest.extract import _attempts
 from app.services.ingest.schema import NOT_MENTIONED
@@ -55,6 +55,14 @@ Rules:
   title. If you are unsure, "{not_mentioned}" is the correct answer.
 - `skills` are only the ones the CV names. Do not expand an abbreviation into a
   skill the page does not contain.
+- `last_drawn_salary` is the salary the candidate last or currently earns, as the
+  CV prints it (e.g. "$2,500/month", "MYR 4800", "Last drawn: $3k"). Copy the
+  figure and its unit VERBATIM into `value` — never normalise, convert, or split
+  it into currency and amount yourself. If the CV states no salary, set `value`
+  to "{not_mentioned}".
+- `expected_salary` is the salary the candidate is asking for next, same rule:
+  verbatim from the page, or "{not_mentioned}". A "current" figure is not an
+  expected one — do not move a value from one field to the other.
 
 Return JSON matching this schema:
 {schema}
@@ -145,6 +153,31 @@ def _fields(role: ExtractedRole) -> list:
     return [f for f in vars(role).values() if f is not None and not f.is_missing]
 
 
+def _drop_if_missing(field: ExtractedField | None) -> ExtractedField | None:
+    """A salary field whose value is the not-mentioned sentinel asserts nothing.
+
+    Same reason `_fields` skips "Not mentioned" role fields: a sentinel has no
+    quotation for `verify` to test, and would ride along as if the CV had
+    stated a salary it did not.
+    """
+    return None if field is None or field.is_missing else field
+
+
+def _verify_salary(
+    field: ExtractedField | None, source: str
+) -> ExtractedField | None:
+    """Keep a salary field only if its quote is on the page, else drop to None.
+
+    Mirrors `identity._verified`: a salary figure the page does not support is a
+    fabrication, and dropping to None (honest absence) is preferable to
+    publishing a number the candidate never wrote. None rather than raise so a
+    sound last-drawn figure survives alongside a misquoted expected one.
+    """
+    if field is None or field.is_missing:
+        return None
+    return field if verify(field, source) else None
+
+
 def _drop_unstated(response: CVResponse) -> CVResponse:
     """Discard rows that assert nothing before verification ever sees them.
 
@@ -159,6 +192,8 @@ def _drop_unstated(response: CVResponse) -> CVResponse:
     return CVResponse(
         roles=[r for r in response.roles if _fields(r)],
         skills=[s for s in response.skills if not s.is_missing],
+        last_drawn_salary=_drop_if_missing(response.last_drawn_salary),
+        expected_salary=_drop_if_missing(response.expected_salary),
     )
 
 
@@ -189,7 +224,11 @@ def _needs_a_better_model(response: CVResponse, source: str) -> bool:
         not _role_is_supported(role, source) for role in response.roles
     )
     unsupported_skill = any(not verify(s, source) for s in response.skills)
-    return unsupported_role or unsupported_skill
+    unsupported_salary = any(
+        field is not None and not verify(field, source)
+        for field in (response.last_drawn_salary, response.expected_salary)
+    )
+    return unsupported_role or unsupported_skill or unsupported_salary
 
 
 def _only_what_the_page_supports(response: CVResponse, source: str) -> CVResponse:
@@ -204,4 +243,6 @@ def _only_what_the_page_supports(response: CVResponse, source: str) -> CVRespons
     return CVResponse(
         roles=[r for r in response.roles if _role_is_supported(r, source)],
         skills=[s for s in response.skills if verify(s, source)],
+        last_drawn_salary=_verify_salary(response.last_drawn_salary, source),
+        expected_salary=_verify_salary(response.expected_salary, source),
     )

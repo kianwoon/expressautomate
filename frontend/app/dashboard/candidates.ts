@@ -169,6 +169,9 @@ export type Candidate = {
   expected_salary: number | null;
   salary_currency: string | null;
   salary_period: string | null;
+  last_drawn_salary: number | null;
+  last_drawn_currency: string | null;
+  last_drawn_period: string | null;
   available_from: string | null;
   notice_period_raw: string | null;
   employment_type: string | null;
