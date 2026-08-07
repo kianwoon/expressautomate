@@ -49,8 +49,8 @@ from app.models.candidate import CandidateDocument, CandidateRole
 from app.services.candidate_naming import normalize_skill
 from app.services.candidate_tenure import span_months
 from app.services.client_naming import normalize_company_name
-from app.services.cv.schema import ROLE_FIELDS, CVResponse, ExtractedDate, ExtractedRole
-from app.services.ingest.evidence import parse_salary, parse_salary_period, verify
+from app.services.cv.schema import ROLE_FIELDS, CVResponse, ExtractedDate, ExtractedRole, ExtractedSalary
+from app.services.ingest.evidence import verify
 from app.services.ingest.schema import ExtractedField
 from app.services.llm.client import LLMResult
 
@@ -639,76 +639,96 @@ async def _fill_salary(
 ) -> None:
     """Fill last-drawn and expected salary where the candidate row is still NULL.
 
-    The figure is read out of `evidence` (checked against the page), not
-    `value` — the same rule `ingest/evidence.quality_state` applies, because
-    `value` is the model's best rendering and `evidence` is the span the
-    verifier located. A salary whose evidence is not on the page has already
-    been dropped to `None` by `extract._verify_salary`, so reaching here means
-    the quote is sound; `parse_salary` may still refuse an ambiguous string,
-    in which case the column stays NULL and the raw figure survives on the
-    evidence rows written below.
+    The model returns salary as structured parts (amount/currency/period) plus
+    an evidence quote. `extract._verify_salary` has already confirmed the
+    evidence is on the page, so the amount is trusted. COALESCE means a value a
+    recruiter typed or a prior CV set always wins over this parse.
 
-    Evidence is recorded for both salary fields whether or not a figure was
-    parsed, so a recruiter can see exactly what the CV said even when the
-    parser could not turn it into a number.
+    Evidence is recorded for both salary fields so a recruiter can see exactly
+    what the CV said, even when the model returned no amount.
     """
-    last_drawn_amount, last_drawn_currency = _parsed_salary(response.last_drawn_salary)
-    last_drawn_period = parse_salary_period(_evidence(response.last_drawn_salary))
-    expected_amount, expected_currency = _parsed_salary(response.expected_salary)
-    expected_period = parse_salary_period(_evidence(response.expected_salary))
-
     await session.execute(
         _FILL_SALARY,
         {
             "candidate_id": candidate_id,
-            "lds": last_drawn_amount,
-            "ldc": last_drawn_currency,
-            "ldp": last_drawn_period,
-            "es": expected_amount,
-            "sc": expected_currency,
-            "sp": expected_period,
+            "lds": _amount(response.last_drawn_salary),
+            "ldc": _currency(response.last_drawn_salary),
+            "ldp": _period(response.last_drawn_salary),
+            "es": _amount(response.expected_salary),
+            "sc": _currency(response.expected_salary),
+            "sp": _period(response.expected_salary),
         },
     )
 
     # Provenance, same as every role field: what the CV said, where on the
-    # page, and whether it checked out. Written even when the figure did not
-    # parse, so the raw text is never lost.
+    # page. Written as an evidence row so the raw text is never lost.
     for name, field in (
         ("last_drawn_salary", response.last_drawn_salary),
         ("expected_salary", response.expected_salary),
     ):
         if field is not None and not field.is_missing:
-            await _insert_evidence(
-                session, tenant_id, extraction_id, None, {name: field}, text
+            await _insert_salary_evidence(
+                session, tenant_id, extraction_id, name, field, text
             )
 
 
-def _parsed_salary(field: ExtractedField | None) -> tuple[float | None, str | None]:
-    """The amount and currency a salary field's evidence yields, or (None, None).
-
-    `parse_salary` returns a (low, high, currency) range because it was built
-    for job orders that quote bands. A candidate's stated salary is a single
-    figure; when the parse yields a range we take the low end as the more
-    conservative reading, and when it yields only a high (an "up to" ceiling)
-    there is no figure the candidate committed to, so it is left unset.
-    """
-    raw = _evidence(field)
-    if raw is None:
-        return None, None
-    low, _high, currency = parse_salary(raw)
-    return low, currency
-
-
-def _evidence(field: ExtractedField | None) -> str | None:
-    """The verified evidence text for a field, or None when absent.
-
-    `value` is what the model rendered; `evidence` is the span `verify`
-    located on the page. Reading the figure from `evidence` is the rule that
-    keeps a model-authored number from being filed as a verified salary.
-    """
+def _amount(field: ExtractedSalary | None) -> float | None:
+    """The salary amount, or None when absent/not mentioned."""
     if field is None or field.is_missing:
         return None
-    return field.evidence or field.value
+    return field.amount
+
+
+def _currency(field: ExtractedSalary | None) -> str | None:
+    """The currency code, or None when absent/not mentioned."""
+    if field is None or field.is_missing:
+        return None
+    return field.currency
+
+
+def _period(field: ExtractedSalary | None) -> str | None:
+    """The salary period, or None when absent/not mentioned."""
+    if field is None or field.is_missing:
+        return None
+    return field.period
+
+
+async def _insert_salary_evidence(
+    session,
+    tenant_id: uuid.UUID,
+    extraction_id: uuid.UUID,
+    name: str,
+    field: ExtractedSalary,
+    source: str,
+) -> None:
+    """Record salary provenance: the evidence quote and whether it checked out.
+
+    Same shape as `_insert_evidence` but adapted for `ExtractedSalary` (which
+    has `evidence` directly, not the `ExtractedField` shape `_insert_evidence`
+    expects). The evidence string is the verbatim quote the model found on the
+    page; `verify`-style check confirms it is actually there.
+    """
+    import re
+    evidence = field.evidence or ""
+    normalised_source = re.sub(r"\s+", " ", source).strip().lower()
+    normalised_evidence = re.sub(r"\s+", " ", evidence).strip().lower()
+    valid = bool(normalised_evidence) and normalised_evidence in normalised_source
+    await session.execute(
+        _INSERT_EVIDENCE,
+        {
+            "id": uuid.uuid4(),
+            "tenant_id": tenant_id,
+            "extraction_id": extraction_id,
+            "candidate_role_id": None,
+            "field_name": name,
+            "extracted_value": f"{field.amount} {field.currency or ''} /{field.period or ''}".strip(),
+            "evidence_text": field.evidence,
+            "start_char": None,
+            "end_char": None,
+            "model_confidence": field.confidence,
+            "evidence_valid": valid,
+        },
+    )
 
 
 class _NewRole:
