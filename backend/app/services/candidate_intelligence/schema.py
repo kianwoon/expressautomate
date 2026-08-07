@@ -23,7 +23,26 @@ verdict — if a capability is marked low residual value, the reason must travel
 with it.
 """
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+
+def _coerce_str_list(value):
+    """Coerce a model-provided value into a list[str].
+
+    The LLM occasionally returns a joined string ("Banking → Insurance") for a
+    field the schema declares as an array, despite prompt instructions. This
+    validator splits such a string on the delimiters the model favours (arrows,
+    commas, semicolons, newlines) so Pydantic validation passes. A list or any
+    other value passes through unchanged (Pydantic's own list[str] coercion then
+    handles it). This is defensive, not a prompt substitute — the prompt still
+    asks for arrays.
+    """
+    if isinstance(value, str):
+        import re
+
+        parts = re.split(r"\s*[→,;]\s*|\n", value)
+        return [p.strip() for p in parts if p.strip()]
+    return value
 
 # The fields of each stage, as the model must answer them. Listed in module
 # constants rather than reconstructed from the Pydantic model because the
@@ -162,6 +181,21 @@ class HistoryProfile(BaseModel):
     systems: list[str] = Field(default_factory=list)
     trajectory: list[str] = Field(default_factory=list)
 
+    # The model sometimes returns a joined string for these flat lists despite
+    # the prompt asking for arrays; coerce defensively.
+    _c_industries = field_validator("industries", mode="before")(
+        classmethod(lambda cls, v: _coerce_str_list(v))
+    )
+    _c_functions = field_validator("functions", mode="before")(
+        classmethod(lambda cls, v: _coerce_str_list(v))
+    )
+    _c_systems = field_validator("systems", mode="before")(
+        classmethod(lambda cls, v: _coerce_str_list(v))
+    )
+    _c_trajectory = field_validator("trajectory", mode="before")(
+        classmethod(lambda cls, v: _coerce_str_list(v))
+    )
+
 
 class AutomationAssessment(BaseModel):
     """One capability assessed for automation exposure + residual human value.
@@ -192,6 +226,10 @@ class AutomationProfile(BaseModel):
     assessments: list[AutomationAssessment] = Field(default_factory=list)
     scarce_capabilities: list[str] = Field(default_factory=list)
 
+    _c_scarce = field_validator("scarce_capabilities", mode="before")(
+        classmethod(lambda cls, v: _coerce_str_list(v))
+    )
+
 
 class MarketBenchmark(BaseModel):
     """Pass 3 — today's version of the work family (design doc §8 + §9).
@@ -211,6 +249,22 @@ class MarketBenchmark(BaseModel):
     emerging: list[str] = Field(default_factory=list)
     scarce: list[str] = Field(default_factory=list)
     automation_summary: str = ""
+
+    _c_work = field_validator("current_work", mode="before")(
+        classmethod(lambda cls, v: _coerce_str_list(v))
+    )
+    _c_req = field_validator("current_required", mode="before")(
+        classmethod(lambda cls, v: _coerce_str_list(v))
+    )
+    _c_declining = field_validator("declining", mode="before")(
+        classmethod(lambda cls, v: _coerce_str_list(v))
+    )
+    _c_emerging = field_validator("emerging", mode="before")(
+        classmethod(lambda cls, v: _coerce_str_list(v))
+    )
+    _c_scarce_bm = field_validator("scarce", mode="before")(
+        classmethod(lambda cls, v: _coerce_str_list(v))
+    )
 
 
 class CapabilityGap(BaseModel):
@@ -242,6 +296,10 @@ class GapAnalysis(BaseModel):
     gaps: list[CapabilityGap] = Field(default_factory=list)
     evidence_gaps: list[str] = Field(default_factory=list)
 
+    _c_evidence_gaps = field_validator("evidence_gaps", mode="before")(
+        classmethod(lambda cls, v: _coerce_str_list(v))
+    )
+
 
 class ResidualValueAssessment(BaseModel):
     """Pass 5 — the decomposable residual value + candid profile (doc §10/§11).
@@ -263,6 +321,19 @@ class ResidualValueAssessment(BaseModel):
     evidence_gaps: list[str] = Field(default_factory=list)
     overall_assessment: str = ""
     current_profile: str = ""
+
+    _c_scarce_rv = field_validator("scarce_capabilities", mode="before")(
+        classmethod(lambda cls, v: _coerce_str_list(v))
+    )
+    _c_depreciated = field_validator("depreciated_capabilities", mode="before")(
+        classmethod(lambda cls, v: _coerce_str_list(v))
+    )
+    _c_emerging_rv = field_validator("emerging_capabilities", mode="before")(
+        classmethod(lambda cls, v: _coerce_str_list(v))
+    )
+    _c_evidence_gaps_rv = field_validator("evidence_gaps", mode="before")(
+        classmethod(lambda cls, v: _coerce_str_list(v))
+    )
 
 
 class CandidateIntelligenceResult(BaseModel):

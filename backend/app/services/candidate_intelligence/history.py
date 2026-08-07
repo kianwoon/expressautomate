@@ -40,6 +40,9 @@ the work is still valuable today — a later stage does that.
 Rules:
 - Ground every statement in the CV and the verified facts below. Do not invent \
 roles, employers, or dates the record does not state.
+- Every field described as a "list" or "array" MUST be a JSON array of separate \
+string elements, never a single joined string. For example `trajectory` must be \
+["Banking", "Insurance"], NOT "Banking → Insurance".
 - `roles` is a list of objects, one per role the candidate held, oldest first. \
 Each role has:
   - `period` (e.g. "2019–2023" or "2019 to present")
@@ -64,8 +67,9 @@ deciding, if the CV states it.
 - `functions` lists the types of work performed across roles (e.g. \
 "Underwriting", "Reconciliation", "Operations").
 - `systems` lists the named products or systems the CV mentions.
-- `trajectory` is the ordered list of domains/industries the candidate moved \
-through, oldest first — the arc of their career.
+- `trajectory` is a JSON array of the domains/industries the candidate moved \
+through, oldest first — e.g. ["Banking", "Insurance"]. Each element is one \
+domain; never join them with arrows or commas into a single string.
 - Ignore any mention of the candidate's sex, race, nationality, age, religion \
 or marital status — those must never influence this analysis.
 - If the CV is sparse or unclear, say so plainly in the affected field rather \
