@@ -242,13 +242,6 @@ function Workspace({ role }: { role: string }) {
     />
   );
 
-  // Open on the first row once the page loads, the same fallback job orders
-  // uses: a panel that starts blank spends the first screenful asking to be
-  // clicked.
-  useEffect(() => {
-    if (!selectedId && items.length > 0) setSelectedId(items[0].id);
-  }, [items, selectedId]);
-
   // The panel needs the full record — skills and `overridden_fields` are only
   // on the single-record GET, never on a list row — so it is fetched
   // separately whenever the selection changes.
@@ -567,26 +560,31 @@ function Workspace({ role }: { role: string }) {
           <p className="body jo-note" aria-live="polite">
             Showing {offset + 1}–{offset + items.length} of {total.toLocaleString()}.
           </p>
-          <div className="jo-split" aria-busy={refreshing || undefined}>
-            {/* The pager lives in this column, under the table it steps
-                through — the same placement job orders uses in `.jo-list`.
-                Below the split it sat under the detail panel too, which is
-                sticky and a screen tall, so the control for the list ended
-                up nowhere near the list. */}
-            <div className="cand-list">
-              <CandidatesTable rows={items} selectedId={selectedId} onSelect={setSelectedId} />
-              {pager}
-            </div>
+          {/* Full width: the table and its pager together, the same `.jo-list`
+              shape the job-orders page uses. The detail opens as a modal over
+              the list rather than beside it, so the table keeps the whole row
+              whether a candidate is open or not. */}
+          <div className="jo-list" aria-busy={refreshing || undefined}>
+            <CandidatesTable rows={items} selectedId={selectedId} onSelect={setSelectedId} />
+            {pager}
+          </div>
+          {/* Mounted only while a row is open. The modal owns nothing about the
+              selection — clearing it (Escape, backdrop, paging) is the parent's
+              job, done through `setSelectedId(null)`. A fetch error shows the
+              message beside the list rather than opening an empty modal. */}
+          {selectedId && detail && !detailError && (
             <CandidatePanel
-              row={detailError ? null : detail}
-              onEdit={() => detail && setView({ mode: "edit", row: detail })}
+              key={detail.id}
+              row={detail}
+              onClose={() => setSelectedId(null)}
+              onEdit={() => setView({ mode: "edit", row: detail })}
               onArchive={doArchive}
               onRestore={doRestore}
               onDelete={canDelete ? doDelete : null}
               onChanged={refreshDetail}
               onDetailChanged={refetchDetail}
             />
-          </div>
+          )}
           {detailError && (
             <p className="body jo-detail-error" role="alert">
               {detailError}
