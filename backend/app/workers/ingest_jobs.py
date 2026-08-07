@@ -38,7 +38,7 @@ from app.core.logging import get_logger
 from app.db.rls import tenant_session
 from app.models.candidate import Candidate, CandidateDocument
 from app.models.tenant import User
-from app.services.candidate_matching import find_candidate
+from app.services.candidate_matching import candidates_with_same_name, find_candidate
 from app.services.candidate_naming import normalize_email, normalize_phone
 from app.services.cv.convert import ConversionUnavailable, is_legacy_office, maybe_convert
 from app.services.cv.identity import extract_identity
@@ -149,6 +149,24 @@ async def _resolve_candidate(
             f"This CV matches a candidate held by {whom}. "
             "Request access or confirm the details before attaching it."
         )
+
+    # No identity match. If the CV also had no matchable identity (no email,
+    # no mobile — only a landline or nothing at all), a name-based duplicate
+    # check catches the case where the same CV was uploaded before. This never
+    # auto-merges: two real people can share a name. It flags for review so a
+    # recruiter decides whether to attach the CV to the existing row or confirm
+    # this is a different person.
+    if not email and not phone_e164 and full_name:
+        same_name = await candidates_with_same_name(session, tenant_id, full_name)
+        if same_name:
+            existing = ", ".join(str(sid) for sid in same_name)
+            # allow-hardcode: a human-readable review reason, not a matching oracle.
+            return None, (
+                f"This CV names '{full_name}', which matches candidate(s) "
+                f"{existing} already in the database. The CV has no email or "
+                "mobile to confirm identity. Review and attach to the existing "
+                "candidate, or confirm this is a different person."
+            )
 
     # No match: a new person. The uploader is the owner, the same rule the
     # manual create path applies ("you uploaded it, it is yours"). `full_name`
