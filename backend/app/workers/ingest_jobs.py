@@ -161,7 +161,7 @@ async def _resolve_candidate(
         if same_name:
             existing = ", ".join(str(sid) for sid in same_name)
             # allow-hardcode: a human-readable review reason, not a matching oracle.
-            return None, (
+            return same_name[0], (
                 f"This CV names '{full_name}', which matches candidate(s) "
                 f"{existing} already in the database. The CV has no email or "
                 "mobile to confirm identity. Review and attach to the existing "
@@ -387,11 +387,22 @@ async def ingest_candidate_cv(
             return
         old_candidate_id = row.candidate_id
         row.candidate_id = candidate_id
-        row.parse_state = CandidateDocument.PENDING
-        row.parse_error = None
+        # A name-only match (no email/mobile) is resolved but needs human
+        # confirmation — set review and stop here, no parse handoff. The
+        # document is attached so the recruiter sees it on the candidate.
+        if review_reason is not None:
+            row.parse_state = CandidateDocument.NEEDS_REVIEW
+            row.parse_error = review_reason
+        else:
+            row.parse_state = CandidateDocument.PENDING
+            row.parse_error = None
         if old_candidate_id != candidate_id:
             await _delete_if_ghost(session, tenant, old_candidate_id, keep=document)
         await session.commit()
+
+    # A name-only match needs review before parsing — no handoff.
+    if review_reason is not None:
+        return
 
     # Hand off to the roles/skills parse. Enqueued after the commit, because the
     # job reads the row it is named for. The document is now an ordinary
