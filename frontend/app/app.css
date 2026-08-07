@@ -1157,6 +1157,33 @@ select.gl-input:focus-visible { outline: 2px solid var(--blue-500); outline-offs
   align-items: center;
   gap: 10px;
 }
+/* The candidate modal's title row: the name on the left, the action buttons
+   (Save / Share / WhatsApp / Archive / Delete) pinned to the upper-right. A
+   recruiter scanning a long record reaches for these from wherever they are
+   scrolled, and a footer bar sits below a fold with no affordance of its own;
+   in the header they are always visible. The structure mirrors the job-orders
+   modal's `Run analysis` header button (`.jo-detail-title-row`), but is kept
+   self-contained here rather than depending on `job-orders.css` loading on
+   the candidates route. `width: 100%` so the flex row spans the modal; the
+   text takes the free space (`flex: 1`) so the action group is pushed right. */
+.cand-title-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-width: 0;
+}
+.cand-title-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.cand-title-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+}
 
 /* A field group inside the form. The border is doing real work: it is what
    separates the facts a Work Permit turns on from race, which decides

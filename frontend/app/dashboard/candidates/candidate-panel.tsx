@@ -321,9 +321,101 @@ function Detail({
       onClose={busy ? () => {} : onClose}
       className="dlg-modal-wide cand-detail-modal"
       title={
-        row.record_status === "merged"
-          ? `${row.full_name} (merged)`
-          : row.full_name
+        <span className="cand-title-row">
+          <span className="cand-title-text">
+            {row.record_status === "merged"
+              ? `${row.full_name} (merged)`
+              : row.full_name}
+          </span>
+          {/* The action buttons live in the header, top-right, not at the
+              bottom of the modal. A recruiter scanning a long record reaches
+              for Save / Share / Archive from wherever they are scrolled to,
+              and a footer bar is below a fold that has no affordance of its
+              own. In the header they are always visible — the same place the
+              job-orders modal keeps "Run analysis". The `!canEdit` note that
+              used to sit beside the footer buttons moves to the body below,
+              where the fields it explains also live. */}
+          <span className="cand-title-actions">
+            {row.record_status !== "merged" && (
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={saveFields}
+                disabled={busy || !canEdit || savingFields}
+                title={canEdit ? undefined : "Only the recruiter who holds this candidate can edit it."}
+              >
+                {savingFields ? "Saving…" : "Save changes"}
+              </button>
+            )}
+            {row.record_status !== "merged" && (
+              <button
+                type="button"
+                className="btn btn-secondary btn-icon"
+                onClick={() => setSharing(true)}
+                disabled={busy}
+                aria-label="Share"
+                title="Share"
+              >
+                {SHARE_GLYPH}
+              </button>
+            )}
+            {/* Claiming is what CREATES the right to edit, so it is offered
+                exactly where editing is refused for want of an owner — and it is
+                offered to everyone, because an unclaimed candidate is queue work
+                the whole agency can already see. */}
+            {unclaimed && row.record_status === "active" && (
+              <button type="button" className="btn btn-secondary" onClick={claim} disabled={busy}>
+                {busy ? "Saving…" : "Claim"}
+              </button>
+            )}
+            {row.record_status !== "merged" && (
+              <WhatsappButton row={row} onLogged={() => setActivityVersion((v) => v + 1)} />
+            )}
+            {row.record_status === "active" && (
+              <button
+                type="button"
+                className="btn btn-secondary btn-icon"
+                onClick={archive}
+                disabled={busy}
+                // The name stays "Archive" while the request is in flight.
+                // Swapping it to "Saving…" swapped the button's identity out of
+                // the accessibility tree — and a screen reader does not
+                // re-announce a name change anyway, so the swap cost the label
+                // and bought nothing. `aria-busy` is the part that carries.
+                aria-label="Archive"
+                title={busy ? "Saving…" : "Archive"}
+                aria-busy={busy}
+              >
+                {ARCHIVE_GLYPH}
+              </button>
+            )}
+            {row.record_status === "archived" && (
+              <button
+                type="button"
+                className="btn btn-secondary btn-icon"
+                onClick={restore}
+                disabled={busy}
+                aria-label="Restore"
+                title={busy ? "Saving…" : "Restore"}
+                aria-busy={busy}
+              >
+                {RESTORE_GLYPH}
+              </button>
+            )}
+            {onDelete && (
+              <button
+                type="button"
+                className="btn btn-secondary btn-icon"
+                onClick={remove}
+                disabled={busy}
+                aria-label="Delete"
+                title="Delete"
+              >
+                {DELETE_GLYPH}
+              </button>
+            )}
+          </span>
+        </span>
       }
     >
       {row.record_status === "merged" ? (
@@ -606,102 +698,18 @@ function Detail({
         </>
       )}
 
-      <div className="jo-detail-actions">
-        <div className="jo-action-row">
-          {/* Save replaces the old Edit button: editing is inline now, so the
-              action a recruiter takes on this modal is "save the fields I
-              changed", not "open a separate form". Disabled (never hidden) for
-              a share recipient exactly as Edit was — a vanished button reads
-              as a page that failed to load. */}
-          <button
-            type="button"
-            className="btn btn-primary"
-            onClick={saveFields}
-            disabled={busy || !canEdit || savingFields}
-            title={canEdit ? undefined : "Only the recruiter who holds this candidate can edit it."}
-          >
-            {savingFields ? "Saving…" : "Save changes"}
-          </button>
-          {/* Icon-only from here down, and the name has to come from
-              `aria-label` — which doubles as the hover tooltip, so a sighted
-              reader who does not recognise the shape is one hover from the
-              word. */}
-          {row.record_status !== "merged" && (
-            <button
-              type="button"
-              className="btn btn-secondary btn-icon"
-              onClick={() => setSharing(true)}
-              disabled={busy}
-              aria-label="Share"
-              title="Share"
-            >
-              {SHARE_GLYPH}
-            </button>
-          )}
-          {/* Claiming is what CREATES the right to edit, so it is offered
-              exactly where editing is refused for want of an owner — and it is
-              offered to everyone, because an unclaimed candidate is queue work
-              the whole agency can already see. */}
-          {unclaimed && row.record_status === "active" && (
-            <button type="button" className="btn btn-secondary" onClick={claim} disabled={busy}>
-              {busy ? "Saving…" : "Claim"}
-            </button>
-          )}
-          {row.record_status !== "merged" && (
-            <WhatsappButton row={row} onLogged={() => setActivityVersion((v) => v + 1)} />
-          )}
-          {row.record_status === "active" && (
-            <button
-              type="button"
-              className="btn btn-secondary btn-icon"
-              onClick={archive}
-              disabled={busy}
-              // The name stays "Archive" while the request is in flight.
-              // Swapping it to "Saving…" swapped the button's identity out of
-              // the accessibility tree — and a screen reader does not
-              // re-announce a name change anyway, so the swap cost the label
-              // and bought nothing. `aria-busy` is the part that carries.
-              aria-label="Archive"
-              title={busy ? "Saving…" : "Archive"}
-              aria-busy={busy}
-            >
-              {ARCHIVE_GLYPH}
-            </button>
-          )}
-          {row.record_status === "archived" && (
-            <button
-              type="button"
-              className="btn btn-secondary btn-icon"
-              onClick={restore}
-              disabled={busy}
-              aria-label="Restore"
-              title={busy ? "Saving…" : "Restore"}
-              aria-busy={busy}
-            >
-              {RESTORE_GLYPH}
-            </button>
-          )}
-          {onDelete && (
-            <button
-              type="button"
-              className="btn btn-secondary btn-icon"
-              onClick={remove}
-              disabled={busy}
-              aria-label="Delete"
-              title="Delete"
-            >
-              {DELETE_GLYPH}
-            </button>
-          )}
-        </div>
-        {!canEdit && (
-          <p className="body jo-sub">
-            {unclaimed
-              ? "Nobody holds this candidate yet. Claim them to edit the record — an unclaimed record is where a wrong edit is least likely to be noticed, so the server refuses it too."
-              : `${ownerName ?? "A colleague"} holds this candidate. You can read the record, log a WhatsApp message against it, and pass it on to someone else — but only they can change it.`}
-          </p>
-        )}
-      </div>
+      {/* The "can't edit" note used to sit beside the footer buttons. With the
+          buttons moved to the header, the note stays in the body next to the
+          fields it explains — a reader who finds every input disabled reads
+          why immediately, rather than having to scroll to a footer that no
+          longer exists. */}
+      {!canEdit && row.record_status !== "merged" && (
+        <p className="body jo-sub">
+          {unclaimed
+            ? "Nobody holds this candidate yet. Claim them to edit the record — an unclaimed record is where a wrong edit is least likely to be noticed, so the server refuses it too."
+            : `${ownerName ?? "A colleague"} holds this candidate. You can read the record, log a WhatsApp message against it, and pass it on to someone else — but only they can change it.`}
+        </p>
+      )}
 
       {sharing && <CandidateShareDialog row={row} onClose={() => setSharing(false)} />}
 
