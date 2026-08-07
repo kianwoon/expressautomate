@@ -50,7 +50,7 @@ from app.services.candidate_naming import normalize_skill
 from app.services.candidate_tenure import span_months
 from app.services.client_naming import normalize_company_name
 from app.services.cv.schema import ROLE_FIELDS, CVResponse, ExtractedDate, ExtractedRole
-from app.services.ingest.evidence import verify
+from app.services.ingest.evidence import parse_salary, parse_salary_period, verify
 from app.services.ingest.schema import ExtractedField
 from app.services.llm.client import LLMResult
 
@@ -115,6 +115,25 @@ _INSERT_SKILL = text(
     VALUES (:id, :tenant_id, :candidate_id, :skill, :skill_normalized,
             :source, :status)
     ON CONFLICT ON CONSTRAINT uq_candidate_skills_once_per_candidate DO NOTHING
+    """
+)
+
+# Salary is filled only where the candidate row is still NULL — `COALESCE`
+# means a value a recruiter typed or a prior CV set always wins over the
+# figure this parse read. A parse that finds nothing leaves every binding
+# NULL and COALESCE is a no-op, so re-running never blanks a column. One
+# statement rather than six because the three columns of each trio share a
+# "did the page state it" decision and belong together.
+_FILL_SALARY = text(
+    """
+    UPDATE candidates SET
+        last_drawn_salary   = COALESCE(last_drawn_salary,   :lds),
+        last_drawn_currency = COALESCE(last_drawn_currency, :ldc),
+        last_drawn_period   = COALESCE(last_drawn_period,   :ldp),
+        expected_salary     = COALESCE(expected_salary,     :es),
+        salary_currency     = COALESCE(salary_currency,     :sc),
+        salary_period       = COALESCE(salary_period,       :sp)
+    WHERE id = :candidate_id
     """
 )
 
@@ -556,6 +575,15 @@ async def persist_cv(
         )
         inserted_skills += 1
 
+    await _fill_salary(
+        session,
+        tenant_id=tenant_id,
+        extraction_id=extraction_id,
+        candidate_id=candidate_id,
+        response=response,
+        text=text,
+    )
+
     if unusable:
         note = (
             f"{unusable} role(s) were left out because the CV named no employer "
@@ -598,6 +626,89 @@ async def persist_cv(
         dropped=dropped,
         model=result.model,
     )
+
+
+async def _fill_salary(
+    session,
+    *,
+    tenant_id: uuid.UUID,
+    extraction_id: uuid.UUID,
+    candidate_id: uuid.UUID,
+    response: CVResponse,
+    text: str,
+) -> None:
+    """Fill last-drawn and expected salary where the candidate row is still NULL.
+
+    The figure is read out of `evidence` (checked against the page), not
+    `value` — the same rule `ingest/evidence.quality_state` applies, because
+    `value` is the model's best rendering and `evidence` is the span the
+    verifier located. A salary whose evidence is not on the page has already
+    been dropped to `None` by `extract._verify_salary`, so reaching here means
+    the quote is sound; `parse_salary` may still refuse an ambiguous string,
+    in which case the column stays NULL and the raw figure survives on the
+    evidence rows written below.
+
+    Evidence is recorded for both salary fields whether or not a figure was
+    parsed, so a recruiter can see exactly what the CV said even when the
+    parser could not turn it into a number.
+    """
+    last_drawn_amount, last_drawn_currency = _parsed_salary(response.last_drawn_salary)
+    last_drawn_period = parse_salary_period(_evidence(response.last_drawn_salary))
+    expected_amount, expected_currency = _parsed_salary(response.expected_salary)
+    expected_period = parse_salary_period(_evidence(response.expected_salary))
+
+    await session.execute(
+        _FILL_SALARY,
+        {
+            "candidate_id": candidate_id,
+            "lds": last_drawn_amount,
+            "ldc": last_drawn_currency,
+            "ldp": last_drawn_period,
+            "es": expected_amount,
+            "sc": expected_currency,
+            "sp": expected_period,
+        },
+    )
+
+    # Provenance, same as every role field: what the CV said, where on the
+    # page, and whether it checked out. Written even when the figure did not
+    # parse, so the raw text is never lost.
+    for name, field in (
+        ("last_drawn_salary", response.last_drawn_salary),
+        ("expected_salary", response.expected_salary),
+    ):
+        if field is not None and not field.is_missing:
+            await _insert_evidence(
+                session, tenant_id, extraction_id, None, {name: field}, text
+            )
+
+
+def _parsed_salary(field: ExtractedField | None) -> tuple[float | None, str | None]:
+    """The amount and currency a salary field's evidence yields, or (None, None).
+
+    `parse_salary` returns a (low, high, currency) range because it was built
+    for job orders that quote bands. A candidate's stated salary is a single
+    figure; when the parse yields a range we take the low end as the more
+    conservative reading, and when it yields only a high (an "up to" ceiling)
+    there is no figure the candidate committed to, so it is left unset.
+    """
+    raw = _evidence(field)
+    if raw is None:
+        return None, None
+    low, _high, currency = parse_salary(raw)
+    return low, currency
+
+
+def _evidence(field: ExtractedField | None) -> str | None:
+    """The verified evidence text for a field, or None when absent.
+
+    `value` is what the model rendered; `evidence` is the span `verify`
+    located on the page. Reading the figure from `evidence` is the rule that
+    keeps a model-authored number from being filed as a verified salary.
+    """
+    if field is None or field.is_missing:
+        return None
+    return field.evidence or field.value
 
 
 class _NewRole:

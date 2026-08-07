@@ -476,13 +476,17 @@ def test_the_cv_extraction_schema_asks_for_none_of_them() -> None:
 
     A CV for a domestic-worker placement states sex, date of birth and
     nationality on the first page. The schema below is what the model is told
-    to return, and it asks for roles and skills only — so those facts are
-    filled in by a person or not at all (§15).
+    to return, and it asks for roles, skills, and the salary the candidate
+    stated — so protected facts are filled in by a person or not at all (§15).
+    Salary is the one deliberate exception: a figure the candidate printed is
+    a fact they stated, not a characteristic to be inferred.
     """
     from app.services.cv.extract import build_prompt as build_cv_prompt
     from app.services.cv.schema import CVResponse, cv_json_schema
 
-    assert set(CVResponse.model_fields) == {"roles", "skills"}
+    assert set(CVResponse.model_fields) == {
+        "roles", "skills", "last_drawn_salary", "expected_salary",
+    }
 
     schema_and_prompt = (
         str(cv_json_schema()) + build_cv_prompt("Jane Tan, female, born 1990, Filipino.")

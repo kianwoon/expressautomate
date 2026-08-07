@@ -635,6 +635,31 @@ function Detail({
                 disabled={!canEdit || savingFields}
               />
             </Field>
+            <Field label="Last drawn salary">
+              <input
+                className="jo-search"
+                type="number"
+                value={form.last_drawn_salary}
+                onChange={(e) => set("last_drawn_salary", e.target.value)}
+                disabled={!canEdit || savingFields}
+              />
+            </Field>
+            <Field label="Last drawn currency">
+              <input
+                className="jo-search"
+                value={form.last_drawn_currency}
+                onChange={(e) => set("last_drawn_currency", e.target.value)}
+                disabled={!canEdit || savingFields}
+              />
+            </Field>
+            <Field label="Last drawn period">
+              <input
+                className="jo-search"
+                value={form.last_drawn_period}
+                onChange={(e) => set("last_drawn_period", e.target.value)}
+                disabled={!canEdit || savingFields}
+              />
+            </Field>
             <Field label="Expected salary">
               <input
                 className="jo-search"

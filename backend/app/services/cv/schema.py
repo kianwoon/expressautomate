@@ -115,7 +115,7 @@ class ExtractedRole(BaseModel):
 
 
 class CVResponse(BaseModel):
-    """Roles and skills, and nothing else about the person.
+    """Roles, skills, and the salary the candidate stated — and nothing else.
 
     A CV very often states sex, date of birth, nationality and race outright —
     for a domestic-worker placement it nearly always does. None of them is
@@ -125,10 +125,18 @@ class CVResponse(BaseModel):
     `app/services/sourcing/redact.py` refuses to let this platform hold.
     Those columns on `candidates` are filled by a person, deliberately, or
     they stay NULL (§15).
+
+    Salary is the one exception to "nothing else about the person", because a
+    figure the candidate printed is a fact they stated, not a characteristic
+    to be inferred. Both last-drawn and expected are single quoted strings —
+    verbatim from the page, like every role field — parsed into amount,
+    currency and period by `persist_cv`, never by the model.
     """
 
     roles: list[ExtractedRole] = Field(default_factory=list)
     skills: list[ExtractedField] = Field(default_factory=list)
+    last_drawn_salary: ExtractedField | None = None
+    expected_salary: ExtractedField | None = None
 
 
 # The field names in the order the prompt should present them.
@@ -194,7 +202,13 @@ def cv_json_schema() -> dict:
                 },
             },
             "skills": {"type": "array", "items": field_schema},
+            # Salary is a single quoted string (e.g. "$2,500/month"), parsed
+            # into amount/currency/period at persist time — not three freeform
+            # fields the model might disagree about. Nullable so a CV that
+            # states neither stays absent rather than fabricated.
+            "last_drawn_salary": nullable,
+            "expected_salary": nullable,
         },
-        "required": ["roles", "skills"],
+        "required": ["roles", "skills", "last_drawn_salary", "expected_salary"],
         "additionalProperties": False,
     }

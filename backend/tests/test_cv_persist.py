@@ -27,6 +27,8 @@ CV = (
     "Staff Nurse, Parkway Shenton, Mar 2019 to Mar 2020\n"
     "Senior Nurse, Raffles Medical, Mar 2020 to present\n"
     "Skills: triage, phlebotomy\n"
+    "Last drawn salary: S$2,500/month\n"
+    "Expected salary: $3,000/month\n"
 )
 
 TODAY = date(2026, 7, 29)
@@ -70,8 +72,12 @@ def _role(title, company, start=None, end=None):
     return role
 
 
-def _response(roles=(), skills=()) -> tuple[CVResponse, LLMResult]:
+def _response(roles=(), skills=(), last_drawn=None, expected=None) -> tuple[CVResponse, LLMResult]:
     payload = {"roles": list(roles), "skills": [_field(s) for s in skills]}
+    if last_drawn:
+        payload["last_drawn_salary"] = last_drawn
+    if expected:
+        payload["expected_salary"] = expected
     return CVResponse.model_validate(payload), LLMResult(
         data=payload, model="test/fast", latency_ms=12, raw={"choices": []}
     )
@@ -664,4 +670,100 @@ async def test_a_second_stint_at_the_same_employer_is_a_second_role(agency):  # 
             )
         ).all()
     assert [r.source for r in rows] == ["human", "cv_upload"]
+    await _cleanup(tenant_id)
+
+
+# --- salary extraction ---------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_salary_quoted_on_the_cv_lands_on_the_candidate(agency):  # noqa: F811
+    """Both salary fields the CV states are parsed and written."""
+    tenant_id, user_id = agency
+    candidate_id = await _a_candidate_row(tenant_id, user_id)
+    document_id = await _document(tenant_id, candidate_id)
+    response, result = _response(
+        last_drawn=_field("S$2,500/month"),
+        expected=_field("$3,000/month"),
+    )
+
+    await _run(tenant_id, candidate_id, document_id, response, result)
+
+    async with AdminSessionLocal() as s:
+        row = (
+            await s.execute(
+                text(
+                    "SELECT last_drawn_salary, last_drawn_currency, last_drawn_period,"
+                    " expected_salary, salary_period"
+                    " FROM candidates WHERE id = :c"
+                ),
+                {"c": candidate_id},
+            )
+        ).one()
+    assert float(row.last_drawn_salary) == 2500.0
+    assert row.last_drawn_currency == "SGD"
+    assert row.last_drawn_period == "month"
+    assert float(row.expected_salary) == 3000.0
+    assert row.salary_period == "month"
+    await _cleanup(tenant_id)
+
+
+@pytest.mark.asyncio
+async def test_a_human_salary_value_is_not_overwritten_by_the_cv(agency):  # noqa: F811
+    """`COALESCE` means a recruiter's figure always wins over the CV's."""
+    tenant_id, user_id = agency
+    candidate_id = await _a_candidate_row(tenant_id, user_id)
+    document_id = await _document(tenant_id, candidate_id)
+    async with AdminSessionLocal() as s:
+        await s.execute(
+            text(
+                "UPDATE candidates SET last_drawn_salary = 9999.0,"
+                " expected_salary = 8888.0 WHERE id = :c"
+            ),
+            {"c": candidate_id},
+        )
+        await s.commit()
+
+    response, result = _response(
+        last_drawn=_field("S$2,500/month"),
+        expected=_field("$3,000/month"),
+    )
+    await _run(tenant_id, candidate_id, document_id, response, result)
+
+    async with AdminSessionLocal() as s:
+        row = (
+            await s.execute(
+                text(
+                    "SELECT last_drawn_salary, expected_salary"
+                    " FROM candidates WHERE id = :c"
+                ),
+                {"c": candidate_id},
+            )
+        ).one()
+    assert float(row.last_drawn_salary) == 9999.0
+    assert float(row.expected_salary) == 8888.0
+    await _cleanup(tenant_id)
+
+
+@pytest.mark.asyncio
+async def test_a_cv_with_no_salary_leaves_the_columns_null(agency):  # noqa: F811
+    """A CV that states no salary must not produce fabricated figures."""
+    tenant_id, user_id = agency
+    candidate_id = await _a_candidate_row(tenant_id, user_id)
+    document_id = await _document(tenant_id, candidate_id)
+
+    await _run(tenant_id, candidate_id, document_id, *_response())
+
+    async with AdminSessionLocal() as s:
+        row = (
+            await s.execute(
+                text(
+                    "SELECT last_drawn_salary, expected_salary"
+                    " FROM candidates WHERE id = :c"
+                ),
+                {"c": candidate_id},
+            )
+        ).one()
+    assert row.last_drawn_salary is None
+    assert row.expected_salary is None
     await _cleanup(tenant_id)
