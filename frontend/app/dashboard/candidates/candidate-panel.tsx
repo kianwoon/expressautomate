@@ -34,6 +34,7 @@ import {
 import { Dialog } from "../dialog";
 import { useCandidateIntelligence } from "../candidate-intelligence";
 import {
+  EducationStage,
   HistoryStage,
   MarketFitStage,
   ResidualValueStage,
@@ -141,11 +142,12 @@ const DELETE_GLYPH = (
 /** The candidate modal's tabs. Details holds the existing editable record;
  *  the other three are the Candidate Intelligence stages — the same shape the
  *  job-order modal's Origin/Work/Person/Search tabs take. */
-type CandidateTab = "details" | "history" | "market" | "residual";
+type CandidateTab = "details" | "history" | "education" | "market" | "residual";
 
 const CANDIDATE_TABS: { key: CandidateTab; label: string }[] = [
   { key: "details", label: "Details" },
   { key: "history", label: "History" },
+  { key: "education", label: "Education" },
   { key: "market", label: "Market fit" },
   { key: "residual", label: "Residual value" },
 ];
@@ -540,6 +542,9 @@ function Detail({
           <div ref={panelRef} style={panelMinHeight ? { minHeight: panelMinHeight } : undefined}>
           {activeTab === "history" && (
             <HistoryStage intelligence={ci.analysis} state={stageState} />
+          )}
+          {activeTab === "education" && (
+            <EducationStage intelligence={ci.analysis} state={stageState} />
           )}
           {activeTab === "market" && (
             <MarketFitStage intelligence={ci.analysis} state={stageState} />

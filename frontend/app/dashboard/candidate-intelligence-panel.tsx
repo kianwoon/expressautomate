@@ -79,6 +79,22 @@ export function HistoryStage({
   );
 }
 
+export function EducationStage({
+  intelligence,
+  state,
+}: {
+  intelligence: CandidateIntelligence | null;
+  state: CandidateStageState;
+}) {
+  if (!intelligence) return <StageNotice state={state} />;
+  const edu = intelligence.history.education;
+  return (
+    <Stage title="Education & qualifications">
+      <EducationList entries={edu} />
+    </Stage>
+  );
+}
+
 export function MarketFitStage({
   intelligence,
   state,
@@ -362,6 +378,49 @@ function RolesTable({
             </li>
           ))}
         </ul>
+      </dd>
+    </div>
+  );
+}
+
+function EducationList({
+  entries,
+}: {
+  entries: { period: string; qualification: string; institution: string; field: string }[];
+}) {
+  if (!entries || entries.length === 0) return null;
+  return (
+    <div className="cand-intel-field">
+      <dt className="cand-intel-dt">Qualifications</dt>
+      <dd className="body">
+        {/* A table: Period / Qualification / Institution. Mirrors the gap
+            table's fixed-layout colgroup so columns align. */}
+        <table className="cand-intel-table">
+          <colgroup>
+            <col className="cand-intel-col-edu-period" />
+            <col className="cand-intel-col-edu-qual" />
+            <col className="cand-intel-col-edu-inst" />
+          </colgroup>
+          <thead>
+            <tr>
+              <th className="cand-intel-th">Period</th>
+              <th className="cand-intel-th">Qualification</th>
+              <th className="cand-intel-th">Institution</th>
+            </tr>
+          </thead>
+          <tbody>
+            {entries.map((e, i) => (
+              <tr key={i} className="cand-intel-tr">
+                <td className="cand-intel-td cand-intel-td-period">{e.period || "—"}</td>
+                <td className="cand-intel-td cand-intel-td-title">
+                  {e.qualification}
+                  {e.field && <span className="cand-intel-td-sub">{e.field}</span>}
+                </td>
+                <td className="cand-intel-td cand-intel-td-note">{e.institution || "—"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </dd>
     </div>
   );

@@ -1302,6 +1302,10 @@ select.gl-input:focus-visible { outline: 2px solid var(--blue-500); outline-offs
 .cand-intel-col-cap { width: 50%; }
 .cand-intel-col-status { width: 20%; }
 .cand-intel-col-note { width: 30%; }
+/* Education table: Period narrow, Qualification wide, Institution medium. */
+.cand-intel-col-edu-period { width: 18%; }
+.cand-intel-col-edu-qual { width: 47%; }
+.cand-intel-col-edu-inst { width: 35%; }
 .cand-intel-tr { border-top: 1px solid var(--line); }
 .cand-intel-td {
   padding: 10px 12px;
@@ -1309,8 +1313,15 @@ select.gl-input:focus-visible { outline: 2px solid var(--blue-500); outline-offs
   overflow-wrap: anywhere;
   line-height: 1.4;
 }
+.cand-intel-td-period { color: var(--ink-500); white-space: nowrap; }
 .cand-intel-td-title { color: var(--ink-900); font-weight: 500; }
 .cand-intel-td-note { color: var(--ink-500); }
+.cand-intel-td-sub {
+  display: block;
+  font-size: 0.75rem;
+  font-weight: 400;
+  color: var(--ink-500);
+}
 
 /* A status/level pill. Colour is redundant to the label word — never the only
    signal (per the `.jo-quality` accessibility idiom). Amber = exposed/weak;

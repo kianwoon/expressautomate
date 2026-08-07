@@ -49,6 +49,14 @@ def history_text(history: HistoryProfile) -> str:
                 if parts:
                     role_lines.append("      - " + ", ".join(parts))
         lines.append("Roles & decomposed work:\n" + "\n".join(role_lines))
+    if history.education:
+        edu_lines = [
+            f"  - {e.period}: {e.qualification}"
+            + (f" — {e.institution}" if e.institution else "")
+            + (f" ({e.field})" if e.field else "")
+            for e in history.education
+        ]
+        lines.append("Education & qualifications:\n" + "\n".join(edu_lines))
     if history.industries:
         lines.append("Industries: " + ", ".join(history.industries))
     if history.functions:
