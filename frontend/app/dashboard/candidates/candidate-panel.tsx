@@ -34,9 +34,9 @@ import {
 import { Dialog } from "../dialog";
 import { useCandidateIntelligence } from "../candidate-intelligence";
 import {
-  CapabilityStage,
-  CareerStage,
-  ProfileStage,
+  HistoryStage,
+  MarketFitStage,
+  ResidualValueStage,
   type CandidateStageState,
 } from "../candidate-intelligence-panel";
 
@@ -141,13 +141,13 @@ const DELETE_GLYPH = (
 /** The candidate modal's tabs. Details holds the existing editable record;
  *  the other three are the Candidate Intelligence stages — the same shape the
  *  job-order modal's Origin/Work/Person/Search tabs take. */
-type CandidateTab = "details" | "career" | "capability" | "profile";
+type CandidateTab = "details" | "history" | "market" | "residual";
 
 const CANDIDATE_TABS: { key: CandidateTab; label: string }[] = [
   { key: "details", label: "Details" },
-  { key: "career", label: "Career" },
-  { key: "capability", label: "Capability" },
-  { key: "profile", label: "Profile" },
+  { key: "history", label: "History" },
+  { key: "market", label: "Market fit" },
+  { key: "residual", label: "Residual value" },
 ];
 
 export function CandidatePanel({
@@ -262,9 +262,10 @@ function Detail({
 
   async function runAnalysis() {
     await ci.run();
-    // Land on the Career tab so the recruiter watches the result arrive, the
-    // same way the job-order modal switches to the Work tab on run.
-    setActiveTab("career");
+    // Land on the Residual value tab so the recruiter sees the headline v2
+    // output first — the candid current-profile paragraph — the same way the
+    // job-order modal switches to the Work tab on run.
+    setActiveTab("residual");
   }
 
   // The shared state every intelligence stage reads to decide empty vs loading
@@ -537,14 +538,14 @@ function Detail({
               collapsing and re-growing on every tab switch. Mirrors the
               `jo-tab-panel` wrapper in the job-orders modal. */}
           <div ref={panelRef} style={panelMinHeight ? { minHeight: panelMinHeight } : undefined}>
-          {activeTab === "career" && (
-            <CareerStage intelligence={ci.analysis} state={stageState} />
+          {activeTab === "history" && (
+            <HistoryStage intelligence={ci.analysis} state={stageState} />
           )}
-          {activeTab === "capability" && (
-            <CapabilityStage intelligence={ci.analysis} state={stageState} />
+          {activeTab === "market" && (
+            <MarketFitStage intelligence={ci.analysis} state={stageState} />
           )}
-          {activeTab === "profile" && (
-            <ProfileStage intelligence={ci.analysis} state={stageState} />
+          {activeTab === "residual" && (
+            <ResidualValueStage intelligence={ci.analysis} state={stageState} />
           )}
 
           {activeTab === "details" && (
