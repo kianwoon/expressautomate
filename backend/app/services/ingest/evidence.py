@@ -43,6 +43,12 @@ _FLOOR = re.compile(
     r"\b(from|starting(\s+(at|from))?|at\s+least|minimum|min|above|onwards?)\b",
     re.IGNORECASE,
 )
+# The Singapore agency multiplier notation: "$5000 x 12" means 5000/month paid
+# 12 months. The multiplier (N) is small (12/13/14 for AWS/bonus months) and is
+# never a standalone salary figure, so it must be stripped before the general
+# two-amount range logic — which would otherwise read 5000 and 12 as a range.
+# The figure is the first number; "x" with optional spaces separates them.
+_MULTIPLIER = re.compile(r"(?P<figure>\d[\d,]*(?:\.\d+)?)\s*[xX]\s*\d{1,2}\b")
 
 
 @lru_cache(maxsize=8)
@@ -233,6 +239,16 @@ def parse_salary(raw: str) -> tuple[float | None, float | None, str | None]:
     currency = _currency(raw)
     if _REFERENCE.search(raw):
         return None, None, currency
+    # The Singapore agency multiplier notation: "$5000 x 12" means 5000/month
+    # paid 12 months (annual bonus context). The "x N" multiplier is not a
+    # second salary figure — it is the number of months. Handle it before the
+    # general two-amount logic, which would read 5000 and 12 as a range.
+    multiplier = _MULTIPLIER.search(raw)
+    if multiplier:
+        figure = float(multiplier.group("figure").replace(",", ""))
+        if figure < settings.SALARY_MIN_CREDIBLE or figure > settings.SALARY_MAX_CREDIBLE:
+            return None, None, currency
+        return figure, figure, currency
     amounts = _amounts(raw)
     if not amounts:
         return None, None, currency
@@ -315,6 +331,12 @@ def parse_salary_period(raw: str | None) -> str | None:
     """
     if raw is None:
         return None
+    # The Singapore agency multiplier notation "x 12" / "x13" means the figure
+    # is monthly (paid 12 or 13 months). No period word is present, so the
+    # letter-only cleaning below would miss it. Checked first so "x 12" alone
+    # resolves to "month" without a word to match on.
+    if _MULTIPLIER.search(raw):
+        return "month"
     # Letters only, so "p.a.", "per-month" and "  Monthly " all reduce to the
     # word underneath the punctuation the model chose to decorate it with.
     cleaned = "".join(char for char in raw.lower() if char.isalpha())
