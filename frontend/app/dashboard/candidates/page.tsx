@@ -390,7 +390,7 @@ function Workspace({ role }: { role: string }) {
         />
       )}
 
-      <div className="jo-head" style={{ marginTop: 24, display: "flex", gap: 10 }}>
+      <div className="jo-head" style={{ marginTop: 24 }}>
         <button type="button" className="btn btn-primary" onClick={() => setView({ mode: "create" })}>
           Add candidate
         </button>
