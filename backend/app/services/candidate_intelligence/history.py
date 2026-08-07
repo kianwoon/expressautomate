@@ -40,6 +40,15 @@ the work is still valuable today — a later stage does that.
 Rules:
 - Ground every statement in the CV and the verified facts below. Do not invent \
 roles, employers, or dates the record does not state.
+- TENURE DEPTH — this is critical. A new employee typically takes 3 to 6 months \
+just to ramp up before contributing meaningfully. A tenure under 6 months is an \
+onboarding period, not real experience — the person was exposed to the work but \
+was leaving just as they started contributing. A tenure of 6 to 12 months means \
+early contribution, not deep capability. Only tenures of 1-2+ years build real, \
+independent depth in the work. Record every role honestly in `evidence`, but \
+where a tenure was short, say so in the `evidence` field (e.g. "7-month junior \
+stint — onboarding exposure, not independent ownership") so downstream stages \
+do not overcount it as proven capability.
 - Every field described as a "list" or "array" MUST be a JSON array of separate \
 string elements, never a single joined string. For example `trajectory` must be \
 ["Banking", "Insurance"], NOT "Banking → Insurance".

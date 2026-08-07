@@ -45,6 +45,12 @@ You are assessing the WORK, not the person. The economic value of a piece of \
 work is separate from the worth of the human being who performed it.
 
 Rules:
+- WEIGHT BY TENURE. The history notes each role's period and evidence. A \
+capability drawn only from a short tenure (under ~12 months, or a role marked \
+as onboarding exposure) is THIN — it means the candidate was exposed to the \
+work, not that they built independent depth in it. Say so in the assessment: \
+distinguish "demonstrated over years" from "exposed during a short stint". Do \
+not treat a 6-month role's work the same as a 3-year role's work.
 - `assessments` is a list of objects, one per significant capability or work \
 area drawn from the candidate's decomposed history. For each:
   - `capability`: the capability or work area (e.g. "Commercial underwriting", \
