@@ -330,8 +330,8 @@ function Detail({
       className="dlg-modal-wide cand-detail-modal"
       title={
         row.record_status === "merged"
-          ? `${row.full_name} · Merged`
-          : `${row.full_name} · ${STAGE_LABEL[row.pipeline_stage]}`
+          ? "Merged candidate"
+          : "Edit candidate"
       }
     >
       {row.record_status === "merged" ? (
