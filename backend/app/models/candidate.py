@@ -97,6 +97,13 @@ class Candidate(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
     PLACED = "placed"
     STAGES = ("new", "contacted", "submitted", PLACED, "rejected")
 
+    # The placeholder name a CV-upload row carries before the ingest worker
+    # reads its identity. Shared so the list query can hide it, the upload
+    # route can set it, and the ghost-deleter can match it — all from one
+    # definition. Must stay in sync with `api/candidate_documents.
+    # _PLACEHOLDER_NAME` and `workers/ingest_jobs._UNNAMED`.
+    PLACEHOLDER_NAME = "Uploaded CV"
+
     full_name: Mapped[str] = mapped_column(Text, nullable=False)
     email: Mapped[str | None] = mapped_column(String(320))
     # Stored twice on purpose. `phone_raw` is what the recruiter typed and what
