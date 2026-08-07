@@ -215,10 +215,8 @@ async def ingest_candidate_cv(
                 parse_state=row.parse_state,
             )
             return
-        placeholder_id = row.candidate_id
         object_key = row.object_key
         user_id = row.uploaded_by
-        filename = row.filename
         row.parse_state = CandidateDocument.INGESTING
         row.parse_error = None
 
@@ -379,7 +377,9 @@ _ENQUEUE_FAILED = (
 )
 
 
-async def _delete_if_ghost(session, tenant: uuid.UUID, candidate_id: uuid.UUID, *, keep: uuid.UUID) -> None:
+async def _delete_if_ghost(
+    session, tenant: uuid.UUID, candidate_id: uuid.UUID, *, keep: uuid.UUID
+) -> None:
     """Delete a placeholder candidate left empty by re-binding its document.
 
     The route created a minimal candidate row to satisfy the NOT NULL foreign

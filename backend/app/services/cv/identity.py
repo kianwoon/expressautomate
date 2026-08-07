@@ -32,7 +32,7 @@ from app.core.logging import get_logger
 from app.services.cv.schema import ExtractedField
 from app.services.ingest.evidence import verify
 from app.services.ingest.schema import NOT_MENTIONED
-from app.services.llm.client import LLMInvalidJSON, LLMResult, complete_json
+from app.services.llm.client import LLMResult, complete_json
 
 log = get_logger(__name__)
 
