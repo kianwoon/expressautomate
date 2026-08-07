@@ -396,7 +396,7 @@ function Workspace({ role }: { role: string }) {
         </button>
         <button
           type="button"
-          className="btn btn-secondary"
+          className="btn btn-primary"
           onClick={() => setUploadOpen(true)}
         >
           Upload CV
