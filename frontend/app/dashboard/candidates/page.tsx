@@ -127,7 +127,7 @@ function Notice({ heading, body }: { heading: string; body: string }) {
   );
 }
 
-type View = { mode: "list" } | { mode: "create" } | { mode: "edit"; row: Candidate };
+type View = { mode: "list" } | { mode: "create" };
 
 // Read once, on module init of the component — the URL is how the job order
 // handed this page its context, and re-reading it on every render would let
@@ -345,15 +345,10 @@ function Workspace({ role }: { role: string }) {
   const formDialog =
     view.mode === "list" ? null : (
       <CandidateForm
-        row={view.mode === "edit" ? view.row : null}
+        row={null}
         onCancel={() => setView({ mode: "list" })}
         onDone={(saved) => {
           setView({ mode: "list" });
-          // Editing the row the panel is already open on leaves `selectedId`
-          // unchanged, so the detail effect never re-runs and the panel keeps
-          // showing the values from before the edit. The PATCH response is the
-          // full record — the same shape the detail GET returns — so adopt it
-          // directly rather than relying on the selection to change.
           setSelectedId(saved.id);
           setDetail(saved);
           setDetailError(null);
@@ -585,7 +580,6 @@ function Workspace({ role }: { role: string }) {
               key={detail.id}
               row={detail}
               onClose={() => setSelectedId(null)}
-              onEdit={() => setView({ mode: "edit", row: detail })}
               onArchive={doArchive}
               onRestore={doRestore}
               onDelete={canDelete ? doDelete : null}

@@ -3,17 +3,35 @@
 import type { ReactNode } from "react";
 import { useEffect, useRef, useState } from "react";
 
-import { Breakable } from "../../breakable";
 import { CANDIDATES_PATH } from "../../api";
 import { useAuth } from "../../auth";
-import type { Candidate, CandidatePage } from "../candidates";
-import { canEditCandidate, claimCandidate, mergeCandidate, unmergeCandidate } from "../candidates";
-import { Value, day } from "../format";
+import type { Candidate, CandidateCollision, CandidatePage } from "../candidates";
+import {
+  ApiError,
+  canEditCandidate,
+  CandidateCollisionError,
+  claimCandidate,
+  mergeCandidate,
+  unmergeCandidate,
+  updateCandidate,
+} from "../candidates";
+import { Value } from "../format";
 import { CandidateAvatar } from "./candidate-avatar";
 import { CandidateCv } from "./candidate-cv";
 import { CandidateHistory } from "./candidate-history";
 import { CandidateShareDialog } from "./candidate-share";
 import { WhatsappActivityTimeline, WhatsappButton } from "./candidate-whatsapp";
+import {
+  changedFields,
+  FormState,
+  HeldByColleague,
+  NATIONALITY_HINTS,
+  RACES,
+  SEXES,
+  STAGES,
+  toFormState,
+  toSubmitBody,
+} from "./candidate-form";
 import { Dialog } from "../dialog";
 
 /**
@@ -125,7 +143,6 @@ const STAGE_LABEL: Record<Candidate["pipeline_stage"], string> = {
 export function CandidatePanel({
   row,
   onClose,
-  onEdit,
   onArchive,
   onRestore,
   onDelete,
@@ -135,7 +152,6 @@ export function CandidatePanel({
   row: Candidate | null;
   /** Closes the modal. The parent owns the `selectedId`; this just clears it. */
   onClose: () => void;
-  onEdit: () => void;
   onArchive: () => Promise<void>;
   /** Undoes an archive. Archiving is reversible by design, so this is offered
    *  wherever Archive is, just on the other side of the same toggle. */
@@ -159,7 +175,6 @@ export function CandidatePanel({
       key={row.id}
       row={row}
       onClose={onClose}
-      onEdit={onEdit}
       onArchive={onArchive}
       onRestore={onRestore}
       onDelete={onDelete}
@@ -176,7 +191,6 @@ function overridden(row: Candidate, field: string): boolean {
 function Detail({
   row,
   onClose,
-  onEdit,
   onArchive,
   onRestore,
   onDelete,
@@ -185,7 +199,6 @@ function Detail({
 }: {
   row: Candidate;
   onClose: () => void;
-  onEdit: () => void;
   onArchive: () => Promise<void>;
   onRestore: () => Promise<void>;
   onDelete: (() => Promise<void>) | null;
@@ -199,6 +212,43 @@ function Detail({
   // Bumped after a WhatsApp open is logged, so the activity timeline below
   // refetches even though the candidate's own id hasn't changed.
   const [activityVersion, setActivityVersion] = useState(0);
+
+  // Inline-editable fields, edit-on-by-default. The form state mirrors
+  // `CandidateForm`'s exactly (same helpers), so a save sends only the fields
+  // that actually changed — a typo fix does not override-protect the other
+  // thirteen. `initial` is captured at mount and reset after each successful
+  // save, so the diff is always against the last saved record.
+  const [form, setForm] = useState<FormState>(() => toFormState(row));
+  const [initial, setInitial] = useState<FormState>(() => toFormState(row));
+  const [savingFields, setSavingFields] = useState(false);
+  const [collision, setCollision] = useState<CandidateCollision | null>(null);
+
+  function set<K extends keyof FormState>(key: K, value: FormState[K]) {
+    setForm((prev) => ({ ...prev, [key]: value }));
+  }
+
+  async function saveFields() {
+    if (savingFields) return;
+    setSavingFields(true);
+    setError(null);
+    setCollision(null);
+    try {
+      const body = changedFields(toSubmitBody(form), initial);
+      await updateCandidate(row.id, body);
+      // The diff against the last saved state, so the next save compares to
+      // this one rather than to the original record.
+      setInitial(form);
+      onDetailChanged();
+    } catch (err) {
+      if (err instanceof CandidateCollisionError) {
+        setCollision(err.collision);
+      } else {
+        setError(err instanceof ApiError ? err.message : "We could not save that just now.");
+      }
+    } finally {
+      setSavingFields(false);
+    }
+  }
 
   const signedIn = auth.status === "signed-in" ? auth.me.user : null;
   // The server's rule, published on the row — not re-derived from `owner`
@@ -312,56 +362,273 @@ function Detail({
         <MergedInto row={row} onUnmerge={unmerge} busy={busy} />
       ) : (
         <>
+          {/* Editable fields, edit-on-by-default. An input styled with
+              `jo-search` inside the existing `.row` grid reads as the same
+              row, now editable; `disabled={!canEdit}` keeps a share
+              recipient's inputs read-only exactly as the old Edit button was
+              greyed. The `overridden()` marker stays on the label so a
+              recruiter still sees which fields are hand-edited vs
+              import-sourced. */}
           <div className="rows jo-detail-rows">
-            {/* First, above every other field. Who holds this record decides
-                whether the rest of the panel is something you can act on, and
-                a reader who learns it only by pressing a greyed-out button has
-                already been confused once. `owner` ships on every payload
-                (2c6051f), so this always draws — a share recipient reads
-                "Unclaimed" in words, never an empty row. */}
+            <div className="row">
+              <span className="row-k">Name</span>
+              <input
+                className="jo-search"
+                value={form.full_name}
+                onChange={(e) => set("full_name", e.target.value)}
+                disabled={!canEdit || savingFields}
+              />
+            </div>
             <div className="row">
               <span className="row-k">Owner</span>
               <span className={ownerName ? undefined : "muted"}>
                 {ownerName ?? "Unclaimed — anyone at the agency can take this one"}
               </span>
             </div>
-            <OverrideRow row={row} field="email" k="Email" v={row.email} />
-            <OverrideRow row={row} field="phone_raw" k="Phone" v={row.phone_raw} />
-            <OverrideRow row={row} field="location" k="Location" v={row.location} />
-            <OverrideRow
-              row={row}
-              field="years_experience"
-              k="Experience"
-              v={row.years_experience != null ? `${row.years_experience} years` : null}
-            />
-            <OverrideRow
-              row={row}
-              field="expected_salary"
-              k="Expected salary"
-              v={
-                row.expected_salary != null
-                  ? `${row.salary_currency ?? ""} ${row.expected_salary}${
-                      row.salary_period ? ` per ${row.salary_period}` : ""
-                    }`.trim()
-                  : null
-              }
-            />
-            <OverrideRow row={row} field="available_from" k="Available from" v={day(row.available_from)} />
-            <OverrideRow row={row} field="notice_period_raw" k="Notice period" v={row.notice_period_raw} />
-            <OverrideRow row={row} field="employment_type" k="Employment type" v={row.employment_type} />
+            <FieldRow row={row} field="email" k="Email">
+              <input
+                className="jo-search"
+                type="email"
+                value={form.email}
+                onChange={(e) => set("email", e.target.value)}
+                disabled={!canEdit || savingFields}
+              />
+            </FieldRow>
+            <FieldRow row={row} field="phone_raw" k="Phone">
+              <input
+                className="jo-search"
+                value={form.phone_raw}
+                onChange={(e) => set("phone_raw", e.target.value)}
+                disabled={!canEdit || savingFields}
+              />
+            </FieldRow>
+            <FieldRow row={row} field="current_title" k="Title">
+              <input
+                className="jo-search"
+                value={form.current_title}
+                onChange={(e) => set("current_title", e.target.value)}
+                disabled={!canEdit || savingFields}
+              />
+            </FieldRow>
+            <FieldRow row={row} field="current_employer" k="Employer">
+              <input
+                className="jo-search"
+                value={form.current_employer}
+                onChange={(e) => set("current_employer", e.target.value)}
+                disabled={!canEdit || savingFields}
+              />
+            </FieldRow>
+            <FieldRow row={row} field="location" k="Location">
+              <input
+                className="jo-search"
+                value={form.location}
+                onChange={(e) => set("location", e.target.value)}
+                disabled={!canEdit || savingFields}
+              />
+            </FieldRow>
+            <FieldRow row={row} field="years_experience" k="Experience">
+              <input
+                className="jo-search"
+                type="number"
+                value={form.years_experience}
+                onChange={(e) => set("years_experience", e.target.value)}
+                disabled={!canEdit || savingFields}
+              />
+            </FieldRow>
+            <FieldRow row={row} field="expected_salary" k="Expected salary">
+              <input
+                className="jo-search"
+                type="number"
+                value={form.expected_salary}
+                onChange={(e) => set("expected_salary", e.target.value)}
+                disabled={!canEdit || savingFields}
+              />
+            </FieldRow>
+            <div className="row">
+              <span className="row-k">Salary currency</span>
+              <input
+                className="jo-search"
+                value={form.salary_currency}
+                onChange={(e) => set("salary_currency", e.target.value)}
+                disabled={!canEdit || savingFields}
+              />
+            </div>
+            <div className="row">
+              <span className="row-k">Salary period</span>
+              <input
+                className="jo-search"
+                value={form.salary_period}
+                onChange={(e) => set("salary_period", e.target.value)}
+                disabled={!canEdit || savingFields}
+              />
+            </div>
+            <FieldRow row={row} field="available_from" k="Available from">
+              <input
+                className="jo-search"
+                type="date"
+                value={form.available_from}
+                onChange={(e) => set("available_from", e.target.value)}
+                disabled={!canEdit || savingFields}
+              />
+            </FieldRow>
+            <FieldRow row={row} field="notice_period_raw" k="Notice period">
+              <input
+                className="jo-search"
+                value={form.notice_period_raw}
+                onChange={(e) => set("notice_period_raw", e.target.value)}
+                disabled={!canEdit || savingFields}
+              />
+            </FieldRow>
+            <FieldRow row={row} field="employment_type" k="Employment type">
+              <input
+                className="jo-search"
+                value={form.employment_type}
+                onChange={(e) => set("employment_type", e.target.value)}
+                disabled={!canEdit || savingFields}
+              />
+            </FieldRow>
+            <div className="row">
+              <span className="row-k">Stage</span>
+              <select
+                className="jo-search"
+                value={form.pipeline_stage}
+                onChange={(e) => set("pipeline_stage", e.target.value as Candidate["pipeline_stage"])}
+                disabled={!canEdit || savingFields}
+              >
+                {STAGES.map((s) => (
+                  <option key={s.value} value={s.value}>
+                    {s.label}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
 
-          {row.skills && row.skills.length > 0 && (
-            <div className="jo-detail-prose">
-              <span className="row-k">Skills</span>
-              <p className="body">{row.skills.join(", ")}</p>
-            </div>
-          )}
+          {/* Skills + Notes as editable inputs rather than static prose. */}
+          <div className="jo-detail-prose">
+            <span className="row-k">Skills (comma separated)</span>
+            <input
+              className="jo-search"
+              value={form.skills}
+              onChange={(e) => set("skills", e.target.value)}
+              disabled={!canEdit || savingFields}
+            />
+          </div>
 
           <div className="jo-detail-prose">
             <span className="row-k">Notes</span>
-            <OverrideProse row={row} field="notes" text={row.notes} />
+            <textarea
+              className="jo-search"
+              style={{ minHeight: 72 }}
+              value={form.notes}
+              onChange={(e) => set("notes", e.target.value)}
+              disabled={!canEdit || savingFields}
+            />
           </div>
+
+          {/* The two regulatory fieldsets, the same markup the create/edit
+              form uses. Edit-on-by-default means these are reachable without
+              opening a separate form; the PDPA framing carries over
+              verbatim. */}
+          <fieldset className="cand-group cand-group-permit">
+            <legend className="row-k">Work Permit details</legend>
+            <p className="body jo-sub cand-group-note">
+              A Work Permit is granted on these four facts, so the eligibility filter on the
+              candidates list can only use what is recorded here. Leave anything you have not been
+              told as <em>Not recorded</em> — an unknown is treated as unknown, and keeps someone in
+              the list rather than ruling them out.
+            </p>
+            <div className="row">
+              <span className="row-k">Sex</span>
+              <select
+                className="jo-search"
+                value={form.sex}
+                onChange={(e) => set("sex", e.target.value)}
+                disabled={!canEdit || savingFields}
+              >
+                <option value="">Not recorded</option>
+                {SEXES.map((s) => (
+                  <option key={s.label} value={s.value}>
+                    {s.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="row">
+              <span className="row-k">Date of birth</span>
+              <input
+                className="jo-search"
+                type="date"
+                value={form.date_of_birth}
+                onChange={(e) => set("date_of_birth", e.target.value)}
+                disabled={!canEdit || savingFields}
+              />
+            </div>
+            <div className="row">
+              <span className="row-k">Years of formal education</span>
+              <input
+                className="jo-search"
+                type="number"
+                value={form.education_years}
+                onChange={(e) => set("education_years", e.target.value)}
+                disabled={!canEdit || savingFields}
+              />
+            </div>
+            <div className="row">
+              <span className="row-k">Nationality</span>
+              <input
+                className="jo-search"
+                list="cand-detail-nationality-hints"
+                value={form.nationality}
+                onChange={(e) => set("nationality", e.target.value)}
+                disabled={!canEdit || savingFields}
+                placeholder="Two-letter country code, e.g. PH"
+              />
+              <datalist id="cand-detail-nationality-hints">
+                {NATIONALITY_HINTS.map((c) => (
+                  <option key={c.code} value={c.code}>
+                    {c.name}
+                  </option>
+                ))}
+              </datalist>
+            </div>
+          </fieldset>
+
+          <fieldset className="cand-group cand-group-record">
+            <legend className="row-k">For your records only</legend>
+            <p className="body jo-sub cand-group-note">
+              Kept for your own records only. It is never used to rank, match or shortlist anyone, it
+              is never sent to the AI that explains why a candidate fits, and it has no part in the
+              Work Permit check above.
+            </p>
+            <div className="row">
+              <span className="row-k">Race</span>
+              <select
+                className="jo-search"
+                value={form.race}
+                onChange={(e) => set("race", e.target.value)}
+                disabled={!canEdit || savingFields}
+              >
+                <option value="">Not recorded</option>
+                {RACES.map((r) => (
+                  <option key={r.label} value={r.value}>
+                    {r.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            {form.race === "others" && (
+              <div className="row">
+                <span className="row-k">Race detail</span>
+                <input
+                  className="jo-search"
+                  value={form.race_detail}
+                  onChange={(e) => set("race_detail", e.target.value)}
+                  disabled={!canEdit || savingFields}
+                />
+              </div>
+            )}
+          </fieldset>
 
           {/* Below the fields rather than above them, because three of those
               fields — title, employer, experience — are derived from these
@@ -382,20 +649,19 @@ function Detail({
 
       <div className="jo-detail-actions">
         <div className="jo-action-row">
-          {/* DISABLED, never hidden. A share recipient can read this record
-              and cannot change it; an Edit button that simply vanishes for
-              them reads as a page that failed to finish loading, and the one
-              thing they need to understand — that the record belongs to
-              somebody else — is the thing that disappeared with it. Kept in
-              place, greyed, with the sentence below saying why. */}
+          {/* Save replaces the old Edit button: editing is inline now, so the
+              action a recruiter takes on this modal is "save the fields I
+              changed", not "open a separate form". Disabled (never hidden) for
+              a share recipient exactly as Edit was — a vanished button reads
+              as a page that failed to load. */}
           <button
             type="button"
             className="btn btn-primary"
-            onClick={onEdit}
-            disabled={busy || !canEdit}
+            onClick={saveFields}
+            disabled={busy || !canEdit || savingFields}
             title={canEdit ? undefined : "Only the recruiter who holds this candidate can edit it."}
           >
-            Edit
+            {savingFields ? "Saving…" : "Save changes"}
           </button>
           {/* Icon-only from here down, and the name has to come from
               `aria-label` — which doubles as the hover tooltip, so a sighted
@@ -480,6 +746,8 @@ function Detail({
 
       {sharing && <CandidateShareDialog row={row} onClose={() => setSharing(false)} />}
 
+      {collision && <HeldByColleague collision={collision} />}
+
       {error && (
         <p className="body jo-detail-error" role="alert">
           {error}
@@ -489,18 +757,20 @@ function Detail({
   );
 }
 
-/** "Edited by hand — an import will not change this" is the whole reason the
- *  overrides table exists, and is invisible without this marker. */
-function OverrideRow({
+/** A row with the "edited by hand" marker on its label, wrapping an editable
+ *  input the caller supplies. The marker is the whole reason the overrides
+ *  table exists, and is invisible without it — so it stays on the label even
+ *  though the value is now an input rather than static text. */
+function FieldRow({
   row,
   field,
   k,
-  v,
+  children,
 }: {
   row: Candidate;
   field: string;
   k: string;
-  v: string | null;
+  children: ReactNode;
 }) {
   const marked = overridden(row, field);
   return (
@@ -517,26 +787,8 @@ function OverrideRow({
           </span>
         )}
       </span>
-      <span className={v ? undefined : "muted"}>{v ? <Breakable text={v} /> : "Not mentioned"}</span>
+      {children}
     </div>
-  );
-}
-
-function OverrideProse({ row, field, text }: { row: Candidate; field: string; text: string | null }) {
-  const marked = overridden(row, field);
-  return (
-    <p className={text ? "body" : "body muted"}>
-      {marked && (
-        <span
-          title="Edited by hand — an import will not change this"
-          style={{ marginRight: 6, cursor: "help" }}
-          aria-label="Edited by hand — an import will not change this"
-        >
-          ✎
-        </span>
-      )}
-      {text ? <Breakable text={text} /> : "Not mentioned"}
-    </p>
   );
 }
 

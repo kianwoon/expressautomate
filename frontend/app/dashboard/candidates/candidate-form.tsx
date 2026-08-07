@@ -39,13 +39,13 @@ import { Dialog } from "../dialog";
  *  Work Permit check then treats as fact. */
 const NOT_RECORDED = "";
 
-const SEXES: { value: string; label: string }[] = [
+export const SEXES: { value: string; label: string }[] = [
   { value: NOT_RECORDED, label: "Not recorded" },
   { value: "female", label: "Female" },
   { value: "male", label: "Male" },
 ];
 
-const RACES: { value: string; label: string }[] = [
+export const RACES: { value: string; label: string }[] = [
   { value: NOT_RECORDED, label: "Not recorded" },
   { value: "chinese", label: "Chinese" },
   { value: "malay", label: "Malay" },
@@ -64,7 +64,7 @@ const RACES: { value: string; label: string }[] = [
  *  rule these mirror lives in `MDW_APPROVED_SOURCE_COUNTRIES` on the server,
  *  which is what eligibility is actually evaluated against; nothing here is
  *  read back or compared. */
-const NATIONALITY_HINTS: { code: string; name: string }[] = [
+export const NATIONALITY_HINTS: { code: string; name: string }[] = [
   { code: "SG", name: "Singapore" },
   { code: "PH", name: "Philippines" },
   { code: "ID", name: "Indonesia" },
@@ -81,7 +81,7 @@ const NATIONALITY_HINTS: { code: string; name: string }[] = [
   { code: "KR", name: "South Korea" },
 ];
 
-const STAGES: { value: Stage; label: string }[] = [
+export const STAGES: { value: Stage; label: string }[] = [
   { value: "new", label: "New" },
   { value: "contacted", label: "Contacted" },
   { value: "submitted", label: "Submitted" },
@@ -89,7 +89,7 @@ const STAGES: { value: Stage; label: string }[] = [
   { value: "rejected", label: "Rejected" },
 ];
 
-type FormState = {
+export type FormState = {
   full_name: string;
   email: string;
   phone_raw: string;
@@ -114,7 +114,7 @@ type FormState = {
   education_years: string;
 };
 
-function toFormState(row: Candidate | null): FormState {
+export function toFormState(row: Candidate | null): FormState {
   return {
     full_name: row?.full_name ?? "",
     email: row?.email ?? "",
@@ -151,7 +151,7 @@ function orNull(value: string): string | null {
 
 type SubmitBody = ReturnType<typeof toSubmitBody>;
 
-function toSubmitBody(form: FormState) {
+export function toSubmitBody(form: FormState) {
   return {
     full_name: form.full_name.trim(),
     email: orNull(form.email),
@@ -195,7 +195,7 @@ function toSubmitBody(form: FormState) {
  *  the former is required by the backend on every PATCH shape it accepts
  *  in this form, the latter is not override-protected — but every other
  *  field is sent only when the recruiter changed it. */
-function changedFields(next: SubmitBody, initialForm: FormState): Partial<SubmitBody> {
+export function changedFields(next: SubmitBody, initialForm: FormState): Partial<SubmitBody> {
   const before = toSubmitBody(initialForm);
   const out: Partial<SubmitBody> = {
     full_name: next.full_name,
