@@ -107,21 +107,22 @@ export function CapabilityStage({
                     <span className="cand-intel-cap-cat">{entry.category}</span>
                   )}
                 </div>
-                {/* A confidence meter (track + fill) carries the same number the
-                    old "%" did, but a recruiter scanning a dozen capabilities
-                    ranks them by bar length without reading digits. The track
-                    is a flat neutral rail; the fill is the brand blue and grows
-                    with confidence. Color is redundant to width, not the only
-                    signal, so it is safe alongside the label. */}
-                <div
-                  className="cand-intel-cap-meter"
-                  role="img"
-                  aria-label={`${pct}% confidence`}
-                >
+                {/* The confidence number AND the bar, side by side: the number
+                    for precision, the bar for at-a-glance ranking across a dozen
+                    capabilities. The number is fixed-width so the bars all start
+                    from the same left edge and line up vertically. */}
+                <div className="cand-intel-cap-meter">
                   <span
-                    className="cand-intel-cap-fill"
-                    style={{ width: `${pct}%` }}
-                  />
+                    className="cand-intel-cap-meter-track"
+                    role="img"
+                    aria-label={`${pct}% confidence`}
+                  >
+                    <span
+                      className="cand-intel-cap-fill"
+                      style={{ width: `${pct}%` }}
+                    />
+                  </span>
+                  <span className="cand-intel-cap-pct">{pct}%</span>
                 </div>
                 {entry.supporting_evidence && (
                   <p className="cand-intel-cap-evidence">
@@ -209,9 +210,19 @@ function Timeline({
             borders, 12×14 padding) under a candidate-scoped class so it renders
             on a route that does not load `job-orders.css`. */}
         <table className="cand-intel-table">
+          <colgroup>
+            {/* Explicit column tracks. `table-layout: fixed` distributes width
+                from these, not from content — without them every column gets an
+                equal third and a long Period token overflows into Role. Period
+                is a short fixed token (narrow); Role is the line you read along
+                (wide); Domain is a short qualifier. */}
+            <col className="cand-intel-col-period" />
+            <col className="cand-intel-col-role" />
+            <col className="cand-intel-col-domain" />
+          </colgroup>
           <thead>
             <tr>
-              <th className="cand-intel-th cand-intel-th-period">Period</th>
+              <th className="cand-intel-th">Period</th>
               <th className="cand-intel-th">Role</th>
               <th className="cand-intel-th">Domain</th>
             </tr>
