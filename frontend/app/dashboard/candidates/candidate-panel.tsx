@@ -484,13 +484,16 @@ function Detail({
                 disabled={!canEdit || savingFields}
               />
             </Field>
-          </div>
 
-          {/* The two regulatory fieldsets, the same markup the create form
-              uses. They share a row (`.cand-group-permit` spans 2, `.cand-group-
-              record` spans 1) so the modal does not grow by their combined
-              height. Edit-on-by-default means these are reachable without
-              opening a separate form; the PDPA framing carries over verbatim. */}
+            {/* The two regulatory fieldsets live INSIDE `.cand-form`, exactly as
+                they do in the create form (`candidate-form.tsx`): their
+                `cand-group-permit`/`cand-group-record` rules set `grid-column:
+                span 2`/`span 1`, which is meant for this 2-column form grid.
+                Moved out here as siblings of `.cand-form` (direct children of
+                `.dlg-modal`), the `span 2` forced the modal's own grid to grow
+                an implicit second column — which is what made the title sit on
+                the left and every field pile onto the right. Inside the form
+                grid, the span partitions a row the way it was designed to. */}
           <fieldset className="cand-group cand-group-permit">
             <legend className="row-k">Work Permit details</legend>
             <p className="body jo-sub cand-group-note">
@@ -584,6 +587,7 @@ function Detail({
               </Field>
             )}
           </fieldset>
+          </div>
 
           {/* Below the fields rather than above them, because three of those
               fields — title, employer, experience — are derived from these
