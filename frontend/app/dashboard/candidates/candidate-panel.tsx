@@ -131,14 +131,6 @@ const DELETE_GLYPH = (
   </ActionGlyph>
 );
 
-const STAGE_LABEL: Record<Candidate["pipeline_stage"], string> = {
-  new: "New",
-  contacted: "Contacted",
-  submitted: "Submitted",
-  placed: "Placed",
-  rejected: "Rejected",
-};
-
 export function CandidatePanel({
   row,
   onClose,
