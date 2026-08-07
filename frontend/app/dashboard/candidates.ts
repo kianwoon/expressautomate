@@ -43,6 +43,7 @@ import {
   CANDIDATES_PAGE_SIZE_KEY,
   usePersistedPageSize,
 } from "./use-persisted-page-size";
+import type { CandidateSort } from "./candidates/candidates-table";
 
 /**
  * The agency's candidate list, and the one place that talks to the
@@ -291,6 +292,7 @@ function listUrl(
   eligibleFor: string | null,
   scope: Scope,
   limit: number,
+  sort: CandidateSort,
 ): string {
   const params = new URLSearchParams({
     limit: String(limit),
@@ -305,6 +307,11 @@ function listUrl(
   // server's own default, and sending it would put a redundant parameter on
   // every ordinary request.
   if (scope !== "all") params.set("scope", scope);
+  // The sort travels on every request. The server ignores it when an A–Z
+  // initial is active (the index pins the list to that letter by name), so
+  // sending it is harmless there and correct everywhere else.
+  params.set("sort", sort.key);
+  params.set("descending", String(sort.descending));
   return `${CANDIDATES_PATH}?${params.toString()}`;
 }
 
@@ -346,6 +353,9 @@ export type Candidates = {
    *  `filter`: "mine, at the submitted stage" is one question, and a recruiter
    *  must not have to choose which half of it to ask. */
   scope: Scope;
+  /** The column + direction the list is sorted by. Default `{ key: "updated",
+   *  descending: true }` — the fixed order the list had before sorting landed. */
+  sort: CandidateSort;
   /** What is being asked for — distinct from `state.page.limit`, which is what
    *  the server actually used and clamps. Mirrors `limit`/`OPPORTUNITIES_PAGE_SIZE`
    *  in `opportunities.ts`: the select the page-size control renders must show
@@ -376,6 +386,11 @@ export type Candidates = {
   setInitial: (initial: string | null) => void;
   setEligibleFor: (eligibleFor: string | null) => void;
   setScope: (scope: Scope) => void;
+  /** Changes the sort column/direction. Resets to the first page, exactly as
+   *  every other narrowing control does: offset 150 of a 10-row page is page
+   *  sixteen, and re-sorting deep in a list lands on rows that no longer follow
+   *  one another. */
+  setSort: (sort: CandidateSort) => void;
   /** Back to the first page for the same reason `setScope` does: offset 150
    *  of a 10-row page is page sixteen, and of a 50-row page it is past the end
    *  of a 200-row list. Growing the page while standing deep in the list would
@@ -403,6 +418,13 @@ export function useCandidates(initialEligibleFor: string | null = null): Candida
   const [counts, setCounts] = useState<Record<string, number> | null>(ZERO_COUNTS);
   const [initials, setInitials] = useState<string[] | null>(NO_INITIALS);
   const [scope, setScopeRaw] = useState<Scope>("all");
+  // The default `{ key: "updated", descending: true }` is the fixed order the
+  // list had before sorting landed — most-recently-updated first — so a page
+  // that has not touched a column header renders exactly as it always did.
+  const [sort, setSort] = useState<CandidateSort>({
+    key: "updated",
+    descending: true,
+  });
   const [refreshing, setRefreshing] = useState(true);
   const [nonce, setNonce] = useState(0);
 
@@ -416,7 +438,9 @@ export function useCandidates(initialEligibleFor: string | null = null): Candida
     setRefreshing(true);
     (async () => {
       try {
-        const res = await fetch(listUrl(filter, offset, q, initial, eligibleFor, scope, limit), {
+        const res = await fetch(
+          listUrl(filter, offset, q, initial, eligibleFor, scope, limit, sort),
+          {
           credentials: "include",
           headers: { Accept: "application/json" },
           signal: controller.signal,
@@ -453,7 +477,7 @@ export function useCandidates(initialEligibleFor: string | null = null): Candida
       }
     })();
     return () => controller.abort();
-  }, [filter, offset, q, initial, eligibleFor, scope, limit, nonce]);
+  }, [filter, offset, q, initial, eligibleFor, scope, limit, sort, nonce]);
 
   // Changing the filter or the search must reset the page, for the same
   // reason as job orders: staying on offset 150 of five matching rows reads
@@ -488,6 +512,13 @@ export function useCandidates(initialEligibleFor: string | null = null): Candida
     setScopeRaw(next);
     setOffset(0);
   }, []);
+  // Re-sorting from deep in a list lands on rows that no longer follow one
+  // another, so the offset resets — the same reason every other narrowing
+  // control does.
+  const setSortAndReset = useCallback((next: CandidateSort) => {
+    setSort(next);
+    setOffset(0);
+  }, []);
   // A page-size change is a filter like any other for the purposes of the
   // offset, and more sharply than most: standing on offset 150 when the page
   // grows to 50 rows is standing past the end of a 200-row list.
@@ -505,6 +536,8 @@ export function useCandidates(initialEligibleFor: string | null = null): Candida
     initial,
     eligibleFor,
     scope,
+    sort,
+    setSort: setSortAndReset,
     limit,
     counts,
     initials,
