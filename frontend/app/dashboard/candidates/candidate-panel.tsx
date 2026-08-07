@@ -1,7 +1,7 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { CANDIDATES_PATH } from "../../api";
 import { useAuth } from "../../auth";
@@ -237,6 +237,29 @@ function Detail({
   const ci = useCandidateIntelligence(row.id);
   const [activeTab, setActiveTab] = useState<CandidateTab>("details");
 
+  // The Details tab is the tallest (it carries the editable fields, activity
+  // timeline and merge picker). Once measured, its height is locked as the
+  // panel's min-height so switching to a shorter Career/Capability/Profile tab
+  // does not collapse the modal — every tab renders against the same canvas,
+  // and the height stops jumping. A ResizeObserver tracks Details' height as
+  // it settles (the activity timeline arrives after mount and grows the panel),
+  // and only while Details is the active tab. The locked height persists across
+  // tab switches. Mirrors the same mechanism in `detail-panel.tsx`.
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  const [panelMinHeight, setPanelMinHeight] = useState<number | null>(null);
+  useLayoutEffect(() => {
+    if (activeTab !== "details" || !panelRef.current) return;
+    const el = panelRef.current;
+    const measure = () => {
+      const h = el.scrollHeight;
+      if (h > 0) setPanelMinHeight(h);
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [activeTab]);
+
   async function runAnalysis() {
     await ci.run();
     // Land on the Career tab so the recruiter watches the result arrive, the
@@ -386,7 +409,7 @@ function Detail({
             {row.record_status !== "merged" && (
               <button
                 type="button"
-                className="cand-detail-run"
+                className="btn btn-primary"
                 onClick={() => void runAnalysis()}
                 disabled={ci.starting || ci.waiting}
                 title="Run the candidate intelligence analysis"
@@ -509,6 +532,11 @@ function Detail({
             ))}
           </div>
 
+          {/* One container for every tab's content. `minHeight` is the Details
+              height (measured once it renders), locked so the modal stops
+              collapsing and re-growing on every tab switch. Mirrors the
+              `jo-tab-panel` wrapper in the job-orders modal. */}
+          <div ref={panelRef} style={panelMinHeight ? { minHeight: panelMinHeight } : undefined}>
           {activeTab === "career" && (
             <CareerStage intelligence={ci.analysis} state={stageState} />
           )}
@@ -796,6 +824,7 @@ function Detail({
           <MergePicker candidateId={row.id} onMerged={onChanged} />
             </>
           )}
+          </div>
         </>
       )}
 
