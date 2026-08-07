@@ -284,6 +284,18 @@ class Settings(BaseSettings):
     # matching `tesseract-ocr-<code>` in the image. Carried as one string so the
     # orchestrator receives it verbatim.
     CV_OCR_LANGUAGES: str = "eng"
+    # --- Legacy document conversion (.doc → .docx) ---
+    # On by default, because LibreOffice headless is installed in the Dockerfile
+    # and a `.doc` refusal is a real-world breakage (agencies hold Word 97-2003
+    # CVs). The gate is ANDed with a binary probe in `conversion_configured()`
+    # so a deployment without LibreOffice degrades to the honest refusal with a
+    # named cause rather than a crash.
+    CV_CONVERT_ENABLED: bool = True
+    # Wall clock one conversion may take. LibreOffice is a full office suite
+    # doing a real document load, so it is slower than a sniff — but a CV is a
+    # handful of pages, and this is the bound that stops a corrupt or hostile
+    # file holding a worker slot indefinitely.
+    CV_CONVERT_TIMEOUT_SECONDS: float = Field(default=60.0, gt=0)
 
     # --- Candidate spreadsheet imports ---
     # The largest spreadsheet the API will accept, counted as the bytes
@@ -1107,6 +1119,21 @@ class Settings(BaseSettings):
         from app.services.cv.ocr import ocr_available
 
         return ocr_available()
+
+    def conversion_configured(self) -> bool:
+        """Can this process convert legacy Office documents (.doc) to .docx?
+
+        ANDs the flag with a binary probe (`converter_available`) so a flag set
+        without LibreOffice degrades to the honest refusal with a named cause
+        rather than a crash inside `soffice`. On by default because the
+        Dockerfile installs LibreOffice and a `.doc` refusal is a real-world
+        breakage; flip `CV_CONVERT_ENABLED=false` to disable.
+        """
+        if not self.CV_CONVERT_ENABLED:
+            return False
+        from app.services.cv.convert import converter_available
+
+        return converter_available()
 
     def graph_configured(self) -> bool:
         """Can this process actually reach Graph?

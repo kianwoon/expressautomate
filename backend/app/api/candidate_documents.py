@@ -34,6 +34,7 @@ from app.core.config import settings
 from app.core.logging import get_logger
 from app.db.rls import tenant_session
 from app.models.candidate import Candidate, CandidateDocument
+from app.services.cv.convert import is_legacy_office
 from app.services.cv.text import sniff
 from app.services.storage.r2 import BodyStore, R2BodyStore, document_key
 from app.services.visibility import (
@@ -52,6 +53,8 @@ router = APIRouter(tags=["candidates"])
 _MIME_FOR_KIND = {
     "pdf": "application/pdf",
     "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    # Legacy Word: stored as-is, converted to .docx inside the worker.
+    "doc": "application/msword",
 }
 
 # Postgres would raise on a longer value anyway; truncating here means an
@@ -206,6 +209,11 @@ async def upload_document(
     # The bytes decide, not the extension and not the Content-Type. 415 rather
     # than 400: the request was well formed, the media type is what we refuse.
     kind = sniff(content)
+    if kind is None and is_legacy_office(content):
+        # A .doc (Word 97-2003) is stored as-is and converted to .docx inside the
+        # worker, where LibreOffice runs. Accepted here so the job sees it; the
+        # route never shells out itself.
+        kind = "doc"
     if kind is None:
         raise HTTPException(
             status_code=415,
@@ -304,6 +312,8 @@ async def upload_document_no_candidate(
     content = await _read_within_limit(file)
 
     kind = sniff(content)
+    if kind is None and is_legacy_office(content):
+        kind = "doc"
     if kind is None:
         raise HTTPException(
             status_code=415,

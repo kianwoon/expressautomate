@@ -27,6 +27,7 @@ from app.core.config import settings
 from app.core.logging import get_logger
 from app.db.rls import tenant_session
 from app.models.candidate import CandidateDocument
+from app.services.cv.convert import ConversionUnavailable, is_legacy_office, maybe_convert
 from app.services.cv.extract import extract_cv
 from app.services.cv.ocr import OCRUnavailable, ocr_text
 from app.services.cv.persist import persist_cv
@@ -161,6 +162,31 @@ async def parse_candidate_cv(
         return
 
     kind = sniff(data)
+    if kind is None and is_legacy_office(data):
+        # A .doc (Word 97-2003) is not the .docx zip `sniff` recognises, but it
+        # is a real Office document the converter can rescue. Convert and
+        # re-sniff; the rest of the pipeline reads the result as an ordinary
+        # .docx. A missing converter surfaces as the same refusal, named.
+        if settings.conversion_configured():
+            try:
+                data, kind = await maybe_convert(data, kind=kind)
+            except ConversionUnavailable as exc:
+                await _terminal(
+                    tenant,
+                    document,
+                    CandidateDocument.UNREADABLE,
+                    f"This legacy document could not be converted: {exc}",
+                )
+                return
+        else:
+            await _terminal(
+                tenant,
+                document,
+                CandidateDocument.UNREADABLE,
+                "This is a legacy Word (.doc) file. Save it as .docx or PDF and "
+                "upload it again — the reader handles those directly.",
+            )
+            return
     if kind is None:
         await _terminal(
             tenant,
