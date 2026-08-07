@@ -346,6 +346,10 @@ class Settings(BaseSettings):
     # `EXTRACTION_MODEL_FAST` at call time (see `job_intelligence.understand.model`),
     # so a deployment that names only the one model still runs the analysis.
     JOB_INTELLIGENCE_MODEL: str = ""
+    # The model the Candidate Intelligence engine asks. Same fallback idiom as
+    # `JOB_INTELLIGENCE_MODEL` (see `candidate_intelligence.career.model`): an
+    # empty value defaults to the fast extraction model at call time.
+    CANDIDATE_INTELLIGENCE_MODEL: str = ""
 
     # --- Cerebras (the classifier and extraction) ---
     # The gate is the highest-volume call in the system — one per email, on
@@ -961,6 +965,13 @@ class Settings(BaseSettings):
     # Same reasoning as `SOURCING_MAX_ATTEMPTS`: a crashed worker deserves a
     # retry, a job order that crashes the pipeline every time does not.
     JOB_INTELLIGENCE_MAX_ATTEMPTS: int = Field(default=3, gt=0)
+    # The Candidate Intelligence analysis: three Cerebras calls (career →
+    # capability → profile) in the worker, the same shape Job Intelligence
+    # takes. Same timeout ceiling (LLM work bounded by model latency) and the
+    # same attempt cap (a candidate that crashes the pipeline every time
+    # reaches `failed` rather than looping forever).
+    CANDIDATE_INTELLIGENCE_JOB_TIMEOUT_SECONDS: float = Field(default=600.0, gt=0)
+    CANDIDATE_INTELLIGENCE_MAX_ATTEMPTS: int = Field(default=3, gt=0)
 
     @field_validator("MS_IDENTITY_SCOPES", "MS_MAILBOX_SCOPES")
     @classmethod

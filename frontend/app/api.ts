@@ -434,6 +434,16 @@ export function candidateArchivePath(id: string): string {
   return `${candidatePath(id)}/archive`;
 }
 
+/**
+ * The Candidate Intelligence analysis for one candidate: POST runs the
+ * three-stage analysis (career → capability → profile) and stores it, GET reads
+ * the stored analysis back. Mirrors `opportunityIntelligencePath` — one
+ * intelligence idiom in this codebase, not two.
+ */
+export function candidateIntelligencePath(id: string): string {
+  return `${candidatePath(id)}/intelligence`;
+}
+
 /** Who else can see this candidate: GET lists, POST shares it. Mirrors
  *  `opportunitySharesPath` — one sharing idiom in this codebase, not two, and
  *  the server module says the same about itself. */

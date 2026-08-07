@@ -131,6 +131,17 @@ EDIT_ONLY_EXEMPT: dict[str, dict[str, str]] = {
             "guard — claiming is the act that creates edit rights."
         ),
     },
+    # allow-hardcode: prose for a human reading a failure, not logic — only
+    # the keys are matched on.
+    "candidate_intelligence.py": {
+        "run_candidate_intelligence_route": (
+            "The row it writes is a `candidate_intelligence` row, not the "
+            "candidate. A share recipient may run an analysis on a candidate "
+            "shown to them — that is visibility, not edit rights, the same rule "
+            "the Job Intelligence route applies. Both routes still load the "
+            "candidate through the read guard."
+        ),
+    },
 }
 
 

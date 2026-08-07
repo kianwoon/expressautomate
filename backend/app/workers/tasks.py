@@ -85,6 +85,13 @@ _STALLED_RUNS = text(
 _STALLED_INTELLIGENCE = text(
     "SELECT * FROM stalled_job_intelligence(:pending_minutes, :working_minutes)"
 )
+# The Candidate Intelligence quarter of `rescan_stuck`, for the same reason
+# `_STALLED_INTELLIGENCE` exists: `candidate_intelligence` carries FORCE ROW
+# LEVEL SECURITY and this sweep sets no `app.tenant_id`, so a direct read
+# matches nothing.
+_STALLED_CANDIDATE_INTEL = text(
+    "SELECT * FROM stalled_candidate_intelligence(:pending_minutes, :working_minutes)"
+)
 _DUE_FOR_RENEWAL = text("SELECT * FROM subscriptions_due_for_renewal(:margin)")
 _ACTIVE_MAILBOXES = text("SELECT * FROM active_mailboxes()")
 _MISSING_SUBSCRIPTION = text("SELECT * FROM mailboxes_without_subscription()")
@@ -154,11 +161,12 @@ async def rescan_stuck() -> int:
     mid-flight loses no email" is simply false.
 
     Four kinds of row, one function. Email messages, uploaded CVs, candidate
-    imports, sourcing runs and Job Intelligence analyses have nothing in common
-    except the way they are stranded — a lost enqueue, or a worker killed
-    mid-job — and that is the whole question this answers. A second scheduled
-    task would be a second thing to forget to schedule, and the sweep that was
-    forgotten is invisible until somebody notices a CV that has said "parsing"
+    imports, sourcing runs, Job Intelligence analyses and Candidate Intelligence
+    analyses have nothing in common except the way they are stranded — a lost
+    enqueue, or a worker killed mid-job — and that is the whole question this
+    answers. A second scheduled task would be a second thing to forget to
+    schedule, and the sweep that was forgotten is invisible until somebody
+    notices a CV that has said "parsing"
     for a week.
     """
     ages = {
@@ -171,6 +179,9 @@ async def rescan_stuck() -> int:
         imports = (await session.execute(_STALLED_IMPORTS, ages)).all()
         runs = (await session.execute(_STALLED_RUNS, ages)).all()
         intelligence = (await session.execute(_STALLED_INTELLIGENCE, ages)).all()
+        candidate_intel = (
+            await session.execute(_STALLED_CANDIDATE_INTEL, ages)
+        ).all()
 
     requeued = 0
     for row in rows:
@@ -248,6 +259,20 @@ async def rescan_stuck() -> int:
             "run_job_intelligence",
             tenant_id=str(row.tenant_id),
             opportunity_id=str(row.opportunity_id),
+            row_id=str(row.id),
+        ):
+            requeued += 1
+
+    for row in candidate_intel:
+        # `run_candidate_intelligence` accepts `running` as well as `pending`,
+        # for the same reason `run_job_intelligence` does: a killed worker
+        # mid-analysis is picked up rather than stranded. The conditional claim
+        # in the job is what prevents two workers proceeding, and `attempts` is
+        # what bounds the loop for a job that crashes every time.
+        if await enqueue(
+            "run_candidate_intelligence",
+            tenant_id=str(row.tenant_id),
+            candidate_id=str(row.candidate_id),
             row_id=str(row.id),
         ):
             requeued += 1

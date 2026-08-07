@@ -17,6 +17,7 @@ from app.api import (
     buddies,
     candidate_documents,
     candidate_imports,
+    candidate_intelligence,
     candidate_merge,
     candidate_ownership,
     candidate_roles,
@@ -187,6 +188,12 @@ api.include_router(candidate_merge.router)
 # rather than live — but declaring it first keeps it that way, the same
 # convention every sibling above follows.
 api.include_router(candidate_documents.router)
+# Before `candidates`, deliberately: this router owns the LITERAL path
+# `/candidates/{candidate_id}/intelligence`. Declared after
+# `/candidates/{candidate_id}`, that literal is never reached — FastAPI hands
+# `intelligence` to the generic route as a path parameter. The same shadowing
+# reason `job_intelligence` is declared before `opportunities`.
+api.include_router(candidate_intelligence.router)
 api.include_router(candidates.router)
 api.include_router(candidate_roles.router)
 api.include_router(candidates_avatar.router)

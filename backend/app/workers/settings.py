@@ -16,6 +16,7 @@ from arq.worker import func
 from app.core.config import settings
 from app.core.logging import configure_logging
 from app.services.graph.client import warn_if_unconfigured
+from app.workers.candidate_intelligence_jobs import run_candidate_intelligence
 from app.workers.cv_jobs import parse_candidate_cv
 from app.workers.delivery_jobs import deliver_notification
 from app.workers.discovery_jobs import run_client_discovery
@@ -169,6 +170,16 @@ class WorkerSettings:
             run_job_intelligence,
             name="run_job_intelligence",
             timeout=settings.JOB_INTEL_JOB_TIMEOUT_SECONDS,
+        ),
+        # The Candidate Intelligence analysis: three Cerebras calls (career →
+        # capability → profile) in the worker, the same shape Job Intelligence
+        # takes. `name` is explicit for the same reason as its siblings:
+        # producers enqueue the string "run_candidate_intelligence", and a
+        # wrapper under any other name fails on the far side of the queue.
+        func(
+            run_candidate_intelligence,
+            name="run_candidate_intelligence",
+            timeout=settings.CANDIDATE_INTELLIGENCE_JOB_TIMEOUT_SECONDS,
         ),
     ]
     # Every function above but the two classification jobs ends in a Graph call. Said once

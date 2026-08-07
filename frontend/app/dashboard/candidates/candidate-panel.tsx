@@ -32,6 +32,13 @@ import {
   toSubmitBody,
 } from "./candidate-form";
 import { Dialog } from "../dialog";
+import { useCandidateIntelligence } from "../candidate-intelligence";
+import {
+  CapabilityStage,
+  CareerStage,
+  ProfileStage,
+  type CandidateStageState,
+} from "../candidate-intelligence-panel";
 
 /**
  * One candidate in full, beside the list.
@@ -131,6 +138,18 @@ const DELETE_GLYPH = (
   </ActionGlyph>
 );
 
+/** The candidate modal's tabs. Details holds the existing editable record;
+ *  the other three are the Candidate Intelligence stages — the same shape the
+ *  job-order modal's Origin/Work/Person/Search tabs take. */
+type CandidateTab = "details" | "career" | "capability" | "profile";
+
+const CANDIDATE_TABS: { key: CandidateTab; label: string }[] = [
+  { key: "details", label: "Details" },
+  { key: "career", label: "Career" },
+  { key: "capability", label: "Capability" },
+  { key: "profile", label: "Profile" },
+];
+
 export function CandidatePanel({
   row,
   onClose,
@@ -209,6 +228,34 @@ function Detail({
   const [initial, setInitial] = useState<FormState>(() => toFormState(row));
   const [savingFields, setSavingFields] = useState(false);
   const [collision, setCollision] = useState<CandidateCollision | null>(null);
+
+  // Candidate Intelligence: the analysis runs as a background job, exactly as
+  // the Job Intelligence analysis does on the job-order modal. The hook owns
+  // the run/starting/waiting/poll state; the header button calls `ci.run()`
+  // and the three stage tabs read `ci.analysis`. Called once here so the
+  // header and the tabs share one source of truth.
+  const ci = useCandidateIntelligence(row.id);
+  const [activeTab, setActiveTab] = useState<CandidateTab>("details");
+
+  async function runAnalysis() {
+    await ci.run();
+    // Land on the Career tab so the recruiter watches the result arrive, the
+    // same way the job-order modal switches to the Work tab on run.
+    setActiveTab("career");
+  }
+
+  // The shared state every intelligence stage reads to decide empty vs loading
+  // vs failed. Derived once from the hook so the three stage panels render
+  // consistently. Mirrors `stageState` in `detail-panel.tsx`.
+  const stageState: CandidateStageState = {
+    hasAnalysis: !!ci.analysis,
+    waiting: ci.waiting,
+    failed: ci.view !== null && "state" in ci.view && ci.view.state === "failed",
+    failureReason:
+      ci.view !== null && "failure_reason" in ci.view ? ci.view.failure_reason : null,
+    loading: ci.phase.status === "loading",
+    readError: ci.phase.status === "error" ? ci.phase.message : null,
+  };
 
   function set<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -339,6 +386,23 @@ function Detail({
             {row.record_status !== "merged" && (
               <button
                 type="button"
+                className="cand-detail-run"
+                onClick={() => void runAnalysis()}
+                disabled={ci.starting || ci.waiting}
+                title="Run the candidate intelligence analysis"
+              >
+                {ci.starting
+                  ? "Starting…"
+                  : ci.waiting
+                    ? "Analysing…"
+                    : ci.analysis
+                      ? "Re-run analysis"
+                      : "Run analysis"}
+              </button>
+            )}
+            {row.record_status !== "merged" && (
+              <button
+                type="button"
                 className="btn btn-primary"
                 onClick={saveFields}
                 disabled={busy || !canEdit || savingFields}
@@ -422,6 +486,41 @@ function Detail({
         <MergedInto row={row} onUnmerge={unmerge} busy={busy} />
       ) : (
         <>
+          {ci.runError && (
+            <p className="body jo-detail-error" role="alert">
+              {ci.runError}
+            </p>
+          )}
+          {/* The tab bar mirrors the job-order modal's Origin/Work/Person/Search
+              strip. Details is the existing editable record (default); the other
+              three are the Candidate Intelligence stages. */}
+          <div className="cand-tabs" role="tablist" aria-label="Candidate view">
+            {CANDIDATE_TABS.map((t) => (
+              <button
+                key={t.key}
+                type="button"
+                role="tab"
+                aria-selected={activeTab === t.key}
+                className={activeTab === t.key ? "cand-tab cand-tab-on" : "cand-tab"}
+                onClick={() => setActiveTab(t.key)}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+
+          {activeTab === "career" && (
+            <CareerStage intelligence={ci.analysis} state={stageState} />
+          )}
+          {activeTab === "capability" && (
+            <CapabilityStage intelligence={ci.analysis} state={stageState} />
+          )}
+          {activeTab === "profile" && (
+            <ProfileStage intelligence={ci.analysis} state={stageState} />
+          )}
+
+          {activeTab === "details" && (
+            <>
           {/* Editable fields in the same multi-column grid the create form
               uses (`.cand-form`), not the single-column `.rows` ribbon: a
               wide modal with 15+ fields stacked one-per-row was a tall scroll
@@ -695,6 +794,8 @@ function Detail({
           <WhatsappActivityTimeline row={row} version={activityVersion} />
 
           <MergePicker candidateId={row.id} onMerged={onChanged} />
+            </>
+          )}
         </>
       )}
 
