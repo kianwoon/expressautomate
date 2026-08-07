@@ -1185,38 +1185,12 @@ select.gl-input:focus-visible { outline: 2px solid var(--blue-500); outline-offs
   flex: 0 0 auto;
 }
 
-/* ---- Candidate modal: header run button + tab bar + intelligence stages ----
+/* ---- Candidate modal: tab bar + intelligence stages ----
    Self-contained here (not in job-orders.css) because the candidates route
-   does not load job-orders.css. The visual mirrors `.jo-detail-run`,
-   `.jo-tab`/`.jo-tab-on` and the `.jo-intel-*` stage classes — the same
-   intelligence UI, under candidate-scoped names so it renders on this route. */
-
-/* The Run-analysis action beside the title. Self-contained — does NOT use
-   `.btn`, so there is no cascade fight with `.btn`'s padding. A compact
-   gradient pill (~28px tall) using the brand gradient, sized to its label
-   width. Mirrors `.jo-detail-run` exactly. */
-.cand-detail-run {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 auto;
-  align-self: center;
-  font: inherit;
-  font-size: 0.8125rem;
-  font-weight: 600;
-  line-height: 1.2;
-  padding: 5px 10px;
-  border: 1px solid transparent;
-  border-radius: 10px;
-  background: linear-gradient(135deg, #1d4ed8 0%, #14a89a 100%);
-  color: #fff;
-  cursor: pointer;
-  white-space: nowrap;
-  transition: filter 0.15s ease;
-}
-.cand-detail-run:hover { filter: brightness(1.08); }
-.cand-detail-run:disabled { opacity: 0.55; cursor: default; }
-.cand-detail-run:focus-visible { outline: 2px solid #2563eb; outline-offset: 2px; }
+   does not load job-orders.css. The Run-analysis button reuses the global
+   `.btn .btn-primary` (same as the Save button beside it) so the two match in
+   height; the tab bar and stage classes mirror `.jo-tab`/`.jo-tab-on` and the
+   `.jo-intel-*` stage classes under candidate-scoped names. */
 
 /* The four-section tab bar. Mirrors `.jo-tabs` / `.jo-tab` / `.jo-tab-on`. */
 .cand-tabs {
