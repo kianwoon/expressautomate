@@ -6,8 +6,7 @@ previous result rather than accumulating a history. The "Candidate analysis"
 button in the candidate modal asks for the analysis and reads it back, and a
 re-ask replaces what the recruiter saw before.
 
-The five JSONB columns (`history` / `automation` / `benchmark` / `gaps` /
-`residual`) mirror the five Pydantic stages in
+The two JSONB columns (`work` / `assessment`) mirror the two pipeline stages in
 `app.services.candidate_intelligence.schema`, stored verbatim from the model's
 answer. They are JSONB rather than normalised columns for the same reason
 `JobIntelligence`'s three are: they are read as a unit and never queried on
@@ -78,17 +77,13 @@ class CandidateIntelligence(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
         Integer, nullable=False, default=0, server_default="0"
     )
 
-    # The five v2 residual-value model stages (design doc v2), one JSONB column
-    # per pipeline stage: history, automation, benchmark, gaps, residual. Stored
-    # verbatim from the model's answer. They are JSONB rather than normalised
-    # columns because they are read as a unit and never queried on individually.
-    history: Mapped[dict | None] = mapped_column(JSONB)
-    automation: Mapped[dict | None] = mapped_column(JSONB)
-    benchmark: Mapped[dict | None] = mapped_column(JSONB)
-    gaps: Mapped[dict | None] = mapped_column(JSONB)
-    residual: Mapped[dict | None] = mapped_column(JSONB)
+    # The two v2 stages: `work` (decomposed work units + education) and
+    # `assessment` (the sharp synthesis). Stored verbatim from the model's
+    # answer. JSONB because they are read as a unit, never queried individually.
+    work: Mapped[dict | None] = mapped_column(JSONB)
+    assessment: Mapped[dict | None] = mapped_column(JSONB)
 
-    # The model name recorded on the *last* of the five calls. The five calls
+    # The model name recorded on the *last* call. Two calls share one model.
     # normally share one model, so one name suffices.
     model_name: Mapped[str | None] = mapped_column(Text)
     prompt_tokens: Mapped[int | None] = mapped_column(Integer)

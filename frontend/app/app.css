@@ -1223,10 +1223,39 @@ select.gl-input:focus-visible { outline: 2px solid var(--blue-500); outline-offs
   border-radius: 4px;
 }
 
-/* The intelligence stage panels. Mirrors the `.jo-intel-*` classes so a
-   candidate's analysis reads the same way a job order's does. */
+/* The Candidate Intelligence v2 panels: Assessment (sharp read), Work
+   (decomposed work units), Education. Self-contained here because the
+   candidates route does not load job-orders.css. */
 .cand-intel-note { margin-top: 8px; font-size: 0.8125rem; color: var(--ink-500); max-width: 72ch; }
 .cand-intel-error { margin-top: 8px; font-size: 0.8125rem; color: var(--amber-700); max-width: 72ch; }
+
+/* The headline — the one-line blunt read. Large, bold, first thing seen. */
+.cand-intel-headline {
+  margin: 0 0 10px;
+  font-size: 1.0625rem;
+  font-weight: 650;
+  color: var(--ink-900);
+  line-height: 1.4;
+}
+.cand-intel-summary {
+  margin: 0 0 16px;
+  font-size: 0.875rem;
+  color: var(--ink-700);
+  line-height: 1.55;
+}
+
+/* The stat grid: Work level / Decision authority / AI exposure / etc. */
+.cand-intel-stats {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px 16px;
+  margin: 0 0 16px;
+}
+.cand-intel-stat { display: grid; gap: 2px; }
+.cand-intel-stat-label { font-size: 0.75rem; color: var(--ink-500); font-weight: 600; }
+.cand-intel-stat-value { font-size: 0.875rem; color: var(--ink-900); margin: 0; line-height: 1.4; }
+
+/* A stage section inside a tab (bordered, titled). */
 .cand-intel-stage {
   border-top: 1px solid var(--line);
   padding-top: 14px;
@@ -1243,41 +1272,79 @@ select.gl-input:focus-visible { outline: 2px solid var(--blue-500); outline-offs
   font-weight: 650;
   color: var(--ink-700);
 }
-.cand-intel-fields {
-  display: grid;
-  gap: 8px 22px;
-  margin: 0;
-}
-.cand-intel-field {
-  display: grid;
-  gap: 2px;
-}
-.cand-intel-dt {
-  font-size: 0.8125rem;
-  color: var(--ink-500);
-}
-.cand-intel-field dd {
-  margin: 0;
-  font-size: 0.875rem;
-  color: var(--ink-900);
-}
-.cand-intel-list {
-  margin: 0;
-  padding-left: 1.1em;
-  display: grid;
-  gap: 4px;
-}
-.cand-intel-list li {
-  font-size: 0.875rem;
-  line-height: 1.4;
-}
+.cand-intel-section-body { display: grid; gap: 8px; }
 
-/* The gap-analysis table. Mirrors the dashboard `.jo-table` look (header strip
-   with `surface-alt`, row borders, 12×14 padding) but is kept self-contained
-   here under a candidate-scoped class because the candidates route does not
-   load `job-orders.css`. Three columns: Capability / Status / Note. Capability
-   is the line a recruiter reads along; Status holds a coloured pill; Note
-   explains the verdict. */
+/* A scarce/depreciated capability card. */
+.cand-intel-cap {
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface, #fff);
+}
+.cand-intel-cap-name { font-size: 0.875rem; color: var(--ink-900); font-weight: 600; }
+.cand-intel-cap-reason { margin: 4px 0 0; font-size: 0.8125rem; color: var(--ink-500); line-height: 1.4; }
+
+/* An unproven claim — the interview question. */
+.cand-intel-unproven {
+  padding: 10px 12px;
+  border: 1px solid var(--amber-050);
+  border-left: 3px solid var(--amber-700);
+  border-radius: 8px;
+  background: var(--surface, #fff);
+}
+.cand-intel-unproven-claim { margin: 0; font-size: 0.8125rem; color: var(--ink-700); font-style: italic; }
+.cand-intel-unproven-question { margin: 4px 0 0; font-size: 0.8125rem; color: var(--ink-900); font-weight: 500; }
+
+/* Role header in the Work tab. */
+.cand-intel-role-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+.cand-intel-role-period { font-size: 0.75rem; color: var(--ink-500); flex: 0 0 auto; }
+.cand-intel-role-title { font-size: 0.9375rem; color: var(--ink-900); font-weight: 600; }
+.cand-intel-role-domain { font-size: 0.75rem; color: var(--ink-500); }
+.cand-intel-role-scope { margin: 0 0 8px; font-size: 0.8125rem; color: var(--ink-700); }
+
+/* A work unit in the Work tab. */
+.cand-intel-workunit {
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface, #fff);
+  margin-bottom: 8px;
+}
+.cand-intel-workunit-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.cand-intel-workunit-work { font-size: 0.875rem; color: var(--ink-900); font-weight: 500; }
+.cand-intel-workunit-claim { margin: 4px 0 0; font-size: 0.75rem; color: var(--ink-500); font-style: italic; }
+.cand-intel-workunit-note { margin: 4px 0 0; font-size: 0.75rem; color: var(--amber-700); }
+.cand-intel-workunit-tags { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+.cand-intel-workunit-residual { margin: 6px 0 0; font-size: 0.75rem; color: var(--ink-500); }
+
+/* Pills — colour redundant to label word (accessibility). */
+.cand-intel-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.6875rem;
+  font-weight: 650;
+  padding: 2px 7px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.cand-intel-pill-amber { color: var(--amber-700); background: var(--amber-050); }
+.cand-intel-pill-teal { color: var(--teal-500); background: var(--teal-050); }
+.cand-intel-pill-blue { color: var(--blue-600); background: var(--blue-050); }
+.cand-intel-pill-grey { color: var(--ink-700); background: var(--surface-alt); }
+
+/* Education table. */
 .cand-intel-table {
   width: 100%;
   border-collapse: collapse;
@@ -1296,13 +1363,6 @@ select.gl-input:focus-visible { outline: 2px solid var(--blue-500); outline-offs
   text-transform: uppercase;
   letter-spacing: 0.02em;
 }
-/* Column widths live on <col> in a colgroup so `table-layout: fixed` honors
-   them. Capability ~50% (the line you read along), Status ~20% (a pill),
-   Note ~30%. */
-.cand-intel-col-cap { width: 50%; }
-.cand-intel-col-status { width: 20%; }
-.cand-intel-col-note { width: 30%; }
-/* Education table: Period narrow, Qualification wide, Institution medium. */
 .cand-intel-col-edu-period { width: 18%; }
 .cand-intel-col-edu-qual { width: 47%; }
 .cand-intel-col-edu-inst { width: 35%; }
@@ -1316,148 +1376,9 @@ select.gl-input:focus-visible { outline: 2px solid var(--blue-500); outline-offs
 .cand-intel-td-period { color: var(--ink-500); white-space: nowrap; }
 .cand-intel-td-title { color: var(--ink-900); font-weight: 500; }
 .cand-intel-td-note { color: var(--ink-500); }
-.cand-intel-td-sub {
-  display: block;
-  font-size: 0.75rem;
-  font-weight: 400;
-  color: var(--ink-500);
-}
+.cand-intel-td-sub { display: block; font-size: 0.75rem; font-weight: 400; color: var(--ink-500); }
 
-/* A status/level pill. Colour is redundant to the label word — never the only
-   signal (per the `.jo-quality` accessibility idiom). Amber = exposed/weak;
-   teal = scarce/demonstrated; blue = moderate/partial; grey = neutral. */
-.cand-intel-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 0.6875rem;
-  font-weight: 650;
-  padding: 2px 8px;
-  border-radius: 999px;
-  white-space: nowrap;
-}
-.cand-intel-pill-amber { color: var(--amber-700); background: var(--amber-050); }
-.cand-intel-pill-teal { color: var(--teal-500); background: var(--teal-050); }
-.cand-intel-pill-blue { color: var(--blue-600); background: var(--blue-050); }
-.cand-intel-pill-grey { color: var(--ink-700); background: var(--surface-alt); }
-
-/* An automation-assessment card: a head row (capability / level pill) over the
-   reason and the residual human value. Each entry is a card (border + padding)
-   so a dozen assessments read as a ranked list, not a wall of text. */
-.cand-intel-card-list {
-  margin: 6px 0 0;
-  padding: 0;
-  list-style: none;
-  display: grid;
-  gap: 10px;
-}
-.cand-intel-card {
-  display: grid;
-  gap: 6px;
-  padding: 12px 14px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: var(--surface, #fff);
-}
-.cand-intel-card-head {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-.cand-intel-card-name { font-size: 0.9375rem; color: var(--ink-900); font-weight: 600; }
-.cand-intel-card-reason {
-  margin: 0;
-  font-size: 0.8125rem;
-  color: var(--ink-700);
-  line-height: 1.45;
-}
-.cand-intel-card-residual {
-  margin: 0;
-  font-size: 0.8125rem;
-  color: var(--ink-500);
-  line-height: 1.45;
-}
-.cand-intel-card-label { font-weight: 600; color: var(--ink-700); }
-
-/* A history role: a head row (period / title / domain / seniority) over the
-   scope and the decomposed work items. Each role is a card so the history
-   reads as a sequence of roles, each with its work visible — the L2
-   decomposition the automation stage reasons about. */
-.cand-intel-role-list {
-  margin: 6px 0 0;
-  padding: 0;
-  list-style: none;
-  display: grid;
-  gap: 10px;
-}
-.cand-intel-role {
-  display: grid;
-  gap: 6px;
-  padding: 12px 14px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: var(--surface, #fff);
-}
-.cand-intel-role-head {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-.cand-intel-role-period { font-size: 0.75rem; color: var(--ink-500); flex: 0 0 auto; }
-.cand-intel-role-title { font-size: 0.9375rem; color: var(--ink-900); font-weight: 600; }
-.cand-intel-role-domain { font-size: 0.75rem; color: var(--ink-500); }
-.cand-intel-role-seniority {
-  font-size: 0.6875rem;
-  color: var(--ink-500);
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-  font-weight: 600;
-  padding: 2px 7px;
-  border-radius: 999px;
-  background: var(--surface-alt);
-}
-.cand-intel-role-scope { margin: 0; font-size: 0.8125rem; color: var(--ink-700); }
-.cand-intel-work-list {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  display: grid;
-  gap: 3px;
-}
-.cand-intel-work-item {
-  font-size: 0.8125rem;
-  color: var(--ink-900);
-  line-height: 1.4;
-}
-.cand-intel-work-task { color: var(--ink-900); }
-.cand-intel-work-meta { color: var(--ink-500); }
-.cand-intel-work-judgment {
-  margin-left: 6px;
-  font-size: 0.6875rem;
-  color: var(--ink-500);
-  text-transform: lowercase;
-}
-
-/* The candid current-profile paragraph — the v2 headline output. Sits as the
-   closing block of the Residual value tab. */
-.cand-intel-profile {
-  margin: 0;
-  font-size: 0.9375rem;
-  color: var(--ink-900);
-  line-height: 1.55;
-}
-
-/* A supporting-evidence quote (reused by the history role card). */
-.cand-intel-cap-evidence {
-  margin: 0;
-  font-size: 0.8125rem;
-  color: var(--ink-500);
-  font-style: italic;
-  line-height: 1.45;
-}
-
+/* old v1 classes removed — replaced by the v2 classes above. */
 /* A field group inside the form. The border is doing real work: it is what
    separates the facts a Work Permit turns on from race, which decides
    nothing, and the two must not read as one list of demographics. */

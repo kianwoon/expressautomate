@@ -5,22 +5,16 @@ import { type ReactNode } from "react";
 import { type CandidateIntelligence } from "./candidate-intelligence";
 
 /**
- * The three Candidate Intelligence v2 stage panels — presentational only.
+ * The Candidate Intelligence v2 panels — Assessment, Work, Education.
  *
- * Mirrors `job-intelligence-panel.tsx` in shape. The "Run analysis" button and
- * all the analysis state (loading, polling, starting, run-error) live in the
- * `useCandidateIntelligence` hook, called once from the candidate panel. These
- * components render a single stage each from the analysis the hook produced.
- *
- * The three tabs map the v2 engine's 8 conceptual layers to recruiter-readable
- * labels: History (L1+L2), Market fit (L3–L6), Residual value (L7+L8).
+ * Assessment is the sharp read (headline + summary + scarce/depreciated/unproven).
+ * Work is the decomposed work units (the evidence behind the assessment).
+ * Education is the qualifications table.
  *
  * allow-hardcode: user-facing copy rendered to the page, not a list anything
  * is matched against.
  */
 
-/** The shared state a stage needs to decide empty vs loading vs failed vs done.
- *  Lifted out so each stage panel reads the same shape without restating it. */
 export type CandidateStageState = {
   hasAnalysis: boolean;
   waiting: boolean;
@@ -30,10 +24,9 @@ export type CandidateStageState = {
   readError: string | null;
 };
 
-/** The nothing-yet line each intelligence tab shows before a run. */
 // allow-hardcode: user-facing copy, not configuration.
 const NOTHING_YET =
-  'No analysis yet. Use "Run analysis" at the top to reassess this candidate\'s experience against today\'s market.';
+  'No analysis yet. Use "Run analysis" at the top to assess this candidate against today\'s market.';
 
 function StageNotice({ state }: { state: CandidateStageState }) {
   if (state.hasAnalysis) return null;
@@ -59,7 +52,11 @@ function StageNotice({ state }: { state: CandidateStageState }) {
   return <p className="body cand-intel-note">{NOTHING_YET}</p>;
 }
 
-export function HistoryStage({
+// ---------------------------------------------------------------------------
+// ASSESSMENT — the sharp read (the default tab)
+// ---------------------------------------------------------------------------
+
+export function AssessmentStage({
   intelligence,
   state,
 }: {
@@ -67,17 +64,140 @@ export function HistoryStage({
   state: CandidateStageState;
 }) {
   if (!intelligence) return <StageNotice state={state} />;
-  const h = intelligence.history;
+  const a = intelligence.assessment;
   return (
-    <Stage title="History">
-      <RolesTable roles={h.roles} />
-      <List label="Industries" items={h.industries} />
-      <List label="Functions" items={h.functions} />
-      <List label="Systems" items={h.systems} />
-      <List label="Trajectory" items={h.trajectory} />
-    </Stage>
+    <>
+      {/* The headline — the one-line read a recruiter opens with. Large,
+          bold, the first thing they see. */}
+      <p className="cand-intel-headline">{a.headline}</p>
+      <p className="cand-intel-summary">{a.summary}</p>
+
+      <div className="cand-intel-stats">
+        <Stat label="Work level" value={a.work_level} />
+        <Stat label="Decision authority" value={a.decision_authority} />
+        <Stat label="AI exposure" value={a.ai_exposure} />
+        <Stat label="Hire readiness" value={a.hire_readiness} />
+        <Stat label="Value trajectory" value={a.value_trajectory} />
+      </div>
+
+      {a.scarce_capabilities.length > 0 && (
+        <Section title="What remains scarce">
+          {a.scarce_capabilities.map((s, i) => (
+            <div key={i} className="cand-intel-cap">
+              <span className="cand-intel-cap-name">{s.capability}</span>
+              {s.evidence && <p className="cand-intel-cap-reason">{s.evidence}</p>}
+            </div>
+          ))}
+        </Section>
+      )}
+
+      {a.depreciated_capabilities.length > 0 && (
+        <Section title="What has depreciated">
+          {a.depreciated_capabilities.map((d, i) => (
+            <div key={i} className="cand-intel-cap">
+              <span className="cand-intel-cap-name">{d.capability}</span>
+              {d.reason && <p className="cand-intel-cap-reason">{d.reason}</p>}
+            </div>
+          ))}
+        </Section>
+      )}
+
+      {a.unproven_claims.length > 0 && (
+        <Section title="Unproven claims — ask in interview">
+          {a.unproven_claims.map((u, i) => (
+            <div key={i} className="cand-intel-unproven">
+              <p className="cand-intel-unproven-claim">&ldquo;{u.claim}&rdquo;</p>
+              {u.question && (
+                <p className="cand-intel-unproven-question">→ {u.question}</p>
+              )}
+            </div>
+          ))}
+        </Section>
+      )}
+    </>
   );
 }
+
+// ---------------------------------------------------------------------------
+// WORK — the decomposed work units (the evidence)
+// ---------------------------------------------------------------------------
+
+export function WorkStage({
+  intelligence,
+  state,
+}: {
+  intelligence: CandidateIntelligence | null;
+  state: CandidateStageState;
+}) {
+  if (!intelligence) return <StageNotice state={state} />;
+  const roles = intelligence.work.roles;
+  return (
+    <>
+      {roles.map((role, i) => (
+        <div key={i} className="cand-intel-stage">
+          <div className="cand-intel-role-head">
+            <span className="cand-intel-role-period">{role.period}</span>
+            <span className="cand-intel-role-title">{role.stated_title}</span>
+            {role.employer && (
+              <span className="cand-intel-role-domain">{role.employer}</span>
+            )}
+          </div>
+          {role.contribution_maturity && (
+            <p className="cand-intel-role-scope">
+              Contribution: {role.contribution_maturity}
+              {role.tenure_months ? ` · ${role.tenure_months}mo` : ""}
+            </p>
+          )}
+          {role.work_units.map((wu, j) => (
+            <div key={j} className="cand-intel-workunit">
+              <div className="cand-intel-workunit-head">
+                <span className="cand-intel-workunit-work">{wu.work}</span>
+                {wu.inflated && <span className="cand-intel-pill cand-intel-pill-amber">⚠ Inflated</span>}
+              </div>
+              {wu.claim && wu.claim !== wu.work && (
+                <p className="cand-intel-workunit-claim">CV says: &ldquo;{wu.claim}&rdquo;</p>
+              )}
+              {wu.evidence_note && (
+                <p className="cand-intel-workunit-note">{wu.evidence_note}</p>
+              )}
+              <div className="cand-intel-workunit-tags">
+                {wu.decision_ownership && (
+                  <span className="cand-intel-pill cand-intel-pill-grey">
+                    Decision: {wu.decision_ownership}
+                  </span>
+                )}
+                {wu.complexity && (
+                  <span className={`cand-intel-pill ${complexityClass(wu.complexity)}`}>
+                    {wu.complexity}
+                  </span>
+                )}
+                {wu.ai_heavy_lift && (
+                  <span className={`cand-intel-pill ${aiClass(wu.ai_heavy_lift)}`}>
+                    AI: {aiLabel(wu.ai_heavy_lift)}
+                  </span>
+                )}
+                {wu.evidence && (
+                  <span className={`cand-intel-pill ${evidenceClass(wu.evidence)}`}>
+                    Evidence: {wu.evidence}
+                  </span>
+                )}
+              </div>
+              {wu.human_residual && (
+                <p className="cand-intel-workunit-residual">
+                  Human residual: {wu.human_residual}
+                </p>
+              )}
+            </div>
+          ))}
+        </div>
+      ))}
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// EDUCATION
+// ---------------------------------------------------------------------------
 
 export function EducationStage({
   intelligence,
@@ -87,341 +207,86 @@ export function EducationStage({
   state: CandidateStageState;
 }) {
   if (!intelligence) return <StageNotice state={state} />;
-  const edu = intelligence.history.education;
+  const edu = intelligence.work.education;
+  if (!edu || edu.length === 0)
+    return <p className="body cand-intel-note">No education data.</p>;
   return (
-    <Stage title="Education & qualifications">
-      <EducationList entries={edu} />
-    </Stage>
+    <Section title="Education & qualifications">
+      <table className="cand-intel-table">
+        <colgroup>
+          <col className="cand-intel-col-edu-period" />
+          <col className="cand-intel-col-edu-qual" />
+          <col className="cand-intel-col-edu-inst" />
+        </colgroup>
+        <thead>
+          <tr>
+            <th className="cand-intel-th">Period</th>
+            <th className="cand-intel-th">Qualification</th>
+            <th className="cand-intel-th">Institution</th>
+          </tr>
+        </thead>
+        <tbody>
+          {edu.map((e, i) => (
+            <tr key={i} className="cand-intel-tr">
+              <td className="cand-intel-td cand-intel-td-period">{e.period || "—"}</td>
+              <td className="cand-intel-td cand-intel-td-title">
+                {e.qualification}
+                {e.field && <span className="cand-intel-td-sub">{e.field}</span>}
+              </td>
+              <td className="cand-intel-td cand-intel-td-note">{e.institution || "—"}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </Section>
   );
 }
 
-export function MarketFitStage({
-  intelligence,
-  state,
-}: {
-  intelligence: CandidateIntelligence | null;
-  state: CandidateStageState;
-}) {
-  if (!intelligence) return <StageNotice state={state} />;
-  const { automation, benchmark, gaps } = intelligence;
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function Stat({ label, value }: { label: string; value: string }) {
+  if (!value) return null;
   return (
-    <>
-      <Stage title="Automation exposure">
-        <AutomationList assessments={automation.assessments} />
-        <List label="Scarce capabilities" items={automation.scarce_capabilities} />
-      </Stage>
-      <Stage title="Today's market benchmark">
-        <Field label="Work family" value={benchmark.work_family} />
-        <List label="Current work" items={benchmark.current_work} />
-        <List label="Current required capabilities" items={benchmark.current_required} />
-        <List label="Declining" items={benchmark.declining} />
-        <List label="Emerging" items={benchmark.emerging} />
-        <List label="Scarce" items={benchmark.scarce} />
-        <Field label="Automation summary" value={benchmark.automation_summary} />
-      </Stage>
-      <Stage title="Gap analysis">
-        <GapList gaps={gaps.gaps} />
-        <List label="Evidence gaps to verify" items={gaps.evidence_gaps} />
-      </Stage>
-    </>
+    <div className="cand-intel-stat">
+      <dt className="cand-intel-stat-label">{label}</dt>
+      <dd className="cand-intel-stat-value">{value}</dd>
+    </div>
   );
 }
 
-export function ResidualValueStage({
-  intelligence,
-  state,
-}: {
-  intelligence: CandidateIntelligence | null;
-  state: CandidateStageState;
-}) {
-  if (!intelligence) return <StageNotice state={state} />;
-  const r = intelligence.residual;
-  return (
-    <>
-      <Stage title="Residual value">
-        <Field label="Historical strength" value={r.historical_strength} />
-        <Field label="Automation exposure" value={r.automation_exposure} />
-        <Field label="Current relevance" value={r.current_relevance} />
-        <List label="Scarce capabilities" items={r.scarce_capabilities} />
-        <List label="Depreciated capabilities" items={r.depreciated_capabilities} />
-        <List label="Emerging capabilities" items={r.emerging_capabilities} />
-        <List label="Evidence gaps" items={r.evidence_gaps} />
-        <Field label="Overall assessment" value={r.overall_assessment} />
-      </Stage>
-      <Stage title="Current profile">
-        {/* The candid paragraph the v2 engine's final layer produces. This is
-            the headline output — a recruiter reads it to understand who the
-            candidate is in today's market, not a years-of-experience summary. */}
-        <p className="body cand-intel-profile">{r.current_profile}</p>
-      </Stage>
-    </>
-  );
-}
-
-function Stage({ title, children }: { title: string; children: ReactNode }) {
+function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
     <div className="cand-intel-stage">
       <h4 className="cand-intel-stage-title">{title}</h4>
-      <dl className="cand-intel-fields">{children}</dl>
+      <div className="cand-intel-section-body">{children}</div>
     </div>
   );
 }
 
-function Field({ label, value }: { label: string; value: string }) {
-  if (!value) return null;
-  return (
-    <div className="cand-intel-field">
-      <dt className="cand-intel-dt">{label}</dt>
-      <dd className="body">{value}</dd>
-    </div>
-  );
-}
-
-function List({ label, items }: { label: string; items: string[] }) {
-  if (!items || items.length === 0) return null;
-  return (
-    <div className="cand-intel-field">
-      <dt className="cand-intel-dt">{label}</dt>
-      <dd className="body">
-        <ul className="cand-intel-list">
-          {items.map((item, i) => (
-            <li key={i}>{item}</li>
-          ))}
-        </ul>
-      </dd>
-    </div>
-  );
-}
-
-/** The automation-level pill colour. Colour is redundant to the label word
- *  (very_high → amber, low/very_low → teal), never the only signal — per the
- *  `.jo-quality` accessibility idiom. */
-function automationLevelClass(level: string): string {
-  const l = level.toLowerCase();
-  if (l === "very_high") return "cand-intel-pill-amber";
-  if (l === "high") return "cand-intel-pill-amber";
-  if (l === "medium") return "cand-intel-pill-blue";
-  if (l === "low") return "cand-intel-pill-teal";
-  if (l === "very_low") return "cand-intel-pill-teal";
+function complexityClass(c: string): string {
+  const s = c.toLowerCase();
+  if (s === "expert" || s === "specialist") return "cand-intel-pill-teal";
+  if (s === "skilled") return "cand-intel-pill-blue";
   return "cand-intel-pill-grey";
 }
 
-/** The gap-status pill colour. Demonstrated → teal, weak/contradicted → amber,
- *  not_evidenced → neutral grey (it is NOT a deficit — "absence of evidence is
- *  not evidence of absence"). */
-function gapStatusClass(status: string): string {
-  const s = status.toLowerCase();
-  if (s === "demonstrated") return "cand-intel-pill-teal";
-  if (s === "partially_demonstrated") return "cand-intel-pill-blue";
-  if (s === "claimed_weak") return "cand-intel-pill-amber";
-  if (s === "contradicted") return "cand-intel-pill-amber";
+function aiClass(a: string): string {
+  const s = a.toLowerCase();
+  if (s.includes("dominant") || s.includes("agentic")) return "cand-intel-pill-amber";
+  if (s.includes("heavy")) return "cand-intel-pill-amber";
+  if (s.includes("assisted")) return "cand-intel-pill-blue";
+  return "cand-intel-pill-teal";
+}
+
+function aiLabel(a: string): string {
+  return a.replace(/ai_/g, "").replace(/_/g, " ");
+}
+
+function evidenceClass(e: string): string {
+  const s = e.toUpperCase();
+  if (s === "A" || s === "B") return "cand-intel-pill-teal";
+  if (s === "C") return "cand-intel-pill-amber";
   return "cand-intel-pill-grey";
-}
-
-/** Human-readable label for the automation_level enum value. */
-function automationLevelLabel(level: string): string {
-  const l = level.toLowerCase();
-  if (l === "very_high") return "Very high";
-  if (l === "very_low") return "Very low";
-  return level.charAt(0).toUpperCase() + level.slice(1);
-}
-
-/** Human-readable label for the gap status enum value. */
-function gapStatusLabel(status: string): string {
-  const s = status.toLowerCase();
-  const labels: Record<string, string> = {
-    demonstrated: "Demonstrated",
-    partially_demonstrated: "Partially demonstrated",
-    claimed_weak: "Claimed, weakly evidenced",
-    not_evidenced: "Not evidenced",
-    contradicted: "Contradicted",
-  };
-  return labels[s] ?? status;
-}
-
-function AutomationList({
-  assessments,
-}: {
-  assessments: { capability: string; automation_level: string; automation_reason: string; residual_human_value: string }[];
-}) {
-  if (!assessments || assessments.length === 0) return null;
-  return (
-    <div className="cand-intel-field">
-      <dt className="cand-intel-dt">Capability assessments</dt>
-      <dd className="body">
-        <ul className="cand-intel-card-list">
-          {assessments.map((a, i) => (
-            <li key={i} className="cand-intel-card">
-              <div className="cand-intel-card-head">
-                <span className="cand-intel-card-name">{a.capability}</span>
-                <span
-                  className={`cand-intel-pill ${automationLevelClass(a.automation_level)}`}
-                >
-                  {automationLevelLabel(a.automation_level)}
-                </span>
-              </div>
-              {a.automation_reason && (
-                <p className="cand-intel-card-reason">{a.automation_reason}</p>
-              )}
-              {a.residual_human_value && (
-                <p className="cand-intel-card-residual">
-                  <span className="cand-intel-card-label">Residual human value: </span>
-                  {a.residual_human_value}
-                </p>
-              )}
-            </li>
-          ))}
-        </ul>
-      </dd>
-    </div>
-  );
-}
-
-function GapList({
-  gaps,
-}: {
-  gaps: { capability: string; status: string; note: string }[];
-}) {
-  if (!gaps || gaps.length === 0) return null;
-  return (
-    <div className="cand-intel-field">
-      <dt className="cand-intel-dt">Capabilities vs today&apos;s standard</dt>
-      <dd className="body">
-        <table className="cand-intel-table">
-          <colgroup>
-            <col className="cand-intel-col-cap" />
-            <col className="cand-intel-col-status" />
-            <col className="cand-intel-col-note" />
-          </colgroup>
-          <thead>
-            <tr>
-              <th className="cand-intel-th">Capability</th>
-              <th className="cand-intel-th">Status</th>
-              <th className="cand-intel-th">Note</th>
-            </tr>
-          </thead>
-          <tbody>
-            {gaps.map((g, i) => (
-              <tr key={i} className="cand-intel-tr">
-                <td className="cand-intel-td cand-intel-td-title">{g.capability}</td>
-                <td className="cand-intel-td">
-                  <span
-                    className={`cand-intel-pill ${gapStatusClass(g.status)}`}
-                  >
-                    {gapStatusLabel(g.status)}
-                  </span>
-                </td>
-                <td className="cand-intel-td cand-intel-td-note">{g.note}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </dd>
-    </div>
-  );
-}
-
-function RolesTable({
-  roles,
-}: {
-  roles: {
-    period: string;
-    title: string;
-    domain: string;
-    seniority: string;
-    scope: string;
-    work: { task: string; tool: string; judgment_level: string; accountability: string }[];
-    evidence: string;
-  }[];
-}) {
-  if (!roles || roles.length === 0) return null;
-  return (
-    <div className="cand-intel-field">
-      <dt className="cand-intel-dt">Roles & decomposed work</dt>
-      <dd className="body">
-        {/* Each role is a card: a header (period / title / domain / seniority)
-            over the decomposed work items. The work decomposition is the L2
-            input the automation stage reasons about, so it is shown in full
-            rather than hidden behind the title. */}
-        <ul className="cand-intel-role-list">
-          {roles.map((role, i) => (
-            <li key={i} className="cand-intel-role">
-              <div className="cand-intel-role-head">
-                <span className="cand-intel-role-period">{role.period || "—"}</span>
-                <span className="cand-intel-role-title">{role.title}</span>
-                {role.domain && (
-                  <span className="cand-intel-role-domain">{role.domain}</span>
-                )}
-                {role.seniority && (
-                  <span className="cand-intel-role-seniority">{role.seniority}</span>
-                )}
-              </div>
-              {role.scope && <p className="cand-intel-role-scope">{role.scope}</p>}
-              {role.work.length > 0 && (
-                <ul className="cand-intel-work-list">
-                  {role.work.map((w, j) => (
-                    <li key={j} className="cand-intel-work-item">
-                      <span className="cand-intel-work-task">{w.task}</span>
-                      {w.tool && (
-                        <span className="cand-intel-work-meta"> · {w.tool}</span>
-                      )}
-                      {w.judgment_level && (
-                        <span className="cand-intel-work-judgment">{w.judgment_level}</span>
-                      )}
-                    </li>
-                  ))}
-                </ul>
-              )}
-              {role.evidence && (
-                <p className="cand-intel-cap-evidence">&ldquo;{role.evidence}&rdquo;</p>
-              )}
-            </li>
-          ))}
-        </ul>
-      </dd>
-    </div>
-  );
-}
-
-function EducationList({
-  entries,
-}: {
-  entries: { period: string; qualification: string; institution: string; field: string }[];
-}) {
-  if (!entries || entries.length === 0) return null;
-  return (
-    <div className="cand-intel-field">
-      <dt className="cand-intel-dt">Qualifications</dt>
-      <dd className="body">
-        {/* A table: Period / Qualification / Institution. Mirrors the gap
-            table's fixed-layout colgroup so columns align. */}
-        <table className="cand-intel-table">
-          <colgroup>
-            <col className="cand-intel-col-edu-period" />
-            <col className="cand-intel-col-edu-qual" />
-            <col className="cand-intel-col-edu-inst" />
-          </colgroup>
-          <thead>
-            <tr>
-              <th className="cand-intel-th">Period</th>
-              <th className="cand-intel-th">Qualification</th>
-              <th className="cand-intel-th">Institution</th>
-            </tr>
-          </thead>
-          <tbody>
-            {entries.map((e, i) => (
-              <tr key={i} className="cand-intel-tr">
-                <td className="cand-intel-td cand-intel-td-period">{e.period || "—"}</td>
-                <td className="cand-intel-td cand-intel-td-title">
-                  {e.qualification}
-                  {e.field && <span className="cand-intel-td-sub">{e.field}</span>}
-                </td>
-                <td className="cand-intel-td cand-intel-td-note">{e.institution || "—"}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </dd>
-    </div>
-  );
 }

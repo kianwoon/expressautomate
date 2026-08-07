@@ -90,11 +90,8 @@ async def run_candidate_intelligence_route(
         else:
             existing.state = CandidateIntelligence.PENDING
             existing.failure_reason = None
-            existing.history = None
-            existing.automation = None
-            existing.benchmark = None
-            existing.gaps = None
-            existing.residual = None
+            existing.work = None
+            existing.assessment = None
             row_id = existing.id
         await session.commit()
 
@@ -153,13 +150,10 @@ def _serialize(row: CandidateIntelligence) -> dict:
         "failure_reason": row.failure_reason,
         "analysed_at": row.analysed_at.isoformat() if row.analysed_at else None,
     }
-    if row.state == CandidateIntelligence.DONE and row.history is not None:
+    if row.state == CandidateIntelligence.DONE and row.work is not None:
         body["intelligence"] = {
-            "history": row.history,
-            "automation": row.automation,
-            "benchmark": row.benchmark,
-            "gaps": row.gaps,
-            "residual": row.residual,
+            "work": row.work,
+            "assessment": row.assessment,
         }
     else:
         body["intelligence"] = None

@@ -25,25 +25,28 @@ import { ApiError, readError } from "./candidates";
  *  two worth asking again about; see `inFlight`. */
 export type CandidateIntelligenceState = "pending" | "running" | "done" | "failed";
 
-/** One decomposed piece of work a role involved (design doc L2). Mirrors
- *  `WorkItem` on the server. */
-export type WorkItem = {
-  task: string;
-  tool: string;
-  judgment_level: string;
-  accountability: string;
+/** One concrete piece of work, decomposed. Mirrors `WorkUnit`. */
+export type WorkUnit = {
+  claim: string;
+  work: string;
+  decision_ownership: string;
+  complexity: string;
+  ai_heavy_lift: string;
+  human_residual: string;
+  evidence: string;
+  evidence_note: string;
+  inflated: boolean;
 };
 
-/** One role from the candidate's history, with its work decomposed (L1 + L2).
- *  Mirrors `HistoryRole`. */
-export type HistoryRole = {
+/** One employment period with its work units. Mirrors `RoleAssessment`. */
+export type RoleAssessment = {
+  employer: string;
   period: string;
-  title: string;
-  domain: string;
-  seniority: string;
-  scope: string;
-  work: WorkItem[];
-  evidence: string;
+  stated_title: string;
+  industry: string;
+  work_units: WorkUnit[];
+  contribution_maturity: string;
+  tenure_months: number;
 };
 
 /** One education or qualification entry. Mirrors `EducationEntry`. */
@@ -54,81 +57,48 @@ export type EducationEntry = {
   field: string;
 };
 
-/** Pass 1 — the candidate's history, value-neutral (L1 + L2). Mirrors
- *  `HistoryProfile`. */
-export type HistoryProfile = {
-  roles: HistoryRole[];
+/** Pass 1 — work decomposition + education. Mirrors `WorkAssessment`. */
+export type WorkAssessment = {
+  roles: RoleAssessment[];
   education: EducationEntry[];
-  industries: string[];
-  functions: string[];
-  systems: string[];
-  trajectory: string[];
 };
 
-/** One capability assessed for automation exposure + residual human value
- *  (L3 + L4). Mirrors `AutomationAssessment`. */
-export type AutomationAssessment = {
+/** A scarce capability with its evidence. Mirrors `ScarceCapability`. */
+export type ScarceCapability = {
   capability: string;
-  automation_level: string;
-  automation_reason: string;
-  residual_human_value: string;
+  evidence: string;
 };
 
-/** Pass 2 — automation exposure across capabilities (L3 + L4). Mirrors
- *  `AutomationProfile`. */
-export type AutomationProfile = {
-  assessments: AutomationAssessment[];
-  scarce_capabilities: string[];
-};
-
-/** Pass 3 — today's version of the work family (L5 + L6). Mirrors
- *  `MarketBenchmark`. */
-export type MarketBenchmark = {
-  work_family: string;
-  current_work: string[];
-  current_required: string[];
-  declining: string[];
-  emerging: string[];
-  scarce: string[];
-  automation_summary: string;
-};
-
-/** One capability assessed against today's standard (L6 gap). Mirrors
- *  `CapabilityGap`. */
-export type CapabilityGap = {
+/** A depreciated capability with its reason. Mirrors `DepreciatedCapability`. */
+export type DepreciatedCapability = {
   capability: string;
-  status: string;
-  note: string;
+  reason: string;
 };
 
-/** Pass 4 — gaps between the candidate and today's standard (L6). Mirrors
- *  `GapAnalysis`. */
-export type GapAnalysis = {
-  gaps: CapabilityGap[];
-  evidence_gaps: string[];
+/** An unproven claim with the interview question. Mirrors `UnprovenClaim`. */
+export type UnprovenClaim = {
+  claim: string;
+  question: string;
 };
 
-/** Pass 5 — the decomposable residual value + candid profile (L7 + L8).
- *  Mirrors `ResidualValueAssessment`. */
-export type ResidualValueAssessment = {
-  historical_strength: string;
-  automation_exposure: string;
-  current_relevance: string;
-  scarce_capabilities: string[];
-  depreciated_capabilities: string[];
-  emerging_capabilities: string[];
-  evidence_gaps: string[];
-  overall_assessment: string;
-  current_profile: string;
+/** Pass 2 — the sharp synthesis. Mirrors `CandidateAssessment`. */
+export type CandidateAssessment = {
+  headline: string;
+  summary: string;
+  work_level: string;
+  decision_authority: string;
+  scarce_capabilities: ScarceCapability[];
+  depreciated_capabilities: DepreciatedCapability[];
+  unproven_claims: UnprovenClaim[];
+  ai_exposure: string;
+  hire_readiness: string;
+  value_trajectory: string;
 };
 
-/** All five stages, present only when `state === "done"`. */
+/** Both stages, present only when `state === "done"`. */
 export type CandidateIntelligence = {
-  history: HistoryProfile;
-  automation: AutomationProfile;
-  benchmark: MarketBenchmark;
-  gaps: GapAnalysis;
-  residual: ResidualValueAssessment;
+  work: WorkAssessment;
+  assessment: CandidateAssessment;
 };
 
 /** The full row, as GET and POST return it. */
