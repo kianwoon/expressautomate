@@ -34,10 +34,9 @@ import {
 import { Dialog } from "../dialog";
 import { useCandidateIntelligence } from "../candidate-intelligence";
 import {
+  AssessmentStage,
   EducationStage,
-  HistoryStage,
-  MarketFitStage,
-  ResidualValueStage,
+  WorkStage,
   type CandidateStageState,
 } from "../candidate-intelligence-panel";
 
@@ -142,14 +141,13 @@ const DELETE_GLYPH = (
 /** The candidate modal's tabs. Details holds the existing editable record;
  *  the other three are the Candidate Intelligence stages — the same shape the
  *  job-order modal's Origin/Work/Person/Search tabs take. */
-type CandidateTab = "details" | "history" | "education" | "market" | "residual";
+type CandidateTab = "details" | "assessment" | "work" | "education";
 
 const CANDIDATE_TABS: { key: CandidateTab; label: string }[] = [
   { key: "details", label: "Details" },
-  { key: "history", label: "History" },
+  { key: "assessment", label: "Assessment" },
+  { key: "work", label: "Work" },
   { key: "education", label: "Education" },
-  { key: "market", label: "Market fit" },
-  { key: "residual", label: "Residual value" },
 ];
 
 export function CandidatePanel({
@@ -264,10 +262,8 @@ function Detail({
 
   async function runAnalysis() {
     await ci.run();
-    // Land on the Residual value tab so the recruiter sees the headline v2
-    // output first — the candid current-profile paragraph — the same way the
-    // job-order modal switches to the Work tab on run.
-    setActiveTab("residual");
+    // Land on the Assessment tab — the sharp headline read.
+    setActiveTab("assessment");
   }
 
   // The shared state every intelligence stage reads to decide empty vs loading
@@ -540,17 +536,14 @@ function Detail({
               collapsing and re-growing on every tab switch. Mirrors the
               `jo-tab-panel` wrapper in the job-orders modal. */}
           <div ref={panelRef} style={panelMinHeight ? { minHeight: panelMinHeight } : undefined}>
-          {activeTab === "history" && (
-            <HistoryStage intelligence={ci.analysis} state={stageState} />
+          {activeTab === "assessment" && (
+            <AssessmentStage intelligence={ci.analysis} state={stageState} />
+          )}
+          {activeTab === "work" && (
+            <WorkStage intelligence={ci.analysis} state={stageState} />
           )}
           {activeTab === "education" && (
             <EducationStage intelligence={ci.analysis} state={stageState} />
-          )}
-          {activeTab === "market" && (
-            <MarketFitStage intelligence={ci.analysis} state={stageState} />
-          )}
-          {activeTab === "residual" && (
-            <ResidualValueStage intelligence={ci.analysis} state={stageState} />
           )}
 
           {activeTab === "details" && (

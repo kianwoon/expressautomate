@@ -183,11 +183,8 @@ async def run_candidate_intelligence(
             .where(CandidateIntelligence.id == record)
             .values(
                 state=CandidateIntelligence.DONE,
-                history=result.history.model_dump(mode="json"),
-                automation=result.automation.model_dump(mode="json"),
-                benchmark=result.benchmark.model_dump(mode="json"),
-                gaps=result.gaps.model_dump(mode="json"),
-                residual=result.residual.model_dump(mode="json"),
+                work=result.work.model_dump(mode="json"),
+                assessment=result.assessment.model_dump(mode="json"),
                 model_name=outcome.stats.model,
                 prompt_tokens=outcome.stats.prompt_tokens,
                 completion_tokens=outcome.stats.completion_tokens,
