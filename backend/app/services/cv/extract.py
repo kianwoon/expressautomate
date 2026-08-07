@@ -22,7 +22,7 @@ import json
 
 from app.core.config import settings
 from app.core.logging import get_logger
-from app.services.cv.schema import CVResponse, ExtractedField, ExtractedRole, cv_json_schema
+from app.services.cv.schema import CVResponse, ExtractedSalary, ExtractedRole, cv_json_schema
 from app.services.ingest.evidence import verify
 from app.services.ingest.extract import _attempts
 from app.services.ingest.schema import NOT_MENTIONED
@@ -55,14 +55,19 @@ Rules:
   title. If you are unsure, "{not_mentioned}" is the correct answer.
 - `skills` are only the ones the CV names. Do not expand an abbreviation into a
   skill the page does not contain.
-- `last_drawn_salary` is the salary the candidate last or currently earns, as the
-  CV prints it (e.g. "$2,500/month", "MYR 4800", "Last drawn: $3k"). Copy the
-  figure and its unit VERBATIM into `value` — never normalise, convert, or split
-  it into currency and amount yourself. If the CV states no salary, set `value`
-  to "{not_mentioned}".
-- `expected_salary` is the salary the candidate is asking for next, same rule:
-  verbatim from the page, or "{not_mentioned}". A "current" figure is not an
-  expected one — do not move a value from one field to the other.
+- `last_drawn_salary` and `expected_salary` are the salary figures the candidate
+  stated. Read the figure and return it as structured parts:
+  - `amount`: the numeric amount in ONE period (the figure as stated, not annualised).
+    "$ 5000 x 12" → amount 5000 (monthly); "$60,000/year" → amount 60000.
+  - `currency`: the ISO code. A bare "$" on a Singapore CV is SGD; "RM" is MYR.
+    Use the currency the CV states, or SGD if it only prints "$".
+  - `period`: "hour", "day", "week", "month", or "year" — whichever the figure is in.
+    "$ 5000 x 12" is monthly (the x12 is months per year). "per annum" is year.
+  - `evidence`: the EXACT text from the CV that states this salary, copied VERBATIM.
+    This is checked — a salary whose quote is not on the page is discarded.
+  - If the CV states no salary, set `amount` to null and all other fields to null.
+  - A "last drawn" / "current" figure goes in `last_drawn_salary`; an "expected"
+    figure goes in `expected_salary`. Never move one into the other.
 
 Return JSON matching this schema:
 {schema}
@@ -153,29 +158,37 @@ def _fields(role: ExtractedRole) -> list:
     return [f for f in vars(role).values() if f is not None and not f.is_missing]
 
 
-def _drop_if_missing(field: ExtractedField | None) -> ExtractedField | None:
-    """A salary field whose value is the not-mentioned sentinel asserts nothing.
+def _drop_if_missing(field: ExtractedSalary | None) -> ExtractedSalary | None:
+    """A salary field with no amount asserts nothing.
 
-    Same reason `_fields` skips "Not mentioned" role fields: a sentinel has no
-    quotation for `verify` to test, and would ride along as if the CV had
+    Same reason `_fields` skips "Not mentioned" role fields: a null amount has
+    no quotation for `verify` to test, and would ride along as if the CV had
     stated a salary it did not.
     """
     return None if field is None or field.is_missing else field
 
 
 def _verify_salary(
-    field: ExtractedField | None, source: str
-) -> ExtractedField | None:
-    """Keep a salary field only if its quote is on the page, else drop to None.
+    field: ExtractedSalary | None, source: str
+) -> ExtractedSalary | None:
+    """Keep a salary only if its evidence quote is on the page, else drop to None.
 
-    Mirrors `identity._verified`: a salary figure the page does not support is a
-    fabrication, and dropping to None (honest absence) is preferable to
-    publishing a number the candidate never wrote. None rather than raise so a
-    sound last-drawn figure survives alongside a misquoted expected one.
+    The model returns structured parts (amount/currency/period) plus an
+    `evidence` string copied from the CV. That evidence is the anti-fabrication
+    check — if it is not found verbatim on the page, the amount is not trusted.
     """
     if field is None or field.is_missing:
         return None
-    return field if verify(field, source) else None
+    evidence = (field.evidence or "").strip()
+    if not evidence or _normalise(evidence) not in _normalise(source):
+        return None
+    return field
+
+
+def _normalise(text: str) -> str:
+    """Whitespace-insensitive contains check, matching `ingest.evidence.verify`."""
+    import re
+    return re.sub(r"\s+", " ", text).strip().lower()
 
 
 def _drop_unstated(response: CVResponse) -> CVResponse:
@@ -225,7 +238,7 @@ def _needs_a_better_model(response: CVResponse, source: str) -> bool:
     )
     unsupported_skill = any(not verify(s, source) for s in response.skills)
     unsupported_salary = any(
-        field is not None and not verify(field, source)
+        _verify_salary(field, source) is None and field is not None and not field.is_missing
         for field in (response.last_drawn_salary, response.expected_salary)
     )
     return unsupported_role or unsupported_skill or unsupported_salary

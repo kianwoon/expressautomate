@@ -114,6 +114,53 @@ class ExtractedRole(BaseModel):
     summary: ExtractedField | None = None
 
 
+# The salary periods a CHECK constraint allows. Mirrors the vocabulary in
+# `ingest.evidence` — a period outside these is refused to NULL, never guessed.
+SALARY_PERIODS = ("hour", "day", "week", "month", "year")
+
+
+class ExtractedSalary(BaseModel):
+    """A salary the candidate stated, read by the model into its parts.
+
+    The model reads "$ 5000 x 12" and returns amount=5000, currency="SGD",
+    period="month" — the interpretation a regex cannot reliably make, because
+    the same notation means different things in different contexts ("x 12" is
+    months here, a multiplier elsewhere). The model understands it; the code
+    trusts the model only after `verify` finds its `evidence` quote on the page.
+
+    `amount` is the figure in the stated period (5000/month, not 60000/year),
+    so the number the recruiter sees is the number the candidate wrote.
+    Currency defaults to SGD for this Singapore platform when the CV uses a
+    bare "$" — the model is told this, because a deterministic parser cannot
+    tell which "$" is SGD and which is USD, but the model can read the CV's
+    country context.
+    """
+
+    amount: float | None = None
+    currency: str | None = None
+    period: str | None = None
+    evidence: str | None = None
+    confidence: float = 0.0
+
+    @property
+    def is_missing(self) -> bool:
+        """A salary with no amount is "Not mentioned", same sentinel rule."""
+        return self.amount is None
+
+    @model_validator(mode="after")
+    def _present_salary_must_quote_something(self) -> "ExtractedSalary":
+        """Same anti-fabrication rule as ExtractedField: quote or refuse."""
+        if self.is_missing:
+            return self
+        if not (self.evidence or "").strip():
+            raise ValueError(f"salary amount {self.amount} quotes no source text")
+        if self.period is not None and self.period not in SALARY_PERIODS:
+            raise ValueError(
+                f"period {self.period!r} is not one of {SALARY_PERIODS}"
+            )
+        return self
+
+
 class CVResponse(BaseModel):
     """Roles, skills, and the salary the candidate stated — and nothing else.
 
@@ -135,8 +182,8 @@ class CVResponse(BaseModel):
 
     roles: list[ExtractedRole] = Field(default_factory=list)
     skills: list[ExtractedField] = Field(default_factory=list)
-    last_drawn_salary: ExtractedField | None = None
-    expected_salary: ExtractedField | None = None
+    last_drawn_salary: ExtractedSalary | None = None
+    expected_salary: ExtractedSalary | None = None
 
 
 # The field names in the order the prompt should present them.
@@ -182,6 +229,18 @@ def cv_json_schema() -> dict:
     }
     nullable = {**field_schema, "type": ["object", "null"]}
     nullable_date = {**date_schema, "type": ["object", "null"]}
+    salary_schema = {
+        "type": ["object", "null"],
+        "properties": {
+            "amount": {"type": ["number", "null"]},
+            "currency": {"type": ["string", "null"]},
+            "period": {"type": ["string", "null"], "enum": [*SALARY_PERIODS, None]},
+            "evidence": {"type": ["string", "null"]},
+            "confidence": {"type": "number"},
+        },
+        "required": ["amount", "currency", "period", "evidence", "confidence"],
+        "additionalProperties": False,
+    }
 
     return {
         "type": "object",
@@ -202,12 +261,8 @@ def cv_json_schema() -> dict:
                 },
             },
             "skills": {"type": "array", "items": field_schema},
-            # Salary is a single quoted string (e.g. "$2,500/month"), parsed
-            # into amount/currency/period at persist time — not three freeform
-            # fields the model might disagree about. Nullable so a CV that
-            # states neither stays absent rather than fabricated.
-            "last_drawn_salary": nullable,
-            "expected_salary": nullable,
+            "last_drawn_salary": salary_schema,
+            "expected_salary": salary_schema,
         },
         "required": ["roles", "skills", "last_drawn_salary", "expected_salary"],
         "additionalProperties": False,

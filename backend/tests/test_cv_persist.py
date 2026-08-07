@@ -31,6 +31,17 @@ CV = (
     "Expected salary: $3,000/month\n"
 )
 
+
+def _salary_field(amount, currency, period, evidence):
+    """An ExtractedSalary-shaped dict for test payloads."""
+    return {
+        "amount": amount,
+        "currency": currency,
+        "period": period,
+        "evidence": evidence,
+        "confidence": 0.9,
+    }
+
 TODAY = date(2026, 7, 29)
 
 
@@ -683,8 +694,8 @@ async def test_salary_quoted_on_the_cv_lands_on_the_candidate(agency):  # noqa: 
     candidate_id = await _a_candidate_row(tenant_id, user_id)
     document_id = await _document(tenant_id, candidate_id)
     response, result = _response(
-        last_drawn=_field("S$2,500/month"),
-        expected=_field("$3,000/month"),
+        last_drawn=_salary_field(2500.0, "SGD", "month", "S$2,500/month"),
+        expected=_salary_field(3000.0, "SGD", "month", "$3,000/month"),
     )
 
     await _run(tenant_id, candidate_id, document_id, response, result)
@@ -725,8 +736,8 @@ async def test_a_human_salary_value_is_not_overwritten_by_the_cv(agency):  # noq
         await s.commit()
 
     response, result = _response(
-        last_drawn=_field("S$2,500/month"),
-        expected=_field("$3,000/month"),
+        last_drawn=_salary_field(2500.0, "SGD", "month", "S$2,500/month"),
+        expected=_salary_field(3000.0, "SGD", "month", "$3,000/month"),
     )
     await _run(tenant_id, candidate_id, document_id, response, result)
 
