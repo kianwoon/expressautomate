@@ -61,6 +61,13 @@ _MIME_FOR_KIND = {
 # absurd filename is a stored oddity rather than a 500.
 _MAX_FILENAME = 255
 
+# The name given to a placeholder candidate before the ingest job reads the CV's
+# identity. A fixed sentinel, never the filename: `_delete_if_ghost` (in
+# `ingest_jobs`) matches on this exact value to tell an empty placeholder from a
+# real record, and a filename would defeat that check and seed a ghost per
+# upload. Must stay in sync with `ingest_jobs._UNNAMED`.
+_PLACEHOLDER_NAME = "Uploaded CV"
+
 _ENQUEUE_FAILED = (
     "This CV was saved but could not be queued for reading. Try again in a "
     "few minutes."
@@ -322,16 +329,18 @@ async def upload_document_no_candidate(
 
     # A placeholder candidate holds the NOT NULL foreign key until the ingest
     # job reads identity and re-binds the document. It carries no contact
-    # details and the default `new` stage — the exact shape `_delete_if_ghost`
-    # looks for, so a placeholder left empty by a successful re-bind is removed
-    # rather than seeded into the candidate list. Created up front rather than
-    # in the job so this route's commit is self-contained: a document row never
-    # exists without its candidate.
+    # details, the default `new` stage, and a FIXED sentinel name — the exact
+    # shape `_delete_if_ghost` looks for, so a placeholder left empty by a
+    # successful re-bind is removed rather than seeded into the candidate list.
+    # The filename is NOT used as the name: it is stored on the document row
+    # (`filename` column) where it belongs, and using it here would make every
+    # placeholder look like real data the ghost-check must keep (a filename is
+    # never equal to the sentinel), leaving one ghost candidate per upload.
     document_id = uuid.uuid4()
     async with tenant_session(tenant_uuid) as session:
         placeholder = Candidate(
             tenant_id=tenant_uuid,
-            full_name=_safe_filename(file.filename, kind)[:1000] or "Uploaded CV",
+            full_name=_PLACEHOLDER_NAME,
             pipeline_stage=Candidate.STAGES[0],
             record_status=Candidate.ACTIVE,
             owner_id=user_uuid,
