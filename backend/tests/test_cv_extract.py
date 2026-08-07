@@ -88,8 +88,26 @@ _FABRICATED = {
 }
 
 
+_EMPTY_SALARY = {
+    "last_drawn_salary": {
+        "amount": None, "currency": None, "period": None,
+        "evidence": None, "confidence": 0.0,
+    },
+    "expected_salary": {
+        "amount": None, "currency": None, "period": None,
+        "evidence": None, "confidence": 0.0,
+    },
+}
+
+
 class _Spy:
-    """Records the models it was asked for, and answers from a queue."""
+    """Records the models it was asked for, and answers from a queue.
+
+    `extract_cv` makes two calls: salary first, then career. The salary call is
+    auto-answered with empty salary (no salary on the test CV) so tests that
+    only care about roles/skills can pass career answers as before. Tests that
+    need salary can inspect the salary call via `self.calls[0]`.
+    """
 
     def __init__(self, *answers) -> None:
         self.answers = list(answers)
@@ -99,6 +117,8 @@ class _Spy:
     async def __call__(self, prompt, *, model, schema, **kw):
         self.models.append(model)
         self.calls.append({"model": model, "schema": schema, "prompt": prompt, **kw})
+        if "salary" in prompt.lower() and "last_drawn_salary" in prompt:
+            return LLMResult(data=_EMPTY_SALARY, model=model)
         answer = self.answers.pop(0)
         if isinstance(answer, Exception):
             raise answer
@@ -110,7 +130,11 @@ async def test_a_role_quoting_the_page_survives():
 
     response, result = await extract_cv(CV, llm=llm)
 
-    assert llm.models == [settings.EXTRACTION_MODEL_FAST], "no reason to pay twice"
+    # Salary call (FAST) + career call (FAST) — one model, no escalation.
+    assert llm.models == [
+        settings.EXTRACTION_MODEL_FAST,
+        settings.EXTRACTION_MODEL_FAST,
+    ], "no reason to pay twice"
     assert result.model == settings.EXTRACTION_MODEL_FAST
     assert len(response.roles) == 1
     role = response.roles[0]
@@ -126,7 +150,9 @@ async def test_a_role_quoting_something_absent_escalates():
 
     response, result = await extract_cv(CV, llm=llm)
 
+    # Salary call (FAST) + career calls (FAST → STRONG on escalation).
     assert llm.models == [
+        settings.EXTRACTION_MODEL_FAST,
         settings.EXTRACTION_MODEL_FAST,
         settings.EXTRACTION_MODEL_STRONG,
     ]
@@ -246,10 +272,12 @@ async def test_extraction_never_asks_a_provider_to_compile_the_schema():
 
     await extract_cv(CV, llm=llm)
 
-    assert llm.calls[0]["schema"] is None
-    assert "roles" in llm.calls[0]["prompt"]
-    assert NOT_MENTIONED in llm.calls[0]["prompt"]
-    assert CV in llm.calls[0]["prompt"]
+    # calls[0] is the salary call; calls[1] is the career call.
+    career_call = llm.calls[1]
+    assert career_call["schema"] is None
+    assert "roles" in career_call["prompt"]
+    assert NOT_MENTIONED in career_call["prompt"]
+    assert CV in career_call["prompt"]
 
 
 async def test_extraction_goes_to_cerebras_with_a_configured_budget():
@@ -260,7 +288,13 @@ async def test_extraction_goes_to_cerebras_with_a_configured_budget():
     assert llm.calls[0]["base_url"] == settings.CEREBRAS_BASE_URL
     assert llm.calls[0]["api_key"] == settings.CEREBRAS_API_KEY
     assert llm.calls[0]["extra_body"]["max_tokens"] == settings.EXTRACTION_MAX_TOKENS
-    assert [c["extra_body"]["reasoning_effort"] for c in llm.calls] == [
+    # Salary call (no reasoning_effort) + career calls (fast, strong).
+    career_efforts = [
+        c["extra_body"]["reasoning_effort"]
+        for c in llm.calls
+        if "reasoning_effort" in c["extra_body"]
+    ]
+    assert career_efforts == [
         settings.EXTRACTION_REASONING_EFFORT_FAST,
         settings.EXTRACTION_REASONING_EFFORT_STRONG,
     ]
@@ -286,9 +320,9 @@ def test_a_value_that_quotes_nothing_is_rejected():
 
 
 def test_the_prompt_instructs_salary_extraction():
-    """Both salary fields ride the same two-pass call as roles and skills."""
-    from app.services.cv.extract import build_prompt
+    """Salary has its own focused prompt, separate from the career prompt."""
+    from app.services.cv.extract import build_salary_prompt
 
-    prompt = build_prompt(CV)
+    prompt = build_salary_prompt(CV)
     assert "last_drawn_salary" in prompt
     assert "expected_salary" in prompt
