@@ -1086,6 +1086,13 @@ select.gl-input:focus-visible { outline: 2px solid var(--blue-500); outline-offs
   max-width: 460px;
   padding: 24px;
   display: grid;
+  /* Explicit single column. Without this, grid auto-flow put the `<h3>`
+     title (tall once the two-column field grid beside it was added) into
+     column 1 and the `.cand-form` into an implicit column 2 — the modal
+     read as "title on the left, fields on the right", which is exactly the
+     broken layout reported. A named single track forces everything to
+     stack top-to-bottom regardless of any child's height. */
+  grid-template-columns: 1fr;
   gap: 12px;
   /* The candidate form is twenty-odd fields and does not fit a laptop screen.
      Bounding the card and scrolling *inside* it keeps the submit button
