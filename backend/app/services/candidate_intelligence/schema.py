@@ -1,21 +1,26 @@
-"""The model-facing Candidate Intelligence output contract.
+"""The model-facing Candidate Intelligence v2 output contract.
 
-Three Pydantic models — one per pipeline stage — and a `json_schema()` derived
+The engine reassesses a candidate's historical experience against today's
+labour market and derives a candid view of their current economic value. The
+core principle (design doc §1) is:
+
+    Experience is evidence, not value.
+
+Years of experience must not be treated as a proxy for current market value.
+The engine therefore re-prices historical work against today's automation/AI
+reality and surfaces what remains scarce and economically useful.
+
+Five Pydantic models — one per pipeline stage — and a `json_schema()` derived
 from them that travels *in the prompt* as text, exactly as the Job Intelligence
-schema does. The parser is the enforcement; the schema string only tells the
-model what to aim for, which no provider can reject for "the compiled grammar
-is too large".
+schema does. The Pydantic parser is the enforcement; the schema string only
+tells the model what to aim for, which no provider can reject for "the compiled
+grammar is too large".
 
-`supporting_evidence` carries a short verbatim quote from the CV, unlike the
-Job Intelligence fields (which carry no evidence at all). The difference is
-that a CV is a source document the model is reasoning *about*, so a capability
-claim that names where in the CV it came from is both more useful and more
-honest than an unsupported adjective. It is a free-form quote string, not the
-offset/`verify` machinery `ingest`'s `ExtractedField` uses: this is
-interpretation written to JSONB, not a persisted structured fact, so the heavy
-anti-fabrication defense that guards the structured rows does not apply here.
-The light quote satisfies the design doc's "every inference needs provenance"
-without the overhead of re-locating each phrase against the source bytes.
+The evidence/explanation fields (`automation_reason`, `residual_human_value`,
+`note`, `evidence`) exist to satisfy the design doc's guardrails 5 and 6:
+explain every depreciation, and explain every residual-value claim. No silent
+verdict — if a capability is marked low residual value, the reason must travel
+with it.
 """
 
 from pydantic import BaseModel, Field
@@ -26,143 +31,252 @@ from pydantic import BaseModel, Field
 # A name here that the model class does not carry (or vice versa) is a defect.
 
 # allow-hardcode: the target shape of the model's answer, not configuration.
-_CAREER_FIELDS = (
-    "timeline",
+_HISTORY_FIELDS = (
+    "roles",
+    "industries",
+    "functions",
+    "systems",
     "trajectory",
-    "primary_domain",
-    "secondary_domains",
-    "career_direction",
-    "career_stage",
-)
-
-# allow-hardcode: as above. The capability entries are nested objects, handled
-# separately from the flat scalar/array typing the rest of the fields use.
-_CAPABILITY_FIELDS = (
-    "capabilities",
-    "tools",
 )
 
 # allow-hardcode: as above.
-_PROFILE_FIELDS = (
-    "professional_identity",
-    "specializations",
-    "orientation",
-    "role_affinity",
+_AUTOMATION_FIELDS = (
+    "assessments",
+    "scarce_capabilities",
 )
 
-# The scalar (single-string) fields of a capability entry. The `confidence`
-# field is the lone number and `supporting_evidence` is a string; `capability`
-# and `category` are also strings.
-# allow-hardcode: the nested-object field shape, not configuration.
-_CAPABILITY_ENTRY_FIELDS = (
+# allow-hardcode: as above.
+_BENCHMARK_FIELDS = (
+    "work_family",
+    "current_work",
+    "current_required",
+    "declining",
+    "emerging",
+    "scarce",
+    "automation_summary",
+)
+
+# allow-hardcode: as above.
+_GAP_FIELDS = (
+    "gaps",
+    "evidence_gaps",
+)
+
+# allow-hardcode: as above.
+_RESIDUAL_FIELDS = (
+    "historical_strength",
+    "automation_exposure",
+    "current_relevance",
+    "scarce_capabilities",
+    "depreciated_capabilities",
+    "emerging_capabilities",
+    "evidence_gaps",
+    "overall_assessment",
+    "current_profile",
+)
+
+# The scalar (single-string) fields across every stage. Named once so the
+# hand-built schema and the Pydantic model agree on which fields are strings
+# vs arrays vs nested objects. `confidence`/numbers are handled separately.
+# allow-hardcode: the scalar field names, not configuration.
+_SCALAR_FIELDS = {
+    # history role / work item
+    "period",
+    "title",
+    "domain",
+    "seniority",
+    "scope",
+    "evidence",
+    "task",
+    "tool",
+    "judgment_level",
+    "accountability",
+    # history rollup
+    "trajectory",
+    # automation assessment
     "capability",
-    "category",
-    "confidence",
-    "supporting_evidence",
-)
+    "automation_level",
+    "automation_reason",
+    "residual_human_value",
+    # benchmark
+    "work_family",
+    "automation_summary",
+    # gap entry
+    "status",
+    "note",
+    # residual
+    "historical_strength",
+    "automation_exposure",
+    "current_relevance",
+    "overall_assessment",
+    "current_profile",
+}
 
-# The scalar fields of a role-affinity entry. `confidence` is the lone number.
-# allow-hardcode: as above.
-_ROLE_AFFINITY_ENTRY_FIELDS = (
-    "role",
-    "affinity_type",
-    "confidence",
-)
+
+class WorkItem(BaseModel):
+    """One decomposed piece of work a role actually involved (design doc §5).
+
+    Job titles are not sufficient — a "Commercial Underwriter" collects risk
+    information, assesses financials, applies rules, configures a policy. The
+    engine decomposes each role into the actual work performed, because
+    automation exposure is assessed against the *work*, not the title.
+    """
+
+    task: str = ""
+    tool: str = ""
+    judgment_level: str = ""
+    accountability: str = ""
 
 
-class TimelineEntry(BaseModel):
-    """One rung on the chronological career ladder.
+class HistoryRole(BaseModel):
+    """One role from the candidate's history, with its work decomposed.
 
-    `period` is a free-form string (e.g. "2019–2023") because CV date precision
-    varies; normalising here would lose information the model can preserve.
+    Combines design doc Layer 1 (fact extraction — the role's period, title,
+    domain, seniority, scope) with Layer 2 (work decomposition — the `work`
+    list). Deliberately value-neutral: this states what the person did, not
+    what it is worth today.
     """
 
     period: str = ""
     title: str = ""
     domain: str = ""
+    seniority: str = ""
+    scope: str = ""
+    work: list[WorkItem] = Field(default_factory=list)
+    evidence: str = ""
 
 
-class CareerProfile(BaseModel):
-    """Stage 1 — the candidate's career, as a structured progression.
+class HistoryProfile(BaseModel):
+    """Pass 1 — the candidate's history, value-neutral (design doc §4).
 
-    The career timeline and trajectory are first-class objects (design doc
-    Phase 3), not derived display text, because matching reasons about
-    transferable experience even when the current title differs from the target.
+    Layer 1 (facts) + Layer 2 (work decomposition) rolled up. `roles` carries
+    the decomposed work per role; `industries`/`functions`/`systems` are the
+    flat rollups; `trajectory` is the ordered arc of domains the candidate
+    moved through. This layer is deliberately value-neutral — it states what
+    the person did, not what it is worth today.
     """
 
-    timeline: list[TimelineEntry] = Field(default_factory=list)
-    # The ordered progression of domains the candidate moved through, oldest
-    # first — the trajectory diagram the design doc (Phase 6) describes.
+    roles: list[HistoryRole] = Field(default_factory=list)
+    industries: list[str] = Field(default_factory=list)
+    functions: list[str] = Field(default_factory=list)
+    systems: list[str] = Field(default_factory=list)
     trajectory: list[str] = Field(default_factory=list)
-    primary_domain: str
-    secondary_domains: list[str] = Field(default_factory=list)
-    career_direction: str
-    career_stage: str
 
 
-class CapabilityEntry(BaseModel):
-    """One capability the candidate has demonstrated, with its backing evidence.
+class AutomationAssessment(BaseModel):
+    """One capability assessed for automation exposure + residual human value.
 
-    `category` groups capabilities the way the design doc (Phase 4) does:
-    `domain`, `functional`, or `operational`. `confidence` (0.0–1.0) is the
-    model's honest estimate of how well the CV supports the claim, derived from
-    directness, recency, and duration. `supporting_evidence` is a short verbatim
-    quote from the CV — provenance without the offset/verify machinery.
+    Combines Layer 3 (automation test) and Layer 4 (human scarcity). The
+    `automation_level` is one of the five levels from the design doc §6 table
+    (very_high / high / medium / low / very_low). `residual_human_value` is the
+    part of the work that still requires a human — the scarce capability. Both
+    `automation_reason` and `residual_human_value` are mandatory prose because
+    guardrails 5 and 6 forbid a silent verdict: if work is depreciated, the
+    reason must travel with it.
     """
 
-    capability: str
-    category: str
-    confidence: float = 0.0
-    supporting_evidence: str = ""
+    capability: str = ""
+    automation_level: str = ""
+    automation_reason: str = ""
+    residual_human_value: str = ""
 
 
-class CapabilityProfile(BaseModel):
-    """Stage 2 — what the candidate can actually do, evidence-backed.
+class AutomationProfile(BaseModel):
+    """Pass 2 — automation exposure across the candidate's capabilities.
 
-    Capabilities are grouped by category rather than a flat skill list, because
-    "Commercial underwriting (functional, 0.98)" tells a recruiter more than a
-    bare noun. A capability should ideally be supported by an action or repeated
-    experience, not just a noun in a CV — the prompt enforces this.
+    Layer 3 + Layer 4 rollup. `assessments` is per-capability; the
+    `scarce_capabilities` list is the cross-cutting set of capabilities the
+    candidate holds that remain difficult to commoditize (design doc §7).
     """
 
-    capabilities: list[CapabilityEntry] = Field(default_factory=list)
-    tools: list[str] = Field(default_factory=list)
+    assessments: list[AutomationAssessment] = Field(default_factory=list)
+    scarce_capabilities: list[str] = Field(default_factory=list)
 
 
-class RoleAffinity(BaseModel):
-    """One role the candidate could plausibly fit, with a fit classification.
+class MarketBenchmark(BaseModel):
+    """Pass 3 — today's version of the work family (design doc §8 + §9).
 
-    `affinity_type` is `direct_fit` (current title matches), `adjacent` (close
-    but not exact), or `transferable` (different title, shared capabilities).
-    Role affinity is a model hypothesis, not a factual statement about the
-    candidate — the prompt says so, and the UI should present it as such.
+    Layer 5 (current market benchmark) + Layer 6 (depreciation/appreciation).
+    The benchmark represents *today's* version of the work, not the historical
+    version — what the market requires now, what is declining, what is
+    emerging, what is scarce. A 10-year hotline operator cannot automatically
+    receive a "10-year experience" premium against a benchmark where tier-1 is
+    now an AI voice agent.
     """
 
-    role: str
-    affinity_type: str
-    confidence: float = 0.0
+    work_family: str = ""
+    current_work: list[str] = Field(default_factory=list)
+    current_required: list[str] = Field(default_factory=list)
+    declining: list[str] = Field(default_factory=list)
+    emerging: list[str] = Field(default_factory=list)
+    scarce: list[str] = Field(default_factory=list)
+    automation_summary: str = ""
 
 
-class ProfessionalProfile(BaseModel):
-    """Stage 3 — what kind of professional this candidate is.
+class CapabilityGap(BaseModel):
+    """One capability assessed against today's standard (design doc §6 gap).
 
-    The candidate equivalent of the Job Intelligence "Person" view, but a
-    synthesis of *this* candidate's career and capability evidence rather than
-    an ideal-person inference. It should not simply repeat the latest job title.
+    The `status` is the load-bearing 5-way distinction from design doc §2:
+
+      demonstrated | partially_demonstrated | claimed_weak | not_evidenced |
+      contradicted
+
+    "Not evidenced" is NOT "does not possess" (guardrail 4) — the prompt
+    enforces this distinction. `note` explains the status so the verdict is
+    never silent.
     """
 
-    professional_identity: str
-    specializations: list[str] = Field(default_factory=list)
-    orientation: str
-    role_affinity: list[RoleAffinity] = Field(default_factory=list)
+    capability: str = ""
+    status: str = ""
+    note: str = ""
+
+
+class GapAnalysis(BaseModel):
+    """Pass 4 — gaps between the candidate and today's standard (design doc §9).
+
+    `gaps` is the per-capability assessment against the benchmark's required /
+    emerging / scarce capabilities; `evidence_gaps` is the list of specific
+    things the CV does not evidence but a recruiter could verify.
+    """
+
+    gaps: list[CapabilityGap] = Field(default_factory=list)
+    evidence_gaps: list[str] = Field(default_factory=list)
+
+
+class ResidualValueAssessment(BaseModel):
+    """Pass 5 — the decomposable residual value + candid profile (doc §10/§11).
+
+    Layer 7 (residual value) + Layer 8 (current candidate profile). This is the
+    headline output. It must NOT reduce to a single opaque score (doc §10); it
+    is a decomposable assessment where every claim traces to evidence or a
+    benchmark. `current_profile` is the candid paragraph (doc §11) that
+    describes who the candidate is in *today's* market — not "10+ years
+    experience", but what remains scarce and economically useful.
+    """
+
+    historical_strength: str = ""
+    automation_exposure: str = ""
+    current_relevance: str = ""
+    scarce_capabilities: list[str] = Field(default_factory=list)
+    depreciated_capabilities: list[str] = Field(default_factory=list)
+    emerging_capabilities: list[str] = Field(default_factory=list)
+    evidence_gaps: list[str] = Field(default_factory=list)
+    overall_assessment: str = ""
+    current_profile: str = ""
 
 
 class CandidateIntelligenceResult(BaseModel):
-    """All three stages, as the API returns and the row stores them."""
+    """All five stages, as the API returns and the row stores them.
 
-    career: CareerProfile
-    capability: CapabilityProfile
-    profile: ProfessionalProfile
+    The container the worker persists and the API serializes. Each field is one
+    pipeline stage's structured output.
+    """
+
+    history: HistoryProfile
+    automation: AutomationProfile
+    benchmark: MarketBenchmark
+    gaps: GapAnalysis
+    residual: ResidualValueAssessment
 
 
 def json_schema() -> dict:
@@ -171,47 +285,38 @@ def json_schema() -> dict:
     Hand-built to satisfy strict structured output (`additionalProperties: false`
     and `required` naming every property), and written as a flat, readable
     object a model can hold in one pass. One stage at a time is requested —
-    never all three in one call — so each stage's schema is returned by its own
+    never all five in one call — so each stage's schema is returned by its own
     module calling the matching helper below.
     """
     return {
-        "career": _career_schema(),
-        "capability": _capability_schema(),
-        "profile": _profile_schema(),
+        "history": _history_schema(),
+        "automation": _automation_schema(),
+        "benchmark": _benchmark_schema(),
+        "gaps": _gaps_schema(),
+        "residual": _residual_schema(),
     }
 
 
-def _career_schema() -> dict:
-    """The career stage schema, with its nested timeline entries.
-
-    `timeline` is an array of objects, each `{period, title, domain}`. The rest
-    are typed to match their Pydantic model fields: strings in `_SCALAR_FIELDS`,
-    arrays of strings otherwise.
-    """
-    properties: dict[str, object] = {
-        "timeline": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "period": {"type": "string"},
-                    "title": {"type": "string"},
-                    "domain": {"type": "string"},
-                },
-                "required": ["period", "title", "domain"],
-                "additionalProperties": False,
-            },
-        },
+def _work_item_schema() -> dict:
+    """The nested work-item object inside a history role."""
+    properties: dict[str, object] = {name: {"type": "string"} for name in _WORK_ITEM_FIELDS}
+    return {
+        "type": "object",
+        "properties": properties,
+        "required": list(_WORK_ITEM_FIELDS),
+        "additionalProperties": False,
     }
-    for name in _CAREER_FIELDS:
-        if name == "timeline":
-            continue
-        properties[name] = (
-            {"type": "string"}
-            if name in _SCALAR_FIELDS
-            else {"type": "array", "items": {"type": "string"}}
-        )
-    required = [f for f in _CAREER_FIELDS if f != "timeline"] + ["timeline"]
+
+
+def _history_role_schema() -> dict:
+    """The nested history-role object, with its work-item list."""
+    scalar_role_fields = [f for f in _HISTORY_ROLE_FIELDS if f != "work"]
+    properties: dict[str, object] = {name: {"type": "string"} for name in scalar_role_fields}
+    properties["work"] = {
+        "type": "array",
+        "items": _work_item_schema(),
+    }
+    required = list(_HISTORY_ROLE_FIELDS)
     return {
         "type": "object",
         "properties": properties,
@@ -220,97 +325,147 @@ def _career_schema() -> dict:
     }
 
 
-def _capability_schema() -> dict:
-    """The capability stage schema, with its nested capability entries.
+def _history_schema() -> dict:
+    """The history stage schema, with its nested role list + flat rollups."""
+    properties: dict[str, object] = {
+        "roles": {
+            "type": "array",
+            "items": _history_role_schema(),
+        },
+    }
+    for name in _HISTORY_FIELDS:
+        if name == "roles":
+            continue
+        properties[name] = (
+            {"type": "string"}
+            if name in _SCALAR_FIELDS
+            else {"type": "array", "items": {"type": "string"}}
+        )
+    required = list(_HISTORY_FIELDS)
+    return {
+        "type": "object",
+        "properties": properties,
+        "required": required,
+        "additionalProperties": False,
+    }
 
-    `capabilities` is an array of objects, each carrying a `confidence` number
-    and a `supporting_evidence` string alongside the `capability`/`category`
-    strings. `tools` is a plain array of strings.
-    """
-    entry_properties: dict[str, object] = {}
-    for name in _CAPABILITY_ENTRY_FIELDS:
-        if name == "confidence":
-            entry_properties[name] = {"type": "number"}
-        else:
-            entry_properties[name] = {"type": "string"}
+
+def _automation_schema() -> dict:
+    """The automation stage schema, with its nested assessment entries."""
+    entry_properties: dict[str, object] = {
+        name: {"type": "string"} for name in _AUTOMATION_ASSESSMENT_FIELDS
+    }
     return {
         "type": "object",
         "properties": {
-            "capabilities": {
+            "assessments": {
                 "type": "array",
                 "items": {
                     "type": "object",
                     "properties": entry_properties,
-                    "required": list(_CAPABILITY_ENTRY_FIELDS),
+                    "required": list(_AUTOMATION_ASSESSMENT_FIELDS),
                     "additionalProperties": False,
                 },
             },
-            "tools": {"type": "array", "items": {"type": "string"}},
+            "scarce_capabilities": {"type": "array", "items": {"type": "string"}},
         },
-        "required": list(_CAPABILITY_FIELDS),
+        "required": list(_AUTOMATION_FIELDS),
         "additionalProperties": False,
     }
 
 
-def _profile_schema() -> dict:
-    """The profile stage schema, with its nested role-affinity entries.
-
-    `role_affinity` is an array of objects, each carrying a `confidence` number
-    alongside the `role`/`affinity_type` strings. The rest are typed to match
-    their Pydantic model fields.
-    """
-    affinity_properties: dict[str, object] = {}
-    for name in _ROLE_AFFINITY_ENTRY_FIELDS:
-        if name == "confidence":
-            affinity_properties[name] = {"type": "number"}
-        else:
-            affinity_properties[name] = {"type": "string"}
-    properties: dict[str, object] = {
-        "role_affinity": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": affinity_properties,
-                "required": list(_ROLE_AFFINITY_ENTRY_FIELDS),
-                "additionalProperties": False,
-            },
-        },
-    }
-    for name in _PROFILE_FIELDS:
-        if name == "role_affinity":
-            continue
+def _benchmark_schema() -> dict:
+    """The market-benchmark stage schema — scalar fields + array rollups."""
+    properties: dict[str, object] = {}
+    for name in _BENCHMARK_FIELDS:
         properties[name] = (
             {"type": "string"}
             if name in _SCALAR_FIELDS
             else {"type": "array", "items": {"type": "string"}}
         )
-    required = [f for f in _PROFILE_FIELDS if f != "role_affinity"] + ["role_affinity"]
     return {
         "type": "object",
         "properties": properties,
-        "required": required,
+        "required": list(_BENCHMARK_FIELDS),
         "additionalProperties": False,
     }
 
 
-# Fields that are single strings, not arrays. Named once so the schema and the
-# Pydantic model agree on which fields are which shape — see the warning above.
-# allow-hardcode: the scalar field names, not configuration.
-_SCALAR_FIELDS = {
-    # career
-    "primary_domain",
-    "career_direction",
-    "career_stage",
+def _gaps_schema() -> dict:
+    """The gap-analysis stage schema, with its nested capability-gap entries."""
+    entry_properties: dict[str, object] = {
+        name: {"type": "string"} for name in _CAPABILITY_GAP_FIELDS
+    }
+    return {
+        "type": "object",
+        "properties": {
+            "gaps": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": entry_properties,
+                    "required": list(_CAPABILITY_GAP_FIELDS),
+                    "additionalProperties": False,
+                },
+            },
+            "evidence_gaps": {"type": "array", "items": {"type": "string"}},
+        },
+        "required": list(_GAP_FIELDS),
+        "additionalProperties": False,
+    }
+
+
+def _residual_schema() -> dict:
+    """The residual-value stage schema — the decomposable assessment + profile."""
+    properties: dict[str, object] = {}
+    for name in _RESIDUAL_FIELDS:
+        properties[name] = (
+            {"type": "string"}
+            if name in _SCALAR_FIELDS
+            else {"type": "array", "items": {"type": "string"}}
+        )
+    return {
+        "type": "object",
+        "properties": properties,
+        "required": list(_RESIDUAL_FIELDS),
+        "additionalProperties": False,
+    }
+
+
+# The fields of a nested history role (Layer 1 + Layer 2 combined).
+# allow-hardcode: the nested-object field shape, not configuration.
+_HISTORY_ROLE_FIELDS = (
     "period",
     "title",
     "domain",
-    # capability entry
+    "seniority",
+    "scope",
+    "work",
+    "evidence",
+)
+
+# The fields of a decomposed work item (Layer 2).
+# allow-hardcode: as above.
+_WORK_ITEM_FIELDS = (
+    "task",
+    "tool",
+    "judgment_level",
+    "accountability",
+)
+
+# The fields of an automation assessment entry (Layer 3 + Layer 4).
+# allow-hardcode: as above.
+_AUTOMATION_ASSESSMENT_FIELDS = (
     "capability",
-    "category",
-    "supporting_evidence",
-    # profile
-    "professional_identity",
-    "orientation",
-    "role",
-    "affinity_type",
-}
+    "automation_level",
+    "automation_reason",
+    "residual_human_value",
+)
+
+# The fields of a capability-gap entry (Layer 6 gap).
+# allow-hardcode: as above.
+_CAPABILITY_GAP_FIELDS = (
+    "capability",
+    "status",
+    "note",
+)

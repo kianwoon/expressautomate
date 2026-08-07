@@ -12,10 +12,10 @@ from dataclasses import dataclass
 
 from app.services.candidate_intelligence.input import assemble
 from app.services.candidate_intelligence.schema import (
+    AutomationAssessment,
     CandidateIntelligenceResult,
-    CapabilityEntry,
-    RoleAffinity,
-    TimelineEntry,
+    HistoryRole,
+    WorkItem,
     json_schema,
 )
 
@@ -114,62 +114,111 @@ def test_assemble_skips_rejected_roles():
     assert "Fake Co" not in context.structured
 
 
-def test_schema_has_three_stages():
+def test_schema_has_five_stages():
     schema = json_schema()
-    assert set(schema.keys()) == {"career", "capability", "profile"}
+    assert set(schema.keys()) == {"history", "automation", "benchmark", "gaps", "residual"}
 
 
-def test_schema_career_has_nested_timeline():
-    """The timeline is an array of objects, not a flat string list."""
-    timeline_items = json_schema()["career"]["properties"]["timeline"]["items"]
-    assert timeline_items["type"] == "object"
-    assert set(timeline_items["properties"].keys()) == {"period", "title", "domain"}
+def test_schema_history_has_nested_roles_with_work():
+    """A history role carries a nested work-item list (the L2 decomposition)."""
+    role_items = json_schema()["history"]["properties"]["roles"]["items"]
+    assert role_items["type"] == "object"
+    assert "work" in role_items["properties"]
+    work_items = role_items["properties"]["work"]["items"]
+    assert set(work_items["properties"].keys()) == {
+        "task",
+        "tool",
+        "judgment_level",
+        "accountability",
+    }
 
 
-def test_schema_capability_entry_has_confidence_number():
-    """`confidence` is the lone number in a capability entry."""
-    entry_props = json_schema()["capability"]["properties"]["capabilities"]["items"][
-        "properties"
-    ]
-    assert entry_props["confidence"]["type"] == "number"
-    assert entry_props["capability"]["type"] == "string"
-    assert entry_props["supporting_evidence"]["type"] == "string"
+def test_schema_automation_entry_has_required_prose():
+    """Every automation assessment must carry a reason + residual value (guardrails 5/6)."""
+    entry_props = (
+        json_schema()["automation"]["properties"]["assessments"]["items"]["properties"]
+    )
+    assert set(entry_props.keys()) == {
+        "capability",
+        "automation_level",
+        "automation_reason",
+        "residual_human_value",
+    }
 
 
 def test_result_model_round_trips():
-    """The aggregate result model validates a full three-stage payload."""
+    """The aggregate result model validates a full five-stage payload."""
+    # allow-hardcode: test fixture content, not an oracle.
     result = CandidateIntelligenceResult.model_validate(
         {
-            "career": {
-                "timeline": [{"period": "2019", "title": "Analyst", "domain": "Banking"}],
-                "trajectory": ["Banking"],
-                "primary_domain": "Banking",
-                "secondary_domains": [],
-                "career_direction": "Growing",
-                "career_stage": "Early",
-            },
-            "capability": {
-                "capabilities": [
+            "history": {
+                "roles": [
                     {
-                        "capability": "Analysis",
-                        "category": "functional",
-                        "confidence": 0.8,
-                        "supporting_evidence": "did analysis",
+                        "period": "2019",
+                        "title": "Analyst",
+                        "domain": "Banking",
+                        "seniority": "junior",
+                        "scope": "",
+                        "work": [
+                            {
+                                "task": "Reconciliation",
+                                "tool": "Excel",
+                                "judgment_level": "routine",
+                                "accountability": "",
+                            }
+                        ],
+                        "evidence": "did reconciliation",
                     }
                 ],
-                "tools": ["Excel"],
+                "industries": ["Banking"],
+                "functions": ["Analysis"],
+                "systems": ["Excel"],
+                "trajectory": ["Banking"],
             },
-            "profile": {
-                "professional_identity": "Analyst",
-                "specializations": ["Analysis"],
-                "orientation": "Analytical",
-                "role_affinity": [
-                    {"role": "Analyst", "affinity_type": "direct_fit", "confidence": 0.9}
+            "automation": {
+                "assessments": [
+                    {
+                        "capability": "Reconciliation",
+                        "automation_level": "high",
+                        "automation_reason": "Rules engines handle standard recon.",
+                        "residual_human_value": "Exception investigation",
+                    }
                 ],
+                "scarce_capabilities": ["Exception investigation"],
+            },
+            "benchmark": {
+                "work_family": "Banking operations",
+                "current_work": ["Automated reconciliation"],
+                "current_required": ["Exception handling"],
+                "declining": ["Manual reconciliation"],
+                "emerging": ["Automation oversight"],
+                "scarce": ["Exception judgment"],
+                "automation_summary": "Largely automated.",
+            },
+            "gaps": {
+                "gaps": [
+                    {
+                        "capability": "Automation oversight",
+                        "status": "not_evidenced",
+                        "note": "Not shown in CV.",
+                    }
+                ],
+                "evidence_gaps": ["Oversight scope"],
+            },
+            "residual": {
+                "historical_strength": "Banking ops",
+                "automation_exposure": "High",
+                "current_relevance": "Exceptions only",
+                "scarce_capabilities": ["Exception judgment"],
+                "depreciated_capabilities": ["Manual reconciliation"],
+                "emerging_capabilities": [],
+                "evidence_gaps": ["Oversight"],
+                "overall_assessment": "Routine work automated.",
+                "current_profile": "Ops professional.",
             },
         }
     )
-    assert isinstance(result.career.timeline[0], TimelineEntry)
-    assert isinstance(result.capability.capabilities[0], CapabilityEntry)
-    assert isinstance(result.profile.role_affinity[0], RoleAffinity)
-    assert result.career.primary_domain == "Banking"
+    assert isinstance(result.history.roles[0], HistoryRole)
+    assert isinstance(result.history.roles[0].work[0], WorkItem)
+    assert isinstance(result.automation.assessments[0], AutomationAssessment)
+    assert result.history.roles[0].title == "Analyst"
