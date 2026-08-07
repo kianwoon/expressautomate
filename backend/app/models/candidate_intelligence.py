@@ -6,12 +6,12 @@ previous result rather than accumulating a history. The "Candidate analysis"
 button in the candidate modal asks for the analysis and reads it back, and a
 re-ask replaces what the recruiter saw before.
 
-The three JSONB columns (`career` / `capability` / `profile`) mirror the three
-Pydantic models in `app.services.candidate_intelligence.schema`, stored verbatim
-from the model's answer. They are JSONB rather than normalised columns for the
-same reason `JobIntelligence`'s three are: they are read as a unit and never
-queried on individually, so joined tables would buy nothing and cost a join on
-every read.
+The five JSONB columns (`history` / `automation` / `benchmark` / `gaps` /
+`residual`) mirror the five Pydantic stages in
+`app.services.candidate_intelligence.schema`, stored verbatim from the model's
+answer. They are JSONB rather than normalised columns for the same reason
+`JobIntelligence`'s three are: they are read as a unit and never queried on
+individually, so joined tables would buy nothing and cost a join on every read.
 
 The composite FK `(tenant_id, candidate_id) → candidates(tenant_id, id)` keeps
 the tenant boundary explicit — the same pattern `CandidateRole` uses, and
@@ -20,7 +20,7 @@ unique constraint that `opportunities` lacks (which is why `JobIntelligence`
 settled for a plain FK).
 
 `state` is a state machine like `JobIntelligence.state`, for the same reason:
-the analysis runs as an arq job (the three LLM calls have no business inside an
+the analysis runs as an arq job (the five LLM calls have no business inside an
 HTTP request, and every other LLM call in the system runs in the worker process
 where Cerebras is configured — not the api process). A row sits at `pending`
 from the POST until the worker claims it, moves to `running`, then `done` or
@@ -78,11 +78,17 @@ class CandidateIntelligence(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
         Integer, nullable=False, default=0, server_default="0"
     )
 
-    career: Mapped[dict | None] = mapped_column(JSONB)
-    capability: Mapped[dict | None] = mapped_column(JSONB)
-    profile: Mapped[dict | None] = mapped_column(JSONB)
+    # The five v2 residual-value model stages (design doc v2), one JSONB column
+    # per pipeline stage: history, automation, benchmark, gaps, residual. Stored
+    # verbatim from the model's answer. They are JSONB rather than normalised
+    # columns because they are read as a unit and never queried on individually.
+    history: Mapped[dict | None] = mapped_column(JSONB)
+    automation: Mapped[dict | None] = mapped_column(JSONB)
+    benchmark: Mapped[dict | None] = mapped_column(JSONB)
+    gaps: Mapped[dict | None] = mapped_column(JSONB)
+    residual: Mapped[dict | None] = mapped_column(JSONB)
 
-    # The model name recorded on the *last* of the three calls. The three calls
+    # The model name recorded on the *last* of the five calls. The five calls
     # normally share one model, so one name suffices.
     model_name: Mapped[str | None] = mapped_column(Text)
     prompt_tokens: Mapped[int | None] = mapped_column(Integer)

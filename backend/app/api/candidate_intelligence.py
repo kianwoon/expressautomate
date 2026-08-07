@@ -7,7 +7,7 @@ enforces structurally on every candidate-touching route. RLS alone would hand a
 colleague another recruiter's analysis; this gate keeps the two consistent.
 
 POST starts the analysis by creating a `pending` row and enqueuing the arq job,
-then returns 202 — the row exists but the answer does not. The three LLM calls
+then returns 202 — the row exists but the answer does not. The five LLM calls
 run in the worker, not here, for the same two load-bearing reasons as Job
 Intelligence:
 
@@ -15,7 +15,7 @@ Intelligence:
    and intelligence call runs in the worker because the Cerebras credentials
    live on the worker service. The api process has only OpenRouter, so a call
    here passes an empty `CEREBRAS_BASE_URL`, falls back to OpenRouter, and 400s.
-2. **Three model calls have no business inside an HTTP request.**
+2. **Five model calls have no business inside an HTTP request.**
 
 GET reads the stored row back, in whatever state it is. `pending`/`running` is
 "still working"; `done` carries the analysis; `failed` carries a sentence. The
@@ -55,7 +55,7 @@ async def run_candidate_intelligence_route(
     """Queue a Candidate Intelligence analysis for this candidate.
 
     202, not 200: the row exists but the answer does not, exactly as the Job
-    Intelligence POST answers. The worker does the three Cerebras calls.
+    Intelligence POST answers. The worker does the five Cerebras calls.
     """
     user_uuid, tenant_uuid, role = await _require_session_with_role(request)
 
@@ -90,9 +90,11 @@ async def run_candidate_intelligence_route(
         else:
             existing.state = CandidateIntelligence.PENDING
             existing.failure_reason = None
-            existing.career = None
-            existing.capability = None
-            existing.profile = None
+            existing.history = None
+            existing.automation = None
+            existing.benchmark = None
+            existing.gaps = None
+            existing.residual = None
             row_id = existing.id
         await session.commit()
 
@@ -151,11 +153,13 @@ def _serialize(row: CandidateIntelligence) -> dict:
         "failure_reason": row.failure_reason,
         "analysed_at": row.analysed_at.isoformat() if row.analysed_at else None,
     }
-    if row.state == CandidateIntelligence.DONE and row.career is not None:
+    if row.state == CandidateIntelligence.DONE and row.history is not None:
         body["intelligence"] = {
-            "career": row.career,
-            "capability": row.capability,
-            "profile": row.profile,
+            "history": row.history,
+            "automation": row.automation,
+            "benchmark": row.benchmark,
+            "gaps": row.gaps,
+            "residual": row.residual,
         }
     else:
         body["intelligence"] = None

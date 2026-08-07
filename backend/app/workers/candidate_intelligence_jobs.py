@@ -2,12 +2,12 @@
 
 Mirrors `job_intelligence_jobs.py` for the same reasons that module exists:
 
-1. **The worker has Cerebras; the api does not.** The three LLM calls (career →
-   capability → profile) belong in the worker process, where the Cerebras
-   credentials live. A request-handler call would pass an empty
+1. **The worker has Cerebras; the api does not.** The five LLM calls (history →
+   automation → benchmark → gaps → residual) belong in the worker process, where
+   the Cerebras credentials live. A request-handler call would pass an empty
    `CEREBRAS_BASE_URL`, fall back to OpenRouter, and 400.
 
-2. **Three model calls have no business inside an HTTP request** — the row
+2. **Five model calls have no business inside an HTTP request** — the row
    exists but the answer does not, exactly as `run_job_intelligence` and
    `run_sourcing` answer.
 
@@ -64,7 +64,7 @@ async def run_candidate_intelligence(
     candidate_id: str,
     row_id: str,
 ) -> None:
-    """Run the three-stage analysis and store it on the row.
+    """Run the five-stage analysis and store it on the row.
 
     Carries its tenant, like every job here: background work has no request and
     therefore no session tenant. A job naming a mismatched (tenant, row) pair
@@ -183,9 +183,11 @@ async def run_candidate_intelligence(
             .where(CandidateIntelligence.id == record)
             .values(
                 state=CandidateIntelligence.DONE,
-                career=result.career.model_dump(mode="json"),
-                capability=result.capability.model_dump(mode="json"),
-                profile=result.profile.model_dump(mode="json"),
+                history=result.history.model_dump(mode="json"),
+                automation=result.automation.model_dump(mode="json"),
+                benchmark=result.benchmark.model_dump(mode="json"),
+                gaps=result.gaps.model_dump(mode="json"),
+                residual=result.residual.model_dump(mode="json"),
                 model_name=outcome.stats.model,
                 prompt_tokens=outcome.stats.prompt_tokens,
                 completion_tokens=outcome.stats.completion_tokens,
