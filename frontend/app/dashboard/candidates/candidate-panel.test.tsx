@@ -115,6 +115,7 @@ function panel(row: Candidate) {
   return (
     <CandidatePanel
       row={row}
+      onClose={() => {}}
       onEdit={() => {}}
       onArchive={async () => {}}
       onRestore={async () => {}}

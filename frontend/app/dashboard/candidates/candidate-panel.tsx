@@ -14,6 +14,7 @@ import { CandidateCv } from "./candidate-cv";
 import { CandidateHistory } from "./candidate-history";
 import { CandidateShareDialog } from "./candidate-share";
 import { WhatsappActivityTimeline, WhatsappButton } from "./candidate-whatsapp";
+import { Dialog } from "../dialog";
 
 /**
  * One candidate in full, beside the list.
@@ -123,6 +124,7 @@ const STAGE_LABEL: Record<Candidate["pipeline_stage"], string> = {
 
 export function CandidatePanel({
   row,
+  onClose,
   onEdit,
   onArchive,
   onRestore,
@@ -131,6 +133,8 @@ export function CandidatePanel({
   onDetailChanged,
 }: {
   row: Candidate | null;
+  /** Closes the modal. The parent owns the `selectedId`; this just clears it. */
+  onClose: () => void;
   onEdit: () => void;
   onArchive: () => Promise<void>;
   /** Undoes an archive. Archiving is reversible by design, so this is offered
@@ -148,22 +152,13 @@ export function CandidatePanel({
    *  mid-upload. */
   onDetailChanged: () => void;
 }) {
-  if (!row) {
-    return (
-      <aside className="card jo-detail" aria-label="Candidate details">
-        <span className="eyebrow">Details</span>
-        <p className="body jo-detail-empty">
-          Select a candidate to read their full record, including skills and any fields edited by
-          hand.
-        </p>
-      </aside>
-    );
-  }
+  if (!row) return null;
 
   return (
     <Detail
       key={row.id}
       row={row}
+      onClose={onClose}
       onEdit={onEdit}
       onArchive={onArchive}
       onRestore={onRestore}
@@ -180,6 +175,7 @@ function overridden(row: Candidate, field: string): boolean {
 
 function Detail({
   row,
+  onClose,
   onEdit,
   onArchive,
   onRestore,
@@ -188,6 +184,7 @@ function Detail({
   onDetailChanged,
 }: {
   row: Candidate;
+  onClose: () => void;
   onEdit: () => void;
   onArchive: () => Promise<void>;
   onRestore: () => Promise<void>;
@@ -282,15 +279,21 @@ function Detail({
   }
 
   return (
-    <aside className="card jo-detail" aria-label="Candidate details">
-      <div className="jo-detail-head">
-        <span className="eyebrow">Details</span>
-        {row.record_status === "merged" ? (
-          <span className="muted">Merged</span>
-        ) : (
-          <span className="eyebrow">{STAGE_LABEL[row.pipeline_stage]}</span>
-        )}
-      </div>
+    <Dialog
+      titleId="cand-detail-title"
+      onClose={busy ? () => {} : onClose}
+      className="dlg-modal-wide cand-detail-modal"
+      title={
+        <span className="jo-detail-title-row">
+          <span>{row.full_name}</span>
+          {row.record_status === "merged" ? (
+            <span className="eyebrow">Merged</span>
+          ) : (
+            <span className="eyebrow">{STAGE_LABEL[row.pipeline_stage]}</span>
+          )}
+        </span>
+      }
+    >
 
       {/* The name sits beside the photo rather than under it: the two
           together are the answer to "who am I looking at", and splitting
@@ -482,7 +485,7 @@ function Detail({
           {error}
         </p>
       )}
-    </aside>
+    </Dialog>
   );
 }
 

@@ -76,18 +76,13 @@
   gap: 20px; align-items: start;
 }
 
-/* The candidates list column: the table and its pager together, as one grid
-   child of `.jo-split`, so the pager sits directly under the last row rather
-   than under the whole split — where it used to be, level with a detail panel
-   that is sticky and a screen tall. Job orders solves the same problem with
-   `.jo-list` in job-orders.css; this is the candidates page's own copy rather
-   than a shared import, because that file is scoped to job orders and pulling
-   it in here for one rule would make the candidates page depend on CSS that
-   is not about it. `min-width: 0` is the part that actually matters: without
-   it a grid item defaults to the intrinsic width of its content, and a
-   fixed-layout table would push this column wider than the 1.85fr `.jo-split`
-   gives it. */
-.cand-list { min-width: 0; }
+/* The full-width list wrapper both dashboard pages use: the table and its
+   pager together, the detail opening as a modal over it rather than beside
+   it. `min-width: 0` is the part that actually matters: without it a
+   fixed-layout table would push this block wider than the viewport. The
+   container-query context (`@container jo-list`) lives in job-orders.css,
+   scoped to that page's responsive cell hiding; the base rule is shared. */
+.jo-list { min-width: 0; }
 
 /* Sticky so the row stays readable while the list is scrolled. Cleared of the
    sticky nav, and capped so a long description scrolls inside the panel
