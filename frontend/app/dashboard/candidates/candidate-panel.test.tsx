@@ -14,7 +14,7 @@ import { CandidatePanel } from "./candidate-panel";
  * - the Owner row reads the server's `owner.name` directly — it must NOT
  *   resolve the name a second time through `useMembers()`, which is a second
  *   place for the name to disagree with the server's.
- * - the Edit button's disabled state is exactly `!row.can_edit` — never a
+ * - the Save button's disabled state is exactly `!row.can_edit` — never a
  *   re-derived `owner.id === me.id` comparison, so the UI cannot drift from
  *   the server's rule.
  *
@@ -116,7 +116,6 @@ function panel(row: Candidate) {
     <CandidatePanel
       row={row}
       onClose={() => {}}
-      onEdit={() => {}}
       onArchive={async () => {}}
       onRestore={async () => {}}
       onDelete={null}
@@ -139,20 +138,20 @@ describe("who holds a candidate, on the panel", () => {
     ).toBeTruthy();
   });
 
-  it("disables Edit exactly when can_edit is false, and says why", async () => {
+  it("disables Save exactly when can_edit is false, and says why", async () => {
     render(panel(candidate({ owner: { id: "u-2", name: "Sarah Lim" }, can_edit: false })));
-    const edit = screen.getByRole("button", { name: "Edit" });
-    expect(edit.hasAttribute("disabled")).toBe(true);
+    const save = screen.getByRole("button", { name: "Save changes" });
+    expect(save.hasAttribute("disabled")).toBe(true);
     expect(
       screen.getByText(/Sarah Lim holds this candidate/),
     ).toBeTruthy();
   });
 
-  it("enables Edit when can_edit is true, even for a colleague's row", async () => {
+  it("enables Save when can_edit is true, even for a colleague's row", async () => {
     // The owner role can edit anyone's candidate — can_edit says so; nothing
     // here re-derives it from owner.id === me.id.
     render(panel(candidate({ owner: { id: "u-2", name: "Sarah Lim" }, can_edit: true })));
-    const edit = screen.getByRole("button", { name: "Edit" });
-    expect(edit.hasAttribute("disabled")).toBe(false);
+    const save = screen.getByRole("button", { name: "Save changes" });
+    expect(save.hasAttribute("disabled")).toBe(false);
   });
 });
