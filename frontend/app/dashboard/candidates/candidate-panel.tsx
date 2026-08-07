@@ -322,8 +322,8 @@ function Detail({
       className="dlg-modal-wide cand-detail-modal"
       title={
         row.record_status === "merged"
-          ? "Merged candidate"
-          : "Edit candidate"
+          ? `${row.full_name} (merged)`
+          : row.full_name
       }
     >
       {row.record_status === "merged" ? (
