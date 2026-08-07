@@ -19,10 +19,11 @@ sending an empty model id — and a second copy would drift from it.
 """
 
 import json
+import re
 
 from app.core.config import settings
 from app.core.logging import get_logger
-from app.services.cv.schema import CVResponse, ExtractedSalary, ExtractedRole, cv_json_schema
+from app.services.cv.schema import CVResponse, ExtractedRole, ExtractedSalary, cv_json_schema
 from app.services.ingest.evidence import verify
 from app.services.ingest.extract import _attempts
 from app.services.ingest.schema import NOT_MENTIONED
@@ -55,19 +56,6 @@ Rules:
   title. If you are unsure, "{not_mentioned}" is the correct answer.
 - `skills` are only the ones the CV names. Do not expand an abbreviation into a
   skill the page does not contain.
-- `last_drawn_salary` and `expected_salary` are the salary figures the candidate
-  stated. Read the figure and return it as structured parts:
-  - `amount`: the numeric amount in ONE period (the figure as stated, not annualised).
-    "$ 5000 x 12" → amount 5000 (monthly); "$60,000/year" → amount 60000.
-  - `currency`: the ISO code. A bare "$" on a Singapore CV is SGD; "RM" is MYR.
-    Use the currency the CV states, or SGD if it only prints "$".
-  - `period`: "hour", "day", "week", "month", or "year" — whichever the figure is in.
-    "$ 5000 x 12" is monthly (the x12 is months per year). "per annum" is year.
-  - `evidence`: the EXACT text from the CV that states this salary, copied VERBATIM.
-    This is checked — a salary whose quote is not on the page is discarded.
-  - If the CV states no salary, set `amount` to null and all other fields to null.
-  - A "last drawn" / "current" figure goes in `last_drawn_salary`; an "expected"
-    figure goes in `expected_salary`. Never move one into the other.
 
 Return JSON matching this schema:
 {schema}
@@ -77,17 +65,157 @@ CV:
 """
 
 
+# allow-hardcode: a prompt, not configuration.
+SALARY_PROMPT = """Read the salary figures the candidate stated on this CV.
+
+Rules:
+- `last_drawn_salary`: the salary the candidate last or currently earns.
+- `expected_salary`: the salary the candidate is asking for next.
+- For each, return the structured parts:
+  - `amount`: the numeric amount in ONE period (the figure as stated, not annualised).
+    "$ 5000 x 12" means 5000/month (the x12 is months per year); "$60,000/year"
+    means 60000/year.
+  - `currency`: the ISO code. A bare "$" on a Singapore CV is SGD; "RM" is MYR.
+    Use the currency the CV states, or SGD if it only prints "$".
+  - `period`: one of "hour", "day", "week", "month", or "year".
+  - `evidence`: the EXACT text from the CV stating this salary, copied VERBATIM.
+    This is checked — a salary whose quote is not on the page is discarded.
+  - If the CV states no salary, set `amount` to null and all other fields to null.
+- A "current" figure is not an "expected" one — never move one into the other.
+
+Return JSON with this shape:
+{{"last_drawn_salary": {{"amount": number|null, "currency": string|null,
+  "period": string|null, "evidence": string|null, "confidence": number}},
+"expected_salary": {{"amount": number|null, "currency": string|null,
+  "period": string|null, "evidence": string|null, "confidence": number}}}}
+
+CV:
+{cv}
+"""
+
+
 def build_prompt(source: str) -> str:
     """Separate from `extract_cv` so a prompt change is testable without a model."""
+    # The roles/skills schema excludes salary — salary is extracted in a
+    # separate call from a smaller text window (see `_salary_window`).
+    schema = cv_json_schema()
+    roles_schema = {
+        "type": "object",
+        "properties": {
+            "roles": schema["properties"]["roles"],
+            "skills": schema["properties"]["skills"],
+        },
+        "required": ["roles", "skills"],
+        "additionalProperties": False,
+    }
     return PROMPT.format(
         not_mentioned=NOT_MENTIONED,
-        schema=json.dumps(cv_json_schema()),
+        schema=json.dumps(roles_schema),
         cv=source,
     )
 
 
+def build_salary_prompt(source: str) -> str:
+    """The salary-only prompt, testable without a model."""
+    return SALARY_PROMPT.format(cv=source)
+
+
+# Salary lives in the personal-particulars header, always near the top of a CV.
+# A window this size captures it without feeding the model the entire career
+# history — which is what made the model give up on large CVs.
+_SALARY_WINDOW_CHARS = 2000
+
+
+def _salary_window(text: str) -> str:
+    """The slice of a CV where salary is stated: the personal-particulars header.
+
+    Salary ("Last Drawn", "Expected Salary") is always in the header section at
+    the top of a CV, never buried in employment history. Sending just this window
+    to the model means salary extraction succeeds even on a CV large enough that
+    the full-document career extraction bails — the two are independent calls.
+    """
+    return text[:_SALARY_WINDOW_CHARS]
+
+
 async def extract_cv(text: str, *, llm=None) -> tuple[CVResponse, LLMResult]:
-    """Extract a career, escalating only when the first pass demonstrably failed.
+    """Extract a career and salary, in two independent calls.
+
+    Roles and skills are read from the full document with the two-pass
+    escalation (fast model → strong model when evidence fails). Salary is read
+    from a small window at the top of the CV (the personal-particulars header
+    where "Last Drawn" / "Expected Salary" always sit), so a CV large enough
+    that the career extraction bails still yields its salary — the two calls
+    are independent, and a failure in one does not lose the other.
+
+    `schema=None` is deliberate: it asks for a bare `json_object`. The schema
+    travels in the prompt, so no provider has to compile a grammar it may refuse
+    — the outage that taught email extraction the same lesson.
+
+    `llm` defaults to None rather than to `complete_json` because a default
+    argument binds the function object at definition time, and monkeypatching
+    this module would then do nothing.
+    """
+    resolve = llm or complete_json
+
+    # Salary: small window, one pass. Fast and reliable — never the bottleneck.
+    salary_response = await _extract_salary(text, resolve)
+
+    # Roles + skills: full document, two-pass escalation.
+    career_response, result = await _extract_career(text, resolve)
+
+    # Merge: salary fills into the career response.
+    return (
+        CVResponse(
+            roles=career_response.roles,
+            skills=career_response.skills,
+            last_drawn_salary=salary_response.last_drawn_salary,
+            expected_salary=salary_response.expected_salary,
+        ),
+        result,
+    )
+
+
+async def _extract_salary(
+    text: str, resolve
+) -> CVResponse:
+    """Extract salary from the personal-particulars window. Never raises.
+
+    A salary extraction failure (model error, parse error) leaves both fields
+    None — honest absence, not a crashed pipeline. The career extraction is
+    independent and still runs. Evidence is verified against the full CV text,
+    not just the window, so a fabricated quote is caught regardless.
+    """
+    window = _salary_window(text)
+    try:
+        result = await resolve(
+            build_salary_prompt(window),
+            model=settings.EXTRACTION_MODEL_FAST,
+            schema=None,
+            base_url=settings.CEREBRAS_BASE_URL,
+            api_key=settings.CEREBRAS_API_KEY,
+            extra_body={
+                "max_tokens": settings.EXTRACTION_MAX_TOKENS,
+            },
+        )
+        data = result.data
+        ld = data.get("last_drawn_salary")
+        ex = data.get("expected_salary")
+        response = CVResponse(
+            last_drawn_salary=_verified_salary(
+                ExtractedSalary.model_validate(ld) if ld else None, text
+            ),
+            expected_salary=_verified_salary(
+                ExtractedSalary.model_validate(ex) if ex else None, text
+            ),
+        )
+        return response
+    except (LLMInvalidJSON, ValueError, TypeError) as exc:
+        log.warning("cv_salary_extraction_failed", error=repr(exc))
+        return CVResponse()
+
+
+async def _extract_career(text: str, resolve) -> tuple[CVResponse, LLMResult]:
+    """Extract roles and skills from the full document, escalating on failure.
 
     Escalation is not a retry. Temperature is zero, so re-asking the same model
     the same question buys a second bill and the same answer — which is why the
@@ -96,16 +224,7 @@ async def extract_cv(text: str, *, llm=None) -> tuple[CVResponse, LLMResult]:
     cannot parse (which includes claiming a date precision the page does not
     support), or the text it quoted is not on the page. Both are decided here by
     code, never by the model's opinion of its own work.
-
-    `schema=None` is deliberate: it asks for a bare `json_object`. The schema
-    travels in the prompt, so no provider has to compile a grammar it may
-    refuse — the outage that taught email extraction the same lesson.
-
-    `llm` defaults to None rather than to `complete_json` because a default
-    argument binds the function object at definition time, and monkeypatching
-    this module would then do nothing.
     """
-    resolve = llm or complete_json
     prompt = build_prompt(text)
     last: tuple[CVResponse, LLMResult] | None = None
     failure: Exception | None = None
@@ -158,17 +277,7 @@ def _fields(role: ExtractedRole) -> list:
     return [f for f in vars(role).values() if f is not None and not f.is_missing]
 
 
-def _drop_if_missing(field: ExtractedSalary | None) -> ExtractedSalary | None:
-    """A salary field with no amount asserts nothing.
-
-    Same reason `_fields` skips "Not mentioned" role fields: a null amount has
-    no quotation for `verify` to test, and would ride along as if the CV had
-    stated a salary it did not.
-    """
-    return None if field is None or field.is_missing else field
-
-
-def _verify_salary(
+def _verified_salary(
     field: ExtractedSalary | None, source: str
 ) -> ExtractedSalary | None:
     """Keep a salary only if its evidence quote is on the page, else drop to None.
@@ -187,7 +296,6 @@ def _verify_salary(
 
 def _normalise(text: str) -> str:
     """Whitespace-insensitive contains check, matching `ingest.evidence.verify`."""
-    import re
     return re.sub(r"\s+", " ", text).strip().lower()
 
 
@@ -205,8 +313,6 @@ def _drop_unstated(response: CVResponse) -> CVResponse:
     return CVResponse(
         roles=[r for r in response.roles if _fields(r)],
         skills=[s for s in response.skills if not s.is_missing],
-        last_drawn_salary=_drop_if_missing(response.last_drawn_salary),
-        expected_salary=_drop_if_missing(response.expected_salary),
     )
 
 
@@ -237,11 +343,7 @@ def _needs_a_better_model(response: CVResponse, source: str) -> bool:
         not _role_is_supported(role, source) for role in response.roles
     )
     unsupported_skill = any(not verify(s, source) for s in response.skills)
-    unsupported_salary = any(
-        _verify_salary(field, source) is None and field is not None and not field.is_missing
-        for field in (response.last_drawn_salary, response.expected_salary)
-    )
-    return unsupported_role or unsupported_skill or unsupported_salary
+    return unsupported_role or unsupported_skill
 
 
 def _only_what_the_page_supports(response: CVResponse, source: str) -> CVResponse:
@@ -256,6 +358,4 @@ def _only_what_the_page_supports(response: CVResponse, source: str) -> CVRespons
     return CVResponse(
         roles=[r for r in response.roles if _role_is_supported(r, source)],
         skills=[s for s in response.skills if verify(s, source)],
-        last_drawn_salary=_verify_salary(response.last_drawn_salary, source),
-        expected_salary=_verify_salary(response.expected_salary, source),
     )

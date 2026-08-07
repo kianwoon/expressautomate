@@ -49,7 +49,13 @@ from app.models.candidate import CandidateDocument, CandidateRole
 from app.services.candidate_naming import normalize_skill
 from app.services.candidate_tenure import span_months
 from app.services.client_naming import normalize_company_name
-from app.services.cv.schema import ROLE_FIELDS, CVResponse, ExtractedDate, ExtractedRole, ExtractedSalary
+from app.services.cv.schema import (
+    ROLE_FIELDS,
+    CVResponse,
+    ExtractedDate,
+    ExtractedRole,
+    ExtractedSalary,
+)
 from app.services.ingest.evidence import verify
 from app.services.ingest.schema import ExtractedField
 from app.services.llm.client import LLMResult
@@ -721,7 +727,10 @@ async def _insert_salary_evidence(
             "extraction_id": extraction_id,
             "candidate_role_id": None,
             "field_name": name,
-            "extracted_value": f"{field.amount} {field.currency or ''} /{field.period or ''}".strip(),
+            "extracted_value": (
+                f"{field.amount} {field.currency or ''}"
+                f" /{field.period or ''}".strip()
+            ),
             "evidence_text": field.evidence,
             "start_char": None,
             "end_char": None,
