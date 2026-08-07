@@ -1272,14 +1272,12 @@ select.gl-input:focus-visible { outline: 2px solid var(--blue-500); outline-offs
   line-height: 1.4;
 }
 
-/* The career timeline: a three-column row (period / title / domain) per role. */
-/* The Career tab's timeline table. Mirrors the dashboard `.jo-table` look
-   (header strip with `surface-alt`, row borders, 12×14 padding) but is kept
-   self-contained here under a candidate-scoped class because the candidates
-   route does not load `job-orders.css`. Three columns: Period / Role / Domain,
-   sized to the data — a period is a fixed-width token, the role is the line a
-   recruiter reads along, the domain is a short qualifier that fits a narrow
-   track. */
+/* The gap-analysis table. Mirrors the dashboard `.jo-table` look (header strip
+   with `surface-alt`, row borders, 12×14 padding) but is kept self-contained
+   here under a candidate-scoped class because the candidates route does not
+   load `job-orders.css`. Three columns: Capability / Status / Note. Capability
+   is the line a recruiter reads along; Status holds a coloured pill; Note
+   explains the verdict. */
 .cand-intel-table {
   width: 100%;
   border-collapse: collapse;
@@ -1299,13 +1297,11 @@ select.gl-input:focus-visible { outline: 2px solid var(--blue-500); outline-offs
   letter-spacing: 0.02em;
 }
 /* Column widths live on <col> in a colgroup so `table-layout: fixed` honors
-   them. A percentage on the cell (the old `width: 9em` on .cand-intel-th-period)
-   is ignored under fixed layout when there is no <col>, so every column got an
-   equal third and Period overflowed into Role. Period ~18%, Role ~52%, Domain
-   ~30% — Role is the line a recruiter reads along, so it gets the most room. */
-.cand-intel-col-period { width: 18%; }
-.cand-intel-col-role { width: 52%; }
-.cand-intel-col-domain { width: 30%; }
+   them. Capability ~50% (the line you read along), Status ~20% (a pill),
+   Note ~30%. */
+.cand-intel-col-cap { width: 50%; }
+.cand-intel-col-status { width: 20%; }
+.cand-intel-col-note { width: 30%; }
 .cand-intel-tr { border-top: 1px solid var(--line); }
 .cand-intel-td {
   padding: 10px 12px;
@@ -1313,22 +1309,38 @@ select.gl-input:focus-visible { outline: 2px solid var(--blue-500); outline-offs
   overflow-wrap: anywhere;
   line-height: 1.4;
 }
-.cand-intel-td-period { color: var(--ink-500); }
 .cand-intel-td-title { color: var(--ink-900); font-weight: 500; }
-.cand-intel-td-domain { color: var(--ink-500); }
+.cand-intel-td-note { color: var(--ink-500); }
 
-/* A capability entry: a head row (name / category) over a confidence meter over
-   the supporting-evidence quote. Each entry is a card (border + padding) so a
-   dozen capabilities read as a ranked list, not a wall of text — the recruiter
-   scans the meter lengths top to bottom to rank the candidate. */
-.cand-intel-cap-list {
+/* A status/level pill. Colour is redundant to the label word — never the only
+   signal (per the `.jo-quality` accessibility idiom). Amber = exposed/weak;
+   teal = scarce/demonstrated; blue = moderate/partial; grey = neutral. */
+.cand-intel-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.6875rem;
+  font-weight: 650;
+  padding: 2px 8px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.cand-intel-pill-amber { color: var(--amber-700); background: var(--amber-050); }
+.cand-intel-pill-teal { color: var(--teal-500); background: var(--teal-050); }
+.cand-intel-pill-blue { color: var(--blue-600); background: var(--blue-050); }
+.cand-intel-pill-grey { color: var(--ink-700); background: var(--surface-alt); }
+
+/* An automation-assessment card: a head row (capability / level pill) over the
+   reason and the residual human value. Each entry is a card (border + padding)
+   so a dozen assessments read as a ranked list, not a wall of text. */
+.cand-intel-card-list {
   margin: 6px 0 0;
   padding: 0;
   list-style: none;
   display: grid;
   gap: 10px;
 }
-.cand-intel-cap {
+.cand-intel-card {
   display: grid;
   gap: 6px;
   padding: 12px 14px;
@@ -1336,14 +1348,56 @@ select.gl-input:focus-visible { outline: 2px solid var(--blue-500); outline-offs
   border-radius: 10px;
   background: var(--surface, #fff);
 }
-.cand-intel-cap-head {
+.cand-intel-card-head {
   display: flex;
   align-items: baseline;
   gap: 8px;
   flex-wrap: wrap;
 }
-.cand-intel-cap-name { font-size: 0.9375rem; color: var(--ink-900); font-weight: 600; }
-.cand-intel-cap-cat {
+.cand-intel-card-name { font-size: 0.9375rem; color: var(--ink-900); font-weight: 600; }
+.cand-intel-card-reason {
+  margin: 0;
+  font-size: 0.8125rem;
+  color: var(--ink-700);
+  line-height: 1.45;
+}
+.cand-intel-card-residual {
+  margin: 0;
+  font-size: 0.8125rem;
+  color: var(--ink-500);
+  line-height: 1.45;
+}
+.cand-intel-card-label { font-weight: 600; color: var(--ink-700); }
+
+/* A history role: a head row (period / title / domain / seniority) over the
+   scope and the decomposed work items. Each role is a card so the history
+   reads as a sequence of roles, each with its work visible — the L2
+   decomposition the automation stage reasons about. */
+.cand-intel-role-list {
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 10px;
+}
+.cand-intel-role {
+  display: grid;
+  gap: 6px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface, #fff);
+}
+.cand-intel-role-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.cand-intel-role-period { font-size: 0.75rem; color: var(--ink-500); flex: 0 0 auto; }
+.cand-intel-role-title { font-size: 0.9375rem; color: var(--ink-900); font-weight: 600; }
+.cand-intel-role-domain { font-size: 0.75rem; color: var(--ink-500); }
+.cand-intel-role-seniority {
   font-size: 0.6875rem;
   color: var(--ink-500);
   text-transform: uppercase;
@@ -1353,37 +1407,38 @@ select.gl-input:focus-visible { outline: 2px solid var(--blue-500); outline-offs
   border-radius: 999px;
   background: var(--surface-alt);
 }
-/* Confidence meter row: the track grows to fill the free space, the percentage
-   sits beside it at a fixed width so the bars all start from the same left edge
-   and line up vertically across cards. ARIA label carries the exact number for
-   screen readers. */
-.cand-intel-cap-meter {
-  display: flex;
-  align-items: center;
-  gap: 10px;
+.cand-intel-role-scope { margin: 0; font-size: 0.8125rem; color: var(--ink-700); }
+.cand-intel-work-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 3px;
 }
-.cand-intel-cap-meter-track {
-  position: relative;
-  flex: 1 1 auto;
-  min-width: 0;
-  height: 6px;
-  border-radius: 999px;
-  background: var(--surface-alt);
-  overflow: hidden;
+.cand-intel-work-item {
+  font-size: 0.8125rem;
+  color: var(--ink-900);
+  line-height: 1.4;
 }
-.cand-intel-cap-pct {
-  flex: 0 0 auto;
-  font-size: 0.75rem;
-  font-weight: 600;
-  color: var(--blue-500);
-  font-variant-numeric: tabular-nums;
+.cand-intel-work-task { color: var(--ink-900); }
+.cand-intel-work-meta { color: var(--ink-500); }
+.cand-intel-work-judgment {
+  margin-left: 6px;
+  font-size: 0.6875rem;
+  color: var(--ink-500);
+  text-transform: lowercase;
 }
-.cand-intel-cap-fill {
-  display: block;
-  height: 100%;
-  border-radius: 999px;
-  background: var(--blue-500);
+
+/* The candid current-profile paragraph — the v2 headline output. Sits as the
+   closing block of the Residual value tab. */
+.cand-intel-profile {
+  margin: 0;
+  font-size: 0.9375rem;
+  color: var(--ink-900);
+  line-height: 1.55;
 }
+
+/* A supporting-evidence quote (reused by the history role card). */
 .cand-intel-cap-evidence {
   margin: 0;
   font-size: 0.8125rem;

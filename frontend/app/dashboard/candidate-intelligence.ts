@@ -9,7 +9,7 @@ import { ApiError, readError } from "./candidates";
  * The one place that talks to the Candidate Intelligence endpoints.
  *
  * The analysis runs as a background job: POST creates a `pending` row and
- * returns 202 immediately (the three Cerebras calls run in the worker, not the
+ * returns 202 immediately (the five Cerebras calls run in the worker, not the
  * request), and GET reads the row back in whatever state it is in. The panel
  * polls GET until the row is terminal, exactly as the Job Intelligence panel
  * polls and the sourcing panel polls a run.
@@ -25,56 +25,101 @@ import { ApiError, readError } from "./candidates";
  *  two worth asking again about; see `inFlight`. */
 export type CandidateIntelligenceState = "pending" | "running" | "done" | "failed";
 
-/** Stage 1 — the candidate's career as a structured progression. Mirrors
- *  `CareerProfile` on the server. */
-export type TimelineEntry = {
+/** One decomposed piece of work a role involved (design doc L2). Mirrors
+ *  `WorkItem` on the server. */
+export type WorkItem = {
+  task: string;
+  tool: string;
+  judgment_level: string;
+  accountability: string;
+};
+
+/** One role from the candidate's history, with its work decomposed (L1 + L2).
+ *  Mirrors `HistoryRole`. */
+export type HistoryRole = {
   period: string;
   title: string;
   domain: string;
+  seniority: string;
+  scope: string;
+  work: WorkItem[];
+  evidence: string;
 };
 
-export type CareerProfile = {
-  timeline: TimelineEntry[];
+/** Pass 1 — the candidate's history, value-neutral (L1 + L2). Mirrors
+ *  `HistoryProfile`. */
+export type HistoryProfile = {
+  roles: HistoryRole[];
+  industries: string[];
+  functions: string[];
+  systems: string[];
   trajectory: string[];
-  primary_domain: string;
-  secondary_domains: string[];
-  career_direction: string;
-  career_stage: string;
 };
 
-/** Stage 2 — evidence-backed capabilities. Mirrors `CapabilityProfile`. */
-export type CapabilityEntry = {
+/** One capability assessed for automation exposure + residual human value
+ *  (L3 + L4). Mirrors `AutomationAssessment`. */
+export type AutomationAssessment = {
   capability: string;
-  category: string;
-  confidence: number;
-  supporting_evidence: string;
+  automation_level: string;
+  automation_reason: string;
+  residual_human_value: string;
 };
 
-export type CapabilityProfile = {
-  capabilities: CapabilityEntry[];
-  tools: string[];
+/** Pass 2 — automation exposure across capabilities (L3 + L4). Mirrors
+ *  `AutomationProfile`. */
+export type AutomationProfile = {
+  assessments: AutomationAssessment[];
+  scarce_capabilities: string[];
 };
 
-/** Stage 3 — the synthesised professional profile. Mirrors
- *  `ProfessionalProfile`. */
-export type RoleAffinity = {
-  role: string;
-  affinity_type: string;
-  confidence: number;
+/** Pass 3 — today's version of the work family (L5 + L6). Mirrors
+ *  `MarketBenchmark`. */
+export type MarketBenchmark = {
+  work_family: string;
+  current_work: string[];
+  current_required: string[];
+  declining: string[];
+  emerging: string[];
+  scarce: string[];
+  automation_summary: string;
 };
 
-export type ProfessionalProfile = {
-  professional_identity: string;
-  specializations: string[];
-  orientation: string;
-  role_affinity: RoleAffinity[];
+/** One capability assessed against today's standard (L6 gap). Mirrors
+ *  `CapabilityGap`. */
+export type CapabilityGap = {
+  capability: string;
+  status: string;
+  note: string;
 };
 
-/** All three stages, present only when `state === "done"`. */
+/** Pass 4 — gaps between the candidate and today's standard (L6). Mirrors
+ *  `GapAnalysis`. */
+export type GapAnalysis = {
+  gaps: CapabilityGap[];
+  evidence_gaps: string[];
+};
+
+/** Pass 5 — the decomposable residual value + candid profile (L7 + L8).
+ *  Mirrors `ResidualValueAssessment`. */
+export type ResidualValueAssessment = {
+  historical_strength: string;
+  automation_exposure: string;
+  current_relevance: string;
+  scarce_capabilities: string[];
+  depreciated_capabilities: string[];
+  emerging_capabilities: string[];
+  evidence_gaps: string[];
+  overall_assessment: string;
+  current_profile: string;
+};
+
+/** All five stages, present only when `state === "done"`. */
 export type CandidateIntelligence = {
-  career: CareerProfile;
-  capability: CapabilityProfile;
-  profile: ProfessionalProfile;
+  history: HistoryProfile;
+  automation: AutomationProfile;
+  benchmark: MarketBenchmark;
+  gaps: GapAnalysis;
+  residual: ResidualValueAssessment;
 };
 
 /** The full row, as GET and POST return it. */
