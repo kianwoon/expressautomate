@@ -23,6 +23,7 @@ import { CandidateShareDialog } from "./candidate-share";
 import { WhatsappActivityTimeline, WhatsappButton } from "./candidate-whatsapp";
 import {
   changedFields,
+  Field,
   FormState,
   HeldByColleague,
   NATIONALITY_HINTS,
@@ -182,10 +183,6 @@ export function CandidatePanel({
       onDetailChanged={onDetailChanged}
     />
   );
-}
-
-function overridden(row: Candidate, field: string): boolean {
-  return (row.overridden_fields ?? []).includes(field);
 }
 
 function Detail({
@@ -362,30 +359,30 @@ function Detail({
         <MergedInto row={row} onUnmerge={unmerge} busy={busy} />
       ) : (
         <>
-          {/* Editable fields, edit-on-by-default. An input styled with
-              `jo-search` inside the existing `.row` grid reads as the same
-              row, now editable; `disabled={!canEdit}` keeps a share
-              recipient's inputs read-only exactly as the old Edit button was
-              greyed. The `overridden()` marker stays on the label so a
-              recruiter still sees which fields are hand-edited vs
-              import-sourced. */}
-          <div className="rows jo-detail-rows">
-            <div className="row">
-              <span className="row-k">Name</span>
+          {/* Editable fields in the same multi-column grid the create form
+              uses (`.cand-form`), not the single-column `.rows` ribbon: a
+              wide modal with 15+ fields stacked one-per-row was a tall scroll
+              nobody could scan. The grid flows fields into two columns and
+              `.cand-form-full` spans the rows that should not be split (name,
+              skills, notes). The override ✎ marker rides on the label. */}
+          <div className="cand-form" style={{ marginTop: 16 }}>
+            <Field label="Full name" full>
               <input
                 className="jo-search"
                 value={form.full_name}
                 onChange={(e) => set("full_name", e.target.value)}
                 disabled={!canEdit || savingFields}
               />
-            </div>
-            <div className="row">
+            </Field>
+            {/* Owner is read-only — not a candidate-editable field. Full width
+                so the "Unclaimed" sentence is not cut at a column break. */}
+            <div className="cand-form-full" style={{ display: "grid", gap: 4 }}>
               <span className="row-k">Owner</span>
-              <span className={ownerName ? undefined : "muted"}>
+              <span className={ownerName ? "body" : "body muted"}>
                 {ownerName ?? "Unclaimed — anyone at the agency can take this one"}
               </span>
             </div>
-            <FieldRow row={row} field="email" k="Email">
+            <Field label="Email">
               <input
                 className="jo-search"
                 type="email"
@@ -393,102 +390,40 @@ function Detail({
                 onChange={(e) => set("email", e.target.value)}
                 disabled={!canEdit || savingFields}
               />
-            </FieldRow>
-            <FieldRow row={row} field="phone_raw" k="Phone">
+            </Field>
+            <Field label="Phone">
               <input
                 className="jo-search"
                 value={form.phone_raw}
                 onChange={(e) => set("phone_raw", e.target.value)}
                 disabled={!canEdit || savingFields}
               />
-            </FieldRow>
-            <FieldRow row={row} field="current_title" k="Title">
+            </Field>
+            <Field label="Current title">
               <input
                 className="jo-search"
                 value={form.current_title}
                 onChange={(e) => set("current_title", e.target.value)}
                 disabled={!canEdit || savingFields}
               />
-            </FieldRow>
-            <FieldRow row={row} field="current_employer" k="Employer">
+            </Field>
+            <Field label="Current employer">
               <input
                 className="jo-search"
                 value={form.current_employer}
                 onChange={(e) => set("current_employer", e.target.value)}
                 disabled={!canEdit || savingFields}
               />
-            </FieldRow>
-            <FieldRow row={row} field="location" k="Location">
+            </Field>
+            <Field label="Location">
               <input
                 className="jo-search"
                 value={form.location}
                 onChange={(e) => set("location", e.target.value)}
                 disabled={!canEdit || savingFields}
               />
-            </FieldRow>
-            <FieldRow row={row} field="years_experience" k="Experience">
-              <input
-                className="jo-search"
-                type="number"
-                value={form.years_experience}
-                onChange={(e) => set("years_experience", e.target.value)}
-                disabled={!canEdit || savingFields}
-              />
-            </FieldRow>
-            <FieldRow row={row} field="expected_salary" k="Expected salary">
-              <input
-                className="jo-search"
-                type="number"
-                value={form.expected_salary}
-                onChange={(e) => set("expected_salary", e.target.value)}
-                disabled={!canEdit || savingFields}
-              />
-            </FieldRow>
-            <div className="row">
-              <span className="row-k">Salary currency</span>
-              <input
-                className="jo-search"
-                value={form.salary_currency}
-                onChange={(e) => set("salary_currency", e.target.value)}
-                disabled={!canEdit || savingFields}
-              />
-            </div>
-            <div className="row">
-              <span className="row-k">Salary period</span>
-              <input
-                className="jo-search"
-                value={form.salary_period}
-                onChange={(e) => set("salary_period", e.target.value)}
-                disabled={!canEdit || savingFields}
-              />
-            </div>
-            <FieldRow row={row} field="available_from" k="Available from">
-              <input
-                className="jo-search"
-                type="date"
-                value={form.available_from}
-                onChange={(e) => set("available_from", e.target.value)}
-                disabled={!canEdit || savingFields}
-              />
-            </FieldRow>
-            <FieldRow row={row} field="notice_period_raw" k="Notice period">
-              <input
-                className="jo-search"
-                value={form.notice_period_raw}
-                onChange={(e) => set("notice_period_raw", e.target.value)}
-                disabled={!canEdit || savingFields}
-              />
-            </FieldRow>
-            <FieldRow row={row} field="employment_type" k="Employment type">
-              <input
-                className="jo-search"
-                value={form.employment_type}
-                onChange={(e) => set("employment_type", e.target.value)}
-                disabled={!canEdit || savingFields}
-              />
-            </FieldRow>
-            <div className="row">
-              <span className="row-k">Stage</span>
+            </Field>
+            <Field label="Stage">
               <select
                 className="jo-search"
                 value={form.pipeline_stage}
@@ -501,35 +436,90 @@ function Detail({
                   </option>
                 ))}
               </select>
-            </div>
+            </Field>
+            <Field label="Years of experience">
+              <input
+                className="jo-search"
+                type="number"
+                value={form.years_experience}
+                onChange={(e) => set("years_experience", e.target.value)}
+                disabled={!canEdit || savingFields}
+              />
+            </Field>
+            <Field label="Expected salary">
+              <input
+                className="jo-search"
+                type="number"
+                value={form.expected_salary}
+                onChange={(e) => set("expected_salary", e.target.value)}
+                disabled={!canEdit || savingFields}
+              />
+            </Field>
+            <Field label="Salary currency">
+              <input
+                className="jo-search"
+                value={form.salary_currency}
+                onChange={(e) => set("salary_currency", e.target.value)}
+                disabled={!canEdit || savingFields}
+              />
+            </Field>
+            <Field label="Salary period">
+              <input
+                className="jo-search"
+                value={form.salary_period}
+                onChange={(e) => set("salary_period", e.target.value)}
+                disabled={!canEdit || savingFields}
+              />
+            </Field>
+            <Field label="Available from">
+              <input
+                className="jo-search"
+                type="date"
+                value={form.available_from}
+                onChange={(e) => set("available_from", e.target.value)}
+                disabled={!canEdit || savingFields}
+              />
+            </Field>
+            <Field label="Notice period">
+              <input
+                className="jo-search"
+                value={form.notice_period_raw}
+                onChange={(e) => set("notice_period_raw", e.target.value)}
+                disabled={!canEdit || savingFields}
+              />
+            </Field>
+            <Field label="Employment type">
+              <input
+                className="jo-search"
+                value={form.employment_type}
+                onChange={(e) => set("employment_type", e.target.value)}
+                disabled={!canEdit || savingFields}
+              />
+            </Field>
+            <Field label="Skills (comma separated)" full>
+              <input
+                className="jo-search"
+                value={form.skills}
+                onChange={(e) => set("skills", e.target.value)}
+                disabled={!canEdit || savingFields}
+              />
+            </Field>
+            <Field label="Notes" full>
+              <textarea
+                className="jo-search"
+                style={{ minHeight: 72 }}
+                value={form.notes}
+                onChange={(e) => set("notes", e.target.value)}
+                disabled={!canEdit || savingFields}
+              />
+            </Field>
           </div>
 
-          {/* Skills + Notes as editable inputs rather than static prose. */}
-          <div className="jo-detail-prose">
-            <span className="row-k">Skills (comma separated)</span>
-            <input
-              className="jo-search"
-              value={form.skills}
-              onChange={(e) => set("skills", e.target.value)}
-              disabled={!canEdit || savingFields}
-            />
-          </div>
-
-          <div className="jo-detail-prose">
-            <span className="row-k">Notes</span>
-            <textarea
-              className="jo-search"
-              style={{ minHeight: 72 }}
-              value={form.notes}
-              onChange={(e) => set("notes", e.target.value)}
-              disabled={!canEdit || savingFields}
-            />
-          </div>
-
-          {/* The two regulatory fieldsets, the same markup the create/edit
-              form uses. Edit-on-by-default means these are reachable without
-              opening a separate form; the PDPA framing carries over
-              verbatim. */}
+          {/* The two regulatory fieldsets, the same markup the create form
+              uses. They share a row (`.cand-group-permit` spans 2, `.cand-group-
+              record` spans 1) so the modal does not grow by their combined
+              height. Edit-on-by-default means these are reachable without
+              opening a separate form; the PDPA framing carries over verbatim. */}
           <fieldset className="cand-group cand-group-permit">
             <legend className="row-k">Work Permit details</legend>
             <p className="body jo-sub cand-group-note">
@@ -538,8 +528,7 @@ function Detail({
               told as <em>Not recorded</em> — an unknown is treated as unknown, and keeps someone in
               the list rather than ruling them out.
             </p>
-            <div className="row">
-              <span className="row-k">Sex</span>
+            <Field label="Sex">
               <select
                 className="jo-search"
                 value={form.sex}
@@ -553,9 +542,8 @@ function Detail({
                   </option>
                 ))}
               </select>
-            </div>
-            <div className="row">
-              <span className="row-k">Date of birth</span>
+            </Field>
+            <Field label="Date of birth">
               <input
                 className="jo-search"
                 type="date"
@@ -563,9 +551,8 @@ function Detail({
                 onChange={(e) => set("date_of_birth", e.target.value)}
                 disabled={!canEdit || savingFields}
               />
-            </div>
-            <div className="row">
-              <span className="row-k">Years of formal education</span>
+            </Field>
+            <Field label="Years of formal education">
               <input
                 className="jo-search"
                 type="number"
@@ -573,9 +560,8 @@ function Detail({
                 onChange={(e) => set("education_years", e.target.value)}
                 disabled={!canEdit || savingFields}
               />
-            </div>
-            <div className="row">
-              <span className="row-k">Nationality</span>
+            </Field>
+            <Field label="Nationality">
               <input
                 className="jo-search"
                 list="cand-detail-nationality-hints"
@@ -591,7 +577,7 @@ function Detail({
                   </option>
                 ))}
               </datalist>
-            </div>
+            </Field>
           </fieldset>
 
           <fieldset className="cand-group cand-group-record">
@@ -601,8 +587,7 @@ function Detail({
               is never sent to the AI that explains why a candidate fits, and it has no part in the
               Work Permit check above.
             </p>
-            <div className="row">
-              <span className="row-k">Race</span>
+            <Field label="Race">
               <select
                 className="jo-search"
                 value={form.race}
@@ -616,17 +601,16 @@ function Detail({
                   </option>
                 ))}
               </select>
-            </div>
+            </Field>
             {form.race === "others" && (
-              <div className="row">
-                <span className="row-k">Race detail</span>
+              <Field label="Race detail">
                 <input
                   className="jo-search"
                   value={form.race_detail}
                   onChange={(e) => set("race_detail", e.target.value)}
                   disabled={!canEdit || savingFields}
                 />
-              </div>
+              </Field>
             )}
           </fieldset>
 
@@ -754,41 +738,6 @@ function Detail({
         </p>
       )}
     </Dialog>
-  );
-}
-
-/** A row with the "edited by hand" marker on its label, wrapping an editable
- *  input the caller supplies. The marker is the whole reason the overrides
- *  table exists, and is invisible without it — so it stays on the label even
- *  though the value is now an input rather than static text. */
-function FieldRow({
-  row,
-  field,
-  k,
-  children,
-}: {
-  row: Candidate;
-  field: string;
-  k: string;
-  children: ReactNode;
-}) {
-  const marked = overridden(row, field);
-  return (
-    <div className="row">
-      <span className="row-k">
-        {k}
-        {marked && (
-          <span
-            title="Edited by hand — an import will not change this"
-            style={{ marginLeft: 6, cursor: "help" }}
-            aria-label="Edited by hand — an import will not change this"
-          >
-            ✎
-          </span>
-        )}
-      </span>
-      {children}
-    </div>
   );
 }
 

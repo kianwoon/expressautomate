@@ -619,7 +619,7 @@ export function HeldByColleague({ collision }: { collision: CandidateCollision }
   );
 }
 
-function Field({
+export function Field({
   label,
   required = false,
   full = false,
