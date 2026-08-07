@@ -52,6 +52,7 @@ def _coerce_str_list(value):
 # allow-hardcode: the target shape of the model's answer, not configuration.
 _HISTORY_FIELDS = (
     "roles",
+    "education",
     "industries",
     "functions",
     "systems",
@@ -110,6 +111,10 @@ _SCALAR_FIELDS = {
     "tool",
     "judgment_level",
     "accountability",
+    # education entry
+    "qualification",
+    "institution",
+    "field",
     # history rollup
     "trajectory",
     # automation assessment
@@ -147,6 +152,21 @@ class WorkItem(BaseModel):
     accountability: str = ""
 
 
+class EducationEntry(BaseModel):
+    """One education or qualification entry from the CV.
+
+    Captures both formal education (degrees, diplomas) and professional
+    certifications (e.g. insurance modules, actuarial exams). Certifications
+    are scarcity signals — regulated qualifications that gate professional
+    authority (underwriting limits, advisory rights) and are hard to automate.
+    """
+
+    period: str = ""
+    qualification: str = ""
+    institution: str = ""
+    field: str = ""
+
+
 class HistoryRole(BaseModel):
     """One role from the candidate's history, with its work decomposed.
 
@@ -176,6 +196,7 @@ class HistoryProfile(BaseModel):
     """
 
     roles: list[HistoryRole] = Field(default_factory=list)
+    education: list[EducationEntry] = Field(default_factory=list)
     industries: list[str] = Field(default_factory=list)
     functions: list[str] = Field(default_factory=list)
     systems: list[str] = Field(default_factory=list)
@@ -396,16 +417,33 @@ def _history_role_schema() -> dict:
     }
 
 
+def _education_entry_schema() -> dict:
+    """The nested education-entry object."""
+    properties: dict[str, object] = {
+        name: {"type": "string"} for name in _EDUCATION_ENTRY_FIELDS
+    }
+    return {
+        "type": "object",
+        "properties": properties,
+        "required": list(_EDUCATION_ENTRY_FIELDS),
+        "additionalProperties": False,
+    }
+
+
 def _history_schema() -> dict:
-    """The history stage schema, with its nested role list + flat rollups."""
+    """The history stage schema, with its nested role/education lists + rollups."""
     properties: dict[str, object] = {
         "roles": {
             "type": "array",
             "items": _history_role_schema(),
         },
+        "education": {
+            "type": "array",
+            "items": _education_entry_schema(),
+        },
     }
     for name in _HISTORY_FIELDS:
-        if name == "roles":
+        if name in ("roles", "education"):
             continue
         properties[name] = (
             {"type": "string"}
@@ -522,6 +560,15 @@ _WORK_ITEM_FIELDS = (
     "tool",
     "judgment_level",
     "accountability",
+)
+
+# The fields of an education/qualification entry.
+# allow-hardcode: as above.
+_EDUCATION_ENTRY_FIELDS = (
+    "period",
+    "qualification",
+    "institution",
+    "field",
 )
 
 # The fields of an automation assessment entry (Layer 3 + Layer 4).

@@ -46,10 +46,19 @@ export type HistoryRole = {
   evidence: string;
 };
 
+/** One education or qualification entry. Mirrors `EducationEntry`. */
+export type EducationEntry = {
+  period: string;
+  qualification: string;
+  institution: string;
+  field: string;
+};
+
 /** Pass 1 — the candidate's history, value-neutral (L1 + L2). Mirrors
  *  `HistoryProfile`. */
 export type HistoryProfile = {
   roles: HistoryRole[];
+  education: EducationEntry[];
   industries: string[];
   functions: string[];
   systems: string[];

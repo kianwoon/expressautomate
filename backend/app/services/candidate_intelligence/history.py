@@ -72,6 +72,17 @@ critical = bespoke judgment with real consequences.
     - `accountability`: what the candidate was accountable for producing or \
 deciding, if the CV states it.
   - `evidence`: a short verbatim phrase quoted from the CV supporting this role.
+- `education` is a JSON array of the candidate's education and professional \
+qualifications, most recent first. Include BOTH formal education (diplomas, \
+degrees) AND professional certifications / exam modules (e.g. insurance \
+modules, actuarial exams, accounting qualifications). Each entry has:
+  - `period` (e.g. "2012–2014" or "2018")
+  - `qualification` (e.g. "Diploma in Business Management", "Insurance Module 5", \
+"GCE O Level")
+  - `institution` (the school or awarding body, e.g. "Singapore Institute of \
+Management", "Singapore College of Insurance")
+  - `field` (the subject area, e.g. "Business Management", "Insurance"; leave \
+empty if not applicable)
 - `industries` lists the industries the candidate has worked in.
 - `functions` lists the types of work performed across roles (e.g. \
 "Underwriting", "Reconciliation", "Operations").
