@@ -1273,36 +1273,61 @@ select.gl-input:focus-visible { outline: 2px solid var(--blue-500); outline-offs
 }
 
 /* The career timeline: a three-column row (period / title / domain) per role. */
-.cand-intel-timeline {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  display: grid;
-  gap: 4px;
-}
-.cand-intel-tl-row {
-  display: grid;
-  grid-template-columns: 9em 1fr auto;
-  gap: 8px;
+/* The Career tab's timeline table. Mirrors the dashboard `.jo-table` look
+   (header strip with `surface-alt`, row borders, 12×14 padding) but is kept
+   self-contained here under a candidate-scoped class because the candidates
+   route does not load `job-orders.css`. Three columns: Period / Role / Domain,
+   sized to the data — a period is a fixed-width token, the role is the line a
+   recruiter reads along, the domain is a short qualifier that fits a narrow
+   track. */
+.cand-intel-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
   font-size: 0.875rem;
+  margin-top: 6px;
+}
+.cand-intel-th {
+  text-align: left;
+  padding: 10px 12px;
+  background: var(--surface-alt);
+  border-bottom: 1px solid var(--line);
+  font-weight: 650;
+  color: var(--ink-700);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+.cand-intel-th-period { width: 9em; }
+.cand-intel-tr { border-top: 1px solid var(--line); }
+.cand-intel-td {
+  padding: 10px 12px;
+  vertical-align: top;
+  overflow-wrap: anywhere;
   line-height: 1.4;
 }
-.cand-intel-tl-period { color: var(--ink-500); }
-.cand-intel-tl-title { color: var(--ink-900); }
-.cand-intel-tl-domain { color: var(--ink-500); }
+.cand-intel-td-period { color: var(--ink-500); white-space: nowrap; }
+.cand-intel-td-title { color: var(--ink-900); font-weight: 500; }
+.cand-intel-td-domain { color: var(--ink-500); }
 
-/* A capability entry: a head row (name / category / confidence) with the
-   supporting-evidence quote beneath it. */
+/* A capability entry: a head row (name / category) over a confidence meter over
+   the supporting-evidence quote. Each entry is a card (border + padding) so a
+   dozen capabilities read as a ranked list, not a wall of text — the recruiter
+   scans the meter lengths top to bottom to rank the candidate. */
 .cand-intel-cap-list {
-  margin: 0;
+  margin: 6px 0 0;
   padding: 0;
   list-style: none;
   display: grid;
-  gap: 8px;
+  gap: 10px;
 }
 .cand-intel-cap {
   display: grid;
-  gap: 2px;
+  gap: 6px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface, #fff);
 }
 .cand-intel-cap-head {
   display: flex;
@@ -1310,22 +1335,39 @@ select.gl-input:focus-visible { outline: 2px solid var(--blue-500); outline-offs
   gap: 8px;
   flex-wrap: wrap;
 }
-.cand-intel-cap-name { font-size: 0.875rem; color: var(--ink-900); font-weight: 500; }
+.cand-intel-cap-name { font-size: 0.9375rem; color: var(--ink-900); font-weight: 600; }
 .cand-intel-cap-cat {
-  font-size: 0.75rem;
+  font-size: 0.6875rem;
   color: var(--ink-500);
-  text-transform: lowercase;
-}
-.cand-intel-cap-conf {
-  font-size: 0.75rem;
-  color: var(--blue-500);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
   font-weight: 600;
-  margin-left: auto;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--surface-alt);
+}
+/* Confidence meter: a neutral track the brand-blue fill grows across. The fill
+   width is the confidence percent, set inline per row. ARIA label carries the
+   exact number for screen readers; sighted readers rank by bar length. */
+.cand-intel-cap-meter {
+  position: relative;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--surface-alt);
+  overflow: hidden;
+}
+.cand-intel-cap-fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--blue-500);
 }
 .cand-intel-cap-evidence {
+  margin: 0;
   font-size: 0.8125rem;
   color: var(--ink-500);
   font-style: italic;
+  line-height: 1.45;
 }
 
 /* A field group inside the form. The border is doing real work: it is what

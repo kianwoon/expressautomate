@@ -86,32 +86,52 @@ export function CapabilityStage({
 }) {
   if (!intelligence) return <StageNotice state={state} />;
   const cap = intelligence.capability;
+  // Strongest first: a recruiter opening this tab wants the candidate's top
+  // capabilities at a glance, not an arbitrary ordering left by the model.
+  // Sorted here (presentational) rather than in the analysis store, because the
+  // stored order is the model's own and other readers may want it intact.
+  const capabilities = [...cap.capabilities].sort(
+    (a, b) => b.confidence - a.confidence,
+  );
   return (
     <Stage title="Capabilities">
-      {cap.capabilities.length > 0 ? (
-        <div className="cand-intel-field">
-          <dt className="cand-intel-dt">Demonstrated capabilities</dt>
-          <dd className="body">
-            <ul className="cand-intel-cap-list">
-              {cap.capabilities.map((entry, i) => (
-                <li key={i} className="cand-intel-cap">
-                  <span className="cand-intel-cap-head">
-                    <span className="cand-intel-cap-name">{entry.capability}</span>
+      {capabilities.length > 0 ? (
+        <ul className="cand-intel-cap-list">
+          {capabilities.map((entry, i) => {
+            const pct = Math.round(entry.confidence * 100);
+            return (
+              <li key={i} className="cand-intel-cap">
+                <div className="cand-intel-cap-head">
+                  <span className="cand-intel-cap-name">{entry.capability}</span>
+                  {entry.category && (
                     <span className="cand-intel-cap-cat">{entry.category}</span>
-                    <span className="cand-intel-cap-conf">
-                      {Math.round(entry.confidence * 100)}%
-                    </span>
-                  </span>
-                  {entry.supporting_evidence && (
-                    <span className="cand-intel-cap-evidence">
-                      &ldquo;{entry.supporting_evidence}&rdquo;
-                    </span>
                   )}
-                </li>
-              ))}
-            </ul>
-          </dd>
-        </div>
+                </div>
+                {/* A confidence meter (track + fill) carries the same number the
+                    old "%" did, but a recruiter scanning a dozen capabilities
+                    ranks them by bar length without reading digits. The track
+                    is a flat neutral rail; the fill is the brand blue and grows
+                    with confidence. Color is redundant to width, not the only
+                    signal, so it is safe alongside the label. */}
+                <div
+                  className="cand-intel-cap-meter"
+                  role="img"
+                  aria-label={`${pct}% confidence`}
+                >
+                  <span
+                    className="cand-intel-cap-fill"
+                    style={{ width: `${pct}%` }}
+                  />
+                </div>
+                {entry.supporting_evidence && (
+                  <p className="cand-intel-cap-evidence">
+                    &ldquo;{entry.supporting_evidence}&rdquo;
+                  </p>
+                )}
+              </li>
+            );
+          })}
+        </ul>
       ) : null}
       <List label="Tools" items={cap.tools} />
     </Stage>
@@ -182,17 +202,34 @@ function Timeline({
     <div className="cand-intel-field">
       <dt className="cand-intel-dt">Timeline</dt>
       <dd className="body">
-        <ul className="cand-intel-timeline">
-          {entries.map((entry, i) => (
-            <li key={i} className="cand-intel-tl-row">
-              <span className="cand-intel-tl-period">{entry.period || "—"}</span>
-              <span className="cand-intel-tl-title">{entry.title}</span>
-              {entry.domain && (
-                <span className="cand-intel-tl-domain">{entry.domain}</span>
-              )}
-            </li>
-          ))}
-        </ul>
+        {/* A real table, not the loose grid the dashboard tables' neighbours
+            use, because a recruiter scans a career by column — period down the
+            left, role beside it, domain beside that — and a header row is what
+            makes the columns legible. Mirrors `.jo-table` (header strip, row
+            borders, 12×14 padding) under a candidate-scoped class so it renders
+            on a route that does not load `job-orders.css`. */}
+        <table className="cand-intel-table">
+          <thead>
+            <tr>
+              <th className="cand-intel-th cand-intel-th-period">Period</th>
+              <th className="cand-intel-th">Role</th>
+              <th className="cand-intel-th">Domain</th>
+            </tr>
+          </thead>
+          <tbody>
+            {entries.map((entry, i) => (
+              <tr key={i} className="cand-intel-tr">
+                <td className="cand-intel-td cand-intel-td-period">
+                  {entry.period || "—"}
+                </td>
+                <td className="cand-intel-td cand-intel-td-title">{entry.title}</td>
+                <td className="cand-intel-td cand-intel-td-domain">
+                  {entry.domain || "—"}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </dd>
     </div>
   );
