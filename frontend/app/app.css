@@ -1113,9 +1113,18 @@ select.gl-input:focus-visible { outline: 2px solid var(--blue-500); outline-offs
    grid drops itself back to one column instead. */
 .cand-form {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  grid-template-columns: repeat(2, 1fr);
   gap: 12px 16px;
   align-items: start;
+}
+/* Drop to one column only on genuinely narrow screens (mobile). The previous
+   `auto-fit` with a 240px floor collapsed to one column whenever the modal's
+   content area was under 480px+gap — which happened on normal laptop widths
+   because the modal padding ate into the available space. */
+@media (max-width: 600px) {
+  .cand-form {
+    grid-template-columns: 1fr;
+  }
 }
 /* The ones a column would misrepresent. A name, a skills list and a notes box
    are all longer than half a row and read worse cut in half; the two grouped
