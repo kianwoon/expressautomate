@@ -348,7 +348,8 @@ class Settings(BaseSettings):
     JOB_INTELLIGENCE_MODEL: str = ""
     # The model the Candidate Intelligence engine asks. Same fallback idiom as
     # `JOB_INTELLIGENCE_MODEL` (see `candidate_intelligence.career.model`): an
-    # empty value defaults to the fast extraction model at call time.
+    # empty value defaults to the fast extraction model at call time. Listed in
+    # `.env.example` alongside the Job Intelligence knobs.
     CANDIDATE_INTELLIGENCE_MODEL: str = ""
 
     # --- Cerebras (the classifier and extraction) ---
