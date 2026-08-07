@@ -333,6 +333,12 @@ async def list_candidates(
         else:
             base = select(Candidate).where(Candidate.record_status != Candidate.MERGED)
         base = base.where(visible_candidates(user_uuid, role), candidate_scope(scope, user_uuid))
+        # Hide placeholder rows — a CV-upload creates one synchronously before
+        # the ingest worker reads identity and either renames or deletes it.
+        # Showing "Uploaded CV" for those 2-5 seconds reads as a ghost
+        # candidate. Excluded everywhere except an explicit search for it.
+        if not (q and Candidate.PLACEHOLDER_NAME.lower() in (q.strip().lower())):
+            base = base.where(Candidate.full_name != Candidate.PLACEHOLDER_NAME)
         if pipeline_stage is not None:
             base = base.where(Candidate.pipeline_stage == pipeline_stage)
         if q:

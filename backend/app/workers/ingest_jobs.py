@@ -60,8 +60,8 @@ _RESUMABLE = (CandidateDocument.INGEST_PENDING, CandidateDocument.INGESTING)
 
 # A display name for a CV that stated none the model could trust, or none at
 # all. Kept short and recognisable so the recruiter can find the row in the list
-# and edit the contact in.
-_UNNAMED = "Uploaded CV"
+# and edit the contact in. Defined on the model so the list query can hide it.
+_UNNAMED = Candidate.PLACEHOLDER_NAME
 
 
 def body_store():

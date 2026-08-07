@@ -65,8 +65,8 @@ _MAX_FILENAME = 255
 # identity. A fixed sentinel, never the filename: `_delete_if_ghost` (in
 # `ingest_jobs`) matches on this exact value to tell an empty placeholder from a
 # real record, and a filename would defeat that check and seed a ghost per
-# upload. Must stay in sync with `ingest_jobs._UNNAMED`.
-_PLACEHOLDER_NAME = "Uploaded CV"
+# upload. Defined on the model so the list query can hide it from one place.
+_PLACEHOLDER_NAME = Candidate.PLACEHOLDER_NAME
 
 _ENQUEUE_FAILED = (
     "This CV was saved but could not be queued for reading. Try again in a "
