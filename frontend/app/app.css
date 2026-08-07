@@ -1298,7 +1298,14 @@ select.gl-input:focus-visible { outline: 2px solid var(--blue-500); outline-offs
   text-transform: uppercase;
   letter-spacing: 0.02em;
 }
-.cand-intel-th-period { width: 9em; }
+/* Column widths live on <col> in a colgroup so `table-layout: fixed` honors
+   them. A percentage on the cell (the old `width: 9em` on .cand-intel-th-period)
+   is ignored under fixed layout when there is no <col>, so every column got an
+   equal third and Period overflowed into Role. Period ~18%, Role ~52%, Domain
+   ~30% — Role is the line a recruiter reads along, so it gets the most room. */
+.cand-intel-col-period { width: 18%; }
+.cand-intel-col-role { width: 52%; }
+.cand-intel-col-domain { width: 30%; }
 .cand-intel-tr { border-top: 1px solid var(--line); }
 .cand-intel-td {
   padding: 10px 12px;
@@ -1306,7 +1313,7 @@ select.gl-input:focus-visible { outline: 2px solid var(--blue-500); outline-offs
   overflow-wrap: anywhere;
   line-height: 1.4;
 }
-.cand-intel-td-period { color: var(--ink-500); white-space: nowrap; }
+.cand-intel-td-period { color: var(--ink-500); }
 .cand-intel-td-title { color: var(--ink-900); font-weight: 500; }
 .cand-intel-td-domain { color: var(--ink-500); }
 
@@ -1346,15 +1353,30 @@ select.gl-input:focus-visible { outline: 2px solid var(--blue-500); outline-offs
   border-radius: 999px;
   background: var(--surface-alt);
 }
-/* Confidence meter: a neutral track the brand-blue fill grows across. The fill
-   width is the confidence percent, set inline per row. ARIA label carries the
-   exact number for screen readers; sighted readers rank by bar length. */
+/* Confidence meter row: the track grows to fill the free space, the percentage
+   sits beside it at a fixed width so the bars all start from the same left edge
+   and line up vertically across cards. ARIA label carries the exact number for
+   screen readers. */
 .cand-intel-cap-meter {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.cand-intel-cap-meter-track {
   position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
   height: 6px;
   border-radius: 999px;
   background: var(--surface-alt);
   overflow: hidden;
+}
+.cand-intel-cap-pct {
+  flex: 0 0 auto;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--blue-500);
+  font-variant-numeric: tabular-nums;
 }
 .cand-intel-cap-fill {
   display: block;
