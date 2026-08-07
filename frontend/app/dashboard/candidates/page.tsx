@@ -149,6 +149,8 @@ function Workspace({ role }: { role: string }) {
     initial,
     eligibleFor,
     scope,
+    sort,
+    setSort,
     counts,
     initials,
     refreshing,
@@ -565,7 +567,13 @@ function Workspace({ role }: { role: string }) {
               the list rather than beside it, so the table keeps the whole row
               whether a candidate is open or not. */}
           <div className="jo-list" aria-busy={refreshing || undefined}>
-            <CandidatesTable rows={items} selectedId={selectedId} onSelect={setSelectedId} />
+            <CandidatesTable
+              rows={items}
+              selectedId={selectedId}
+              onSelect={setSelectedId}
+              sort={sort}
+              onSort={setSort}
+            />
             {pager}
           </div>
           {/* Mounted only while a row is open. The modal owns nothing about the

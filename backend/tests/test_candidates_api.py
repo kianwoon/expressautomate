@@ -109,6 +109,41 @@ async def test_merged_rows_are_reachable_by_explicit_filter(agency_with_candidat
     assert [row["id"] for row in body["items"]] == [str(ids["merged"])]
 
 
+async def test_sorting_by_name_ascending(agency_with_candidates) -> None:
+    """?sort=name&descending=false orders A→Z by the lowered full name."""
+    tid, uid, ids = agency_with_candidates
+    async with await _client_for(tid, uid) as http:
+        body = (
+            await http.get("/api/candidates?sort=name&descending=false")
+        ).json()
+    names = [row["full_name"] for row in body["items"]]
+    # "Jane Tan" < "John Lim" alphabetically; the merged "Jane T" is hidden.
+    assert names == ["Jane Tan", "John Lim"]
+
+
+async def test_sorting_by_stage_orders_the_pipeline_not_alphabetically(
+    agency_with_candidates,
+) -> None:
+    """Stage sorts by the funnel rank (new→placed), not the text order."""
+    tid, uid, ids = agency_with_candidates
+    async with await _client_for(tid, uid) as http:
+        body = (
+            await http.get("/api/candidates?sort=stage&descending=false")
+        ).json()
+    stages = [row["pipeline_stage"] for row in body["items"]]
+    # "new" (rank 0) before "placed" (rank 3), not "placed" before "new".
+    assert stages == ["new", "placed"]
+
+
+async def test_the_default_sort_is_updated_desc(agency_with_candidates) -> None:
+    """No sort param = the fixed order the list always had (updated desc)."""
+    tid, uid, ids = agency_with_candidates
+    async with await _client_for(tid, uid) as http:
+        explicit = (await http.get("/api/candidates?sort=updated&descending=true")).json()
+        default = (await http.get("/api/candidates")).json()
+    assert [r["id"] for r in default["items"]] == [r["id"] for r in explicit["items"]]
+
+
 async def test_a_merged_candidate_is_still_reachable_by_id(agency_with_candidates) -> None:
     tid, uid, ids = agency_with_candidates
     async with await _client_for(tid, uid) as http:

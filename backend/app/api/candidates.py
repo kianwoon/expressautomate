@@ -13,7 +13,7 @@ from typing import Literal
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, field_validator
-from sqlalchemy import delete, func, insert, or_, select, text, update
+from sqlalchemy import case, delete, func, insert, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 
@@ -58,6 +58,58 @@ router = APIRouter(tags=["candidates"])
 
 StageFilter = Literal["new", "contacted", "submitted", "placed", "rejected"]
 RecordStatusFilter = Literal["active", "archived", "merged"]
+
+# The five list columns a recruiter may sort by, mirroring `opportunities.py`'s
+# sort for the job-orders table. The default (`updated`) preserves the previous
+# fixed order — `updated_at` desc — so an unsorted list is byte-for-byte what it
+# was before the parameter existed.
+CandidateSortKey = Literal["name", "title", "employer", "stage", "updated"]
+
+# The pipeline_stage column is text, but its natural order is the hiring
+# funnel (`new` → `placed`), not alphabetical. A recruiter clicking "Stage"
+# means "show me how far down the pipeline people are", so the order is pinned
+# to that vocabulary by rank. `rejected` sits last in both directions: it is
+# the end of the road, not the start.
+_STAGE_RANK = {
+    "new": 0, "contacted": 1, "submitted": 2, "placed": 3, "rejected": 4,
+}
+
+
+def _stage_rank():
+    # `else_=0` rather than NULL: a row whose stage is somehow off-vocabulary
+    # (impossible once `ck_candidates_pipeline_stage` holds, kept for `case`'s
+    # required else) sorts at the top of an ascending list, exactly as
+    # `opportunities._quality_rank` does for the same reason.
+    return case(
+        *[(Candidate.pipeline_stage == stage, rank) for stage, rank in _STAGE_RANK.items()],
+        else_=0,
+    )
+
+
+# Column (or expression) each sort key orders by, text columns lowered so the
+# order is case-insensitive — "acme" and "Acme" are the same employer and an
+# uppercase-first ordering would file them pages apart.
+_CANDIDATE_SORT_COLUMN = {
+    "name": func.lower(Candidate.full_name),
+    "title": func.lower(Candidate.current_title),
+    "employer": func.lower(Candidate.current_employer),
+    "stage": _stage_rank,
+    "updated": Candidate.updated_at,
+}
+
+
+def _candidate_order_by(sort: str, descending: bool) -> tuple:
+    """The ORDER BY clause for a sort key, nulls sinking in both directions.
+
+    Mirrors `opportunities._order_by`: SQL does not sink NULLs for you, both
+    directions are spelled out, and `id.desc()` breaks ties so paging stays
+    stable regardless of which column is being sorted.
+    """
+    column = _CANDIDATE_SORT_COLUMN[sort]
+    if callable(column):
+        column = column()
+    ordered = column.desc().nulls_last() if descending else column.asc().nulls_last()
+    return (ordered, Candidate.id.desc())
 
 # The regulatory vocabularies, named off the model so the request schema and
 # the database CHECK cannot drift apart. These are accepted on write and shown
@@ -208,6 +260,14 @@ async def list_candidates(
     q: str | None = None,
     initial: str | None = InitialFilter,
     scope: Literal["mine", "queue", "shared_with_me", "all"] = "all",
+    # The column to sort by, plus its direction. Defaults to `updated` desc —
+    # the fixed order the list had before sorting landed — so a caller who sends
+    # neither sees the same rows in the same order it always did. `initial`
+    # overrides both: an A–Z letter pins the list to that initial and sorts
+    # within it by name ascending, exactly as it always has, so the sort
+    # parameter is ignored when a letter is active (see `order` below).
+    sort: CandidateSortKey = "updated",
+    descending: bool = True,
     # A recruiter narrowing a shortlist to who a placement's regulatory rules
     # (MOM's, not the job's own occupational sex requirement — see
     # `eligibility.has_regulatory_not_met`) do not definitely disqualify.
@@ -328,10 +388,16 @@ async def list_candidates(
         # It matters more since `?eligible_for=` arrived: the same order decides
         # where the bounded scan is cut, so an unstable tail would change *which*
         # candidates are assessed between one request and the next.
+        #
+        # The A–Z index (`initial`) overrides the sort: a recruiter who picks a
+        # letter is standing in that slice, sorted by name — re-sorting it would
+        # detach the list from the index that produced it. Without a letter, the
+        # recruiter's chosen column and direction apply, defaulting to the
+        # `updated_at` desc the list always had.
         order = (
             (func.lower(Candidate.full_name).asc(), Candidate.id.asc())
             if initial is not None
-            else (Candidate.updated_at.desc(), Candidate.id.desc())
+            else _candidate_order_by(sort, descending)
         )
 
         excluded_ineligible: int | None = None

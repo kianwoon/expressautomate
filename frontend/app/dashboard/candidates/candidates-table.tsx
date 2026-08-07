@@ -11,9 +11,29 @@ import type { Candidate } from "../candidates";
  * screens have nothing to share but layout idioms, which live in the shared
  * `jo-*` CSS classes both already reuse.
  *
+ * Column sorting mirrors job-orders: a `Sort` type, a `Th` header with
+ * `aria-sort` + a click handler, and the page threading `sort`/`setSort`
+ * through. The five columns are the same five the table has always drawn.
+ *
  * allow-hardcode: the strings here are user-facing copy, not a list anything
  * is matched against.
  */
+
+/** The five list columns a recruiter may sort by. The keys are the values the
+ *  backend's `CandidateSortKey` accepts — they travel in the query string. */
+export type CandidateSortKey = "name" | "title" | "employer" | "stage" | "updated";
+
+/** A sort the table is currently applying. `{ key: "updated", descending: true }`
+ *  is the default — the fixed order the list had before sorting landed. */
+export type CandidateSort = { key: CandidateSortKey; descending: boolean };
+
+const COLUMNS: { key: CandidateSortKey; label: string }[] = [
+  { key: "name", label: "Name" },
+  { key: "title", label: "Title" },
+  { key: "employer", label: "Employer" },
+  { key: "stage", label: "Stage" },
+  { key: "updated", label: "Updated" },
+];
 
 const STAGE_LABEL: Record<Candidate["pipeline_stage"], string> = {
   new: "New",
@@ -27,10 +47,14 @@ export function CandidatesTable({
   rows,
   selectedId,
   onSelect,
+  sort,
+  onSort,
 }: {
   rows: Candidate[];
   selectedId: string | null;
   onSelect: (id: string) => void;
+  sort: CandidateSort;
+  onSort: (sort: CandidateSort) => void;
 }) {
   return (
     <div className="card jo-table-card">
@@ -53,11 +77,9 @@ export function CandidatesTable({
         </colgroup>
         <thead>
           <tr>
-            <th className="row-k jo-th">Name</th>
-            <th className="row-k jo-th">Title</th>
-            <th className="row-k jo-th">Employer</th>
-            <th className="row-k jo-th">Stage</th>
-            <th className="row-k jo-th">Updated</th>
+            {COLUMNS.map((column) => (
+              <Th key={column.key} column={column} sort={sort} onSort={onSort} />
+            ))}
           </tr>
         </thead>
         <tbody>
@@ -106,5 +128,46 @@ export function CandidatesTable({
         </tbody>
       </table>
     </div>
+  );
+}
+
+function Th({
+  column,
+  sort,
+  onSort,
+}: {
+  column: { key: CandidateSortKey; label: string };
+  sort: CandidateSort;
+  onSort: (sort: CandidateSort) => void;
+}) {
+  const active = sort.key === column.key;
+  return (
+    <th
+      className="row-k jo-th"
+      // The arrow is invisible to a screen reader, and a table that has
+      // silently reordered itself is indistinguishable from one that lost rows.
+      aria-sort={active ? (sort.descending ? "descending" : "ascending") : "none"}
+      data-active={active ? "yes" : undefined}
+    >
+      <button
+        type="button"
+        className="jo-sort"
+        // Re-clicking the sorted column reverses it; moving to a new column
+        // starts ascending — except Updated, where descending is what anyone
+        // clicking a date column means by "sort by date".
+        onClick={() =>
+          onSort(
+            active
+              ? { key: column.key, descending: !sort.descending }
+              : { key: column.key, descending: column.key === "updated" },
+          )
+        }
+      >
+        <span>{column.label}</span>
+        <span className="jo-arrow" aria-hidden="true">
+          {active ? (sort.descending ? "↓" : "↑") : ""}
+        </span>
+      </button>
+    </th>
   );
 }
