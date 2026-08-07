@@ -329,14 +329,9 @@ function Detail({
       onClose={busy ? () => {} : onClose}
       className="dlg-modal-wide cand-detail-modal"
       title={
-        <span className="jo-detail-title-row">
-          <span>{row.full_name}</span>
-          {row.record_status === "merged" ? (
-            <span className="eyebrow">Merged</span>
-          ) : (
-            <span className="eyebrow">{STAGE_LABEL[row.pipeline_stage]}</span>
-          )}
-        </span>
+        row.record_status === "merged"
+          ? `${row.full_name} · Merged`
+          : `${row.full_name} · ${STAGE_LABEL[row.pipeline_stage]}`
       }
     >
       {row.record_status === "merged" ? (
