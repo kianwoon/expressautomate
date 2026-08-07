@@ -183,8 +183,8 @@ async def _cleanup(tenant_id):
 
 @pytest.mark.asyncio
 async def test_a_new_cv_creates_a_candidate_and_hands_off_to_parse(
-    agency, store, enqueued, monkeypatch
-):  # noqa: F811
+    agency, store, enqueued, monkeypatch  # noqa: F811
+):
     tenant_id, user_id = agency
     placeholder_id, document_id = await _placeholder_and_document(
         tenant_id, user_id, store, _pdf_with_text_pages(1, CV_TEXT)
@@ -219,8 +219,8 @@ async def test_a_new_cv_creates_a_candidate_and_hands_off_to_parse(
 
 @pytest.mark.asyncio
 async def test_a_cv_matching_an_existing_candidate_attaches_to_it(
-    agency, store, enqueued, monkeypatch
-):  # noqa: F811
+    agency, store, enqueued, monkeypatch  # noqa: F811
+):
     """Identity resolution reuses the person already in the database."""
     tenant_id, user_id = agency
     # An existing candidate the new CV's email will match.
@@ -259,8 +259,8 @@ async def test_a_cv_matching_an_existing_candidate_attaches_to_it(
 
 @pytest.mark.asyncio
 async def test_a_cv_with_no_contact_details_creates_a_candidate_with_no_email(
-    agency, store, enqueued, monkeypatch
-):  # noqa: F811
+    agency, store, enqueued, monkeypatch  # noqa: F811
+):
     """A CV that states no email and no phone still becomes a candidate.
 
     Identity is email-or-phone; without either, the candidate has no matchable
@@ -292,8 +292,8 @@ async def test_a_cv_with_no_contact_details_creates_a_candidate_with_no_email(
 
 @pytest.mark.asyncio
 async def test_a_colleague_held_match_becomes_needs_review(
-    agency, store, enqueued, monkeypatch
-):  # noqa: F811
+    agency, store, enqueued, monkeypatch  # noqa: F811
+):
     """A match the uploader cannot see is flagged, never silently attached.
 
     An owner sees every candidate in the agency (`visible_candidates` returns
@@ -349,8 +349,7 @@ async def test_a_colleague_held_match_becomes_needs_review(
 
 
 @pytest.mark.asyncio
-async def test_an_unreadable_file_is_terminal(agency, store, enqueued):
-    # noqa: F811
+async def test_an_unreadable_file_is_terminal(agency, store, enqueued):  # noqa: F811
     tenant_id, user_id = agency
     placeholder_id, document_id = await _placeholder_and_document(
         tenant_id, user_id, store, b"this is not a PDF at all"
@@ -369,8 +368,8 @@ async def test_an_unreadable_file_is_terminal(agency, store, enqueued):
 
 @pytest.mark.asyncio
 async def test_replaying_the_job_on_a_resolved_document_does_nothing(
-    agency, store, enqueued, monkeypatch
-):  # noqa: F811
+    agency, store, enqueued, monkeypatch  # noqa: F811
+):
     tenant_id, user_id = agency
     # A document that already resolved sits at `pending` (handed off to parse);
     # replaying the ingest job on one must be a no-op, not a second resolution.

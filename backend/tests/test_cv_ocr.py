@@ -19,7 +19,6 @@ from pypdf import PdfWriter
 from sqlalchemy import text
 
 from app.core.config import settings
-from app.models.candidate import CandidateDocument
 from app.services.llm.client import LLMResult
 from app.services.storage.r2 import InMemoryBodyStore
 from app.workers import cv_jobs, ingest_jobs
@@ -179,8 +178,8 @@ async def _cleanup(tenant_id):
 
 @pytest.mark.asyncio
 async def test_a_scanned_pdf_with_ocr_yields_text_and_parses(
-    agency, store, ocr_on, monkeypatch
-):  # noqa: F811
+    agency, store, ocr_on, monkeypatch  # noqa: F811
+):
     """The case the whole feature exists for: empty text layer → OCR → parsed."""
     from tests.test_candidate_roles_api import _a_candidate_row
 
@@ -213,8 +212,8 @@ async def test_a_scanned_pdf_with_ocr_yields_text_and_parses(
 
 @pytest.mark.asyncio
 async def test_ocr_disabled_keeps_the_original_unreadable_path(
-    agency, store
-):  # noqa: F811
+    agency, store  # noqa: F811
+):
     """A deployment that has not opted in is unchanged: scanned → unreadable."""
     from tests.test_candidate_roles_api import _a_candidate_row
 
@@ -259,9 +258,8 @@ async def test_ocr_that_yields_nothing_is_unreadable(agency, store, ocr_on, monk
 @pytest.mark.asyncio
 async def test_ocr_unavailable_is_unreadable_with_the_cause(agency, store, ocr_on, monkeypatch):  # noqa: F811
     """A missing toolchain surfaces as `unreadable` naming OCR, not a crash."""
-    from tests.test_candidate_roles_api import _a_candidate_row
-
     from app.services.cv.ocr import OCRUnavailable
+    from tests.test_candidate_roles_api import _a_candidate_row
 
     tenant_id, user_id = agency
     candidate_id = await _a_candidate_row(tenant_id, user_id)
