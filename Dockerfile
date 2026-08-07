@@ -30,6 +30,7 @@ COPY --from=ghcr.io/astral-sh/uv:0.5.11 /uv /usr/local/bin/uv
 # too, but never invoke them.
 RUN apt-get update && apt-get install -y --no-install-recommends \
       tesseract-ocr ghostscript qpdf \
+      libreoffice-core libreoffice-writer \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

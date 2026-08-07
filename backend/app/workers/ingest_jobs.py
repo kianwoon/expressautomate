@@ -40,6 +40,7 @@ from app.models.candidate import Candidate, CandidateDocument
 from app.models.tenant import User
 from app.services.candidate_matching import find_candidate
 from app.services.candidate_naming import normalize_email, normalize_phone
+from app.services.cv.convert import ConversionUnavailable, is_legacy_office, maybe_convert
 from app.services.cv.identity import extract_identity
 from app.services.cv.ocr import OCRUnavailable, ocr_text
 from app.services.cv.text import UnsupportedDocument, extract_text, sniff
@@ -247,6 +248,26 @@ async def ingest_candidate_cv(
         return
 
     kind = sniff(data)
+    if kind is None and is_legacy_office(data):
+        # See `parse_candidate_cv` for the rationale: a .doc is a real Office
+        # document the converter rescues, so the rest of the pipeline reads it
+        # as an ordinary .docx after conversion.
+        if settings.conversion_configured():
+            try:
+                data, kind = await maybe_convert(data, kind=kind)
+            except ConversionUnavailable as exc:
+                await _terminal(
+                    tenant, document, CandidateDocument.UNREADABLE,
+                    f"This legacy document could not be converted: {exc}",
+                )
+                return
+        else:
+            await _terminal(
+                tenant, document, CandidateDocument.UNREADABLE,
+                "This is a legacy Word (.doc) file. Save it as .docx or PDF and "
+                "upload it again — the reader handles those directly.",
+            )
+            return
     if kind is None:
         await _terminal(
             tenant, document, CandidateDocument.UNREADABLE,
