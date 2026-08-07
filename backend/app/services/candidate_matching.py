@@ -121,6 +121,47 @@ _CONTACT_LIKE = re.compile(r"@|\d{4,}")
 _MAX_TOKENS = 3
 
 
+def normalize_name(full_name: str) -> str:
+    """A name reduced to lowercase alpha tokens for a loose same-person check.
+
+    Not a key — two different people can share a name. This exists only to
+    surface a *likely* duplicate for a human to confirm when no matchable
+    identity (email/mobile) was found. "Chan  Wen  Jie" and "Chan Wen Jie"
+    both reduce to "chan wen jie" here.
+    """
+    tokens = [w for w in re.split(r"\s+", full_name.lower()) if w.isalpha()]
+    return " ".join(tokens)
+
+
+async def candidates_with_same_name(
+    session: AsyncSession,
+    tenant_id: uuid.UUID,
+    full_name: str,
+) -> list[uuid.UUID]:
+    """Existing active candidates whose normalized name matches.
+
+    Returns at most a few ids — enough to tell the recruiter "this may be a
+    duplicate, confirm before creating". Never used to auto-merge: two real
+    people can share a name, and silently merging them is the worst outcome.
+    """
+    normalized = normalize_name(full_name)
+    if not normalized:
+        return []
+    # Collapse repeated whitespace in the stored name before comparing, so
+    # "Chan  Wen  Jie" (double-spaced from PDF extraction) matches "Chan Wen Jie".
+    collapsed = func.regexp_replace(Candidate.full_name, r"\s+", " ", "g")
+    rows = (
+        await session.execute(
+            select(Candidate.id)
+            .where(Candidate.tenant_id == tenant_id)
+            .where(Candidate.record_status == Candidate.ACTIVE)
+            .where(func.lower(collapsed) == normalized)
+            .limit(5)
+        )
+    ).scalars().all()
+    return list(rows)
+
+
 def abbreviate(full_name: str) -> str:
     """"Wei Ming Tan" -> "Wei Ming T." — enough to recognise a person you have
     met, not enough to be a directory of who the agency holds.

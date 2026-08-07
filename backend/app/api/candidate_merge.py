@@ -243,6 +243,69 @@ async def merge_candidate(
             {"loser": candidate_id, "target": body.target_id},
         )
 
+        # Carry over scalar fields the loser had but the target doesn't. The
+        # target is the survivor, so its existing non-NULL values always win —
+        # COALESCE fills only the gaps. Without this, merging a CV-uploaded row
+        # (which carries extracted salary) into a manually-created one (which
+        # has none) silently drops the salary, defeating the point of merging.
+        # A correlated subquery (not FROM) so RLS on the loser row resolves
+        # under the same tenant session.
+        await session.execute(
+            text(
+                """
+                UPDATE candidates SET
+                    expected_salary     = COALESCE(expected_salary,
+                        (SELECT expected_salary     FROM candidates WHERE id = :loser)),
+                    salary_currency     = COALESCE(salary_currency,
+                        (SELECT salary_currency     FROM candidates WHERE id = :loser)),
+                    salary_period       = COALESCE(salary_period,
+                        (SELECT salary_period       FROM candidates WHERE id = :loser)),
+                    last_drawn_salary   = COALESCE(last_drawn_salary,
+                        (SELECT last_drawn_salary   FROM candidates WHERE id = :loser)),
+                    last_drawn_currency = COALESCE(last_drawn_currency,
+                        (SELECT last_drawn_currency FROM candidates WHERE id = :loser)),
+                    last_drawn_period   = COALESCE(last_drawn_period,
+                        (SELECT last_drawn_period   FROM candidates WHERE id = :loser)),
+                    current_title       = COALESCE(current_title,
+                        (SELECT current_title       FROM candidates WHERE id = :loser)),
+                    current_employer    = COALESCE(current_employer,
+                        (SELECT current_employer    FROM candidates WHERE id = :loser)),
+                    location            = COALESCE(location,
+                        (SELECT location            FROM candidates WHERE id = :loser)),
+                    years_experience    = COALESCE(years_experience,
+                        (SELECT years_experience    FROM candidates WHERE id = :loser)),
+                    available_from      = COALESCE(available_from,
+                        (SELECT available_from      FROM candidates WHERE id = :loser)),
+                    notice_period_raw   = COALESCE(notice_period_raw,
+                        (SELECT notice_period_raw   FROM candidates WHERE id = :loser)),
+                    employment_type     = COALESCE(employment_type,
+                        (SELECT employment_type     FROM candidates WHERE id = :loser)),
+                    sex                 = COALESCE(sex,
+                        (SELECT sex                 FROM candidates WHERE id = :loser)),
+                    race                = COALESCE(race,
+                        (SELECT race                FROM candidates WHERE id = :loser)),
+                    race_detail         = COALESCE(race_detail,
+                        (SELECT race_detail         FROM candidates WHERE id = :loser)),
+                    nationality         = COALESCE(nationality,
+                        (SELECT nationality         FROM candidates WHERE id = :loser)),
+                    date_of_birth       = COALESCE(date_of_birth,
+                        (SELECT date_of_birth       FROM candidates WHERE id = :loser)),
+                    education_years     = COALESCE(education_years,
+                        (SELECT education_years     FROM candidates WHERE id = :loser)),
+                    notes               = COALESCE(notes,
+                        (SELECT notes               FROM candidates WHERE id = :loser)),
+                    email               = COALESCE(email,
+                        (SELECT email               FROM candidates WHERE id = :loser)),
+                    phone_raw           = COALESCE(phone_raw,
+                        (SELECT phone_raw           FROM candidates WHERE id = :loser)),
+                    phone_e164          = COALESCE(phone_e164,
+                        (SELECT phone_e164          FROM candidates WHERE id = :loser))
+                WHERE id = :target
+                """
+            ),
+            {"target": body.target_id, "loser": candidate_id},
+        )
+
         # Status and target in one statement — a CHECK enforces that a merged
         # row names its target and a live row does not.
         await session.execute(
