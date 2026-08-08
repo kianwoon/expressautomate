@@ -192,8 +192,11 @@ function Ingesting({ me }: { me: Me }) {
   // reading, so it keeps its sentence.
   if (total > 0) return null;
 
+  // Full width, like the job-orders table below: every sentence on this page
+  // that sits above the workspace spans the same measure as the rows under it,
+  // rather than stopping at `.lede`'s 62ch or a 62ch body cap.
   return (
-    <p className="lede" style={{ marginTop: 18 }}>
+    <p className="lede" style={{ marginTop: 18, maxWidth: "none" }}>
       {/* No delivery-time promise: Microsoft decides when a notification
           arrives, and a stated "minute or two" would be our claim to keep. */}
       Your mailbox is connected and being watched. Nothing has arrived yet — new mail appears here
@@ -205,11 +208,11 @@ function Ingesting({ me }: { me: Me }) {
 function Starting() {
   return (
     <>
-      <p className="lede" style={{ marginTop: 18 }}>
+      <p className="lede" style={{ marginTop: 18, maxWidth: "none" }}>
         Your mailbox is connected. We are setting up the watch on it now — this takes a few
         seconds, and mail starts arriving here once it is done.
       </p>
-      <p className="body" style={{ marginTop: 12, maxWidth: "62ch" }}>
+      <p className="body" style={{ marginTop: 12, maxWidth: "none" }}>
         {/* It used to say "Refresh in a moment", which was an instruction to do
             the page's job for it. The page now re-checks on its own, so the
             sentence describes that instead of delegating it. */}
@@ -222,7 +225,7 @@ function Starting() {
 function Reconnect() {
   return (
     <>
-      <p className="lede" style={{ marginTop: 18 }}>
+      <p className="lede" style={{ marginTop: 18, maxWidth: "none" }}>
         {/* "Picks up where it left off" only holds while the delta checkpoint
             is still valid; after a long enough outage Graph expires it and the
             walk restarts. Promising continuity outright would be a claim we
@@ -230,7 +233,7 @@ function Reconnect() {
         Microsoft has stopped letting us read this mailbox, so ingestion has paused. Nothing
         already read has been lost, and reconnecting resumes it.
       </p>
-      <p className="body" style={{ marginTop: 12, maxWidth: "62ch" }}>
+      <p className="body" style={{ marginTop: 12, maxWidth: "none" }}>
         This usually means the permission was revoked, a password changed, or the grant simply
         aged out.
       </p>
@@ -249,11 +252,11 @@ function Reconnect() {
 function NotConnected({ me }: { me: Me }) {
   return (
     <>
-      <p className="lede" style={{ marginTop: 18 }}>
+      <p className="lede" style={{ marginTop: 18, maxWidth: "none" }}>
         Your account is set up. Connect a mailbox and we will start reading the recruitment mail
         that arrives in it.
       </p>
-      <p className="body" style={{ marginTop: 12, maxWidth: "62ch" }}>
+      <p className="body" style={{ marginTop: 12, maxWidth: "none" }}>
         Microsoft will ask you to approve read-only access. Some organisations require an
         administrator to approve it — if that happens the request goes to them, and signing in is
         unaffected either way.
