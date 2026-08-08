@@ -8,7 +8,12 @@ WORKDIR /site
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
 COPY frontend/ ./
-RUN npm run build
+# Cache Next's own build cache so a frontend tweak rebuilds only what it
+# changes instead of the whole static export. The GHA layer cache cannot do
+# this on its own: `COPY frontend/ ./` invalidates this layer on every
+# frontend edit, while the cache mount survives across builds via the same
+# `type=gha` cache scope the workflow already passes to build-push-action.
+RUN --mount=type=cache,target=/site/.next/cache npm run build
 
 FROM python:3.12-slim AS base
 

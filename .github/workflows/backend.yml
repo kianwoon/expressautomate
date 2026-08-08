@@ -63,8 +63,40 @@ jobs:
       exists: ${{ steps.tag.outputs.exists }}
       gateway_tag: ${{ steps.gateway_tag.outputs.tag }}
       gateway_exists: ${{ steps.gateway_tag.outputs.exists }}
+      # Which stacks this run's diff touches, so the three test jobs can skip
+      # when their code is untouched. The lists must stay in step with the
+      # deploy scope step below.
+      backend: ${{ steps.changes.outputs.backend }}
+      frontend: ${{ steps.changes.outputs.frontend }}
+      gateway: ${{ steps.changes.outputs.gateway }}
     steps:
+      # Full history, not the default shallow clone: `git ls-tree` needs only
+      # HEAD, but the diff below compares the pushed commit with its base,
+      # which a depth-1 clone cannot see. Same reason the deploy job checks
+      # out with fetch-depth: 0.
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      # Which stacks changed in this run. The deploy scope step hand-rolls the
+      # same diff later; this one feeds the test jobs, so the two must agree —
+      # a stack counted as changed here runs its tests, and a stack the deploy
+      # step thinks changed had better have been tested. `.env.example` is in
+      # the backend list on purpose: the workflow triggers on it precisely to
+      # check that the documented config still boots the app.
+      - uses: dorny/paths-filter@v3
+        id: changes
+        with:
+          filters: |
+            backend:
+              - 'backend/**'
+              - 'Dockerfile'
+              - '.github/**'
+              - '.env.example'
+            frontend:
+              - 'frontend/**'
+            gateway:
+              - 'gateway/**'
 
       - id: tag
         env:
@@ -139,6 +171,11 @@ jobs:
   # reaches Koyeb unless both pass.
   test:
     runs-on: ubuntu-latest
+    needs: [plan]
+    # A frontend- or gateway-only push does not exercise a byte of this job's
+    # code — the suite would come out exactly as the last run's. Skipping it
+    # keeps a copy tweak from paying the full Python + Postgres bill (~4 min).
+    if: needs.plan.outputs.backend == 'true'
 
     services:
       postgres:
@@ -241,6 +278,10 @@ jobs:
   # the Python suite, so it runs as its own job rather than bolted onto `test`.
   gateway_test:
     runs-on: ubuntu-latest
+    needs: [plan]
+    # The suite boots the backend's migrations to build its schema, so either
+    # stack's change must re-run it — but a frontend-only push must not.
+    if: needs.plan.outputs.backend == 'true' || needs.plan.outputs.gateway == 'true'
 
     # The store tests need a real Postgres. `ON CONFLICT`, the bytea round trip
     # and RLS are database behaviours, and a double would agree with whatever
@@ -326,6 +367,10 @@ jobs:
   # tested against a mocked `fetch`, never a live backend.
   frontend_test:
     runs-on: ubuntu-latest
+    needs: [plan]
+    # Runs only when the frontend actually changed. The fastest of the three
+    # suites, but a backend-only push has no reason to pay even for it.
+    if: needs.plan.outputs.frontend == 'true'
 
     steps:
       - uses: actions/checkout@v7
@@ -409,12 +454,17 @@ jobs:
     # the scope step decide. That happened to be harmless (the services were
     # already on the target image) but would silently skip a genuine redeploy,
     # such as after a rollback.
+    #
+    # The test jobs may be `skipped`, the same contract the build jobs already
+    # have: a run that skipped a suite did so because the plan step proved that
+    # stack untouched, so skipping it cannot have hidden a failure. A job that
+    # RAN still has to pass.
     if: >-
       !cancelled() &&
       github.ref == 'refs/heads/main' && github.event_name == 'push' &&
-      needs.test.result == 'success' &&
-      needs.gateway_test.result == 'success' &&
-      needs.frontend_test.result == 'success' &&
+      (needs.test.result == 'success' || needs.test.result == 'skipped') &&
+      (needs.gateway_test.result == 'success' || needs.gateway_test.result == 'skipped') &&
+      (needs.frontend_test.result == 'success' || needs.frontend_test.result == 'skipped') &&
       (needs.build.result == 'success' || needs.build.result == 'skipped') &&
       (needs.gateway_build.result == 'success' || needs.gateway_build.result == 'skipped')
     needs: [plan, test, gateway_test, frontend_test, build, gateway_build]
