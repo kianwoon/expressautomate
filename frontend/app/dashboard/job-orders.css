@@ -28,22 +28,33 @@
    distance from the nav. */
 .jo-workspace[data-lead="yes"] { margin-top: 0; }
 .jo-stats { margin-bottom: 40px; }
+/* Compact metric cards: the icon and its uppercase key share one row, the
+   figure sits underneath, and the caption closes the card. The old stack —
+   icon, key, figure and caption each on their own line, with a 148px floor —
+   made the four cards taller than the workspace they introduce. The row still
+   sizes all four cards equally; the grid does that now, not a min-height. */
 .jo-stat {
-  display: flex; flex-direction: column; gap: 4px;
-  /* A minimum, not a height: the four cards sit on one row and the longest
-     caption used to make its own card taller than its neighbours, which read
-     as a mistake rather than as a longer sentence. */
-  min-height: 148px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-areas:
+    "icon label"
+    "value value"
+    "sub sub";
+  align-items: center;
+  column-gap: 12px;
+  row-gap: 6px;
+  padding: 18px 20px;
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 .jo-stat:hover { border-color: var(--ink-300); box-shadow: 0 4px 14px rgba(var(--shadow-rgb), 0.06); }
 /* The glyph sits in its own tinted square rather than floating beside the
-   text: at 18px a line icon on white disappears next to a 2rem numeral, and
+   text: at 18px a line icon on white disappears next to a large numeral, and
    the wash is what gives each card its colour without tinting the whole
    surface. */
 .jo-stat-icon {
+  grid-area: icon;
   display: inline-flex; align-items: center; justify-content: center;
-  width: 34px; height: 34px; border-radius: 9px; margin-bottom: 8px;
+  width: 32px; height: 32px; border-radius: 9px;
 }
 .jo-stat[data-accent="blue"] .jo-stat-icon { background: var(--blue-050); color: var(--blue-600); }
 .jo-stat[data-accent="teal"] .jo-stat-icon { background: var(--teal-050); color: var(--teal-500); }
@@ -52,17 +63,19 @@
    is the opposite of how these read before: four large numerals with their
    meaning in smaller text underneath. */
 .jo-stat-k {
+  grid-area: label;
   font-size: 0.75rem; font-weight: 650; letter-spacing: 0.08em;
   text-transform: uppercase; color: var(--ink-500);
 }
 .jo-stat-v {
-  font-size: 2rem; font-weight: 700; line-height: 1.1; overflow-wrap: anywhere;
+  grid-area: value;
+  font-size: clamp(1.3rem, 2vw, 1.75rem);
+  font-weight: 700; line-height: 1.15; overflow-wrap: anywhere;
   /* The sync card carries words where the others carry a numeral. Letting it
      set its own smaller size keeps four cards looking like one row instead of
      three numbers and an outlier wrapping onto two lines. */
-  font-size: clamp(1.4rem, 2.2vw, 2rem);
 }
-.jo-stat-sub { font-size: 0.8125rem; margin-top: 2px; }
+.jo-stat-sub { grid-area: sub; font-size: 0.8125rem; }
 /* The one card that is asking for something gets a left edge, and nothing
    else. A whole card tinted amber reads as an error, which a queue of work
    waiting to be looked at is not. */
