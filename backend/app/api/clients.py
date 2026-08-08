@@ -167,6 +167,29 @@ def _assignee_join(stmt, assignee):
     )
 
 
+def _buddy_name_expr():
+    """One referring-buddy name per client, or None.
+
+    A correlated scalar subquery, NOT a JOIN: `buddy_referrals` is one-to-many
+    from a client (one row per distinct buddy who referred it), so joining it
+    multiplies client rows — a client referred by three buddies rendered three
+    times, inflated `total`, and `get_client`'s `.one_or_none()` raised
+    `MultipleResultsFound`. The subquery collapses to a single value per client
+    (the most recent referrer's name), preserving one-row-per-client without
+    losing the "who referred this client" signal the list shows.
+    """
+    return (
+        select(Buddy.name)
+        .select_from(BuddyReferral)
+        .join(Buddy, Buddy.id == BuddyReferral.buddy_id)
+        .where(BuddyReferral.client_id == Client.id)
+        .order_by(BuddyReferral.created_at.desc())
+        .limit(1)
+        .scalar_subquery()
+        .label("buddy_name")
+    )
+
+
 def _serialize(
     client: Client,
     assignee_name: str | None = None,
@@ -296,13 +319,8 @@ async def list_clients(
             counts[stored] = counts.get(stored, 0) + n
 
         assignee = aliased(User)
-        buddy = aliased(Buddy)
         base = _assignee_join(
-            select(Client, _assignee_name_expr(assignee), buddy.name.label("buddy_name")), assignee
-        ).outerjoin(
-            BuddyReferral, BuddyReferral.client_id == Client.id
-        ).outerjoin(
-            buddy, buddy.id == BuddyReferral.buddy_id
+            select(Client, _assignee_name_expr(assignee), _buddy_name_expr()), assignee
         )
         if status is not None:
             base = base.where(Client.status == status)
@@ -387,16 +405,12 @@ async def get_client(request: Request, client_id: uuid.UUID) -> dict:
     _user_uuid, tenant_uuid = _require_session(request)
     async with tenant_session(tenant_uuid) as session:
         assignee = aliased(User)
-        buddy = aliased(Buddy)
         row = (
             await session.execute(
                 _assignee_join(
-                    select(Client, _assignee_name_expr(assignee), buddy.name.label("buddy_name")),
+                    select(Client, _assignee_name_expr(assignee), _buddy_name_expr()),
                     assignee,
-                )
-                .outerjoin(BuddyReferral, BuddyReferral.client_id == Client.id)
-                .outerjoin(buddy, buddy.id == BuddyReferral.buddy_id)
-                .where(Client.id == client_id)
+                ).where(Client.id == client_id)
             )
         ).one_or_none()
         # Same 404-not-403 reasoning as `_load`: naming an id as another
@@ -679,94 +693,7 @@ async def merge_client(request: Request, client_id: uuid.UUID, body: MergeReques
         if loser.status == Client.MERGED:
             raise HTTPException(status_code=400, detail="Client is already merged")
 
-        # Mentions move, because they are evidence about a company and the
-        # company is now the target. Leaving them behind would make the
-        # surviving row look newly discovered.
-        #
-        # A mention cannot simply be repointed with a bare UPDATE: if the
-        # target already has a mention for the same email_message_id, the
-        # repoint would collide with uq_client_mentions_once_per_message
-        # (NULLS NOT DISTINCT, so two NULL-message mentions collide too).
-        #
-        # A real (non-null) message id collision means one message mentioning
-        # one company only needs one mention on the surviving client — the
-        # weaker of the two is redundant and is dropped. Strength is judged
-        # by matched_by alone (email_domain is a firmer claim than a
-        # normalised-name match, so it outranks it): there is no confidence
-        # column to break a tie on, and matched_by never ties between two
-        # different values by construction. Two mentions that share the same
-        # matched_by are equally strong evidence, so on that genuine tie the
-        # target's existing mention is kept and the loser's is dropped as
-        # redundant — which side wins doesn't matter, since neither claim is
-        # stronger than the other.
-        #
-        # A NULL message id collision is different: the constraint permits
-        # only one NULL-message mention per client, but a NULL id does not
-        # mean "same missing source" — it means the source was retention-
-        # purged, and two purged mentions are two different purged emails.
-        # They are not duplicates of each other and neither is redundant, so
-        # neither is moved or deleted; the loser's NULL-message mention stays
-        # on the loser row exactly as it is. The loser row is not deleted by
-        # a merge (status just becomes `merged`), it stays reachable by id,
-        # and its mentions survive there — "the source is gone" stays true
-        # without ever becoming "this never happened" on either row.
-        def _strength(mention: ClientMention) -> int:
-            return {"email_domain": 2, "name": 1}.get(mention.matched_by, 0)
-
-        target_mentions = (
-            (
-                await session.execute(
-                    select(ClientMention).where(ClientMention.client_id == body.target_id)
-                )
-            )
-            .scalars()
-            .all()
-        )
-        target_by_message = {
-            m.email_message_id: m for m in target_mentions if m.email_message_id is not None
-        }
-        loser_mentions = (
-            (
-                await session.execute(
-                    select(ClientMention).where(ClientMention.client_id == client_id)
-                )
-            )
-            .scalars()
-            .all()
-        )
-
-        movable_ids = []
-        redundant_loser_ids = []
-        outranked_target_ids = []
-        for m in loser_mentions:
-            if m.email_message_id is None:
-                # Two purged sources, not one duplicated source — leave in place.
-                continue
-            collision = target_by_message.get(m.email_message_id)
-            if collision is None:
-                movable_ids.append(m.id)
-            elif _strength(m) > _strength(collision):
-                outranked_target_ids.append(collision.id)
-                movable_ids.append(m.id)
-            else:
-                redundant_loser_ids.append(m.id)
-
-        if outranked_target_ids:
-            # Free the (client_id, email_message_id) slot before the winning
-            # loser mention is repointed into it below.
-            await session.execute(
-                delete(ClientMention).where(ClientMention.id.in_(outranked_target_ids))
-            )
-        if movable_ids:
-            await session.execute(
-                update(ClientMention)
-                .where(ClientMention.id.in_(movable_ids))
-                .values(client_id=body.target_id)
-            )
-        if redundant_loser_ids:
-            await session.execute(
-                delete(ClientMention).where(ClientMention.id.in_(redundant_loser_ids))
-            )
+        await _merge_mentions(session, client_id, body.target_id)
         await session.execute(
             update(Client)
             .where(Client.id == client_id)
@@ -778,6 +705,100 @@ async def merge_client(request: Request, client_id: uuid.UUID, body: MergeReques
         )
         await session.commit()
     return {"status": "merged", "merged_into_client_id": str(body.target_id)}
+
+
+async def _merge_mentions(
+    session, loser_id: uuid.UUID, target_id: uuid.UUID
+) -> None:
+    """Move a loser client's mentions onto the target, resolving collisions.
+
+    Mentions move, because they are evidence about a company and the company is
+    now the target. Leaving them behind would make the surviving row look newly
+    discovered.
+
+    A mention cannot simply be repointed with a bare UPDATE: if the target
+    already has a mention for the same email_message_id, the repoint would
+    collide with uq_client_mentions_once_per_message (NULLS NOT DISTINCT, so two
+    NULL-message mentions collide too).
+
+    A real (non-null) message id collision means one message mentioning one
+    company only needs one mention on the surviving client — the weaker of the
+    two is redundant and is dropped. Strength is judged by matched_by alone
+    (email_domain is a firmer claim than a normalised-name match, so it outranks
+    it): there is no confidence column to break a tie on, and matched_by never
+    ties between two different values by construction. Two mentions that share
+    the same matched_by are equally strong evidence, so on that genuine tie the
+    target's existing mention is kept and the loser's is dropped as redundant —
+    which side wins doesn't matter, since neither claim is stronger than the
+    other.
+
+    A NULL message id collision is different: the constraint permits only one
+    NULL-message mention per client, but a NULL id does not mean "same missing
+    source" — it means the source was retention-purged, and two purged mentions
+    are two different purged emails. They are not duplicates of each other and
+    neither is redundant, so neither is moved or deleted; the loser's
+    NULL-message mention stays on the loser row exactly as it is. The loser row
+    is not deleted by a merge (status just becomes `merged`), it stays reachable
+    by id, and its mentions survive there — "the source is gone" stays true
+    without ever becoming "this never happened" on either row.
+    """
+    def _strength(mention: ClientMention) -> int:
+        return {"email_domain": 2, "name": 1}.get(mention.matched_by, 0)
+
+    target_mentions = (
+        (
+            await session.execute(
+                select(ClientMention).where(ClientMention.client_id == target_id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    target_by_message = {
+        m.email_message_id: m for m in target_mentions if m.email_message_id is not None
+    }
+    loser_mentions = (
+        (
+            await session.execute(
+                select(ClientMention).where(ClientMention.client_id == loser_id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    movable_ids = []
+    redundant_loser_ids = []
+    outranked_target_ids = []
+    for m in loser_mentions:
+        if m.email_message_id is None:
+            # Two purged sources, not one duplicated source — leave in place.
+            continue
+        collision = target_by_message.get(m.email_message_id)
+        if collision is None:
+            movable_ids.append(m.id)
+        elif _strength(m) > _strength(collision):
+            outranked_target_ids.append(collision.id)
+            movable_ids.append(m.id)
+        else:
+            redundant_loser_ids.append(m.id)
+
+    if outranked_target_ids:
+        # Free the (client_id, email_message_id) slot before the winning loser
+        # mention is repointed into it below.
+        await session.execute(
+            delete(ClientMention).where(ClientMention.id.in_(outranked_target_ids))
+        )
+    if movable_ids:
+        await session.execute(
+            update(ClientMention)
+            .where(ClientMention.id.in_(movable_ids))
+            .values(client_id=target_id)
+        )
+    if redundant_loser_ids:
+        await session.execute(
+            delete(ClientMention).where(ClientMention.id.in_(redundant_loser_ids))
+        )
 
 
 @router.post("/clients/{client_id}/unmerge")
