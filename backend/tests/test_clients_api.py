@@ -121,6 +121,99 @@ async def test_the_status_filter_is_the_review_queue(agency_with_clients) -> Non
 
 
 @pytest.fixture
+async def agency_with_multi_referral_client():
+    """One client referred by two distinct buddies.
+
+    `buddy_referrals` is one-to-many from a client (one row per buddy), so a
+    naive JOIN multiplies the client row once per referrer. This fixture seeds
+    that exact shape so the dedup tests can prove the list and detail endpoints
+    return one row, not two.
+    """
+    tid, uid = uuid.uuid4(), uuid.uuid4()
+    cid = uuid.uuid4()
+    buddy_a, buddy_b = uuid.uuid4(), uuid.uuid4()
+    async with AdminSessionLocal() as s:
+        await s.execute(
+            text("INSERT INTO tenants (id, name, slug) VALUES (:i, :n, :n)"),
+            {"i": tid, "n": f"agency-{tid.hex[:6]}"},
+        )
+        await s.execute(
+            text(
+                "INSERT INTO users (id, tenant_id, email, role) "
+                "VALUES (:i, :t, :e, 'owner')"
+            ),
+            {"i": uid, "t": tid, "e": f"u{uid.hex[:6]}@agency.sg"},
+        )
+        await s.execute(
+            text(
+                "INSERT INTO clients (id, tenant_id, name, name_normalized, status) "
+                "VALUES (:i, :t, 'Acme', 'acme', 'unconfirmed')"
+            ),
+            {"i": cid, "t": tid},
+        )
+        await s.execute(
+            text(
+                "INSERT INTO buddies (id, tenant_id, name, email, source) "
+                "VALUES (:i, :t, :n, :e, 'pipeline')"
+            ),
+            {"i": buddy_a, "t": tid, "n": "Recruiter A", "e": "a@buddy.sg"},
+        )
+        await s.execute(
+            text(
+                "INSERT INTO buddies (id, tenant_id, name, email, source) "
+                "VALUES (:i, :t, :n, :e, 'pipeline')"
+            ),
+            {"i": buddy_b, "t": tid, "n": "Recruiter B", "e": "b@buddy.sg"},
+        )
+        await s.execute(
+            text(
+                "INSERT INTO buddy_referrals (id, tenant_id, buddy_id, client_id) "
+                "VALUES (:i, :t, :b, :c)"
+            ),
+            {"i": uuid.uuid4(), "t": tid, "b": buddy_a, "c": cid},
+        )
+        await s.execute(
+            text(
+                "INSERT INTO buddy_referrals (id, tenant_id, buddy_id, client_id) "
+                "VALUES (:i, :t, :b, :c)"
+            ),
+            {"i": uuid.uuid4(), "t": tid, "b": buddy_b, "c": cid},
+        )
+        await s.commit()
+    yield tid, uid, cid
+    await cleanup_tenant(tid)
+
+
+async def test_a_client_with_multiple_referrals_lists_once(
+    agency_with_multi_referral_client,
+) -> None:
+    """The buddy_referrals relation is one-to-many, so a JOIN would multiply
+    client rows — a client referred by two buddies rendered twice, `total` was
+    inflated, and pagination consumed two slots for one client. The correlated
+    scalar subquery collapses to one buddy name per client, so one referrer or
+    five, the row count is the client count."""
+    tid, uid, cid = agency_with_multi_referral_client
+    async with await _client_for(tid, uid) as http:
+        body = (await http.get("/api/clients")).json()
+    assert len(body["items"]) == 1
+    assert body["items"][0]["id"] == str(cid)
+    assert body["total"] == 1
+
+
+async def test_a_client_with_multiple_referrals_loads_in_detail(
+    agency_with_multi_referral_client,
+) -> None:
+    """The detail endpoint called `.one_or_none()` on a query that could return
+    multiple rows (one per buddy), raising `MultipleResultsFound` (500) for any
+    multi-referral client. The scalar subquery keeps it one row."""
+    tid, uid, cid = agency_with_multi_referral_client
+    async with await _client_for(tid, uid) as http:
+        response = await http.get(f"/api/clients/{cid}")
+    assert response.status_code == 200
+    assert response.json()["id"] == str(cid)
+
+
+@pytest.fixture
 async def agency_with_named_clients():
     """Three live clients whose names, domains and statuses differ, so the
     letter bar and every sort column have something to disagree about.

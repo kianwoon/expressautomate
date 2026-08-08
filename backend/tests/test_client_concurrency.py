@@ -66,6 +66,36 @@ async def test_two_concurrent_domain_matches_produce_one_client(agency) -> None:
     assert count == 1
 
 
+async def test_concurrent_name_matches_produce_one_client(agency) -> None:
+    """The advisory lock on (tenant, normalised name) serialises concurrent
+    name-path creates.
+
+    Reproduces the live "Woodlands Health ×3" bug: three forwarded job orders
+    from the same agency, processed in parallel (arq max_jobs=10), each named
+    the same body company that did not yet exist. Under READ COMMITTED the
+    `WHERE NOT EXISTS` guard is powerless — each transaction sees only its own
+    snapshot — so all three inserted. The transaction-scoped advisory lock makes
+    the second and third block until the first commits, then their re-read finds
+    the row. Three concurrent matches, one client.
+    """
+    results = await asyncio.gather(
+        _match_once(agency, "forwarder@agency.com.sg", "Woodlands Health"),
+        _match_once(agency, "forwarder@agency.com.sg", "Woodlands Health"),
+        _match_once(agency, "forwarder@agency.com.sg", "Woodlands Health"),
+        return_exceptions=True,
+    )
+    for r in results:
+        assert not isinstance(r, Exception), f"concurrent match raised: {r!r}"
+
+    async with tenant_session(agency) as s:
+        count = (
+            await s.execute(
+                text("SELECT count(*) FROM clients WHERE name_normalized = 'woodlands health'")
+            )
+        ).scalar_one()
+    assert count == 1
+
+
 """The reassignment race, below.
 
 `PUT /clients/{id}/assignee` decides permission from the client's current

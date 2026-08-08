@@ -14,6 +14,7 @@ domain onto the hiring company's identity key would be a fabrication. The
 client's real domain can be filled in later by a recruiter.
 """
 
+import hashlib
 import uuid
 from dataclasses import dataclass
 
@@ -22,6 +23,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.client import Client
 from app.services.client_naming import domain_of, normalize_company_name
+
+# A transaction-scoped advisory lock namespace for name-path client creation.
+# Distinct from every other advisory-lock user in the codebase so a key
+# collision with a different subsystem is impossible.
+_LOCK_NAMESPACE_NAME = 92734
 
 # Isolation is defence in depth here, not a single mechanism — the same
 # arrangement `candidate_matching.py` documents. RLS on `clients` (keyed off
@@ -98,6 +104,46 @@ _INSERT_CLIENT_BY_NAME = text(
 )
 
 _TOUCH = text("UPDATE clients SET last_seen_at = now() WHERE id = :id")
+
+
+def _name_lock_key(tenant_id: uuid.UUID, normalized: str) -> int:
+    """A stable key for `pg_advisory_xact_lock`'s int4 parameter.
+
+    The lock serialises concurrent name-path creations for the *same*
+    company name. Two `extract_email` jobs running in parallel (arq
+    `max_jobs=10`, READ COMMITTED) can each `SELECT` "no row", each miss
+    the other's uncommitted insert, and both insert — the `WHERE NOT
+    EXISTS` guard is powerless against that because READ COMMITTED lets
+    each transaction see its own snapshot. The advisory lock closes the
+    race: the second worker blocks until the first commits, then its
+    re-read finds the row.
+
+    Scoped by tenant and by the normalised name so it only serialises
+    workers racing on the *same* identity, never unrelated companies. A
+    transaction-scoped lock (not session-scoped) is essential: it
+    auto-releases at COMMIT/ROLLBACK, so a crashed worker never leaves a
+    stuck lock.
+
+    `pg_advisory_xact_lock(namespace, key)` takes two int4 parameters
+    (signed 32-bit, range −2147483648..2147483647). A 4-byte BLAKE2 digest
+    is unsigned (0..4294967295), so it is reinterpreted as signed via
+    `int.from_bytes(..., signed=True)` — the bit pattern is stable, only
+    the interpretation differs, so two calls on the same input always
+    hash to the same key.
+    """
+    digest = hashlib.blake2b(
+        f"{tenant_id}|{normalized}".encode(), digest_size=4
+    ).digest()
+    return int.from_bytes(digest, "big", signed=True)
+
+
+# pg_advisory_xact_lock: released automatically at transaction end, so a
+# crash or rollback never strands it. The two-int form uses the 64-bit key
+# space split into (namespace, key); `_LOCK_NAMESPACE_NAME` keeps this code
+# out of every other advisory-lock user's namespace.
+_LOCK_BY_NAME = text(
+    "SELECT pg_advisory_xact_lock(:namespace, :key)"
+)
 
 _STATUS_OF = text(
     "SELECT status, merged_into_client_id, assigned_user_id FROM clients WHERE id = :id"
@@ -287,6 +333,22 @@ async def _resolve(
     # whose domain is the agency's, not the client's. Trying domain first
     # collapsed every forwarded order onto the forwarding agency.
     if normalized:
+        # Serialise concurrent name-path work for the SAME company. Without
+        # this, two parallel extract_email jobs (arq max_jobs=10, READ
+        # COMMITTED) each read "no row", each miss the other's uncommitted
+        # insert, and both insert — the WHERE NOT EXISTS guard cannot see
+        # the other transaction's row. The lock blocks the loser until the
+        # winner commits, so the loser's re-read below finds the new row.
+        # Scoped to (tenant, normalised name): unrelated companies are never
+        # serialised against each other. Transaction-scoped: auto-released
+        # at COMMIT/ROLLBACK, so a crash never strands it.
+        await session.execute(
+            _LOCK_BY_NAME,
+            {
+                "namespace": _LOCK_NAMESPACE_NAME,
+                "key": _name_lock_key(tenant_id, normalized),
+            },
+        )
         row = (
             await session.execute(_BY_NAME, {"tenant_id": tenant_id, "name": normalized})
         ).first()
