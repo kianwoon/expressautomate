@@ -72,7 +72,10 @@
    title. The eyebrow is gone, so the gap would only push the heading off its
    own baseline with the controls beside it. */
 .jo-head-title { margin-top: 0; }
-.jo-head-body { margin-top: 12px; max-width: 68ch; }
+/* Full width, like the table it introduces: the detail opens as a modal over
+   the list, so `.jo-list` spans the workspace, and a 68ch measure would end
+   the sentence short of the rows it describes. */
+.jo-head-body { margin-top: 12px; max-width: none; }
 
 .jo-note-card { margin-top: 16px; display: grid; gap: 16px; justify-items: start; }
 

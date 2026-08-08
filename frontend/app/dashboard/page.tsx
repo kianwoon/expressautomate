@@ -130,13 +130,13 @@ function SignedIn({ me }: { me: Me }) {
 
   return (
     <>
+      {/* No eyebrow above the heading: "YOUR ACCOUNT" over "Signed in as …"
+          labelled the page twice, and the nav already says whose account this
+          is. The heading starts the page, like the other dashboard pages'. */}
       {!running && (
-        <>
-          <span className="eyebrow">Your account</span>
-          <h1 style={{ marginTop: 14, fontSize: "clamp(1.75rem, 3.4vw, 2.5rem)" }}>
-            Signed in as <span className="gradient-text">{displayNameOf(me)}</span>
-          </h1>
-        </>
+        <h1 style={{ fontSize: "clamp(1.75rem, 3.4vw, 2.5rem)" }}>
+          Signed in as <span className="gradient-text">{displayNameOf(me)}</span>
+        </h1>
       )}
 
       {stage === "ingesting" ? (
