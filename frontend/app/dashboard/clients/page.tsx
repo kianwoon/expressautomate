@@ -250,7 +250,9 @@ function Workspace() {
       <h1 style={{ fontSize: "clamp(1.75rem, 3.4vw, 2.5rem)" }}>
         The companies behind your job orders.
       </h1>
-      <p className="lede" style={{ marginTop: 18 }}>
+      {/* Measured to the table it introduces, not to `.lede`'s 62ch — `.cl-lede`
+          in clients.css carries the numbers and the responsive step. */}
+      <p className="lede cl-lede" style={{ marginTop: 18 }}>
         Most of these were proposed automatically from an email. Confirm the ones that are real,
         archive what is not, and merge duplicates as they turn up — and add one yourself when a
         client arrives some other way.

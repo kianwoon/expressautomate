@@ -22,6 +22,17 @@
    this column wider than the 1.85fr `.jo-split` gives it. */
 .cl-list { min-width: 0; }
 
+/* The lede under the page heading is measured to the table column it
+   introduces rather than to `.lede`'s 62ch: `.jo-split` gives the list 1.85 of
+   its 2.85 parts after the 20px gap, and the sentence is meant to end where
+   that table does. The numbers restate the split's own — change them together.
+   Below 1080px the split becomes a single full-width column (globals.css), so
+   the lede widens with it; the media query keeps the two in step. */
+.cl-lede { max-width: calc((100% - 20px) * 1.85 / 2.85); }
+@media (max-width: 1080px) {
+  .cl-lede { max-width: none; }
+}
+
 /* ── Clients: status, suspension, contacts ───────────────────────────────
    Added with the manual-administration work. The chips row gained a button
    at its right end, so the row has to be a two-part flex rather than the

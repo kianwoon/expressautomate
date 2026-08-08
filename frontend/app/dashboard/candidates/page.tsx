@@ -366,7 +366,9 @@ function Workspace({ role }: { role: string }) {
       <h1 style={{ fontSize: "clamp(1.75rem, 3.4vw, 2.5rem)" }}>
         The people you place.
       </h1>
-      <p className="lede" style={{ marginTop: 18 }}>
+      {/* The list below is full width — `.jo-list` fills the wrap — so the lede
+          matches it instead of stopping at `.lede`'s 62ch. */}
+      <p className="lede" style={{ marginTop: 18, maxWidth: "none" }}>
         Every candidate your agency has recorded, tenant-wide — nothing here came from an email;
         it was typed by a person or came from a sheet a person uploaded.
       </p>
