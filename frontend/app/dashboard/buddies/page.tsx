@@ -2,12 +2,13 @@
 
 import { useCallback, useEffect, useId, useState } from "react";
 
-import { BUDDIES_API_PATH, LANDING_PATH } from "../../api";
+import { BUDDIES_API_PATH, BUDDIES_PAGE_SIZE, BUDDIES_PAGE_SIZES, LANDING_PATH } from "../../api";
 import { useAuth } from "../../auth";
 import { SiteFooter } from "../../site-footer";
 import { SiteNav } from "../../site-nav";
 import { day } from "../format";
 import { Dialog } from "../dialog";
+import { BUDDIES_PAGE_SIZE_KEY, usePersistedPageSize } from "../use-persisted-page-size";
 
 type Buddy = {
   id: string;
@@ -20,11 +21,13 @@ type Buddy = {
 };
 
 /** The server's list response — a dict, not the bare array the endpoint used
- *  to return. `total` is the length of the filtered set (no pagination here:
- *  a buddy network is small), and `initials` drives the A–Z bar. */
+ *  to return. `total` is the length of the filtered set, `limit` and `offset`
+ *  the pagination window the server actually used (it clamps `limit`). */
 type BuddyPage = {
   items: Buddy[];
   total: number;
+  limit: number;
+  offset: number;
   initials: string[];
   /** Grand total of referred job orders across ALL buddies — independent of
    *  the search/letter filter, so it stays honest while a recruiter narrows
@@ -114,8 +117,18 @@ const INITIALS: string[] = [
   NON_ALPHA_INITIAL,
 ];
 
-function listUrl(q: string, initial: string | null, sort: BuddySort, period: BuddyPeriod | null): string {
-  const params = new URLSearchParams();
+function listUrl(
+  q: string,
+  initial: string | null,
+  sort: BuddySort,
+  period: BuddyPeriod | null,
+  limit: number,
+  offset: number,
+): string {
+  const params = new URLSearchParams({
+    limit: String(limit),
+    offset: String(offset),
+  });
   if (q.trim()) params.set("q", q.trim());
   if (initial) params.set("initial", initial);
   // Always sent, even on the default view: the server's own default order
@@ -184,6 +197,12 @@ function Workspace() {
   const [q, setQ] = useState("");
   const [initial, setInitial] = useState<string | null>(null);
   const [sort, setSort] = useState<BuddySort>(DEFAULT_SORT);
+  const [offset, setOffset] = useState(0);
+  const [pageSize, setPageSize] = usePersistedPageSize(
+    BUDDIES_PAGE_SIZE_KEY,
+    BUDDIES_PAGE_SIZE,
+    BUDDIES_PAGE_SIZES,
+  );
   const [period, setPeriod] = useState<BuddyPeriod | null>(() => {
     // Lazy initialiser so the remembered period is known before the first
     // fetch — an effect would fetch "All time" then refetch the remembered
@@ -194,6 +213,7 @@ function Workspace() {
   });
   const choosePeriod = useCallback((next: BuddyPeriod | null) => {
     setPeriod(next);
+    setOffset(0);
     if (typeof window === "undefined") return;
     try {
       window.localStorage.setItem(BUDDIES_PERIOD_KEY, next ?? PERIOD_ALL_SENTINEL);
@@ -206,6 +226,16 @@ function Workspace() {
   // so the dialog title renders before the fetch resolves.
   const [openBuddy, setOpenBuddy] = useState<Buddy | null>(null);
 
+  // Reset to page 1 when any filter changes.
+  const onOffset = useCallback((next: number) => setOffset(next), []);
+  const onPageSize = useCallback(
+    (next: number) => {
+      setPageSize(next);
+      setOffset(0);
+    },
+    [setPageSize],
+  );
+
   useEffect(() => {
     const controller = new AbortController();
     // Rows already on screen stay on screen while the refetch runs — the same
@@ -214,7 +244,7 @@ function Workspace() {
     setPage((prev) => prev);
     (async () => {
       try {
-        const res = await fetch(listUrl(q, initial, sort, period), {
+        const res = await fetch(listUrl(q, initial, sort, period, pageSize, offset), {
           credentials: "include",
           signal: controller.signal,
         });
@@ -229,10 +259,17 @@ function Workspace() {
       }
     })();
     return () => controller.abort();
-  }, [q, initial, sort, period]);
+  }, [q, initial, sort, period, pageSize, offset]);
 
-  const pickInitial = useCallback((next: string | null) => setInitial(next), []);
-  const onSort = useCallback((next: BuddySort) => setSort(next), []);
+const pickInitial = useCallback((next: string | null) => {
+    setInitial(next);
+    setOffset(0);
+  }, []);
+
+  const onSort = useCallback((next: BuddySort) => {
+    setSort(next);
+    setOffset(0);
+  }, []);
 
   const buddies = page?.items ?? [];
   const initials = page?.initials ?? NO_INITIALS;
@@ -268,14 +305,16 @@ function Workspace() {
   }
 
   const totalReferrals = page.total_referrals;
+  const limit = page.limit;
+  const total = page.total;
 
   return (
     <>
       <h1 style={{ fontSize: "clamp(1.75rem, 3.4vw, 2.5rem)" }}>Buddies</h1>
       <p className="lede" style={{ marginTop: 18, maxWidth: "none" }}>
         External recruiters who forward job orders into your mailbox.{" "}
-        <mark className="jo-highlight"> {buddies.length} </mark>{" "}
-        {buddies.length === 1 ? "buddy has" : "buddies have"} referred{" "}
+        <mark className="jo-highlight"> {total} </mark>{" "}
+        {total === 1 ? "buddy has" : "buddies have"} referred{" "}
         <mark className="jo-highlight"> {totalReferrals} </mark>{" "}
         {totalReferrals === 1 ? "job order" : "job orders"}.
       </p>
@@ -285,7 +324,7 @@ function Workspace() {
           className="jo-search"
           type="search"
           value={q}
-          onChange={(event) => setQ(event.target.value)}
+          onChange={(event) => { setQ(event.target.value); setOffset(0); }}
           placeholder="Search name or email…"
           aria-label="Search buddies"
         />
@@ -350,7 +389,7 @@ function Workspace() {
         ) : (
           <>
             <p className="body jo-note" aria-live="polite">
-              Showing {buddies.length} {buddies.length === 1 ? "buddy" : "buddies"}.
+              Showing {buddies.length} of {total} {total === 1 ? "buddy" : "buddies"}.
             </p>
             <div className="card jo-table-card">
               <table className="jo-table" style={{ tableLayout: "auto" }}>
@@ -396,6 +435,14 @@ function Workspace() {
                 </tbody>
               </table>
             </div>
+            <Pager
+              total={total}
+              limit={limit}
+              offset={offset}
+              pageSize={pageSize}
+              onOffset={onOffset}
+              onPageSize={onPageSize}
+            />
           </>
         )}
       </div>
@@ -505,6 +552,85 @@ function PhoneCell({ buddy }: { buddy: Buddy }) {
     >
       {saved || <span className="muted">Add</span>}
     </button>
+  );
+}
+
+/** `limit` is what the server used and is what the arithmetic must run on — it
+ *  clamps, so it is not always what was asked for. `pageSize` is what was
+ *  asked for, and is the only thing the control may show: a select whose value
+ *  disagrees with its options renders blank. Mirrors `Pager` in
+ *  `candidates/page.tsx` exactly, down to this comment — same distinction,
+ *  same reason.
+ *
+ *  The size control stays even when everything fits on one page — that is
+ *  exactly when someone might want a smaller one — so only Previous/Next and
+ *  the page count are conditional. */
+function Pager({
+  total,
+  limit,
+  offset,
+  pageSize,
+  onOffset,
+  onPageSize,
+}: {
+  total: number;
+  limit: number;
+  offset: number;
+  pageSize: number;
+  onOffset: (offset: number) => void;
+  onPageSize: (limit: number) => void;
+}) {
+  const page = Math.floor(offset / limit) + 1;
+  // `page` is in the max because the two can disagree: a list that shrank
+  // under a poll leaves someone standing on page 2 of a set that now fits on
+  // page 1, and "Page 2 of 1" is not a thing to show anyone.
+  const pages = Math.max(1, Math.ceil(total / limit), page);
+  // `offset > 0` and not only `total > limit`: in that same case there is one
+  // page's worth of rows and the reader is past it, so the steps are the only
+  // way back — hiding them because everything now fits is what would strand
+  // them.
+  const paged = total > limit || offset > 0;
+
+  return (
+    <nav className="jo-pager" aria-label="Buddy pages and page size">
+      {paged && (
+        <>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            disabled={offset === 0}
+            onClick={() => onOffset(Math.max(0, offset - limit))}
+          >
+            Previous
+          </button>
+          <span className="body jo-sub" aria-live="polite">
+            Page {page} of {pages}
+          </span>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            disabled={offset + limit >= total}
+            onClick={() => onOffset(offset + limit)}
+          >
+            Next
+          </button>
+        </>
+      )}
+      <label className="jo-perpage">
+        Rows per page
+        <select
+          className="jo-perpage-select"
+          value={pageSize}
+          onChange={(event) => onPageSize(Number(event.target.value))}
+        >
+          {BUDDIES_PAGE_SIZES.map((n) => (
+            <option key={n} value={n}>
+              {n}
+            </option>
+          ))}
+        </select>
+      </label>
+    </nav>
   );
 }
 

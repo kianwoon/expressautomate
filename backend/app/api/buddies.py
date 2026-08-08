@@ -14,6 +14,7 @@ from pydantic import BaseModel, EmailStr
 from sqlalchemy import and_, func, or_, select, text, update
 
 from app.api.auth import _require_session, _require_session_with_role
+from app.core.config import settings
 from app.db.rls import tenant_session
 from app.models import Buddy, BuddyReferral, Opportunity, UserEmail
 from app.services.name_index import initial_of as _initial_of
@@ -234,6 +235,8 @@ def _buddy_order(sort_by, descending, initial, referral_count):
 @router.get("/buddies")
 async def list_buddies(
     request: Request,
+    limit: int | None = Query(default=None, ge=1),
+    offset: int = Query(default=0, ge=0),
     q: str | None = None,
     initial: str | None = InitialFilter,
     sort_by: BuddySortBy | None = None,
@@ -242,27 +245,20 @@ async def list_buddies(
 ) -> dict:
     """External recruiters who have referred clients, with referral counts.
 
-    Supports the same letter bar, search and sort as the clients list. Unlike
-    clients there is no pagination: a tenant's buddy network is small (the
-    partner-agency colleagues who forward job orders), so the whole filtered
-    set is returned in one page rather than carving it with limit/offset.
-
-    `referral_count` is the number of job orders a buddy has brought in — the
-    work, not the buddy→client links — and `period` scopes it to a window so a
-    recruiter can ask "who has been sending me work lately".
+    Supports the same letter bar, search, sort and pagination as the clients
+    list.
     """
     user_uuid, tenant_uuid, role = await _require_session_with_role(request)
     cutoff = _period_cutoff(period)
-    # The same per-recruiter visibility the job orders list applies. RLS scopes
-    # to the tenant; this scopes within it, so a buddy's referred job order the
-    # reader cannot see does not count any more than it would appear in their
-    # job orders list.
     visible = visible_opportunities(user_uuid, role)
 
     # The referral count, once, as a LEFT JOINed column. Buddies with no
     # opportunities in the period coalesce to 0 rather than disappearing.
     counts = _referral_counts_subquery(cutoff, visible)
     referral_count = func.coalesce(counts.c.n, 0).label("referral_count")
+
+    ceiling = settings.BUDDIES_PAGE_LIMIT
+    page_limit = ceiling if limit is None else min(limit, ceiling)
 
     async with tenant_session(tenant_uuid) as session:
         base = (
@@ -271,11 +267,6 @@ async def list_buddies(
         )
 
         if q:
-            # Same escaping as `clients.py`: parameterized (no injection), but
-            # a literal "%" or "_" typed by a recruiter would otherwise match
-            # as a wildcard. Matched against email as well as name so a search
-            # for a domain or address finds the buddy the way a recruiter would
-            # think of them.
             escaped = (
                 q.strip()
                 .lower()
@@ -290,6 +281,13 @@ async def list_buddies(
                     func.lower(Buddy.email).like(like, escape="\\"),
                 )
             )
+
+        # Count total matching rows BEFORE initial/limit/offset.
+        total = int(
+            await session.scalar(
+                select(func.count()).select_from(base.subquery())
+            )
+        )
 
         # Computed from `base` *before* `initial` narrows it, for the same
         # reason as clients/candidates: the bar answers "which letters could I
@@ -314,7 +312,7 @@ async def list_buddies(
             base = base.where(_initial_of(Buddy.name) == initial.upper())
 
         order = _buddy_order(sort_by, descending, initial, referral_count)
-        rows = (await session.execute(base.order_by(*order))).all()
+        rows = (await session.execute(base.order_by(*order).limit(page_limit).offset(offset))).all()
 
         # The grand total of referred job orders across ALL buddies — not just
         # the ones the search or letter filter left on the page. Computed from
@@ -340,7 +338,9 @@ async def list_buddies(
             }
             for row in rows
         ],
-        "total": len(rows),
+        "total": total,
+        "limit": page_limit,
+        "offset": offset,
         "initials": initials,
         "total_referrals": total_referrals,
     }

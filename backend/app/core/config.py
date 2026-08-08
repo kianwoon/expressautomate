@@ -489,6 +489,7 @@ class Settings(BaseSettings):
     CLIENTS_PAGE_LIMIT: int = Field(default=200, gt=0)
 
     CANDIDATES_PAGE_LIMIT: int = Field(default=200, gt=0)
+    BUDDIES_PAGE_LIMIT: int = Field(default=200, gt=0)
 
     # `?eligible_for=` (app/api/candidates.py) cannot filter in SQL — a
     # candidate is only known `not_met` after `eligibility.evaluate()` runs in

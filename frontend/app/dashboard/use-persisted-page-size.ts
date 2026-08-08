@@ -23,6 +23,7 @@ import { useCallback, useState } from "react";
 export const CANDIDATES_PAGE_SIZE_KEY = "ea.pageSize.candidates";
 export const CLIENTS_PAGE_SIZE_KEY = "ea.pageSize.clients";
 export const OPPORTUNITIES_PAGE_SIZE_KEY = "ea.pageSize.jobOrders";
+export const BUDDIES_PAGE_SIZE_KEY = "ea.pageSize.buddies";
 
 /**
  * A page-size `useState` that reads its initial value from localStorage and

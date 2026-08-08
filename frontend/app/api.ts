@@ -269,6 +269,25 @@ export const BUDDIES_DASHBOARD_PATH = "/dashboard/buddies";
 export const BUDDIES_API_PATH = `${API_BASE}/api/buddies`;
 export const USER_EMAILS_API_PATH = `${API_BASE}/api/user/emails`;
 
+/** How many buddies one page of the list asks for. Same env-override and
+ *  NaN-guard reasoning as `CANDIDATES_PAGE_SIZE` above: an unset variable
+ *  parses to `NaN`, and `limit=NaN` is a 422 from the API — a bad value must
+ *  fall back to a working page, not break the screen. */
+export const BUDDIES_PAGE_SIZE = Number(process.env.NEXT_PUBLIC_BUDDIES_PAGE_SIZE) || 10;
+
+/** What the page-size control offers. Same idiom as `CANDIDATES_PAGE_SIZES`
+ *  above — the configured default is folded in and the result deduped, so an
+ *  operator who sets the env var to something not on this list still gets a
+ *  control whose value is one of its own options. 10 stays in the set for the
+ *  same reason it does in CANDIDATES_PAGE_SIZES: dropping it here would take
+ *  it out of the choices too.
+ *
+ *  The server clamps `limit` to `BUDDIES_PAGE_LIMIT` (200) rather than
+ *  rejecting it, so nothing here can ask for a page it will not get. */
+export const BUDDIES_PAGE_SIZES: readonly number[] = [
+  ...new Set([10, 20, 30, 40, 50, BUDDIES_PAGE_SIZE]),
+].sort((a, b) => a - b);
+
 /**
  * Client auto-discovery: a header-only scan of the signed-in recruiter's own
  * mailbox that backfills contacts onto existing clients and offers the ranked
