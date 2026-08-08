@@ -276,20 +276,21 @@ async def merge_into(
 
 
 async def run(tenant_id: uuid.UUID, *, write: bool) -> None:
-    """Re-normalise, then merge every duplicate cluster. Print a plan first."""
+    """Re-normalise, then merge every duplicate cluster. Print a plan first.
+
+    Re-normalisation and cluster detection run in the SAME transaction so the
+    dry run sees the clusters that *would* exist after the normalised values
+    are corrected — a dry run that rolled back step A before step B would miss
+    every cluster whose only divergence was a stale suffix (the Kaplan/Wearnes
+    case). The whole thing commits or rolls back atomically at the end.
+    """
     async with tenant_session(tenant_id) as session:
         n_fixed = await renormalize(session, tenant_id)
         action = "renormalised" if write else "would renormalise"
         print(f"[A] {action} {n_fixed} client row(s) with stale name_normalized.")
-        if write:
-            await session.commit()
-        else:
-            await session.rollback()
 
-    # After renormalisation commits, read the clusters in a fresh session.
-    name_clusters = []
-    domain_pairs = []
-    async with tenant_session(tenant_id) as session:
+        name_clusters = []
+        domain_pairs = []
         for row in (
             await session.execute(_CLUSTERS_BY_NAME, {"tenant_id": tenant_id})
         ).all():
@@ -313,32 +314,37 @@ async def run(tenant_id: uuid.UUID, *, write: bool) -> None:
                 }
             )
 
-    print(
-        f"\n[B] Found {len(name_clusters)} name-normalised duplicate cluster(s) "
-        f"and {len(domain_pairs)} name↔domain clash pair(s).\n"
-    )
-    if not name_clusters and not domain_pairs:
-        print("Nothing to merge. Exiting.")
-        return
-
-    for cluster in name_clusters:
-        ids = cluster["ids"]
-        print(f"  cluster  key={cluster['normalized']!r}")
-        for i, (cid, cname) in enumerate(zip(ids, cluster["names"], strict=True)):
-            role = "SURVIVOR" if i == 0 else "merge→"
-            print(f"    {role:9} {cid}  {cname}")
-
-    for pair in domain_pairs:
         print(
-            f"  domain clash  {pair['name_client_id']} ({pair['name_name']!r})  "
-            f"≈  {pair['domain_client_id']} ({pair['domain']!r})"
+            f"\n[B] Found {len(name_clusters)} name-normalised duplicate cluster(s) "
+            f"and {len(domain_pairs)} name↔domain clash pair(s).\n"
         )
 
-    if not write:
-        print("\nDry run — no changes made. Re-run with --write to merge.")
-        return
+        for cluster in name_clusters:
+            ids = cluster["ids"]
+            print(f"  cluster  key={cluster['normalized']!r}")
+            for i, (cid, cname) in enumerate(zip(ids, cluster["names"], strict=True)):
+                role = "SURVIVOR" if i == 0 else "merge→"
+                print(f"    {role:9} {cid}  {cname}")
 
-    async with tenant_session(tenant_id) as session:
+        for pair in domain_pairs:
+            print(
+                f"  domain clash  {pair['name_client_id']} ({pair['name_name']!r})  "
+                f"≈  {pair['domain_client_id']} ({pair['domain']!r})"
+            )
+
+        if not name_clusters and not domain_pairs:
+            print("Nothing to merge.")
+            if write:
+                await session.commit()
+            else:
+                await session.rollback()
+            return
+
+        if not write:
+            print("\nDry run — no changes made. Re-run with --write to merge.")
+            await session.rollback()
+            return
+
         merged = 0
         for cluster in name_clusters:
             survivor, *losers = cluster["ids"]
