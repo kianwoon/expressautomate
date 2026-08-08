@@ -40,9 +40,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings  # noqa: F401  (loads env)
 from app.db.rls import tenant_session
-from app.db.session import engine
 from app.services.client_naming import normalize_company_name
-
 
 # --- Step A: re-normalise every non-merged client ---------------------------
 
@@ -326,7 +324,7 @@ async def run(tenant_id: uuid.UUID, *, write: bool) -> None:
     for cluster in name_clusters:
         ids = cluster["ids"]
         print(f"  cluster  key={cluster['normalized']!r}")
-        for i, (cid, cname) in enumerate(zip(ids, cluster["names"])):
+        for i, (cid, cname) in enumerate(zip(ids, cluster["names"], strict=True)):
             role = "SURVIVOR" if i == 0 else "merge→"
             print(f"    {role:9} {cid}  {cname}")
 
