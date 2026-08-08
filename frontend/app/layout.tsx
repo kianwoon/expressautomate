@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import "./app.css";
+import { ChunkErrorReload } from "./chunk-error-reload";
 
 const TITLE = "expressautomate.app — find a place for each person";
 
@@ -80,7 +81,12 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
-      <body>{children}</body>
+      <body>
+        {/* Reloads when the running bundle requests a chunk a newer deploy no
+            longer ships — see the component. Renders nothing. */}
+        <ChunkErrorReload />
+        {children}
+      </body>
     </html>
   );
 }
