@@ -219,8 +219,11 @@ export function JobOrders({ me, heading = "h2" }: { me: Me; heading?: "h1" | "h2
         <ReviewBell count={counts.needs_review} onOpen={() => setFilter("needs_review")} />
         {/* Beside the list it adds to, not in a settings page. A job order
             taken over the phone is typed in while the client is still on it,
-            and the button for that belongs where the job orders are. */}
-        <button type="button" className="btn btn-secondary" onClick={() => setCreating(true)}>
+            and the button for that belongs where the job orders are. Primary,
+            the same as "Add candidate" and "Add client" on their pages — the
+            create action is the page's main call to action, not a secondary
+            one. */}
+        <button type="button" className="btn btn-primary" onClick={() => setCreating(true)}>
           New job order
         </button>
       </div>
