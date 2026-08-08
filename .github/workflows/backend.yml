@@ -84,7 +84,11 @@ jobs:
       # step thinks changed had better have been tested. `.env.example` is in
       # the backend list on purpose: the workflow triggers on it precisely to
       # check that the documented config still boots the app.
-      - uses: dorny/paths-filter@v3
+      # v4, not v3: v3 runs on the Node 20 runtime GitHub deprecated in 2025
+      # (the deprecation warning on every run). v4 is the same action — its
+      # only change is the Node 24 runtime — so the filters and outputs below
+      # are untouched.
+      - uses: dorny/paths-filter@v4
         id: changes
         with:
           filters: |
@@ -316,7 +320,11 @@ jobs:
 
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-node@v4
+      # v6, not v4: v4 runs on the deprecated Node 20 runtime. v6 is the
+      # current Node 24 major with a few releases behind it; its only breaking
+      # change (npm-only automatic caching) never applies here because both
+      # call sites pass `cache: npm` and a cache-dependency-path explicitly.
+      - uses: actions/setup-node@v6
         with:
           node-version: '22'
           cache: npm
@@ -374,7 +382,9 @@ jobs:
 
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-node@v4
+      # v6, not v4: v4 runs on the deprecated Node 20 runtime. Same reasoning
+      # as the gateway_test job's setup-node above.
+      - uses: actions/setup-node@v6
         with:
           node-version: '22'
           cache: npm
