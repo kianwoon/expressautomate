@@ -35,9 +35,13 @@ const STATUS_LABEL: Record<Client["status"], string> = {
 };
 
 /** The server sort key each column maps to. Order matches the `<colgroup>` so
- *  a reader scanning down sees the same columns in both. */
+ *  a reader scanning down sees the same columns in both. Phone sits beside
+ *  Name because "who is this and what do I dial" is the pair a recruiter
+ *  scans the list for; the buddy who referred the account is a fact about
+ *  the row, not the identity of it. */
 const COLUMNS: { key: ClientSortKey; label: string }[] = [
   { key: "name", label: "Name" },
+  { key: "phone", label: "Phone" },
   { key: "email_domain", label: "Referred by" },
   { key: "status", label: "Status" },
   { key: "last_seen", label: "Last seen" },
@@ -59,23 +63,33 @@ export function ClientsTable({
   return (
     <div className="card jo-table-card">
       <table className="jo-table jo-table-clients">
-        {/* Four columns, so this table fits the master column outright and
-            does not need the sideways scroll the job-orders table lives with.
-            It only did before because the floor was shared: forced to the
-            eight-column table's width, Status and Last seen sat off the right
-            edge of a card that was already as wide as the screen allowed.
+        {/* Five columns at a 720px floor (`.jo-table-clients` in `app.css`),
+            below which the card scrolls sideways — the same deal the
+            job-orders table lives with, and the cost of adding Phone to a
+            table that used to fit the old side-by-side layout outright.
 
-            Status is 23% because the badge sets it, and the badge is wider
-            than its label looks: uppercased and letter-spaced, "UNCONFIRMED"
-            measures 107px, so with the cell's 28px of padding it needs 135px
-            and 23% of the 600px floor gives 138. Last seen is 20% for the
-            same kind of reason — the date does not wrap. Name and Mail domain
-            do wrap, so they are the two that can give the room. */}
+            Each width is measured against that floor, because
+            `table-layout: fixed` means a column cannot ask for more later:
+
+            - Name, 26%: the identity column gets the most room; long company
+              names wrap.
+            - Phone, 19%: a phone number must not wrap (broken across lines it
+              stops reading as a number), so the cell holds one line. "+65 6221
+              3344" is ~100px of text, and with the cell's 28px of padding it
+              needs ~130px — 19% of 720 gives 137.
+            - Referred by, 17%: the buddy's name wraps, so it can give room.
+            - Status, 21%: the badge sets it — uppercased and letter-spaced,
+              "UNCONFIRMED" measures 107px, so with padding it needs 135px and
+              21% of 720 gives 151.
+            - Last seen, 17%: the date does not wrap, and 17% of 720 gives 122
+              for the date's ~110px.
+        */}
         <colgroup>
-          <col style={{ width: "30%" }} />
-          <col style={{ width: "27%" }} />
-          <col style={{ width: "23%" }} />
-          <col style={{ width: "20%" }} />
+          <col style={{ width: "26%" }} />
+          <col style={{ width: "19%" }} />
+          <col style={{ width: "17%" }} />
+          <col style={{ width: "21%" }} />
+          <col style={{ width: "17%" }} />
         </colgroup>
         <thead>
           <tr>
@@ -107,6 +121,9 @@ export function ClientsTable({
                   >
                     {row.name}
                   </button>
+                </td>
+                <td className="jo-td" data-nowrap="yes">
+                  {row.phone ?? <span className="muted">—</span>}
                 </td>
                 <td className="jo-td">
                   {row.buddy_name ?? <span className="muted">—</span>}

@@ -21,8 +21,10 @@ import { ClientLogo } from "./client-logo";
  *
  * The modal opens in edit mode, the same "edit-on-by-default" deal the
  * candidate panel gives its fields: a recruiter who clicked a row did so to
- * act on it, and the form is that action. The read-only record — mentions,
- * facts, the action buttons — is one Cancel away.
+ * act on it, and the form is that action. Saving closes the modal — the save
+ * is the whole interaction, and no second confirmation is asked for after it.
+ * The read-only record — mentions, facts, the action buttons — is one Cancel
+ * away, for when a client needs a review action instead of an edit.
  *
  * Editing lives in `client-form.tsx` rather than in this file. That is a size
  * decision as much as a structural one: this panel was already past 450 lines
@@ -141,6 +143,10 @@ function Detail({
   // Escape stay guarded while the form is saving — see `onSavingChange` on
   // `ClientForm`.
   const [formSaving, setFormSaving] = useState(false);
+  // Whether the form is valid to submit, mirrored from the form for the same
+  // reason the Save button itself is: the button now lives in this panel's
+  // title row, so the panel owns its disabled state.
+  const [formValid, setFormValid] = useState(true);
 
   const modalBusy = busy || formSaving;
 
@@ -188,7 +194,129 @@ function Detail({
       titleId="cl-detail-title"
       onClose={modalBusy ? () => {} : onClose}
       className="dlg-modal-wide cl-detail-modal"
-      title={row.name}
+      title={
+        <span className="cl-title-row">
+          <span className="cl-title-text">{row.name}</span>
+          {/* The actions live in the header, top-right, not at the bottom of
+              the record — the same arrangement as the candidates modal. A
+              recruiter reaches for Save / Confirm / Archive from wherever they
+              are scrolled to, and a footer sits below a fold with no
+              affordance of its own. Which buttons show depends on which half
+              of the record is open: the form (Save / Cancel, plus Confirm for
+              an unconfirmed client) or the read-only record (Confirm / Archive
+              / Suspend / Edit). */}
+          <span className="cl-title-actions">
+            {editing ? (
+              <>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  disabled={!formValid || formSaving}
+                  onClick={() => {
+                    // The button lives outside the form (it is in the title
+                    // row), so it submits through the form's id — see the
+                    // `client-edit-form` id on the bare form in
+                    // `client-form.tsx`. `requestSubmit`, not `submit`: the
+                    // former fires the form's submit event, which is what
+                    // `ClientForm.submit` handles; the latter bypasses it.
+                    (document.getElementById("client-edit-form") as HTMLFormElement | null)
+                      ?.requestSubmit();
+                  }}
+                >
+                  {formSaving ? "Saving…" : "Save changes"}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  disabled={formSaving}
+                  onClick={() => setEditing(false)}
+                >
+                  Cancel
+                </button>
+                {row.status === "unconfirmed" && (
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    disabled={formSaving || busy}
+                    onClick={() => run(onConfirm, "We could not save that just now.")}
+                  >
+                    Confirm
+                  </button>
+                )}
+              </>
+            ) : (
+              <>
+                {row.status === "unconfirmed" && (
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    disabled={busy}
+                    onClick={() => run(onConfirm, "We could not save that just now.")}
+                  >
+                    {busy ? "Saving…" : "Confirm"}
+                  </button>
+                )}
+                {row.status !== "archived" && row.status !== "merged" && (
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    disabled={busy}
+                    onClick={() => run(onArchive, "We could not save that just now.")}
+                  >
+                    {busy ? "Saving…" : "Archive"}
+                  </button>
+                )}
+                {row.status === "archived" && (
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    disabled={busy}
+                    onClick={() => run(onRestore, "We could not save that just now.")}
+                  >
+                    {busy ? "Saving…" : "Restore"}
+                  </button>
+                )}
+                {/* Each offered only for the status that accepts it — the
+                    server refuses the others with a 400, and a button whose
+                    only outcome is an error message is not an offer. Suspend
+                    is `confirmed` only; unconfirmed means nobody has agreed
+                    this client is real yet, so there is nothing to put on
+                    hold. */}
+                {row.status === "confirmed" && !askingReason && (
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    disabled={busy}
+                    onClick={() => setAskingReason(true)}
+                  >
+                    Suspend…
+                  </button>
+                )}
+                {row.status === "suspended" && (
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    disabled={busy}
+                    onClick={() => void unsuspend()}
+                  >
+                    {busy ? "Saving…" : "Unsuspend"}
+                  </button>
+                )}
+                {row.status !== "merged" && (
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    disabled={busy}
+                    onClick={() => setEditing(true)}
+                  >
+                    Edit
+                  </button>
+                )}
+              </>
+            )}
+          </span>
+        </span>
+      }
     >
       {/* The close affordance, pinned to the modal's upper-right corner — the
           same treatment as the job-order modal's `.jo-detail-close`. The
@@ -228,10 +356,18 @@ function Detail({
           client={row}
           bare
           onSavingChange={setFormSaving}
+          onCanSubmitChange={setFormValid}
           onCancel={() => setEditing(false)}
           onDone={() => {
-            setEditing(false);
+            // The save is the whole interaction: close the modal rather than
+            // flipping to the read-only record and offering Confirm right
+            // where the recruiter just saved. A second prompt after a save
+            // reads as "confirm the save" — and confirming an unconfirmed
+            // client under the Unconfirmed queue moves it out of the list,
+            // which is how a saved client "disappears". Editing never changes
+            // status, so the row stays exactly where it was.
             onChanged();
+            onClose();
           }}
         />
       ) : row.status === "merged" ? (
@@ -271,83 +407,11 @@ function Detail({
           <Mentions mentions={row.mentions} />
 
           <MergePicker clientId={row.id} onMerged={onChanged} />
-        </>
-      )}
 
-      {/* The action buttons are the read-only half of the record: while the
-          form is open, Save and Cancel are the only two that mean anything,
-          and showing Archive / Suspend / Edit beside them would read as three
-          competing ways to act on the same row. */}
-      {!editing && (
-        <div className="jo-detail-actions">
-          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-            {row.status === "unconfirmed" && (
-              <button
-                type="button"
-                className="btn btn-primary"
-                disabled={busy}
-                onClick={() => run(onConfirm, "We could not save that just now.")}
-              >
-                {busy ? "Saving…" : "Confirm"}
-              </button>
-            )}
-            {row.status !== "archived" && row.status !== "merged" && (
-              <button
-                type="button"
-                className="btn btn-secondary"
-                disabled={busy}
-                onClick={() => run(onArchive, "We could not save that just now.")}
-              >
-                {busy ? "Saving…" : "Archive"}
-              </button>
-            )}
-            {row.status === "archived" && (
-              <button
-                type="button"
-                className="btn btn-secondary"
-                disabled={busy}
-                onClick={() => run(onRestore, "We could not save that just now.")}
-              >
-                {busy ? "Saving…" : "Restore"}
-              </button>
-            )}
-            {/* Each offered only for the status that accepts it — the server
-                refuses the others with a 400, and a button whose only outcome
-                is an error message is not an offer. Suspend is `confirmed`
-                only; unconfirmed means nobody has agreed this client is real
-                yet, so there is nothing to put on hold. */}
-            {row.status === "confirmed" && !askingReason && (
-              <button
-                type="button"
-                className="btn btn-secondary"
-                disabled={busy}
-                onClick={() => setAskingReason(true)}
-              >
-                Suspend…
-              </button>
-            )}
-            {row.status === "suspended" && (
-              <button
-                type="button"
-                className="btn btn-primary"
-                disabled={busy}
-                onClick={() => void unsuspend()}
-              >
-                {busy ? "Saving…" : "Unsuspend"}
-              </button>
-            )}
-            {row.status !== "merged" && (
-              <button
-                type="button"
-                className="btn btn-secondary"
-                disabled={busy}
-                onClick={() => setEditing(true)}
-              >
-                Edit
-              </button>
-            )}
-          </div>
-
+          {/* The reason box opened by the header's "Suspend…" button. It
+              stays in the body rather than the header: a text input is not an
+              action button, and the row of buttons is for what a recruiter
+              might do, not what they must fill in. */}
           {askingReason && (
             <div className="cl-suspend-ask">
               <label className="body" style={{ display: "grid", gap: 4 }}>
@@ -387,7 +451,7 @@ function Detail({
               </div>
             </div>
           )}
-        </div>
+        </>
       )}
 
       {error && (

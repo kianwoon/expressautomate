@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 
 import {
   ApiError,
@@ -188,6 +188,7 @@ export function ClientForm({
   onCancel,
   bare = false,
   onSavingChange,
+  onCanSubmitChange,
 }: {
   /** `null` for create. */
   client: Client | null;
@@ -209,6 +210,11 @@ export function ClientForm({
    *  this is how it keeps Escape / the backdrop / its close button from
    *  discarding a save that is still in flight. */
   onSavingChange?: (saving: boolean) => void;
+  /** Called with whether the form currently holds a valid, saveable state —
+   *  a name, and no contact row missing one. The client modal renders its own
+   *  Save button in the title row and needs this to disable it; the standalone
+   *  dialog reads `canSubmit` internally instead. */
+  onCanSubmitChange?: (valid: boolean) => void;
 }) {
   const [form, setForm] = useState<FormState>(() => toFormState(client));
   // Captured once at mount so an edit is diffed against what the record held,
@@ -266,6 +272,14 @@ export function ClientForm({
   const liveRows = rows.filter((r) => !isBlankRow(r));
   const namelessRow = liveRows.some((r) => r.name.trim() === "");
   const canSubmit = form.name.trim() !== "" && !namelessRow && !saving;
+  // The validity without the saving flag, for a caller that renders its own
+  // Save button: `saving` is already reported through `onSavingChange`, so a
+  // `disabled={!valid || saving}` in the caller stays honest without this
+  // value going stale mid-save.
+  const formValid = form.name.trim() !== "" && !namelessRow;
+  useEffect(() => {
+    onCanSubmitChange?.(formValid);
+  }, [formValid, onCanSubmitChange]);
 
   /** Everything the contacts section owes the server, in an order that makes
    *  the last write the winning one: removals, then the field edits and the
@@ -376,7 +390,16 @@ export function ClientForm({
         </p>
       )}
 
-      <form onSubmit={submit} className="cand-form" style={{ marginTop: 16 }}>
+      {/* The id is what lets the client modal's title-row Save button submit
+          this form from outside it (`document.getElementById(...).requestSubmit()`
+          in `client-panel.tsx`). The standalone dialog needs no id — its own
+          buttons sit inside the form. */}
+      <form
+        id={bare ? "client-edit-form" : undefined}
+        onSubmit={submit}
+        className="cand-form"
+        style={{ marginTop: 16 }}
+      >
         <Field label="Client name" full required>
           <input
             className="jo-search"
@@ -538,19 +561,25 @@ export function ClientForm({
           )}
         </fieldset>
 
-        <div className="cand-form-full" style={{ display: "flex", gap: 10, marginTop: 8 }}>
-          <button type="submit" className="btn btn-primary" disabled={!canSubmit}>
-            {saving ? "Saving…" : client || createdId ? "Save changes" : "Add client"}
-          </button>
-          <button
-            type="button"
-            className="btn btn-secondary"
-            onClick={() => onCancel(createdId)}
-            disabled={saving}
-          >
-            Cancel
-          </button>
-        </div>
+        {/* The standalone dialog's own buttons. Bare mode has none: the
+            client modal renders Save / Cancel / Confirm in its title row, and
+            a second copy at the bottom of the form would be two places to act
+            on the same record. */}
+        {!bare && (
+          <div className="cand-form-full" style={{ display: "flex", gap: 10, marginTop: 8 }}>
+            <button type="submit" className="btn btn-primary" disabled={!canSubmit}>
+              {saving ? "Saving…" : client || createdId ? "Save changes" : "Add client"}
+            </button>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => onCancel(createdId)}
+              disabled={saving}
+            >
+              Cancel
+            </button>
+          </div>
+        )}
       </form>
     </>
   );

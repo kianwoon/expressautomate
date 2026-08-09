@@ -156,7 +156,7 @@ export type ClientPage = {
 /** The columns the table offers sort headers for. Mirrors the server's
  *  `ClientSortBy` whitelist (`backend/app/api/clients.py`): the two must
  *  agree, and the value sent is the value the server validates against. */
-export type ClientSortKey = "name" | "email_domain" | "status" | "last_seen";
+export type ClientSortKey = "name" | "email_domain" | "status" | "last_seen" | "phone";
 
 export type ClientSort = { key: ClientSortKey; descending: boolean };
 
@@ -173,6 +173,40 @@ export const DEFAULT_CLIENT_SORT: ClientSort = { key: "last_seen", descending: t
  *  pointer runs loser -> survivor with no link back, so without this chip a
  *  wrongly merged client could never be found again to unmerge. */
 export type Filter = null | ClientStatus;
+
+/** The status chip a first-time visitor lands on. Kept in one place because
+ *  the persisted-filter helper below falls back to it and `useClients` reads
+ *  it for the initial state — two copies of the default is how they drift. */
+export const DEFAULT_CLIENT_FILTER: Filter = "unconfirmed";
+
+/** localStorage key for the remembered status chip, following the
+ *  `ea.<screen>.<preference>` convention used by the page-size hook
+ *  (`ea.pageSize.<screen>`) and the buddies screen's period chip. Browser-only
+ *  — the server never sees it, and there is no user-preferences table to lean
+ *  on. The review queue is a working view a recruiter leaves (to check All,
+ *  say, or the archive) and comes back to; remembering it means the screen
+ *  reopens where they were, not always at the top of the queue. */
+const CLIENTS_FILTER_KEY = "ea.clients.filter";
+/** `null` ("All") is a valid selection but not a storable string key, so it is
+ *  serialized as this sentinel rather than relying on the empty string. */
+const FILTER_ALL_SENTINEL = "all";
+/** The stored values a filter may take. `null` is folded into the sentinel. */
+const STORABLE_FILTERS: Filter[] = ["unconfirmed", "confirmed", "suspended", "archived", "merged"];
+
+/** Reads and validates the remembered filter against the chips, so a stale or
+ *  hand-edited value (or Safari private mode, where reads throw) falls back to
+ *  the default instead of selecting a chip that does not exist. */
+function readStoredFilter(key: string): Filter {
+  let raw: string | null;
+  try {
+    raw = window.localStorage.getItem(key);
+  } catch {
+    return DEFAULT_CLIENT_FILTER;
+  }
+  if (raw === null) return DEFAULT_CLIENT_FILTER;
+  if (raw === FILTER_ALL_SENTINEL) return null;
+  return (STORABLE_FILTERS as string[]).includes(raw) ? (raw as Filter) : DEFAULT_CLIENT_FILTER;
+}
 
 function listUrl(
   filter: Filter,
@@ -251,10 +285,19 @@ export type Clients = {
 
 /** The review queue is the centre of gravity here: the default view is the
  *  unconfirmed proposals a recruiter has not yet judged, not the whole
- *  tenant mixed together. */
+ *  tenant mixed together. The last chip they picked is remembered (see
+ *  `CLIENTS_FILTER_KEY`), so a return visit opens where they left off. */
 export function useClients(): Clients {
   const [state, setState] = useState<ListState>({ status: "loading" });
-  const [filter, setFilterRaw] = useState<Filter>("unconfirmed");
+  // Read in a lazy initialiser rather than an effect, for the same reason the
+  // page-size hook does: the remembered chip has to be known before the first
+  // fetch, or the list loads Unconfirmed and then refetches the remembered
+  // view — a wasted request and a visible flash of the wrong rows. The
+  // `typeof window` guard covers the prerender pass under Node.
+  const [filter, setFilterRaw] = useState<Filter>(() => {
+    if (typeof window === "undefined") return DEFAULT_CLIENT_FILTER;
+    return readStoredFilter(CLIENTS_FILTER_KEY);
+  });
   const [offset, setOffset] = useState(0);
   const [limit, setLimitRaw] = usePersistedPageSize(
     CLIENTS_PAGE_SIZE_KEY,
@@ -306,6 +349,16 @@ export function useClients(): Clients {
   const setFilter = useCallback((next: Filter) => {
     setFilterRaw(next);
     setOffset(0);
+    // Remember the choice so the next visit opens on the same chip. A failed
+    // write (Safari private mode, quota full, storage disabled) is not worth
+    // surfacing: the chip keeps working for the rest of this session, it just
+    // stops remembering past a reload.
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(CLIENTS_FILTER_KEY, next ?? FILTER_ALL_SENTINEL);
+    } catch {
+      /* not worth surfacing */
+    }
   }, []);
   // A page-size change is a filter change like any other for the purposes of
   // the offset, and for the same reason `candidates.ts` resets it: standing

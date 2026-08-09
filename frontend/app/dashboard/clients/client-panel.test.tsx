@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { Client } from "../clients";
@@ -98,6 +98,63 @@ describe("ClientPanel logo wiring", () => {
 
     expect(screen.getByText("Looked after by")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Save changes" })).toBeNull();
+  });
+
+  it("Save changes closes the modal — the edit is the whole interaction", async () => {
+    // Pins the reported bug: after a save, the modal used to flip to the
+    // read-only record, whose Confirm button read as "confirm the save" and
+    // moved an unconfirmed client out of the Unconfirmed queue — the client
+    // "disappeared". Saving must close the modal and offer nothing after it.
+    const onClose = vi.fn();
+    const onChanged = vi.fn();
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(client()));
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <ClientPanel
+        row={client()}
+        onClose={onClose}
+        onConfirm={async () => {}}
+        onArchive={async () => {}}
+        onRestore={async () => {}}
+        onChanged={onChanged}
+        onDetailChanged={() => {}}
+        onSelectClient={() => {}}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("Phone"), { target: { value: "+65 9999 8888" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+    expect(onChanged).toHaveBeenCalledTimes(1);
+    // And the read-only half with its Confirm button never appears.
+    expect(screen.queryByRole("button", { name: "Confirm" })).toBeNull();
+  });
+
+  it("offers Confirm beside Save changes in the title row for an unconfirmed client", () => {
+    // The confirm action lives in the header now, next to Save — not hidden
+    // behind the read-only half. A recruiter who opened an unconfirmed client
+    // to edit it can graduate it out of the queue from the same row of
+    // buttons they saved with.
+    const onConfirm = vi.fn();
+    render(
+      <ClientPanel
+        row={client({ status: "unconfirmed" })}
+        onClose={() => {}}
+        onConfirm={onConfirm}
+        onArchive={async () => {}}
+        onRestore={async () => {}}
+        onChanged={() => {}}
+        onDetailChanged={() => {}}
+        onSelectClient={() => {}}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Save changes" })).toBeTruthy();
+    const confirm = screen.getByRole("button", { name: "Confirm" });
+    fireEvent.click(confirm);
+    expect(onConfirm).toHaveBeenCalledTimes(1);
   });
 
   it("routes a logo upload to onDetailChanged alone, never onChanged", async () => {

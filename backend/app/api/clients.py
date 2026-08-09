@@ -48,9 +48,9 @@ InitialFilter = Query(default=None, pattern=r"^([A-Za-z]|#)$")
 # The columns a recruiter may sort the list by. Anything else is a 422 from the
 # framework, so the whitelist is enforced by the type system rather than by a
 # lookup that could silently ignore a typo. `last_seen` and `created` are the
-# two the default order already uses; `name`, `email_domain` and `status` are
-# the ones the table exposes headers for.
-ClientSortBy = Literal["name", "email_domain", "status", "last_seen", "created"]
+# two the default order already uses; `name`, `phone`, `email_domain` and
+# `status` are the ones the table exposes headers for.
+ClientSortBy = Literal["name", "email_domain", "status", "last_seen", "created", "phone"]
 
 
 class MergeRequest(BaseModel):
@@ -273,6 +273,8 @@ def _client_order(sort_by, descending, initial):
             keys = (Client.status,)
         elif sort_by == "last_seen":
             keys = (Client.last_seen_at, Client.created_at)
+        elif sort_by == "phone":
+            keys = (Client.phone,)
         else:  # "created"
             keys = (Client.created_at, Client.last_seen_at)
         ordered = tuple(

@@ -16,6 +16,32 @@
    column. */
 .cl-lede { max-width: none; }
 
+/* The client modal's title row: the name on the left, the action buttons
+   (Save / Cancel / Confirm / Archive / Suspend / Edit) pinned to the
+   upper-right — the same arrangement as the candidates modal's
+   `.cand-title-row`. A recruiter scanning a long record reaches for these from
+   wherever they are scrolled; in the header they are always visible. Kept
+   self-contained here rather than depending on `app.css`'s candidate classes,
+   which would make the clients route load styling written for candidates. */
+.cl-title-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-width: 0;
+}
+.cl-title-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.cl-title-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
 /* The client detail modal, and its close ×. The panel became a popup over the
    list, the same move job orders and candidates made before it: the modal is
    the shared `.dlg-modal-wide` width, `position: relative` so the close

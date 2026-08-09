@@ -155,10 +155,15 @@
   table-layout: fixed; font-size: 0.875rem;
 }
 
-.jo-table-clients { min-width: 600px; }
+/* Phone joined the clients table, and the floor follows the widest cells the
+   way it always has: the status badge needs ~135px and a phone number needs
+   ~130px without wrapping, so five columns land at 720px — above the 600px
+   four-column floor, and still under the job-orders table's 1000px. */
+.jo-table-clients { min-width: 720px; }
 .jo-table-candidates { min-width: 660px; }
-/* Only the job-orders table is wider than its column and scrolls. Eight
-   columns of a vacancy do not fit 683px legibly; five candidate fields do.
+/* Only the job-orders and clients tables are wider than their columns and
+   scroll. Eight columns of a vacancy do not fit 683px legibly; five
+   candidate fields do.
    Measured against the master column at its full width: fitting candidates
    costs 115px of table height over ten rows, and takes the rows that wrap
    from four to eight — against a Stage and an Updated column that were

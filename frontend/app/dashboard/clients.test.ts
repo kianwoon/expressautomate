@@ -302,3 +302,87 @@ describe("rows per page persistence", () => {
     expect(localStorage.getItem(CANDIDATES_PAGE_SIZE_KEY)).toBeNull();
   });
 });
+
+describe("status chip persistence", () => {
+  function lastUrl(fetchMock: ReturnType<typeof vi.fn>): string {
+    const calls = fetchMock.mock.calls;
+    return String(calls[calls.length - 1][0]);
+  }
+
+  it("remembers a chosen chip across a remount — the screen reopens where the reader left it", async () => {
+    vi.stubGlobal("localStorage", fakeStorage());
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(page()));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const first = renderHook(() => useClients());
+    await waitFor(() => expect(first.result.current.state.status).toBe("ready"));
+    act(() => first.result.current.setFilter("confirmed"));
+    await waitFor(() => expect(lastUrl(fetchMock)).toContain("status=confirmed"));
+    first.unmount();
+
+    const second = renderHook(() => useClients());
+    await waitFor(() => expect(second.result.current.state.status).toBe("ready"));
+    expect(second.result.current.filter).toBe("confirmed");
+    expect(lastUrl(fetchMock)).toContain("status=confirmed");
+  });
+
+  it("remembers the All chip, serialized as the sentinel rather than a bare null", async () => {
+    vi.stubGlobal("localStorage", fakeStorage());
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(page()));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const first = renderHook(() => useClients());
+    await waitFor(() => expect(first.result.current.state.status).toBe("ready"));
+    act(() => first.result.current.setFilter(null));
+    await waitFor(() => expect(first.result.current.filter).toBeNull());
+    first.unmount();
+
+    const second = renderHook(() => useClients());
+    await waitFor(() => expect(second.result.current.state.status).toBe("ready"));
+    expect(second.result.current.filter).toBeNull();
+    // "All" means no `status=` in the query string.
+    expect(lastUrl(fetchMock)).not.toContain("status=");
+  });
+
+  it.each(["bogus", "all-statuses", ""])(
+    "falls back to the default for garbage %j in storage",
+    async (garbage) => {
+      const storage = fakeStorage();
+      storage.setItem("ea.clients.filter", garbage);
+      vi.stubGlobal("localStorage", storage);
+      const fetchMock = vi.fn().mockResolvedValue(jsonResponse(page()));
+      vi.stubGlobal("fetch", fetchMock);
+
+      const { result } = renderHook(() => useClients());
+      await waitFor(() => expect(result.current.state.status).toBe("ready"));
+      expect(result.current.filter).toBe("unconfirmed");
+      expect(lastUrl(fetchMock)).toContain("status=unconfirmed");
+    },
+  );
+
+  it("stays at the default and keeps working when localStorage throws on read and write", async () => {
+    const throwing: Storage = {
+      getItem: vi.fn(() => {
+        throw new Error("storage blocked");
+      }),
+      setItem: vi.fn(() => {
+        throw new Error("storage blocked");
+      }),
+      removeItem: vi.fn(),
+      clear: vi.fn(),
+      key: vi.fn(),
+      length: 0,
+    } as Storage;
+    vi.stubGlobal("localStorage", throwing);
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(page()));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { result } = renderHook(() => useClients());
+    await waitFor(() => expect(result.current.state.status).toBe("ready"));
+    expect(result.current.filter).toBe("unconfirmed");
+
+    expect(() => act(() => result.current.setFilter("archived"))).not.toThrow();
+    await waitFor(() => expect(lastUrl(fetchMock)).toContain("status=archived"));
+    expect(result.current.filter).toBe("archived");
+  });
+});
