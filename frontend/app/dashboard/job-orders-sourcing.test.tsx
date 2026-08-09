@@ -271,6 +271,57 @@ describe("Shortlist server-reported submissions", () => {
   });
 });
 
+describe("Shortlist score display", () => {
+  it("renders the overall score as a whole percentage", async () => {
+    getSourcing.mockResolvedValue(view({ run: run(), matches: [match({ score: "0.3018" })] }));
+    namesFor.mockResolvedValue(new Map([["cand-1", "Jane Tan"]]));
+
+    render(<Shortlist row={opportunity()} />);
+
+    await screen.findByText("Jane Tan");
+    expect(screen.getByText("30%")).toBeTruthy();
+    // The stored string itself is never shown next to the percentage.
+    expect(screen.queryByText("0.3018")).toBeNull();
+  });
+
+  it("rounds each scored component to a whole percentage of its weight, and an absent one in words", async () => {
+    getSourcing.mockResolvedValue(
+      view({
+        run: run(),
+        matches: [
+          match({
+            score: "0.8200",
+            reasons: [
+              { name: "skills", weight: "3.0", raw: "0.5368", contribution: "1.6104", note: null },
+              {
+                name: "salary",
+                weight: "2.0",
+                raw: null,
+                contribution: null,
+                note: "No comparable salary: one side is missing, or the currencies differ.",
+              },
+            ],
+          }),
+        ],
+      }),
+    );
+    namesFor.mockResolvedValue(new Map([["cand-1", "Jane Tan"]]));
+
+    render(<Shortlist row={opportunity()} />);
+
+    await screen.findByText("Jane Tan");
+    expect(screen.getByText("82%")).toBeTruthy();
+    // 1.6104 of 3.0 → 53.68% → 54%, not "1.6104 of 3.0".
+    expect(screen.getByText("54%")).toBeTruthy();
+    expect(screen.queryByText("1.6104 of 3.0")).toBeNull();
+    // A component with nothing to compare still says so in words, never "0%".
+    expect(
+      screen.getByText("No comparable salary: one side is missing, or the currencies differ."),
+    ).toBeTruthy();
+    expect(screen.queryByText("0%")).toBeNull();
+  });
+});
+
 describe("Shortlist redacted matches", () => {
   it("renders the masked name and holder for a redacted match, never the raw id", async () => {
     getSourcing.mockResolvedValue(

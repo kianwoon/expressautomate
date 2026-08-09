@@ -50,10 +50,11 @@ import {
  *   re-pitching embarrassment the exclusion exists to prevent — so it is said
  *   out loud rather than left to be discovered.
  *
- * Nothing here parses `score` or a reason's numbers. They arrive as strings
- * from a NUMERIC column and the server has already ordered the list properly
- * (score descending, then candidate id); re-sorting strings numerically would
- * quietly reorder a shortlist a recruiter may already have sent.
+ * Nothing here compares `score` or a reason's numbers. They arrive as strings
+ * from a NUMERIC column and are parsed only to render them as percentages;
+ * the server has already ordered the list properly (score descending, then
+ * candidate id), and that order is preserved — re-sorting strings numerically
+ * would quietly reorder a shortlist a recruiter may already have sent.
  *
  * allow-hardcode: the strings below are user-facing copy rendered to the page,
  * not a list anything is matched against.
@@ -597,11 +598,10 @@ function Match({
           {rank}
         </span>
         <span className={!redacted && name ? "src-name" : "src-name src-name-unknown"}>{who}</span>
-        {/* The score verbatim, exactly as the server computed and stored it.
-            Rounding it here would collapse distinct scores into apparent ties
-            in the one place a recruiter goes to ask why the order is what it
-            is. */}
-        <span className="src-score">{match.score}</span>
+        {/* The score as a whole percentage (0.3018 → 30%), for display only.
+            The server's four-decimal score remains the source of truth for
+            the order; this is what a recruiter reads at a glance. */}
+        <span className="src-score">{percent(Number(match.score), match.score)}</span>
       </div>
 
       {redacted ? (
@@ -773,6 +773,19 @@ function EligibilityRow({ finding }: { finding: EligibilityFinding }) {
   );
 }
 
+/** A 0–1 fraction as a whole percentage, for display only. The stored numbers
+ *  are strings (a NUMERIC column; a float round-trip would show
+ *  0.6499999999999999 for a value the scorer computed exactly), and are
+ *  parsed here purely to render — never to compare or re-order, which is the
+ *  server's job. Rounded to the nearest whole percent (0.3018 → 30%), the
+ *  level of precision a recruiter reads at a glance; the server's four-decimal
+ *  score remains the source of truth for the order. Falls back to `fallback`
+ *  when the fraction is not a finite number (a zero weight would otherwise
+ *  render "Infinity%"). */
+function percent(fraction: number, fallback: string): string {
+  return Number.isFinite(fraction) ? `${Math.round(fraction * 100)}%` : fallback;
+}
+
 /** Why this person is where they are. The arithmetic behind the score, so
  *  "why is she third?" has an answer on the page rather than in a log. */
 function Breakdown({ reasons }: { reasons: MatchReason[] | null }) {
@@ -784,13 +797,17 @@ function Breakdown({ reasons }: { reasons: MatchReason[] | null }) {
         <li key={reason.name} className="src-reason">
           <span className="src-reason-k">{COMPONENT_LABELS[reason.name] ?? reason.name}</span>
           {/* Null means nothing was recorded to compare, which is not the same
-              as scoring zero — saying "0" here would put "a poor fit on
+              as scoring zero — saying "0%" here would put "a poor fit on
               salary" in front of a recruiter when the truth is that nobody
-              stated one. */}
+              stated one. A scored component reads as the percentage of its
+              weight the candidate earned (1.0736 of 2.0 → 54%). */}
           <span className={reason.contribution === null ? "src-reason-v muted" : "src-reason-v"}>
             {reason.contribution === null
               ? (reason.note ?? "Nothing to compare")
-              : `${reason.contribution} of ${reason.weight}`}
+              : percent(
+                  Number(reason.contribution) / Number(reason.weight),
+                  `${reason.contribution} of ${reason.weight}`,
+                )}
           </span>
           {reason.contribution !== null && reason.note && (
             <span className="src-reason-note">{reason.note}</span>

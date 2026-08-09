@@ -55,7 +55,8 @@ export type SourcingRun = {
  *
  * Every number is a **string**, and deliberately: the column is NUMERIC and a
  * float round-trip would show `0.6499999999999999` for a value the scorer
- * computed exactly. Nothing here is ever parsed or compared as a number.
+ * computed exactly. The screen parses them for display (as percentages), never
+ * to compare: ordering is the server's job, and stays string-stable.
  *
  * `raw` and `contribution` are null together when there was nothing to
  * compare, which is not the same as scoring zero — `note` then says what was
