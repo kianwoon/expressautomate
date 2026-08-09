@@ -163,6 +163,17 @@
    disc around. `min-width: 0` is what lets a flex item shrink below its
    content's intrinsic width, same trick `.row` and `.cand-list` use. */
 .jo-company-cell .jo-rowbtn { min-width: 0; }
+/* One line, ellipsis. A long company name used to wrap the button to a second
+   line, and since the row is as tall as its tallest cell, that one row grew
+   taller than its neighbours on a value nobody scans twice in the same place —
+   the name is one fact among eight in a fixed-layout row, and the full string
+   is a `title` hover and the detail panel away. Now the name truncates instead,
+   and the owner disc beside it stays vertically centred on the single line. */
+.jo-company-cell .jo-rowbtn {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 
 /* The list column is what the table has to fit into, and it is narrower than
    the viewport by a factor the table cannot see — `.jo-split` gives it 1.85 of
@@ -332,6 +343,18 @@
   display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
   overflow: hidden; overflow-wrap: break-word;
 }
+
+/* The salary cell is the row's height anchor, so it always fills two lines.
+   `Salary` renders the range and the sender's words, and when either is absent
+   the cell would otherwise drop to a single line and take the whole row with
+   it — the row of a posting that said "salary negotiable" sat a line shorter
+   than the row beside it. `min-height: calc(1.6em * 2)` is two lines at the
+   inherited 1.6 line-height; the second line stays empty for the short rows
+   rather than vanishing, and the empty line reads as whitespace, not as data.
+   The cell's content is already clamped to two lines, so the minimum never
+   fights the maximum. If the table's line-height ever changes, this number
+   travels with it. */
+.jo-salary-clamp { min-height: calc(1.6em * 2); }
 
 /* `.jo-perpage` and `.jo-perpage-select` moved to `app.css`, beside
    `.jo-pager` — they belong to the shared pager, which candidates and clients

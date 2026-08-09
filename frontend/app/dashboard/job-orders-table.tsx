@@ -179,6 +179,11 @@ export function JobOrdersTable({
                     // The row's own name is not enough on its own: "Acme" read
                     // out of context does not say what pressing it does.
                     aria-label={`Show details for ${row.company_name_raw ?? "this job order"}`}
+                    // The name is clamped to one line in the cell (see
+                    // `.jo-company-cell .jo-rowbtn`); this hover is the
+                    // convenience that reveals the rest, the same deal every
+                    // clamped cell in the table offers.
+                    title={row.company_name_raw ?? undefined}
                     onClick={(event) => {
                       // The row handler would otherwise fire straight after
                       // this one and select the same row twice.
@@ -198,8 +203,16 @@ export function JobOrdersTable({
                       banded pay by experience. The whole thing is one hover
                       (`title`) and one panel away; the cell holds it to two
                       lines so one long row does not set the height of every
-                      row that shares its state. */}
-                  <div className="jo-clamp" title={salaryTitle(row)}>
+                      row that shares its state.
+
+                      This cell is also the row's height anchor. `jo-salary-clamp`
+                      (see `job-orders.css`) reserves its second line even when
+                      the row has no range or no raw text, so a row never drops
+                      to a single line because a particular posting said less
+                      about pay than its neighbour did. Uniform rows are what
+                      make the table scannable; the prose columns beside it
+                      still clamp to two lines but are free to use one. */}
+                  <div className="jo-clamp jo-salary-clamp" title={salaryTitle(row)}>
                     <Salary row={row} />
                   </div>
                 </td>
