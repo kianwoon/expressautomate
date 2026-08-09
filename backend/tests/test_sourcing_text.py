@@ -1,5 +1,7 @@
 """Tests for sourcing text comparison functions."""
 
+from decimal import Decimal
+
 from app.services.sourcing.text import overlap, salary_fit, tokens
 
 
@@ -209,3 +211,41 @@ class TestSalaryFit:
         result = salary_fit(60000, "SGD", "year", 70000, 50000, "SGD", "year")
         assert result is not None
         # Should handle it gracefully (normalize the range internally)
+
+    def test_decimal_inputs_from_the_database_do_not_crash(self):
+        """The ORM hands over Decimals (Numeric columns); the band arithmetic
+        mixes them with float literals, which used to raise.
+
+        Reproduced: the first production run whose salary actually scored —
+        every earlier run had abstained on a missing currency before reaching
+        the arithmetic — crashed with
+        `TypeError: unsupported operand type(s) for -: 'float' and
+        'decimal.Decimal'` at `1.0 - distance / band_width`.
+        """
+        # The production pair: candidate 5,000 SGD/month vs job 5,500–6,400
+        # SGD/month, both stored as NUMERIC → Decimal. Just below the band.
+        result = salary_fit(
+            Decimal("5000.00"),
+            "SGD",
+            "month",
+            Decimal("5500.00"),
+            Decimal("6400.00"),
+            "SGD",
+            "month",
+        )
+        assert result is not None
+        # 1 - (66000 - 60000) / (76800 - 66000) = 1 - 6000/10800 ≈ 0.4444.
+        assert 0.4 < result < 0.5
+
+    def test_decimal_inputs_in_band_score_full(self):
+        """A Decimal salary inside the Decimal band scores exactly 1.0."""
+        result = salary_fit(
+            Decimal("6000.00"),
+            "SGD",
+            "month",
+            Decimal("5500.00"),
+            Decimal("6400.00"),
+            "SGD",
+            "month",
+        )
+        assert result == 1.0

@@ -4,6 +4,7 @@ Pure module — no database, no settings, no I/O.
 """
 
 import string
+from decimal import Decimal
 
 # Period normalization factors to annual basis.
 # These assume a standard employment model: 40-hour work week, 8-hour work day,
@@ -68,11 +69,11 @@ def overlap(job_title: str, candidate_title: str) -> float:
 
 
 def salary_fit(
-    candidate_amount: float | None,
+    candidate_amount: float | Decimal | None,
     candidate_currency: str | None,
     candidate_period: str | None,
-    job_min: float | None,
-    job_max: float | None,
+    job_min: float | Decimal | None,
+    job_max: float | Decimal | None,
     job_currency: str | None,
     job_period: str | None,
 ) -> float | None:
@@ -88,6 +89,12 @@ def salary_fit(
 
     No currency conversion is performed. A rate we did not fetch on a date we did
     not record is a fabricated fact.
+
+    The amounts may arrive as Decimal (the ORM reads Numeric columns as Decimal)
+    or float. They are coerced to float once, at the top: the band arithmetic
+    mixes them with float literals, and `1.0 - Decimal` raises TypeError — the
+    crash that took down the first production run whose salary actually scored
+    (every earlier run abstained on a missing currency before reaching here).
 
     Args:
         candidate_amount: Candidate's salary expectation (or None).
@@ -117,6 +124,12 @@ def salary_fit(
     # Check for currency mismatch.
     if candidate_currency != job_currency:
         return None
+
+    # Coerce to float now that the values are known present. See the docstring:
+    # the arithmetic below is float math, and a Decimal operand would raise.
+    candidate_amount = float(candidate_amount)
+    job_min = float(job_min)
+    job_max = float(job_max)
 
     # Normalize both sides to annual basis.
     candidate_annual = candidate_amount * _PERIOD_TO_ANNUAL[candidate_period]
