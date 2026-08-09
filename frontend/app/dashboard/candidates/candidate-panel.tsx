@@ -26,6 +26,7 @@ import {
   HeldByColleague,
   NATIONALITY_HINTS,
   RACES,
+  SalaryGroup,
   SEXES,
   STAGES,
   toFormState,
@@ -635,56 +636,28 @@ function Detail({
                 disabled={!canEdit || savingFields}
               />
             </Field>
-            <Field label="Last drawn salary">
-              <input
-                className="jo-search"
-                type="number"
-                value={form.last_drawn_salary}
-                onChange={(e) => set("last_drawn_salary", e.target.value)}
-                disabled={!canEdit || savingFields}
-              />
-            </Field>
-            <Field label="Last drawn currency">
-              <input
-                className="jo-search"
-                value={form.last_drawn_currency}
-                onChange={(e) => set("last_drawn_currency", e.target.value)}
-                disabled={!canEdit || savingFields}
-              />
-            </Field>
-            <Field label="Last drawn period">
-              <input
-                className="jo-search"
-                value={form.last_drawn_period}
-                onChange={(e) => set("last_drawn_period", e.target.value)}
-                disabled={!canEdit || savingFields}
-              />
-            </Field>
-            <Field label="Expected salary">
-              <input
-                className="jo-search"
-                type="number"
-                value={form.expected_salary}
-                onChange={(e) => set("expected_salary", e.target.value)}
-                disabled={!canEdit || savingFields}
-              />
-            </Field>
-            <Field label="Salary currency">
-              <input
-                className="jo-search"
-                value={form.salary_currency}
-                onChange={(e) => set("salary_currency", e.target.value)}
-                disabled={!canEdit || savingFields}
-              />
-            </Field>
-            <Field label="Salary period">
-              <input
-                className="jo-search"
-                value={form.salary_period}
-                onChange={(e) => set("salary_period", e.target.value)}
-                disabled={!canEdit || savingFields}
-              />
-            </Field>
+            <SalaryGroup
+              label="Last drawn salary"
+              amount={form.last_drawn_salary}
+              onAmount={(v) => set("last_drawn_salary", v)}
+              currency={form.last_drawn_currency}
+              onCurrency={(v) => set("last_drawn_currency", v)}
+              period={form.last_drawn_period}
+              onPeriod={(v) => set("last_drawn_period", v)}
+              amountPlaceholder="2500"
+              disabled={!canEdit || savingFields}
+            />
+            <SalaryGroup
+              label="Expected salary"
+              amount={form.expected_salary}
+              onAmount={(v) => set("expected_salary", v)}
+              currency={form.salary_currency}
+              onCurrency={(v) => set("salary_currency", v)}
+              period={form.salary_period}
+              onPeriod={(v) => set("salary_period", v)}
+              amountPlaceholder="2800"
+              disabled={!canEdit || savingFields}
+            />
             <Field label="Available from">
               <input
                 className="jo-search"

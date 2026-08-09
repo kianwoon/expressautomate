@@ -1150,6 +1150,27 @@ select.gl-input:focus-visible { outline: 2px solid var(--blue-500); outline-offs
 .cand-form-full > .jo-search {
   max-width: none;
 }
+/* One salary — last drawn or expected — as a single unit: the amount with its
+   currency and period beside it. Rendered as six sibling grid fields, the
+   currency and period each appeared twice and read as duplicates; grouped,
+   the pair is visibly attached to the amount it qualifies. The amount takes
+   the flexible space; currency and period hold fixed narrow widths. */
+.cand-salary-group {
+  display: grid;
+  gap: 4px;
+}
+.cand-salary-row {
+  display: flex;
+  gap: 6px;
+}
+.cand-salary-row > .cand-salary-amount {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.cand-salary-row > .cand-salary-unit {
+  flex: 0 0 76px;
+  min-width: 0;
+}
 /* The mark sits on the heading's text baseline rather than its line box, so a
    long candidate name wrapping to a second line does not drag it downwards. */
 .dlg-title {

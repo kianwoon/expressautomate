@@ -355,56 +355,32 @@ export function CandidateForm({
             placeholder="3"
           />
         </Field>
-        <Field label="Last drawn salary">
-          <input
-            className="jo-search"
-            type="number"
-            value={form.last_drawn_salary}
-            onChange={(e) => set("last_drawn_salary", e.target.value)}
-            placeholder="2500"
-          />
-        </Field>
-        <Field label="Last drawn currency">
-          <input
-            className="jo-search"
-            value={form.last_drawn_currency}
-            onChange={(e) => set("last_drawn_currency", e.target.value)}
-            placeholder="SGD"
-          />
-        </Field>
-        <Field label="Last drawn period">
-          <input
-            className="jo-search"
-            value={form.last_drawn_period}
-            onChange={(e) => set("last_drawn_period", e.target.value)}
-            placeholder="month"
-          />
-        </Field>
-        <Field label="Expected salary">
-          <input
-            className="jo-search"
-            type="number"
-            value={form.expected_salary}
-            onChange={(e) => set("expected_salary", e.target.value)}
-            placeholder="2800"
-          />
-        </Field>
-        <Field label="Salary currency">
-          <input
-            className="jo-search"
-            value={form.salary_currency}
-            onChange={(e) => set("salary_currency", e.target.value)}
-            placeholder="SGD"
-          />
-        </Field>
-        <Field label="Salary period">
-          <input
-            className="jo-search"
-            value={form.salary_period}
-            onChange={(e) => set("salary_period", e.target.value)}
-            placeholder="month"
-          />
-        </Field>
+        {/* Each salary is one unit, not three sibling fields: the currency and
+            period sit beside the amount they belong to, so the grid no longer
+            shows "currency" and "period" twice as apparently-duplicate fields.
+            The two trios stay separate on the wire — the backend lets a
+            candidate quote current and expected in different units — but the
+            form presents each as a single group. */}
+        <SalaryGroup
+          label="Last drawn salary"
+          amount={form.last_drawn_salary}
+          onAmount={(v) => set("last_drawn_salary", v)}
+          currency={form.last_drawn_currency}
+          onCurrency={(v) => set("last_drawn_currency", v)}
+          period={form.last_drawn_period}
+          onPeriod={(v) => set("last_drawn_period", v)}
+          amountPlaceholder="2500"
+        />
+        <SalaryGroup
+          label="Expected salary"
+          amount={form.expected_salary}
+          onAmount={(v) => set("expected_salary", v)}
+          currency={form.salary_currency}
+          onCurrency={(v) => set("salary_currency", v)}
+          period={form.salary_period}
+          onPeriod={(v) => set("salary_period", v)}
+          amountPlaceholder="2800"
+        />
         <Field label="Available from">
           <input
             className="jo-search"
@@ -649,6 +625,75 @@ export function HeldByColleague({ collision }: { collision: CandidateCollision }
           We could not send that request just now. Try again in a moment.
         </p>
       )}
+    </div>
+  );
+}
+
+/** One salary — last drawn or expected — as a single unit: amount, currency
+ *  and period in one row, so the currency and period sit visibly beside the
+ *  amount they qualify. Rendered as six sibling grid fields, the currency and
+ *  period each appeared twice and read as duplicates; grouped, the pair reads
+ *  as one fact. The two trios stay separate on the wire (a candidate can
+ *  quote current in MYR and expected in SGD — see the model comment on
+ *  `last_drawn_currency`), only the presentation is joined.
+ *
+ *  Each input is named with an explicit `aria-label`: a wrapping `<label>`
+ *  would attach the group's name to only the first control and leave the
+ *  currency and period with no accessible name at all.
+ *
+ *  allow-hardcode: the "SGD" and "month" placeholders are user-facing example
+ *  copy rendered to the page, not a list anything is matched against. */
+export function SalaryGroup({
+  label,
+  amount,
+  onAmount,
+  currency,
+  onCurrency,
+  period,
+  onPeriod,
+  amountPlaceholder,
+  disabled = false,
+}: {
+  label: string;
+  amount: string;
+  onAmount: (value: string) => void;
+  currency: string;
+  onCurrency: (value: string) => void;
+  period: string;
+  onPeriod: (value: string) => void;
+  amountPlaceholder: string;
+  disabled?: boolean;
+}) {
+  return (
+    <div className="cand-salary-group">
+      <span className="row-k">{label}</span>
+      <div className="cand-salary-row">
+        <input
+          className="jo-search cand-salary-amount"
+          type="number"
+          value={amount}
+          onChange={(e) => onAmount(e.target.value)}
+          placeholder={amountPlaceholder}
+          disabled={disabled}
+          aria-label={label}
+        />
+        <input
+          className="jo-search cand-salary-unit"
+          value={currency}
+          onChange={(e) => onCurrency(e.target.value)}
+          placeholder="SGD"
+          disabled={disabled}
+          aria-label={`${label} currency`}
+        />
+        <input
+          className="jo-search cand-salary-unit"
+          value={period}
+          onChange={(e) => onPeriod(e.target.value)}
+          placeholder="month"
+          disabled={disabled}
+          aria-label={`${label} period`}
+        />
+      </div>
     </div>
   );
 }
