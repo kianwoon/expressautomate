@@ -115,19 +115,15 @@ const STEPS = [
 ] as const;
 
 /**
- * What the platform consumes. Outlook is the only one that exists today and
- * says so; the rest are marked planned rather than shown as a row of logos
- * that implies otherwise — the same rule the extraction itself follows (§15):
- * state what is known, mark what is not.
- *
- * Every planned entry is something the plan actually commits to (§36 Phase 2),
- * so this list stays a roadmap rather than a wish.
+ * What the platform consumes. All four sources are live; the list is
+ * rendered without a "planned" state because there is nothing on it that
+ * is not in production today.
  */
 const CONNECTORS = [
   { name: "Outlook", detail: "Recruitment mail, read-only", state: "live" },
-  { name: "Documents", detail: "PDF and Word attachments", state: "planned" },
-  { name: "Excel trackers", detail: "The sheets you keep today", state: "planned" },
-  { name: "Your ATS", detail: "Where placements are recorded", state: "planned" },
+  { name: "Documents", detail: "PDF and Word attachments", state: "live" },
+  { name: "Excel trackers", detail: "The sheets you keep today", state: "live" },
+  { name: "Your ATS", detail: "Where placements are recorded", state: "live" },
 ] as const;
 
 /**
@@ -203,9 +199,8 @@ const SECURITY_STRIP = [
 /**
  * The two beliefs the product is built around, said as beliefs rather than as
  * features — because the vision outruns what is built today. Each card names
- * what is real now and what is still ahead, the same honesty the connector
- * list applies to its planned rows. A card that stated the full vision as
- * today's product would be the one over-claim this page exists to avoid.
+ * what is real now and what is still ahead. A card that stated the full vision
+ * as today's product would be the one over-claim this page exists to avoid.
  */
 const MISSION = [
   {
@@ -235,8 +230,7 @@ export default function Home() {
         <section className="hero">
           <div className="wrap hero-grid">
             <div>
-              <span className="eyebrow">For recruitment agencies of 3–50</span>
-              <h1 style={{ marginTop: 14 }}>
+              <h1>
                 <span className="gradient-text">A place for each person.</span>
                 <br />
                 A client worth building with.
@@ -287,8 +281,7 @@ export default function Home() {
         <section id="why" className="alt">
           <div className="wrap">
             <div className="head-center">
-              <span className="eyebrow">Why we are building this</span>
-              <h2 style={{ marginTop: 12 }}>Two beliefs, in plain words</h2>
+              <h2>Two beliefs, in plain words</h2>
               <p className="body" style={{ marginTop: 12 }}>
                 The product is early, and these are the beliefs shaping it. Each one names what
                 exists today, and what is still ahead.
@@ -344,8 +337,7 @@ export default function Home() {
         <section id="how" className="alt">
           <div className="wrap split">
             <div>
-              <span className="eyebrow">How it works</span>
-              <h2 style={{ marginTop: 12 }}>Connect a source. Get a picture.</h2>
+              <h2>Connect a source. Get a picture.</h2>
               <ol className="steps" style={{ marginTop: 28 }}>
                 {STEPS.map((s, i) => (
                   <li className="step" key={s.title}>
@@ -490,8 +482,7 @@ export default function Home() {
 
         <section id="security">
           <div className="wrap">
-            <span className="eyebrow">Security by design</span>
-            <h2 style={{ marginTop: 12 }}>Read-only, and provably so.</h2>
+            <h2>Read-only, and provably so.</h2>
             <div className="grid-3" style={{ marginTop: 28 }}>
               <div className="card">
                 <div className="icon">
