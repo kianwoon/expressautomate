@@ -123,3 +123,24 @@ describe("the panel and a colleague's placement change", () => {
     expect(select.value).toBe("local_hire");
   });
 });
+
+describe("the modal's close ×", () => {
+  it("closes the modal when clicked", () => {
+    const onClose = vi.fn();
+    render(
+      <DetailPanel
+        row={opportunity()}
+        onClose={onClose}
+        onReview={async () => null}
+        onClaim={async () => ({ ok: true }) as never}
+        onAssign={async () => ({ ok: true }) as never}
+        onClientSet={async () => ({ ok: true }) as never}
+        onVanished={() => {}}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+});

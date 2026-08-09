@@ -316,6 +316,22 @@ function Detail({
                   ? "Re-run analysis"
                   : "Run analysis"}
           </button>
+          {/* The close affordance, pinned to the far right of the title row.
+              The backdrop click and Escape already close the modal, but
+              neither is discoverable — a visible × is where a user looks
+              first, and the one control that is always reachable from
+              anywhere in the record. Disabled rather than no-op'd while a
+              save or move is in flight, so a keyboard user can see why the
+              modal will not leave yet. */}
+          <button
+            type="button"
+            className="jo-detail-close"
+            onClick={onClose}
+            disabled={busy}
+            aria-label="Close"
+          >
+            <span aria-hidden="true">×</span>
+          </button>
         </span>
       }
       titleId="jo-detail-title"
@@ -376,7 +392,7 @@ function Detail({
       <div ref={panelRef} className="jo-tab-panel" style={panelMinHeight ? { minHeight: panelMinHeight } : undefined}>
 
       {/*
-        Two columns, not one. The modal has 880px of width, and the content
+        Two columns, not one. The modal has 1120px of width, and the content
         falls into two kinds: what the email said (the facts, read-only) and
         what we do about it (placement, ownership, share, review). Stacked
         singly they were a tall ribbon the recruiter scrolled through; paired,

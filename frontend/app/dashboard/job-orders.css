@@ -724,12 +724,14 @@
 
 /* ---- job order detail modal: two columns, not a ribbon ----
    The detail became a popup to give the list its full width, and the popup is
-   880px wide (`.dlg-modal-wide`). Stacked singly that width is mostly air
-   beside a column of fields, and the recruiter scrolled past their own
-   actions to reach the requirements. The content falls into two kinds — what
-   the email said (read-only facts) and what we do about it (placement,
-   ownership, share, review) — so they pair into two columns and the long
-   reading spans both.
+   1120px wide (wider than the shared `.dlg-modal-wide` 880px — the record has
+   a two-column field grid, full-width prose and a full-width shortlist, all
+   of which read airily in a ribbon and comfortably at this width). Stacked
+   singly the width is mostly air beside a column of fields, and the recruiter
+   scrolled past their own actions to reach the requirements. The content
+   falls into two kinds — what the email said (read-only facts) and what we
+   do about it (placement, ownership, share, review) — so they pair into two
+   columns and the long reading spans both.
 
    The columns are a CSS grid child of the Dialog's own grid. `align-items:
    start` keeps each column only as tall as its content rather than stretching
@@ -737,6 +739,9 @@
    down the right side. A visible gutter between the columns separates the two
    kinds of content without a border: a line would make the columns read as
    two cards, when they are one record split for legibility. */
+.dlg-modal-wide.jo-detail-modal {
+  max-width: 1120px;
+}
 .jo-detail-modal .jo-modal-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
@@ -1050,6 +1055,33 @@
 .jo-detail-run:hover { filter: brightness(1.08); }
 .jo-detail-run:disabled { opacity: 0.55; cursor: default; }
 .jo-detail-run:focus-visible { outline: 2px solid #2563eb; outline-offset: 2px; }
+
+/* The close × at the far right of the title row. A compact, quiet square —
+   it is the exit, not an action, so it reads as a small chrome element rather
+   than competing with Run-analysis. Disabled while a save or move is in
+   flight, matching the Dialog's own guarded close. */
+.jo-detail-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  align-self: center;
+  width: 28px;
+  height: 28px;
+  margin-left: -4px;
+  font: inherit;
+  font-size: 1.25rem;
+  line-height: 1;
+  color: var(--ink-500);
+  background: none;
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: color 150ms ease, background 150ms ease;
+}
+.jo-detail-close:hover { color: var(--ink-900); background: var(--surface-alt); }
+.jo-detail-close:disabled { color: var(--ink-300); cursor: default; background: none; }
+.jo-detail-close:focus-visible { outline: 2px solid var(--blue-500); outline-offset: 2px; }
 
 /* The four-section tab bar. Mirrors the settings `.nt-tabs` visual (flex row,
    gap, transparent bottom border on inactive, currentColor on active, opacity
