@@ -411,6 +411,7 @@ function Detail({
         two narrow columns would wrap every control inside itself.
       */}
       {activeTab === "origin" && (
+      <>
       <div className="jo-modal-grid">
         {/* ---- Left: the email's facts ---- */}
         <div className="jo-modal-col">
@@ -484,22 +485,6 @@ function Detail({
           </div>
 
           <DecodedCodes row={row} />
-
-          {/* Provenance, not a link. We hold an id for the message, not a URL
-              we can promise still resolves in the user's Outlook — offering
-              one that 404s is worse than offering none. The id is here so a
-              disputed row can be traced back to the email it came from. */}
-          <div className="jo-detail-source">
-            <span className="row-k">Source</span>
-            <p className="body jo-sub">
-              Read from one email in the connected mailbox. Every value above is the sender&rsquo;s,
-              not ours.
-            </p>
-            <div className="rows">
-              <Row k="Message id" v={row.internet_message_id} empty="Not recorded" />
-              <Row k="Graph id" v={row.graph_message_id} empty="Not recorded" />
-            </div>
-          </div>
         </div>
 
         {/* ---- Right: your actions ---- */}
@@ -615,6 +600,26 @@ function Detail({
           row={row}
         />
       </div>
+
+      {/* Last, below even the shortlist: the provenance. Closing out the
+          record with where it came from keeps the reading order — facts,
+          actions, what we did about it, then the email it all traces back
+          to. Provenance, not a link: we hold an id for the message, not a
+          URL we can promise still resolves in the user's Outlook — offering
+          one that 404s is worse than offering none. The id is here so a
+          disputed row can be traced back to the email it came from. */}
+      <div className="jo-detail-source">
+        <span className="row-k">Source</span>
+        <p className="body jo-sub">
+          Read from one email in the connected mailbox. Every value above is the sender&rsquo;s,
+          not ours.
+        </p>
+        <div className="rows">
+          <Row k="Message id" v={row.internet_message_id} empty="Not recorded" />
+          <Row k="Graph id" v={row.graph_message_id} empty="Not recorded" />
+        </div>
+      </div>
+      </>
       )}
 
       {/* ---- Work / Person / Search: the three Job Intelligence stages, each
