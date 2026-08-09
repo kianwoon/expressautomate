@@ -345,7 +345,7 @@ export function Shortlist({ row }: { row: Opportunity }) {
           <button
             type="button"
             ref={startRef}
-            className="src-start"
+            className="btn btn-secondary"
             onClick={() => void start()}
             disabled={starting || waiting}
           >

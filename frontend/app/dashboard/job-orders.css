@@ -449,7 +449,9 @@
 /* The row's action stops fading in and is simply there — the reveal was
      only ever a way of keeping the row quiet, never a way of hiding it. */
 .src-act { transition: none; opacity: 1; }
-.src-start { transition: none; }
+/* `.src-start` no longer has rules of its own — the button is `.btn
+   btn-secondary` now, and `.btn`'s own transitions are unchanged under
+   reduced motion, so there is nothing left to disable here. */
 /* Same reasoning as `.ci-pulse`: it is the only thing saying the shortlist
      has not finished, so it stops moving rather than disappearing. */
 .src-pulse { animation: none; opacity: 1; }
@@ -471,23 +473,11 @@
   max-width: 180px;
 }
 .src-history-select:focus-visible { outline: 2px solid var(--blue-500); outline-offset: 1px; }
-/* The one control that is always here — and therefore where focus lands after
-   an action removes the control that was pressed. */
-.src-start {
-  font: inherit;
-  font-size: 0.8125rem;
-  font-weight: 650;
-  padding: 2px 6px;
-  border: 0;
-  background: none;
-  color: var(--blue-500);
-  cursor: pointer;
-  border-radius: 4px;
-  transition: color 150ms ease;
-}
-.src-start:hover { color: var(--ink-900); }
-.src-start:disabled { cursor: default; opacity: 0.5; }
-.src-start:focus-visible { outline: 2px solid var(--blue-500); outline-offset: 2px; }
+/* The "Find candidates" button carries the shared `.btn .btn-secondary`
+   treatment (applied in `job-orders-sourcing.tsx`), so it matches the modal's
+   other buttons by construction rather than bespoke rules. It remains the one
+   control that is always here — where focus lands after an action removes the
+   control that was pressed. */
 .src-note { margin-top: 8px; font-size: 0.8125rem; color: var(--ink-500); max-width: 72ch; }
 .src-state {
   margin-top: 8px;
@@ -1059,36 +1049,10 @@
   flex: 1 1 auto;
   min-width: 0;
 }
-/* The Run-analysis action beside the title. A compact gradient pill (the
-   btn-primary treatment) sized for the header row: narrower padding than the
-   body buttons and constrained to its label width so a short label does not
-   stretch across the row. */
-/* The Run-analysis action beside the title. Self-contained — does NOT use
-   `.btn`, so there is no cascade fight with `.btn`'s 11px 20px padding. A
-   compact gradient pill (~28px tall) using the brand gradient, sized to its
-   label width. */
-.jo-detail-run {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 auto;
-  align-self: center;
-  font: inherit;
-  font-size: 0.8125rem;
-  font-weight: 600;
-  line-height: 1.2;
-  padding: 5px 10px;
-  border: 1px solid transparent;
-  border-radius: 10px;
-  background: linear-gradient(135deg, #1d4ed8 0%, #14a89a 100%);
-  color: #fff;
-  cursor: pointer;
-  white-space: nowrap;
-  transition: filter 0.15s ease;
-}
-.jo-detail-run:hover { filter: brightness(1.08); }
-.jo-detail-run:disabled { opacity: 0.55; cursor: default; }
-.jo-detail-run:focus-visible { outline: 2px solid #2563eb; outline-offset: 2px; }
+/* The Run-analysis action beside the title. Shares `.btn .btn-primary`
+   (applied in `detail-panel.tsx`) with the candidate modal's analysis button,
+   so the two "Run analysis" controls read the same across the app. The header
+   row's flex layout keeps the title wrapping and the button pinned right. */
 
 /* The close × in the modal's upper-right corner. It floats in the card's top
    padding (`.jo-detail-modal` is `position: relative`), so it sits clear of
