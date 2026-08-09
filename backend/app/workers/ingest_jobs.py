@@ -58,10 +58,19 @@ log = get_logger(__name__)
 # extraction re-resolves to the same person.
 _RESUMABLE = (CandidateDocument.INGEST_PENDING, CandidateDocument.INGESTING)
 
-# A display name for a CV that stated none the model could trust, or none at
-# all. Kept short and recognisable so the recruiter can find the row in the list
-# and edit the contact in. Defined on the model so the list query can hide it.
-_UNNAMED = Candidate.PLACEHOLDER_NAME
+# A display name for a CV that stated none the model could trust, or none
+# at all. Kept short and recognisable so the recruiter can find the row in
+# the list and edit the contact in — and deliberately NOT the placeholder
+# sentinel `Candidate.PLACEHOLDER_NAME`, because the candidate list hides
+# rows named exactly that. A resolved candidate using the sentinel would be
+# invisible at precisely the moment it most needs a person to edit it.
+_UNNAMED = "CV — add name"
+
+# The name a placeholder candidate is given when identity extraction hit a
+# collision (a colleague-held match, or two different people) and the CV
+# cannot be attached to anyone. The placeholder is hidden under its sentinel
+# name, so this findable label is what surfaces the review in the list.
+_NEEDS_REVIEW_NAME = "CV — needs review"
 
 
 def body_store():
@@ -306,8 +315,10 @@ async def ingest_candidate_cv(
     if not source.strip():
         # A scanned CV yields no text layer; OCR recovers it when configured, so
         # the identity read that follows sees real contact details rather than
-        # an empty string. Same fallback shape as `parse_candidate_cv`.
-        if settings.ocr_configured():
+        # an empty string. Same fallback shape as `parse_candidate_cv` — and
+        # same PDF-only gate: only a PDF can be a scan, and a textless DOCX
+        # handed to `ocr_text` would fail with a misleading scan error.
+        if settings.ocr_configured() and kind == "pdf":
             try:
                 ocrd = await ocr_extract(
                     data,
@@ -372,6 +383,20 @@ async def ingest_candidate_cv(
             if row is not None:
                 row.parse_state = CandidateDocument.NEEDS_REVIEW
                 row.parse_error = review_reason
+                # The document stays on the placeholder candidate the route
+                # created, and that row is hidden from the candidate list under
+                # its sentinel name — which would make this review invisible:
+                # the recruiter would see nothing appear and have no way to
+                # learn why. Rename the placeholder to something findable (the
+                # CV's own name, or a needs-review label) so the CV surfaces in
+                # the list and its panel shows the reason. `_delete_if_ghost`
+                # is not reached from this branch.
+                placeholder = await session.get(Candidate, row.candidate_id)
+                if (
+                    placeholder is not None
+                    and placeholder.full_name == Candidate.PLACEHOLDER_NAME
+                ):
+                    placeholder.full_name = full_name or _NEEDS_REVIEW_NAME
             await session.commit()
             return
 
@@ -461,9 +486,9 @@ async def _delete_if_ghost(
         return
     if row.pipeline_stage != Candidate.STAGES[0]:
         return
-    if row.full_name and row.full_name != _UNNAMED:
-        # The model read a name and we stored it on the placeholder before
-        # re-binding — that is real data, not a ghost. Keep the row.
+    if row.full_name and row.full_name != Candidate.PLACEHOLDER_NAME:
+        # A recruiter gave the placeholder a real name before the job ran —
+        # that is data, not a ghost. Keep the row.
         return
     other_docs = (
         await session.execute(

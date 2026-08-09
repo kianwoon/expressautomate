@@ -78,6 +78,16 @@ EXEMPT: dict[str, dict[str, str]] = {
             "returns nothing whatsoever about the row it names."
         ),
     },
+    "candidate_documents.py": {
+        "upload_document_no_candidate": (
+            "The only Candidate it reads or deletes is the placeholder it "
+            "created in this same request, by the tenant-scoped id it minted — "
+            "never an id taken from the client, and never a pre-existing row "
+            "to be visible or editable. On a lost ingest enqueue it rolls its "
+            "own creation back (the bytes, the document row, the placeholder) "
+            "rather than reaching for somebody else's candidate."
+        ),
+    },
 }
 
 

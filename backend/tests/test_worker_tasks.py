@@ -161,6 +161,64 @@ async def test_a_finished_row_is_never_requeued(admin_session, tenant, queued, s
     assert queued == []
 
 
+async def test_a_stalled_ingest_document_is_requeued_without_candidate_id(
+    admin_session, tenant, queued
+):
+    """The CV ingest job takes (tenant_id, document_id) only.
+
+    A `candidate_id` keyword passed to `ingest_candidate_cv` is a TypeError on
+    the far side of the queue — its signature has no such parameter, because it
+    re-reads the row and re-resolves the person itself. The sweep passing the
+    parse job's argument to the ingest job would strand a CV a killed worker
+    left at `ingesting`, and re-enqueue the same failing job every sweep.
+    """
+    user_id = uuid.uuid4()
+    await admin_session.execute(
+        text(
+            "INSERT INTO users (id, tenant_id, email, role)"
+            " VALUES (:i, :t, :e, 'recruiter')"
+        ),
+        {"i": user_id, "t": tenant, "e": f"u-{user_id.hex[:8]}@example.com"},
+    )
+    candidate_id = uuid.uuid4()
+    await admin_session.execute(
+        text(
+            "INSERT INTO candidates (id, tenant_id, full_name, pipeline_stage,"
+            " record_status, owner_id, created_by, updated_by)"
+            " VALUES (:i, :t, 'Uploaded CV', 'new', 'active', :u, :u, :u)"
+        ),
+        {"i": candidate_id, "t": tenant, "u": user_id},
+    )
+    document_id = uuid.uuid4()
+    await admin_session.execute(
+        text(
+            "INSERT INTO candidate_documents"
+            " (id, tenant_id, candidate_id, filename, content_type, byte_size,"
+            "  object_key, parse_state, origin, uploaded_by, updated_at)"
+            " VALUES (:i, :t, :c, 'cv.pdf', 'application/pdf', 10, :k,"
+            "         'ingesting', 'ingest', :u, now() - make_interval(mins => 999))"
+        ),
+        {
+            "i": document_id,
+            "t": tenant,
+            "c": candidate_id,
+            "k": f"{tenant}/candidates/{candidate_id}/documents/{document_id}.pdf",
+            "u": user_id,
+        },
+    )
+    await admin_session.commit()
+
+    requeued = await tasks.rescan_stuck()
+
+    ingest_calls = [(name, kwargs) for name, kwargs in queued if name == "ingest_candidate_cv"]
+    assert requeued == 1
+    assert ingest_calls
+    _, kwargs = ingest_calls[0]
+    assert "candidate_id" not in kwargs
+    assert kwargs["document_id"] == str(document_id)
+    assert kwargs["tenant_id"] == str(tenant)
+
+
 async def test_a_row_a_worker_is_still_holding_is_left_alone(
     admin_session, tenant, queued
 ):

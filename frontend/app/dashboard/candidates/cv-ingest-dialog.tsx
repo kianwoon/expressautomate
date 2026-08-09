@@ -23,8 +23,11 @@ import { Dialog } from "../dialog";
  * dialog, not a list anything is matched against.
  */
 
+/** The kinds the server will accept, mirrored from `candidate-cv.tsx` —
+ *  `.doc` included because the backend converts legacy Word — the server
+ *  sniffs the bytes and is the one that decides. */
 const ACCEPT =
-  ".pdf,.docx,application/pdf," +
+  ".pdf,.docx,.doc,application/pdf,application/msword," +
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 
 type Status =
@@ -49,7 +52,20 @@ export function CvIngestDialog({
     if (busy) return;
     setStatus({ kind: "uploading" });
     try {
-      await uploadCandidateDocumentNoCandidate(file);
+      const document = await uploadCandidateDocumentNoCandidate(file);
+      // A 202 with a `failed` row is the route telling us the job never got
+      // queued (a Redis outage). The row lives on a hidden placeholder, so
+      // nothing will appear in the list — "the candidate will appear" would
+      // be a promise nothing is keeping. Say the real sentence instead.
+      if (document.parse_state === "failed") {
+        setStatus({
+          kind: "error",
+          message:
+            document.parse_error ??
+            "We could not upload that CV just now. Try again in a few minutes.",
+        });
+        return;
+      }
       setStatus({ kind: "done" });
     } catch (err) {
       setStatus({

@@ -221,8 +221,16 @@ async def test_past_the_daily_quota_is_429_with_nothing_stored(
     assert len(queued) == 1
 
 
-async def test_a_failed_enqueue_lands_the_row_in_failed(agency, store, monkeypatch):
-    """A lost enqueue is surfaced on the row, not hidden behind a spinner."""
+async def test_a_failed_enqueue_returns_503_and_leaves_no_ghost(agency, store, monkeypatch):
+    """A lost enqueue on the no-candidate path is rolled back, not hidden.
+
+    The per-candidate path keeps a FAILED row because the panel renders it and
+    offers a retry. This path has no panel: the row would sit on a placeholder
+    candidate the list hides, invisible and unretryable — a ghost that burns
+    quota. So the whole upload — bytes, document row, placeholder — is undone
+    and the caller gets an error it can show, rather than a promise that a
+    candidate is on its way.
+    """
     tid, uid = agency
 
     async def _refuse(name: str, **kwargs) -> bool:
@@ -233,6 +241,9 @@ async def test_a_failed_enqueue_lands_the_row_in_failed(agency, store, monkeypat
     async with _client_for(tid, uid) as http:
         response = await _upload_no_candidate(http, _pdf_bytes())
 
-    assert response.status_code == 202, response.text
-    assert response.json()["parse_state"] == CandidateDocument.FAILED
-    assert "again" in response.json()["parse_error"].lower()
+    assert response.status_code == 503, response.text
+    assert "again" in response.json()["detail"].lower()
+    # Nothing durable was left behind: no document row, no placeholder
+    # candidate, no bytes in storage.
+    assert await _candidate_count(tid) == 0
+    assert not store.binary_objects

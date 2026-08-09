@@ -11,8 +11,11 @@ never upgraded.
 This module is the bridge. When the upload path meets bytes that are clearly an
 Office document but not a `.docx`, LibreOffice headless converts them to `.docx`
 in a temp dir, and the caller re-runs `sniff` on the result — so the rest of the
-pipeline (tables, identity, OCR, the parse) is reused verbatim. RTF and ODT come
-along for free: LibreOffice converts them with the same command.
+pipeline (tables, identity, OCR, the parse) is reused verbatim. Only the OLE2
+legacy Word format (`.doc`) actually reaches the converter today: `is_legacy_office`
+gates on the OLE2 magic bytes, so RTF and ODT are refused upstream at the upload
+route (415) even though LibreOffice itself could convert them with the same
+command. Widening the gate is a one-line change here plus the accept list.
 
 Runs entirely inside the worker process — no bytes leave the host — same PDPA
 posture as the OCR fallback. Bounded by a timeout, because LibreOffice on a

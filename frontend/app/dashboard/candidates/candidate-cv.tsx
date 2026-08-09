@@ -48,12 +48,14 @@ import {
  */
 const POLL_MS = 6000;
 
-/** The two kinds the server will accept, stated here only as the file
+/** The kinds the server will accept, stated here only as the file
  *  chooser's filter — the server sniffs the bytes and is the one that decides,
  *  so a file that slips past this is refused there with a sentence of its own
- *  rather than silently accepted. */
+ *  rather than silently accepted. `.doc` is included because the backend
+ *  accepts and converts legacy Word (Word 97-2003) CVs; leaving it out meant
+ *  those files could only be uploaded by drag-and-drop, never chosen. */
 const ACCEPT =
-  ".pdf,.docx,application/pdf," +
+  ".pdf,.docx,.doc,application/pdf,application/msword," +
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 
 const IN_FLIGHT: ParseState[] = ["ingest_pending", "ingesting", "pending", "parsing"];

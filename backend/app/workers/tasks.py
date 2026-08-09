@@ -208,12 +208,22 @@ async def rescan_stuck() -> int:
         # `origin`) so this routing needs no second read; a row is never sent to
         # the wrong job, which would re-read identity on a document mid-parse or
         # re-parse a document that has no candidate resolved yet.
+        #
+        # `candidate_id` is passed ONLY to `parse_candidate_cv`. The ingest
+        # job's signature is `(tenant_id, document_id)` — it reads the row and
+        # re-resolves the person itself, and a `candidate_id` keyword there is
+        # a TypeError on the far side of the queue, which would strand the CV
+        # every sweep re-enqueues it (a row a killed worker left at `ingesting`
+        # is exactly the case this block exists to recover).
         if row.parse_state in ("ingest_pending", "ingesting"):
-            job = "ingest_candidate_cv"
-        else:
-            job = "parse_candidate_cv"
-        if await enqueue(
-            job,
+            if await enqueue(
+                "ingest_candidate_cv",
+                tenant_id=str(row.tenant_id),
+                document_id=str(row.id),
+            ):
+                requeued += 1
+        elif await enqueue(
+            "parse_candidate_cv",
             tenant_id=str(row.tenant_id),
             candidate_id=str(row.candidate_id),
             document_id=str(row.id),

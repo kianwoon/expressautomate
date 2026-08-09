@@ -224,7 +224,7 @@ async def upload_document(
     if kind is None:
         raise HTTPException(
             status_code=415,
-            detail="Only PDF and Word (.docx) files can be read, whatever this was named.",
+            detail="Only PDF and Word (.doc/.docx) files can be read, whatever this was named.",
         )
 
     document_id = uuid.uuid4()
@@ -324,7 +324,7 @@ async def upload_document_no_candidate(
     if kind is None:
         raise HTTPException(
             status_code=415,
-            detail="Only PDF and Word (.docx) files can be read, whatever this was named.",
+            detail="Only PDF and Word (.doc/.docx) files can be read, whatever this was named.",
         )
 
     # A placeholder candidate holds the NOT NULL foreign key until the ingest
@@ -373,14 +373,25 @@ async def upload_document_no_candidate(
         tenant_id=str(tenant_uuid),
         document_id=str(document_id),
     ):
+        # The per-candidate path can keep a FAILED row — the panel renders it
+        # and offers a retry. This path has no panel: the row lives on a
+        # placeholder candidate the list hides, so a FAILED row here is a
+        # ghost the recruiter can never see, retry, or delete. Roll the whole
+        # upload back instead — the bytes, the document row, and the
+        # placeholder that exists only to hold the foreign key — and answer
+        # with an error the dialog can show, so a Redis blip is not a promise
+        # that a candidate is on its way.
         log.warning("cv_ingest_enqueue_failed", candidate_document_id=str(document_id))
+        await store.delete(key)
         async with tenant_session(tenant_uuid) as session:
             document = await session.get(CandidateDocument, document_id)
             if document is not None:
-                document.parse_state = CandidateDocument.FAILED
-                document.parse_error = _ENQUEUE_FAILED
-                await session.commit()
-                return serialize(document)
+                await session.delete(document)
+            placeholder_row = await session.get(Candidate, candidate_id)
+            if placeholder_row is not None:
+                await session.delete(placeholder_row)
+            await session.commit()
+        raise HTTPException(status_code=503, detail=_ENQUEUE_FAILED)
 
     async with tenant_session(tenant_uuid) as session:
         stored = await session.get(CandidateDocument, document_id)

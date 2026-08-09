@@ -20,7 +20,7 @@ import pytest
 from sqlalchemy import text
 
 from app.core.config import settings
-from app.models.candidate import CandidateDocument
+from app.models.candidate import Candidate, CandidateDocument
 from app.services.cv.identity import IdentityField, IdentityResult
 from app.services.llm.client import LLMResult
 from app.services.storage.r2 import InMemoryBodyStore
@@ -65,7 +65,11 @@ def enqueued(monkeypatch):
     return jobs
 
 
-def _identity(full_name="Evelyn Tan", email="evelyn.tan@example.com", phone="+65 9123 4567"):
+def _identity(
+    full_name: str | None = "Evelyn Tan",
+    email: str | None = "evelyn.tan@example.com",
+    phone: str | None = "+65 9123 4567",
+):
     """A fake identity extractor returning fields that quote the CV."""
 
     def _field(value: str | None) -> IdentityField | None:
@@ -291,6 +295,40 @@ async def test_a_cv_with_no_contact_details_creates_a_candidate_with_no_email(
 
 
 @pytest.mark.asyncio
+async def test_a_cv_with_no_readable_identity_gets_a_findable_name(
+    agency, store, enqueued, monkeypatch  # noqa: F811
+):
+    """A CV the model could not read a name from must still be findable.
+
+    The fallback display name must NOT be the placeholder sentinel: the
+    candidate list hides rows named exactly "Uploaded CV", so a candidate
+    created with that name would be invisible at the moment it most needs a
+    person to edit the contact details in — the whole reason the fallback
+    exists.
+    """
+    tenant_id, user_id = agency
+    placeholder_id, document_id = await _placeholder_and_document(
+        tenant_id, user_id, store, _pdf_with_text_pages(1, CV_TEXT)
+    )
+
+    monkeypatch.setattr(
+        ingest_jobs, "extract_identity",
+        _identity(full_name=None, email=None, phone=None),
+    )
+    await ingest_jobs.ingest_candidate_cv(
+        None, tenant_id=str(tenant_id), document_id=str(document_id)
+    )
+
+    row = await _document(document_id)
+    assert row.parse_state == CandidateDocument.PENDING
+    created = await _candidate(row.candidate_id)
+    assert created.full_name == "CV — add name"
+    assert created.full_name != Candidate.PLACEHOLDER_NAME
+    assert len(enqueued) == 1
+    await _cleanup(tenant_id)
+
+
+@pytest.mark.asyncio
 async def test_a_colleague_held_match_becomes_needs_review(
     agency, store, enqueued, monkeypatch  # noqa: F811
 ):
@@ -345,6 +383,12 @@ async def test_a_colleague_held_match_becomes_needs_review(
     assert row.parse_error is not None
     # The parse is NOT enqueued while the candidate is in dispute.
     assert enqueued == []
+    # The document stays on the placeholder, but the placeholder is renamed
+    # away from the hidden sentinel so the review surfaces in the candidate
+    # list — an invisible needs_review CV is a CV the recruiter can never act
+    # on. The CV's own name makes the row findable and identifiable.
+    holder = await _candidate(placeholder_id)
+    assert holder.full_name == "Evelyn Tan"
     await _cleanup(tenant_id)
 
 

@@ -214,8 +214,12 @@ async def parse_candidate_cv(
     if not source.strip():
         # A PDF of scanned images parses cleanly and yields nothing. Asking a
         # model about an empty string would bill for a confident nothing, so the
-        # text is either recovered by OCR here or the document stops.
-        if settings.ocr_configured():
+        # text is either recovered by OCR here or the document stops. OCR is a
+        # PDF-only fallback: only a PDF can be a scan, and `ocr_text` writes the
+        # bytes to `input.pdf` — handing it a textless DOCX (a document with
+        # images but no prose) would fail with a misleading "scanned CV" error
+        # instead of the honest no-text message below.
+        if settings.ocr_configured() and kind == "pdf":
             try:
                 ocrd = await ocr_extract(
                     data,
@@ -283,8 +287,12 @@ async def parse_candidate_cv(
         if row is None:
             # Deleted while the model was thinking. Nothing to attach the
             # extraction to, and `extractions.candidate_document_id` cascades
-            # from a row that no longer exists.
+            # from a row that no longer exists. The extracted text written to
+            # R2 before the model call is an orphan now: the delete that
+            # removed the row could not see `text_key` because it was never
+            # committed. Remove the object so it does not outlive the row.
             log.info("cv_parse_document_vanished", candidate_document_id=document_id)
+            await store.delete(text_key)
             return
         row.text_key = text_key
         row.text_chars = len(source)
