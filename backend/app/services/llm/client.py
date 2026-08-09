@@ -34,6 +34,19 @@ class LLMInvalidJSON(Exception):
     """
 
 
+class LLMNoContent(LLMInvalidJSON):
+    """The model returned a reasoning trace and no answer at all.
+
+    Distinct from a bad answer: a malformed JSON answer is the model's best
+    effort, and re-asking it at temperature zero is "the same answer twice".
+    This is the model never emitting anything — a reasoning model that spent
+    its whole output budget thinking (DeepSeek counts reasoning tokens against
+    `max_tokens`). Re-asking is a materially different request — the reasoning
+    trace may land differently and the budget may have grown — so a job layer
+    may retry this without violating the no-retry rule for real answers.
+    """
+
+
 @dataclass
 class LLMResult:
     data: dict
@@ -123,7 +136,7 @@ async def complete_json(
     choices = body.get("choices") or [{}]
     content = (choices[0].get("message") or {}).get("content")
     if not content:
-        raise LLMInvalidJSON("the model returned no content")
+        raise LLMNoContent("the model returned no content")
     usage = body.get("usage") or {}
     return LLMResult(
         data=_parse(content),

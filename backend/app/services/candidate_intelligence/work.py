@@ -142,8 +142,8 @@ async def infer_work(
         base_url=settings.DEEPSEEK_BASE_URL,
         api_key=settings.DEEPSEEK_API_KEY,
         extra_body={
-            "max_tokens": settings.EXTRACTION_MAX_TOKENS,
-            "reasoning_effort": settings.EXTRACTION_REASONING_EFFORT_FAST,
+            "max_tokens": settings.CANDIDATE_INTELLIGENCE_MAX_TOKENS,
+            "reasoning_effort": settings.CANDIDATE_INTELLIGENCE_REASONING_EFFORT,
         },
     )
     return WorkAssessment.model_validate(result.data), result

@@ -8,7 +8,7 @@ import httpx
 import pytest
 
 from app.core.config import settings
-from app.services.llm.client import LLMInvalidJSON, complete_json
+from app.services.llm.client import LLMInvalidJSON, LLMNoContent, complete_json
 
 
 @pytest.fixture(autouse=True)
@@ -74,3 +74,28 @@ async def test_json_wrapped_in_a_code_fence_is_recovered():
     )
 
     assert result.data == {"jobs": []}
+
+
+async def test_empty_content_raises_llm_no_content_not_a_generic_error():
+    """An empty `content` — a reasoning model that spent its whole budget
+    thinking — is the specific exception the job layer retries. It must arrive
+    as `LLMNoContent`, not as the generic `LLMInvalidJSON`, or the retry never
+    fires and the analysis fails for good on the first empty response."""
+    payload = {
+        "choices": [
+            {
+                "message": {
+                    "role": "assistant",
+                    "reasoning": "long chain of thought that used the whole budget",
+                    "content": None,
+                }
+            }
+        ],
+        "usage": {"completion_tokens_details": {"reasoning_tokens": 16000}},
+        "model": "test/fast",
+    }
+
+    with pytest.raises(LLMNoContent):
+        await complete_json(
+            "prompt", model="test/fast", schema={}, transport=_transport(payload)
+        )

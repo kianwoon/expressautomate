@@ -153,3 +153,32 @@ async def test_aggregates_token_counts():
     outcome = await analyze_candidate(_Candidate(), llm=llm)
     assert outcome.stats.prompt_tokens == 0
     assert outcome.stats.latency_ms == 0
+
+
+async def test_both_stages_use_the_candidate_budget_not_extractions():
+    """The work pass is the deepest reasoning prompt in the system and must not
+    silently share extraction's `max_tokens`: deepseek-v4-flash counts reasoning
+    against the budget, and 16000 was consumed by reasoning alone on a real run,
+    returning no content. Each stage carries the candidate-specific knobs."""
+    seen: list[dict] = []
+
+    async def spy(prompt, *, model, schema, **kwargs):
+        seen.append(dict(kwargs, model=model, schema=schema))
+        return await FakeLLM(
+            _work_payload(), _assessment_payload()
+        )(prompt, model=model, schema=schema)
+
+    await analyze_candidate(_Candidate(), roles=[_Role()], llm=spy)
+
+    assert len(seen) == 2
+    for call in seen:
+        expected_model = settings.CANDIDATE_INTELLIGENCE_MODEL or settings.EXTRACTION_MODEL_FAST
+        assert call["model"] == expected_model
+        assert call["base_url"] == settings.DEEPSEEK_BASE_URL
+        assert call["api_key"] == settings.DEEPSEEK_API_KEY
+        assert call["schema"] is None
+        assert call["extra_body"]["max_tokens"] == settings.CANDIDATE_INTELLIGENCE_MAX_TOKENS
+        assert (
+            call["extra_body"]["reasoning_effort"]
+            == settings.CANDIDATE_INTELLIGENCE_REASONING_EFFORT
+        )

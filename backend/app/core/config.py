@@ -351,6 +351,34 @@ class Settings(BaseSettings):
     # empty value defaults to the fast extraction model at call time. Listed in
     # `.env.example` alongside the Job Intelligence knobs.
     CANDIDATE_INTELLIGENCE_MODEL: str = ""
+    # The output budget the Candidate Intelligence engine gives each call.
+    # Separate from `EXTRACTION_MAX_TOKENS` because the work pass is the deepest
+    # reasoning prompt in the system: `deepseek-v4-flash` counts reasoning tokens
+    # against `max_tokens`, and the work decomposition burned the extraction
+    # budget (16000) on reasoning alone, returning `reasoning` content with no
+    # `content` — an empty response the job layer fails for good. 65536 is 4×
+    # the budget that failed and well under the model's 384K output ceiling,
+    # leaving room for a long trace and the large JSON answer (verified against
+    # the live API, not theorised).
+    CANDIDATE_INTELLIGENCE_MAX_TOKENS: int = Field(default=65536, gt=0)
+    # The reasoning effort the Candidate Intelligence engine asks for. Matches
+    # `EXTRACTION_REASONING_EFFORT_FAST`'s default; explicit because the right
+    # answer is a property of the model, and the knob must not silently track
+    # extraction's if the two ever diverge.
+    CANDIDATE_INTELLIGENCE_REASONING_EFFORT: str = "low"
+    # How many times the job re-asks after an empty response (`LLMNoContent`).
+    # A no-content answer is not an answer — the model spent its budget thinking
+    # and never emitted anything — so re-asking is a materially different
+    # request, and the "temperature zero makes a retry the same answer twice"
+    # rule applies only to real answers. One retry covers provider hiccups and
+    # the tail of a budget miss; the 64K ceiling makes the retry overwhelmingly
+    # likely to answer.
+    CANDIDATE_INTELLIGENCE_NO_CONTENT_RETRIES: int = Field(default=1, ge=0)
+    # Pause between no-content retries. Small: it is backoff for a transient
+    # provider state, not a rate limit — the job already spends an arq slot.
+    CANDIDATE_INTELLIGENCE_NO_CONTENT_RETRY_DELAY_SECONDS: float = Field(
+        default=2.0, ge=0
+    )
 
     # --- DeepSeek (the classifier and extraction) ---
     # The gate is the highest-volume call in the system — one per email, on

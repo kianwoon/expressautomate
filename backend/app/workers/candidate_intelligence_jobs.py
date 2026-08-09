@@ -24,6 +24,7 @@ or empty CV fails the run with an actionable reason rather than analysing
 nothing.
 """
 
+import asyncio
 import uuid
 from datetime import UTC, datetime
 
@@ -35,7 +36,7 @@ from app.db.rls import tenant_session
 from app.models.candidate import Candidate, CandidateDocument, CandidateRole, CandidateSkill
 from app.models.candidate_intelligence import CandidateIntelligence
 from app.services.candidate_intelligence.engine import analyze_candidate
-from app.services.llm.client import LLMInvalidJSON
+from app.services.llm.client import LLMInvalidJSON, LLMNoContent
 from app.services.storage.r2 import R2BodyStore
 
 log = get_logger(__name__)
@@ -161,11 +162,14 @@ async def run_candidate_intelligence(
         return
 
     try:
-        outcome = await analyze_candidate(candidate, roles, skills, cv_text)
+        outcome = await _analyze_with_no_content_retry(candidate, roles, skills, cv_text)
     except (LLMInvalidJSON, Exception) as exc:
         # A bad model answer, or a transport failure reaching DeepSeek. Either
         # is a failed run the recruiter can retry; neither is retried here,
         # because temperature zero makes a plain retry the same answer twice.
+        # `LLMNoContent` is the one exception to that rule and is handled
+        # inside `_analyze_with_no_content_retry` — an empty response is not an
+        # answer, so re-asking is a different request, not the same answer.
         log.warning(
             "candidate_intelligence_failed",
             row_id=row_id,
@@ -213,6 +217,34 @@ async def _fail(tenant: uuid.UUID, record: uuid.UUID, reason: str) -> None:
             .execution_options(synchronize_session=False)
         )
         await session.commit()
+
+
+async def _analyze_with_no_content_retry(candidate, roles, skills, cv_text: str):
+    """Run the pipeline, re-asking after an empty response.
+
+    `LLMNoContent` means the model spent its budget thinking and never emitted
+    an answer — re-asking is a different request, not "the same answer twice",
+    so it gets a bounded retry (DeepSeek's reasoning trace is sampled even at
+    temperature zero, which thinking mode ignores anyway). Any other failure —
+    a real answer that failed to parse, a transport error — propagates
+    immediately to the caller's single fail path.
+    """
+    retries = settings.CANDIDATE_INTELLIGENCE_NO_CONTENT_RETRIES
+    delay = settings.CANDIDATE_INTELLIGENCE_NO_CONTENT_RETRY_DELAY_SECONDS
+    last_error: LLMNoContent | None = None
+    for attempt in range(retries + 1):
+        try:
+            return await analyze_candidate(candidate, roles, skills, cv_text)
+        except LLMNoContent as exc:
+            last_error = exc
+            if attempt < retries:
+                log.warning(
+                    "candidate_intelligence_no_content_retry",
+                    attempt=attempt + 1,
+                    retries=retries,
+                )
+                await asyncio.sleep(delay)
+    raise last_error  # type: ignore[misc]  # retries >= 0 guarantees one attempt
 
 
 async def _candidate_text(session, tenant: uuid.UUID, candidate_id: uuid.UUID) -> str:
