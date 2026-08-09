@@ -766,7 +766,7 @@ section { padding: 60px 0; }
 /* ---- footer ---- */
 footer { border-top: 1px solid var(--line); padding: 48px 0 40px; color: var(--ink-500); font-size: 0.875rem; }
 .footer-grid {
-  display: grid; grid-template-columns: 1.6fr repeat(3, 1fr) 1.1fr; gap: 32px;
+  display: grid; grid-template-columns: 1.6fr repeat(3, 1fr) minmax(max-content, 1.4fr); gap: 32px;
   align-items: start;
 }
 .footer-mark { display: flex; align-items: center; gap: 9px; color: var(--ink-900); }
