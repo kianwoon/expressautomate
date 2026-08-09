@@ -213,6 +213,30 @@ async def test_bad_rows_are_reported_with_their_sheet_and_line(agency, store):  
     await _cleanup(tenant_id)
 
 
+async def test_a_misaligned_csv_row_is_reported_not_fatal(agency, store):  # noqa: F811
+    """An unquoted comma shifts one row's columns; that row is skipped and
+    named in the report, while the rows around it still land. One bad row
+    costs itself, never the file."""
+    tenant_id, _user_id = agency
+    content = (
+        b"full name,email\n"
+        b"Jane Tan,jane@acme.sg,stray\n"
+        b"Bob Lim,bob@acme.sg\n"
+    )
+    import_id = await _seed(tenant_id, store, content)
+
+    await run_candidate_import(None, tenant_id=str(tenant_id), import_id=str(import_id))
+
+    row = await _row(import_id)
+    assert row.state == CandidateImport.DONE
+    assert row.candidates_created == 1
+    assert row.rows_failed == 1
+    report = _report(store, row.error_report_key)
+    assert f"{CANDIDATE_SHEET} line 2:" in report
+    assert "shifted the columns" in report
+    await _cleanup(tenant_id)
+
+
 async def test_a_sheet_nobody_reads_is_reported_rather_than_dropped(agency, store):  # noqa: F811
     tenant_id, _user_id = agency
     content = _xlsx(

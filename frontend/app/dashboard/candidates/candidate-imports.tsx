@@ -157,6 +157,12 @@ export function CandidateImports({
   const refetch = useCallback(async () => {
     try {
       setRows(await listCandidateImports());
+      // A successful read is the answer to a failed one: the imports list is
+      // reachable again, so a transient poll failure must not leave an error
+      // banner sitting over a table that is visibly refreshing. Upload and
+      // undo set their own errors in their own catch blocks and only call
+      // `refetch` on success, so nothing of theirs is wiped by this.
+      setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "We could not read your recent imports.");
     }

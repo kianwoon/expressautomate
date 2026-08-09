@@ -229,6 +229,18 @@ def parse_candidates(
             )
             continue
 
+        # The manual create path rejects a blank name (`CandidateIn`'s
+        # validator and the `ck_candidates_name_not_blank` CHECK), and the
+        # import must make the same call. The database would otherwise answer
+        # for it as a CHECK violation on flush — which aborts the *whole*
+        # run, taking every valid row down with it — instead of this one
+        # row's problem.
+        if not full_name:
+            problems.append(
+                RowProblem(sheet=sheet, line=line, reason="no full name for this person")
+            )
+            continue
+
         records.append(
             CandidateRecord(
                 line=line,

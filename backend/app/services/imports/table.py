@@ -17,6 +17,7 @@ exactly as it would read the original; only the trust boundary moves.
 import csv
 import io
 from collections.abc import Iterable
+from dataclasses import dataclass
 from typing import Literal
 
 import openpyxl
@@ -43,6 +44,65 @@ class UnreadableTable(Exception):
     pass
 
 
+@dataclass(frozen=True)
+class RowWidthProblem:
+    """One CSV row whose cell count did not match the header's.
+
+    A wider row almost always means an unquoted delimiter — a comma inside a
+    description — silently shifting every later column. The row is skipped
+    and this is reported alongside the other row problems, so one bad row
+    costs itself rather than the file (the same rule `rows.py` keeps). A
+    *shorter* row is the ordinary case of trailing empty cells and stays
+    allowed: the missing columns read as empty, which per-row parsers report
+    as "no email or phone" rather than silently misreading anything.
+    """
+
+    sheet: str
+    line: int
+    reason: str
+
+
+def _decode_csv(data: bytes) -> str:
+    """The file's text, whether it was saved as UTF-8 or UTF-16.
+
+    UTF-8 first, with the BOM eaten by `utf-8-sig`. Excel's "Unicode Text"
+    export writes UTF-16 with a byte-order mark, and the `utf-16` codec
+    honours that mark and strips it — but only when a mark is actually
+    there. Without one the endianness is unknowable, so the file is refused
+    rather than guessed at.
+    """
+    try:
+        return data.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        pass
+    if data.startswith(b"\xff\xfe") or data.startswith(b"\xfe\xff"):
+        try:
+            return data.decode("utf-16")
+        except UnicodeDecodeError as exc:
+            raise UnreadableTable("csv is not valid utf-16") from exc
+    raise UnreadableTable("csv is not valid utf-8")
+
+
+def _delimiter_for(text: str) -> str:
+    """The separator this CSV most likely uses, judged from its header line.
+
+    A header line is almost never quoted, so counting raw `,`, `;` and tab
+    characters on that one line is a reliable proxy — and it is the one
+    place where an Excel-locale file (semicolon or tab instead of comma)
+    can be told apart from a comma file without a flaky heuristic. Comma
+    wins ties, keeping the conventional default for a single-column file.
+    """
+    header_line = text.splitlines()[0] if text.splitlines() else ""
+    semis = header_line.count(";")
+    tabs = header_line.count("\t")
+    commas = header_line.count(",")
+    if semis > commas and semis > tabs:
+        return ";"
+    if tabs > commas and tabs > semis:
+        return "\t"
+    return ","
+
+
 def sniff_table(data: bytes) -> Literal["csv", "xlsx"] | None:
     """Identify a table format from bytes alone — never filename, never content type.
 
@@ -58,8 +118,8 @@ def sniff_table(data: bytes) -> Literal["csv", "xlsx"] | None:
         return "xlsx"
 
     try:
-        data.decode("utf-8-sig")
-    except UnicodeDecodeError:
+        _decode_csv(data)
+    except UnreadableTable:
         return None
 
     return "csv"
@@ -102,7 +162,13 @@ def _check_no_duplicate_headers(header: list[str]) -> None:
 
 
 def _rows_from_records(
-    header: list[str], records: Iterable[list[object]], max_rows: int
+    header: list[str],
+    records: Iterable[list[object]],
+    max_rows: int,
+    *,
+    strict_width: bool = False,
+    width_problems: list[RowWidthProblem] | None = None,
+    sheet: str = "",
 ) -> list[dict[str, str]]:
     """Turn header + data rows into dicts, enforcing `max_rows` as we go.
 
@@ -111,12 +177,36 @@ def _rows_from_records(
     whole sheet has already been read into memory — the caller is expected
     to hand us a genuine iterator (a csv reader, an openpyxl row iterator),
     never a pre-built list, or this buys nothing.
+
+    With `strict_width` (CSV only), a row with *more* cells than the header
+    is skipped and reported in `width_problems` rather than having its tail
+    silently dropped — an unquoted comma has shifted the columns and the
+    extra cell is the only trace of it. The sheet's own name travels in for
+    the report, since a CSV's one sheet is standing in for one of the two
+    named sheets. XLSX never sets the flag: its rows are uniformly padded
+    and ragged widths there are an openpyxl quirk, not a corruption signal.
     """
     _check_no_duplicate_headers(header)
     rows: list[dict[str, str]] = []
-    for record in records:
+    for index, record in enumerate(records):
         if len(rows) >= max_rows:
             raise TooManyRows(f"sheet has more than {max_rows} rows")
+        if strict_width and len(record) > len(header):
+            # The CSV path is the only strict_width caller and always
+            # supplies the list; the row is one problem, never a file error.
+            assert width_problems is not None
+            width_problems.append(
+                RowWidthProblem(
+                    sheet=sheet,
+                    line=index + 2,
+                    reason=(
+                        f"this row has {len(record)} columns but the header has "
+                        f"{len(header)} — a comma or quote in the data has probably "
+                        "shifted the columns"
+                    ),
+                )
+            )
+            continue
         row = {
             header[i]: _normalise_cell(record[i])
             for i in range(min(len(header), len(record)))
@@ -128,17 +218,16 @@ def _rows_from_records(
 
 def _read_csv(
     data: bytes, max_rows: int, sheet_name: str
-) -> dict[str, list[dict[str, str]]]:
-    try:
-        text = data.decode("utf-8-sig")
-    except UnicodeDecodeError as exc:
-        raise UnreadableTable("csv is not valid utf-8") from exc
+) -> tuple[dict[str, list[dict[str, str]]], list[RowWidthProblem]]:
+    # `_decode_csv` raises `UnreadableTable` with the specific reason when
+    # the bytes are not a CSV we can read; it propagates as-is.
+    text = _decode_csv(data)
 
-    reader = csv.reader(io.StringIO(text))
+    reader = csv.reader(io.StringIO(text), delimiter=_delimiter_for(text))
     try:
         header_row = next(reader)
     except StopIteration:
-        return {sheet_name: []}
+        return {sheet_name: []}, []
     except csv.Error as exc:
         raise UnreadableTable("csv could not be parsed") from exc
 
@@ -154,11 +243,21 @@ def _read_csv(
         except csv.Error as exc:
             raise UnreadableTable("csv could not be parsed") from exc
 
-    rows = _rows_from_records(header, _records(), max_rows)
-    return {sheet_name: rows}
+    width_problems: list[RowWidthProblem] = []
+    rows = _rows_from_records(
+        header,
+        _records(),
+        max_rows,
+        strict_width=True,
+        width_problems=width_problems,
+        sheet=sheet_name,
+    )
+    return {sheet_name: rows}, width_problems
 
 
-def _read_xlsx(data: bytes, budget: int, max_rows: int) -> dict[str, list[dict[str, str]]]:
+def _read_xlsx(
+    data: bytes, budget: int, max_rows: int
+) -> tuple[dict[str, list[dict[str, str]]], list[RowWidthProblem]]:
     try:
         repacked = bounded_archive(data, budget=budget)
         workbook = openpyxl.load_workbook(repacked, read_only=True, data_only=True)
@@ -202,7 +301,7 @@ def _read_xlsx(data: bytes, budget: int, max_rows: int) -> dict[str, list[dict[s
     finally:
         workbook.close()
 
-    return sheets
+    return sheets, []
 
 
 def read_sheets(
@@ -212,8 +311,13 @@ def read_sheets(
     budget: int,
     max_rows: int,
     sheet_name: str | None = None,
-) -> dict[str, list[dict[str, str]]]:
+) -> tuple[dict[str, list[dict[str, str]]], list[RowWidthProblem]]:
     """Read a table's rows, keyed by sheet name then by lower-cased header.
+
+    Returns the rows and the `RowWidthProblem`s the read skipped, so a
+    caller can turn the second into the same error report the row parsers
+    fill — a CSV row wider than its header is one row's problem, not the
+    file's.
 
     `budget` bounds how much plaintext an XLSX's zip members may inflate to
     (see module docstring); `max_rows` bounds how many data rows any single

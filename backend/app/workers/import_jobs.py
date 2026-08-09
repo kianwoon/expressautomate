@@ -122,7 +122,9 @@ async def _fail(tenant: uuid.UUID, import_id: uuid.UUID, reason: str) -> None:
         await session.commit()
 
 
-def _split(sheets: dict[str, list[dict[str, str]]]) -> tuple[list, list, list[RowProblem]]:
+def _split(
+    sheets: dict[str, list[dict[str, str]]], width_problems: list
+) -> tuple[list, list, list[RowProblem]]:
     """Route each sheet in the workbook to the parser that understands it.
 
     Matched case-insensitively because `Candidates`, `candidates` and
@@ -131,10 +133,18 @@ def _split(sheets: dict[str, list[dict[str, str]]]) -> tuple[list, list, list[Ro
     named anything else is reported rather than silently dropped: a recruiter
     whose data sat on a tab called `Sheet1` deserves to be told that, not to
     see an import that succeeded and did nothing.
+
+    The `width_problems` `read_sheets` skipped arrive here as the same kind
+    of report: `RowWidthProblem` and `RowProblem` are the same three fields
+    (sheet, line, reason), so each becomes a line in the error report — a
+    misaligned CSV row is a row problem, exactly like a row the parser
+    refused, and the run continues past it.
     """
     candidates: list = []
     roles: list = []
-    problems: list[RowProblem] = []
+    problems: list[RowProblem] = [
+        RowProblem(sheet=p.sheet, line=p.line, reason=p.reason) for p in width_problems
+    ]
 
     for name, rows in sheets.items():
         lowered = name.strip().lower()
@@ -256,7 +266,7 @@ async def run_candidate_import(ctx, *, tenant_id: str, import_id: str) -> None:
         return
 
     try:
-        sheets = read_sheets(
+        sheets, width_problems = read_sheets(
             data,
             kind,
             budget=settings.IMPORT_INFLATE_BUDGET_BYTES,
@@ -277,7 +287,7 @@ async def run_candidate_import(ctx, *, tenant_id: str, import_id: str) -> None:
         await _fail(tenant, record, f"This file could not be read as a spreadsheet: {exc}")
         return
 
-    candidates, roles, problems = _split(sheets)
+    candidates, roles, problems = _split(sheets, width_problems)
 
     async with tenant_session(tenant) as session:
         outcome = await apply_import(

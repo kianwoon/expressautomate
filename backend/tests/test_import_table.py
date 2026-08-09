@@ -29,7 +29,7 @@ def _xlsx_bytes(sheets: dict[str, list[list[object]]]) -> bytes:
 
 def test_csv_header_and_two_rows_yield_two_dicts():
     data = b"Name,Email\nAlice,alice@example.com\nBob,bob@example.com\n"
-    sheets = read_sheets(data, "csv", budget=10_000, max_rows=100)
+    sheets, _ = read_sheets(data, "csv", budget=10_000, max_rows=100)
     rows = sheets["csv"]
     assert rows == [
         {"name": "Alice", "email": "alice@example.com"},
@@ -39,7 +39,7 @@ def test_csv_header_and_two_rows_yield_two_dicts():
 
 def test_csv_headers_case_and_space_insensitive():
     data = b" Name , EMAIL \nAlice,alice@example.com\n"
-    sheets = read_sheets(data, "csv", budget=10_000, max_rows=100)
+    sheets, _ = read_sheets(data, "csv", budget=10_000, max_rows=100)
     assert sheets["csv"] == [{"name": "Alice", "email": "alice@example.com"}]
 
 
@@ -59,7 +59,7 @@ def test_real_xlsx_is_recognised_and_read():
     )
     assert sniff_table(data) == "xlsx"
 
-    sheets = read_sheets(data, "xlsx", budget=10_000_000, max_rows=100)
+    sheets, _ = read_sheets(data, "xlsx", budget=10_000_000, max_rows=100)
     assert sheets["Candidates"] == [{"name": "Alice", "email": "alice@example.com"}]
     assert sheets["History"] == [{"company": "Acme", "role": "Recruiter"}]
 
@@ -76,13 +76,13 @@ def test_too_many_rows_names_the_cap():
 
 def test_whitespace_only_cell_reads_as_empty():
     data = b"Name,Note\nAlice,   \n"
-    sheets = read_sheets(data, "csv", budget=10_000, max_rows=100)
+    sheets, _ = read_sheets(data, "csv", budget=10_000, max_rows=100)
     assert sheets["csv"] == [{"name": "Alice", "note": ""}]
 
 
 def test_merged_cell_reads_as_empty_in_later_rows():
     data = _xlsx_bytes({"Sheet1": [["Name", "Team"], ["Alice", "Eng"], ["Bob", None]]})
-    sheets = read_sheets(data, "xlsx", budget=10_000_000, max_rows=100)
+    sheets, _ = read_sheets(data, "xlsx", budget=10_000_000, max_rows=100)
     assert sheets["Sheet1"] == [
         {"name": "Alice", "team": "Eng"},
         {"name": "Bob", "team": ""},
@@ -162,6 +162,111 @@ def test_xlsx_duplicate_headers_raise_unreadable_table():
 
 def test_csv_sheet_name_defaults_to_csv_but_can_be_overridden():
     data = b"Name,Email\nAlice,alice@example.com\n"
-    sheets = read_sheets(data, "csv", budget=10_000, max_rows=100, sheet_name="History")
+    sheets, _ = read_sheets(data, "csv", budget=10_000, max_rows=100, sheet_name="History")
     assert list(sheets.keys()) == ["History"]
     assert sheets["History"] == [{"name": "Alice", "email": "alice@example.com"}]
+
+
+# A row wider than the header ------------------------------------------------
+
+
+def test_csv_row_wider_than_header_is_reported_and_skipped():
+    """An unquoted comma shifts the columns; the extra cell is its trace. The
+    row is skipped and reported as one row problem — never silently dropped,
+    and never a reason to refuse the whole file."""
+    data = (
+        b"Name,Email\n"
+        b"Alice,alice@example.com,stray,stray\n"
+        b"Bob,bob@example.com\n"
+    )
+    sheets, problems = read_sheets(data, "csv", budget=10_000, max_rows=100)
+
+    # The good row still lands; the misaligned one costs only itself.
+    assert sheets["csv"] == [{"name": "Bob", "email": "bob@example.com"}]
+    assert len(problems) == 1
+    assert problems[0].sheet == "csv"
+    assert problems[0].line == 2
+    assert "4 columns" in problems[0].reason
+    assert "header has 2" in problems[0].reason
+
+
+def test_misaligned_csv_rows_keep_their_true_lines():
+    """Two bad rows report their own line numbers, and following good rows
+    still read as themselves."""
+    data = (
+        b"Name,Email\n"
+        b"Alice,alice@example.com,stray\n"
+        b"Carol,carol@example.com\n"
+        b"Dave,dave@example.com,stray\n"
+        b"Erin,erin@example.com\n"
+    )
+    sheets, problems = read_sheets(data, "csv", budget=10_000, max_rows=100)
+    assert sheets["csv"] == [
+        {"name": "Carol", "email": "carol@example.com"},
+        {"name": "Erin", "email": "erin@example.com"},
+    ]
+    assert [p.line for p in problems] == [2, 4]
+
+
+def test_csv_row_shorter_than_header_still_reads():
+    """Trailing empty cells are the ordinary CSV case and must not be refused —
+    the missing column simply reads empty, which the row parsers report on."""
+    data = b"Name,Email,Phone\nAlice,alice@example.com\n"
+    sheets, _ = read_sheets(data, "csv", budget=10_000, max_rows=100)
+    # The absent phone cell is a missing key, not a "": `parse_candidates`
+    # reads `row.get("phone") or ""`, so both are the same downstream.
+    assert sheets["csv"] == [{"name": "Alice", "email": "alice@example.com"}]
+
+
+def test_xlsx_row_wider_than_header_is_not_refused():
+    """XLSX rows are uniformly padded and ragged widths there are an openpyxl
+    quirk, not a corruption signal — the strict width rule is CSV-only."""
+    data = _xlsx_bytes({"Sheet1": [["Name", "Email"], ["Alice", "a@x.com", "extra"]]})
+    sheets, _ = read_sheets(data, "xlsx", budget=10_000_000, max_rows=100)
+    assert sheets["Sheet1"] == [{"name": "Alice", "email": "a@x.com"}]
+
+
+# Encodings and delimiters ---------------------------------------------------
+
+
+def test_utf16_csv_with_bom_is_sniffed_and_read():
+    """Excel's 'Unicode Text' export is UTF-16LE with a BOM; the utf-16 codec
+    honours and strips the mark, so the file reads exactly like a UTF-8 one."""
+    data = "Name,Email\nAlice,alice@example.com\n".encode("utf-16")
+    assert sniff_table(data) == "csv"
+    sheets, _ = read_sheets(data, "csv", budget=10_000, max_rows=100)
+    assert sheets["csv"] == [{"name": "Alice", "email": "alice@example.com"}]
+
+
+def test_utf16_without_bom_falls_back_to_utf8_not_a_crash():
+    """No BOM means the endianness is unknowable, and the file cannot be
+    told apart from UTF-8 text containing NULs — so it is not refused, it is
+    read as UTF-8 and the NUL-stuffed cells fail per-row parsing downstream.
+    Pinned here so nobody mistakes that for a silent success."""
+    data = "Name,Email\nAlice,alice@example.com\n".encode("utf-16-le")
+    assert sniff_table(data) == "csv"
+    sheets, _ = read_sheets(data, "csv", budget=10_000, max_rows=100)
+    assert sheets["csv"]  # parses; the cells are NUL-stuffed garbage
+
+
+def test_semicolon_delimited_csv_is_read():
+    """An Excel-locale CSV uses `;`; the delimiter is taken from the header
+    line, where quotes are almost never in play."""
+    data = b"Name;Email\nAlice;alice@example.com\n"
+    sheets, _ = read_sheets(data, "csv", budget=10_000, max_rows=100)
+    assert sheets["csv"] == [{"name": "Alice", "email": "alice@example.com"}]
+
+
+def test_tab_delimited_csv_is_read():
+    data = b"Name\tEmail\nAlice\talice@example.com\n"
+    sheets, _ = read_sheets(data, "csv", budget=10_000, max_rows=100)
+    assert sheets["csv"] == [{"name": "Alice", "email": "alice@example.com"}]
+
+
+def test_comma_wins_the_delimiter_tie():
+    """A header with one comma and one semicolon is a comma file, not a
+    semicolon file — comma is the conventional default on a tie, so the
+    semicolon stays inside the first column name."""
+    data = b"Name;Full,Email\nAlice;A,alice@example.com\n"
+    sheets, _ = read_sheets(data, "csv", budget=10_000, max_rows=100)
+    assert sheets["csv"] == [{"name;full": "Alice;A", "email": "alice@example.com"}]

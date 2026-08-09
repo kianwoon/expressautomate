@@ -392,6 +392,25 @@ async def _apply_candidates(
                 outcome.held_by_colleagues += 1
                 held.add(candidate.id)
                 continue
+            # Matching deliberately finds archived rows (they still hold the
+            # unique keys, so an import that skipped them would collide on
+            # insert), but that does not make them editable: an archived
+            # person was removed from the active list on purpose, and a bulk
+            # re-import must not silently revive or rewrite them. Reported
+            # rather than dropped, and never added to `seen`, so a history
+            # row naming them is refused below too.
+            if candidate.record_status == Candidate.ARCHIVED:
+                outcome.problems.append(
+                    RowProblem(
+                        sheet=_CANDIDATE_SHEET,
+                        line=line,
+                        reason=(
+                            f"this row matches candidate {candidate.id}, which is "
+                            "archived; nothing was written for it"
+                        ),
+                    )
+                )
+                continue
             if await _update_candidate(
                 session,
                 tenant_id=tenant_id,
@@ -562,6 +581,31 @@ async def _candidate_for(
             )
         )
         return None
+    # A history row must not attach work to an archived person either. The
+    # candidates pass cannot record this in `seen` — a History-only row may
+    # name a candidate the Candidates sheet never mentioned — so the status
+    # is read directly, exactly the check that pass makes.
+    archived = (
+        await session.execute(
+            select(Candidate.id).where(
+                Candidate.id == match.candidate_id,
+                Candidate.record_status == Candidate.ARCHIVED,
+            )
+        )
+    ).scalars().first()
+    if archived is not None:
+        who = record.candidate_email or record.candidate_phone
+        problems.append(
+            RowProblem(
+                sheet=_ROLE_SHEET,
+                line=line,
+                reason=(
+                    f"{who} matches candidate {match.candidate_id}, which is archived; "
+                    "this job was not attached"
+                ),
+            )
+        )
+        return None
     return match.candidate_id
 
 
@@ -660,6 +704,17 @@ async def _apply_roles(
 
             changed = False
             for name, new in values.items():
+                # A blank cell is not an erasure (§15), the same rule
+                # `_update_candidate` keeps for a person's row. A History
+                # sheet that omits the Location or Description column — or
+                # carries a date `_dates` had to drop as unreadable — is not
+                # asserting that those fields are empty, so the existing
+                # role's values are left alone rather than wiped. `employer`
+                # and `title` are already known stated (the check above);
+                # `started_on`/`ended_on` arrive as `None` exactly when the
+                # sheet said nothing readable.
+                if not _stated(new):
+                    continue
                 previous = getattr(role, name)
                 if previous == new:
                     continue

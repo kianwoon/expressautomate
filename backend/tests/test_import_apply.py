@@ -695,3 +695,179 @@ async def test_an_import_never_reaches_another_agencys_candidate(agency, other_a
         )
         assert candidate.full_name == "Jane T"
         assert candidate.import_id is None
+
+
+# A blank cell is not an erasure — on roles as well as candidates --------------
+
+
+@pytest.mark.asyncio
+async def test_role_update_preserves_fields_the_sheet_did_not_state(agency):  # noqa: F811
+    """A History row with employer+title but no dates, location or description
+    must not wipe those off the role it matches — the same §15 rule
+    `_update_candidate` keeps for a person's row."""
+    tenant_id, _user = agency
+    candidate_id = await _existing_candidate(tenant_id)
+    import_id = await _an_import(tenant_id)
+    role_id = uuid.uuid4()
+    async with AdminSessionLocal() as s:
+        await s.execute(
+            text(
+                "INSERT INTO candidate_roles (id, tenant_id, candidate_id, employer,"
+                " employer_normalized, title, title_normalized, started_on,"
+                " started_precision, ended_on, ended_precision, location, description,"
+                " source, status)"
+                " VALUES (:i, :t, :c, 'Parkway Shenton', 'parkway shenton', 'Nurse',"
+                " 'nurse', '2019-06-01', 'month', '2020-01-01', 'month', 'Singapore',"
+                " 'Ward rounds.', 'human', 'confirmed')"
+            ),
+            {"i": role_id, "t": tenant_id, "c": candidate_id},
+        )
+        await s.commit()
+
+    async with tenant_session(tenant_id) as session:
+        outcome = await apply_import(
+            session,
+            tenant_id=tenant_id,
+            import_id=import_id,
+            candidates=[],
+            roles=[
+                _role(
+                    title="Staff Nurse",  # stated, so it still updates
+                    started_on=None,
+                    started_precision=None,
+                    ended_on=None,
+                    ended_precision=None,
+                    location=None,
+                    description=None,
+                )
+            ],
+            today=TODAY,
+        )
+
+    assert outcome.roles_updated == 1
+    assert outcome.problems == []
+
+    async with tenant_session(tenant_id) as session:
+        role = (await session.execute(select(CandidateRole))).scalars().one()
+        assert role.id == role_id
+        assert role.title == "Staff Nurse"
+        # Everything the sheet did not state stayed put.
+        assert role.started_on == date(2019, 6, 1)
+        assert role.started_precision == "month"
+        assert role.ended_on == date(2020, 1, 1)
+        assert role.ended_precision == "month"
+        assert role.location == "Singapore"
+        assert role.description == "Ward rounds."
+
+
+@pytest.mark.asyncio
+async def test_a_blank_name_row_is_reported_and_does_not_fail_the_run(agency):  # noqa: F811
+    """One row with an email but no name is a row problem, not a reason to
+    abort the whole import — the CHECK would otherwise take the valid rows
+    down with it."""
+    tenant_id, _user = agency
+    import_id = await _an_import(tenant_id)
+
+    rows = [
+        {"email": "noname@x.com"},
+        {"full name": "Good Person", "email": "good@x.com"},
+    ]
+    records, parse_problems = parse_candidates(rows, sheet="Candidates")
+    assert len(records) == 1
+    assert len(parse_problems) == 1
+    assert "no full name" in parse_problems[0].reason
+
+    async with tenant_session(tenant_id) as session:
+        outcome = await apply_import(
+            session,
+            tenant_id=tenant_id,
+            import_id=import_id,
+            candidates=records,
+            roles=[],
+            today=TODAY,
+        )
+
+    assert outcome.candidates_created == 1
+    assert outcome.problems == []
+
+    async with tenant_session(tenant_id) as session:
+        names = set(
+            (await session.execute(select(Candidate.full_name))).scalars().all()
+        )
+        assert names == {"Good Person"}
+
+
+# Archived candidates ---------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_an_archived_candidate_is_not_edited_by_an_import(agency):  # noqa: F811
+    """Matching deliberately finds archived rows (they still hold the unique
+    keys), but an import must not rewrite a person who was archived on
+    purpose — the row is reported, never revived."""
+    tenant_id, _user = agency
+    candidate_id = await _existing_candidate(tenant_id, full_name="Jane T")
+    async with AdminSessionLocal() as s:
+        await s.execute(
+            text("UPDATE candidates SET record_status = 'archived' WHERE id = :i"),
+            {"i": candidate_id},
+        )
+        await s.commit()
+    import_id = await _an_import(tenant_id)
+
+    async with tenant_session(tenant_id) as session:
+        outcome = await apply_import(
+            session,
+            tenant_id=tenant_id,
+            import_id=import_id,
+            candidates=[_candidate(full_name="Jane Tan")],
+            roles=[],
+            today=TODAY,
+        )
+
+    assert outcome.candidates_updated == 0
+    assert outcome.candidates_created == 0
+    assert len(outcome.problems) == 1
+    assert "archived" in outcome.problems[0].reason
+
+    async with tenant_session(tenant_id) as session:
+        candidate = (
+            (await session.execute(select(Candidate).where(Candidate.id == candidate_id)))
+            .scalars()
+            .one()
+        )
+        assert candidate.full_name == "Jane T"
+        assert candidate.record_status == Candidate.ARCHIVED
+
+
+@pytest.mark.asyncio
+async def test_a_history_row_matching_an_archived_candidate_is_refused(agency):  # noqa: F811
+    """The same refusal from the roles path: work must not attach to a person
+    the candidates pass just refused to revive."""
+    tenant_id, _user = agency
+    candidate_id = await _existing_candidate(tenant_id)
+    async with AdminSessionLocal() as s:
+        await s.execute(
+            text("UPDATE candidates SET record_status = 'archived' WHERE id = :i"),
+            {"i": candidate_id},
+        )
+        await s.commit()
+    import_id = await _an_import(tenant_id)
+
+    async with tenant_session(tenant_id) as session:
+        outcome = await apply_import(
+            session,
+            tenant_id=tenant_id,
+            import_id=import_id,
+            candidates=[],
+            roles=[_role()],
+            today=TODAY,
+        )
+
+    assert outcome.roles_created == 0
+    assert outcome.roles_updated == 0
+    assert len(outcome.problems) == 1
+    assert "archived" in outcome.problems[0].reason
+
+    async with tenant_session(tenant_id) as session:
+        assert (await session.execute(select(CandidateRole))).scalars().all() == []

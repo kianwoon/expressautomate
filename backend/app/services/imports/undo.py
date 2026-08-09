@@ -51,7 +51,9 @@ from app.models.candidate import (
 # that can be compared against `new_value` on the way back. Two independent
 # copies that drifted apart would make undo silently inert — every comparison
 # failing, every field "skipped", and nothing about the result looking wrong.
-from app.services.imports.apply import _as_text
+# `_holder` is the same rule apply.py uses before writing an identity key, so
+# the reversal does not collide with a key somebody else has taken since.
+from app.services.imports.apply import _as_text, _holder
 
 # The mapped class behind each `entity_type`. Undo reads the column types off
 # these to put a text value back as whatever the column actually holds.
@@ -424,6 +426,39 @@ async def undo_import(session, *, tenant_id: uuid.UUID, import_id: uuid.UUID) ->
                 )
             )
             continue
+
+        # Restoring an identity key can collide with a row that claimed it in
+        # the meantime: the import moved A's email from a@x to b@x, somebody
+        # then created B with a@x, and putting a@x back on A would trip the
+        # unique index and abort the whole reversal. Checked before it is
+        # written, the same way `_holder` guards the forward write — a taken
+        # key is skipped and reported, never raised into a 500. A NULL
+        # `previous_value` restores to NULL, which no index can collide with.
+        if (
+            change.entity_type == CandidateImportChange.CANDIDATE
+            and change.field_name in ("email", "phone_e164")
+            and change.previous_value is not None
+        ):
+            restored_value = _restored(
+                _MODELS[change.entity_type], change.field_name, change.previous_value
+            )
+            # Both columns are strings, so the restored text comes back a
+            # string; asserting it narrows the type for `_holder` below.
+            assert isinstance(restored_value, str)
+            holder = await _holder(session, change.field_name, restored_value, change.entity_id)
+            if holder is not None:
+                outcome.skips.append(
+                    UndoSkip(
+                        entity_type=change.entity_type,
+                        entity_id=change.entity_id,
+                        field_name=change.field_name,
+                        reason=(
+                            f"{change.field_name} was not restored: {change.previous_value!r} "
+                            f"now belongs to candidate {holder}"
+                        ),
+                    )
+                )
+                continue
 
         setattr(
             row,

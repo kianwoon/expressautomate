@@ -40,6 +40,18 @@ def test_candidate_row_with_neither_email_nor_phone_is_a_problem():
     ]
 
 
+def test_candidate_row_with_contact_but_no_name_is_a_problem():
+    """The manual create path and the DB CHECK both refuse a blank name, so
+    the import must report the row rather than let the CHECK abort the run."""
+    rows = [{"email": "noname@example.com"}]
+    records, problems = parse_candidates(rows, sheet="Candidates")
+    assert records == []
+    assert len(problems) == 1
+    assert problems[0].sheet == "Candidates"
+    assert problems[0].line == 2
+    assert "no full name" in problems[0].reason
+
+
 def test_unnormalisable_phone_is_a_problem_with_readable_reason():
     rows = [{"full name": "Bad Phone", "phone": "12a34"}]
     records, problems = parse_candidates(rows, sheet="Candidates")

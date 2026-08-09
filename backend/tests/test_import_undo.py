@@ -462,6 +462,60 @@ async def test_a_field_the_import_emptied_comes_back(agency):  # noqa: F811
     assert (await _one_candidate(tenant_id)).location == "Singapore"
 
 
+@pytest.mark.asyncio
+async def test_undo_skips_a_restored_key_that_was_taken_since(agency):  # noqa: F811
+    """The import moved A off a@x; B claimed a@x in the meantime. Undo must
+    skip and report, never collide with the unique index into a 500."""
+    tenant_id, _user = agency
+    candidate_id = await _existing_candidate(tenant_id)
+    # The fixture starts A at jane@acme.sg with no phone; move it onto the
+    # key pair the scenario needs: a@x plus a phone the import can match by.
+    async with AdminSessionLocal() as s:
+        await s.execute(
+            text(
+                "UPDATE candidates SET email = 'a@x.com', phone_e164 = '+6591234567'"
+                " WHERE id = :i"
+            ),
+            {"i": candidate_id},
+        )
+        await s.commit()
+
+    import_id = await _an_import(tenant_id)
+    await _apply(
+        tenant_id,
+        import_id,
+        [_candidate(email="b@x.com", phone_raw="+65 9123 4567", phone_e164="+6591234567")],
+    )
+    assert (await _one_candidate(tenant_id)).email == "b@x.com"
+
+    # B claims the email the import freed.
+    async with AdminSessionLocal() as s:
+        s.add(
+            Candidate(
+                id=uuid.uuid4(),
+                tenant_id=tenant_id,
+                full_name="Person B",
+                email="a@x.com",
+            )
+        )
+        await s.commit()
+
+    outcome = await _undo(tenant_id, import_id)
+
+    assert outcome.fields_skipped >= 1
+    skipped = {skip.field_name for skip in outcome.skips}
+    assert "email" in skipped
+    reason = next(skip.reason for skip in outcome.skips if skip.field_name == "email")
+    assert "a@x.com" in reason and "now belongs to" in reason
+
+    async with tenant_session(tenant_id) as session:
+        emails = set(
+            (await session.execute(select(Candidate.email))).scalars().all()
+        )
+        # A stays where the import left it; B keeps the key it took.
+        assert emails == {"b@x.com", "a@x.com"}
+
+
 # Refusals -----------------------------------------------------------------
 
 
