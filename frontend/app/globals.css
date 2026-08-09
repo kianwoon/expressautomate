@@ -770,7 +770,7 @@ footer { border-top: 1px solid var(--line); padding: 48px 0 40px; color: var(--i
   align-items: start;
 }
 .footer-mark { display: flex; align-items: center; gap: 9px; color: var(--ink-900); }
-.footer-brand p { margin-top: 12px; max-width: 30ch; }
+.footer-brand p { margin-top: 3px; max-width: 30ch; }
 .footer-h {
   font-size: 0.8125rem; font-weight: 650; color: var(--ink-900);
   letter-spacing: 0; text-transform: none;
