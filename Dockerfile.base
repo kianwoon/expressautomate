@@ -1,0 +1,43 @@
+# syntax=docker/dockerfile:1
+#
+# The heavy, rarely-changing half of the api image. Kept as its own image
+# (ghcr.io/kianwoon/expressautomate-base) so the per-commit build in
+# .github/workflows/backend.yml never drags the OCR toolchain or the pinned
+# venv through the layer cache: the root Dockerfile starts FROM here and only
+# layers application code on top.
+#
+# Rebuilt only when this file, backend/pyproject.toml or backend/uv.lock
+# change — see the workflow's base_tag step for the versioning and the
+# base_build job for the build. That is the "prebuilt when the dependency set
+# does not change" guarantee: every commit in between starts from an image
+# that already exists in GHCR instead of re-running apt-get and uv sync.
+
+FROM python:3.12-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy \
+    UV_PROJECT_ENVIRONMENT=/opt/venv \
+    PATH="/opt/venv/bin:$PATH"
+
+COPY --from=ghcr.io/astral-sh/uv:0.5.11 /uv /usr/local/bin/uv
+
+# System OCR toolchain for scanned-PDF fallback (`app/services/cv/ocr.py`). The
+# Python `ocrmypdf` wrapper orchestrates these three binaries; without any one
+# of them it refuses to start. English ships in the base `tesseract-ocr` pack;
+# additional languages are added via `tesseract-ocr-<code>` and surfaced through
+# `CV_OCR_LANGUAGES`. Only the arq worker runs OCR, but the image is shared.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      tesseract-ocr ghostscript qpdf \
+      libreoffice-core libreoffice-writer \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Pinned dependency venv. This layer is the reason the base image exists: it
+# changes only when the lockfile does, so the app image build on top of it is
+# fast for every commit in between.
+COPY backend/pyproject.toml backend/uv.lock ./
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen --no-dev --no-install-project

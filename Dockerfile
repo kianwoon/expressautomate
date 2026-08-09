@@ -1,5 +1,16 @@
 # syntax=docker/dockerfile:1
 
+# The heavy base — Python, uv, the OCR toolchain (tesseract/ghostscript/qpdf/
+# libreoffice) and the pinned venv — lives in its own image, built only when
+# Dockerfile.base, backend/pyproject.toml or backend/uv.lock change (workflow
+# base_tag step). This image just layers application code on top, so a code
+# commit never re-runs apt-get or reinstalls deps. BASE_TAG is pinned by the
+# build job's build-args; the default keeps a plain local `docker build .`
+# working against the latest published base.
+# Declared before the first FROM so it is in global scope and usable in the
+# base stage's FROM below (an ARG between stages is not).
+ARG BASE_TAG=latest
+
 # The Next.js site is built here and copied into the Python image, so one
 # service serves both. Frontend edits therefore redeploy the API too — the
 # trade for running a single instance instead of two.
@@ -9,41 +20,15 @@ COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
 COPY frontend/ ./
 # Cache Next's own build cache so a frontend tweak rebuilds only what it
-# changes instead of the whole static export. The GHA layer cache cannot do
-# this on its own: `COPY frontend/ ./` invalidates this layer on every
-# frontend edit, while the cache mount survives across builds via the same
-# `type=gha` cache scope the workflow already passes to build-push-action.
+# changes instead of the whole static export. The layer cache cannot do this
+# on its own: `COPY frontend/ ./` invalidates this layer on every frontend
+# edit, while the cache mount survives across builds via the registry/GHA
+# cache scopes the workflow passes to build-push-action.
 RUN --mount=type=cache,target=/site/.next/cache npm run build
 
-FROM python:3.12-slim AS base
-
-ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
-    UV_COMPILE_BYTECODE=1 \
-    UV_LINK_MODE=copy \
-    UV_PROJECT_ENVIRONMENT=/opt/venv \
-    PATH="/opt/venv/bin:$PATH"
-
-COPY --from=ghcr.io/astral-sh/uv:0.5.11 /uv /usr/local/bin/uv
-
-# System OCR toolchain for scanned-PDF fallback (`app/services/cv/ocr.py`). The
-# Python `ocrmypdf` wrapper orchestrates these three binaries; without any one
-# of them it refuses to start. English ships in the base `tesseract-ocr` pack;
-# additional languages are added via `tesseract-ocr-<code>` and surfaced through
-# `CV_OCR_LANGUAGES`. Installed in the single shared image so the arq worker —
-# the only process that runs OCR — has them; the api/supervisor carry the weight
-# too, but never invoke them.
-RUN apt-get update && apt-get install -y --no-install-recommends \
-      tesseract-ocr ghostscript qpdf \
-      libreoffice-core libreoffice-writer \
-    && rm -rf /var/lib/apt/lists/*
+FROM ghcr.io/kianwoon/expressautomate-base:${BASE_TAG} AS base
 
 WORKDIR /app
-
-# Dependency layer first — application edits do not invalidate it.
-COPY backend/pyproject.toml backend/uv.lock ./
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-dev --no-install-project
 
 COPY backend/alembic.ini ./
 COPY backend/alembic ./alembic

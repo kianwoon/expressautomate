@@ -1,0 +1,38 @@
+# Root-context builds (the api image and the base image) only COPY
+# backend/app, backend/alembic, backend/alembic.ini, backend/pyproject.toml,
+# backend/uv.lock, frontend/** and Dockerfile.base — everything else that
+# would come along for the ride is waste on every `docker build .`. CI
+# checkouts are clean, but a local build was shipping ~750 MB of .venv and
+# node_modules as context.
+
+# Version control
+.git
+.gitignore
+
+# Secrets — never ship local environment files
+.env
+.env.*
+!.env.example
+
+# Python
+backend/.venv/
+**/__pycache__/
+**/*.pyc
+backend/tests/
+.pytest_cache/
+.ruff_cache/
+
+# Node
+frontend/node_modules/
+frontend/.next/
+frontend/coverage/
+gateway/node_modules/
+gateway/dist/
+
+# Docs and design artifacts the image never references
+docs/
+mockups/
+*.md
+
+# macOS noise
+.DS_Store

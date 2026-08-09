@@ -79,6 +79,16 @@ lives under an `/api` router. Nothing strips a prefix, so `API_ROOT_PATH` is
 empty. `tests/test_routing.py` fails if a route escapes `/api`, where the
 static mount would shadow it.
 
+**The api image is built on a separate base image.** `Dockerfile.base`
+(`ghcr.io/kianwoon/expressautomate-base`) carries the rarely-changing half —
+Python, uv, the OCR toolchain (tesseract/ghostscript/qpdf/libreoffice) and the
+pinned venv — and is rebuilt only when `Dockerfile.base`, `backend/pyproject.toml`
+or `backend/uv.lock` change. The root `Dockerfile` starts `FROM` it and layers
+application code on top. This is what keeps a code-only commit from re-running
+`apt-get` and `uv sync` on every build; the workflow's `base_tag` step versions
+the base and `base_build` builds it. A base change flows into the api image
+naturally because `Dockerfile.base` is part of the api image's content hash.
+
 Two Koyeb settings are **not** in this repo and must be re-applied by hand if
 the service is ever recreated — both caused outages when they drifted:
 

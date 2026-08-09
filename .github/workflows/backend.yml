@@ -9,6 +9,7 @@ on:
       - 'gateway/**'
       - '.env.example'
       - 'Dockerfile'
+      - 'Dockerfile.base'
       - '.github/workflows/backend.yml'
       - '.github/scripts/**'
   pull_request:
@@ -19,6 +20,7 @@ on:
       - 'gateway/**'
       - '.env.example'
       - 'Dockerfile'
+      - 'Dockerfile.base'
       - '.github/workflows/backend.yml'
       - '.github/scripts/**'
 
@@ -32,6 +34,11 @@ concurrency:
 
 env:
   IMAGE: ghcr.io/kianwoon/expressautomate-api
+  # The heavy half of the api image — Python, uv, the OCR toolchain and the
+  # pinned venv (Dockerfile.base). Its tag hashes Dockerfile.base +
+  # pyproject.toml + uv.lock ONLY, so a code commit leaves it untouched and
+  # the api build pulls it from GHCR instead of rebuilding apt-get and deps.
+  BASE_IMAGE: ghcr.io/kianwoon/expressautomate-base
   # The WA gateway is a separate Node service and gets its OWN image (plan
   # §12.3). It must never run on the shared backend image, and its tag must
   # hash ONLY gateway/** — that is what stops a backend or frontend commit
@@ -61,6 +68,8 @@ jobs:
     outputs:
       tag: ${{ steps.tag.outputs.tag }}
       exists: ${{ steps.tag.outputs.exists }}
+      base_tag: ${{ steps.base_tag.outputs.tag }}
+      base_exists: ${{ steps.base_tag.outputs.exists }}
       gateway_tag: ${{ steps.gateway_tag.outputs.tag }}
       gateway_exists: ${{ steps.gateway_tag.outputs.exists }}
       # Which stacks this run's diff touches, so the three test jobs can skip
@@ -95,6 +104,7 @@ jobs:
             backend:
               - 'backend/**'
               - 'Dockerfile'
+              - 'Dockerfile.base'
               - '.github/**'
               - '.env.example'
             frontend:
@@ -123,8 +133,14 @@ jobs:
           # something the image contains reuses a stale tag and silently ships
           # the old code — which has happened here, and is why these patterns
           # name test files exactly rather than reaching for a broader glob.
+          #
+          # Dockerfile.base is hashed because the api image's content depends
+          # on which base it starts FROM: editing the base must change the api
+          # tag or the build job would reuse an image built from an older base.
+          # backend/pyproject.toml and backend/uv.lock are already inside the
+          # `backend` tree above, so they need no separate mention here.
           TAG=img-$(git ls-tree -r HEAD --format='%(objectname) %(path)' \
-                     -- backend frontend Dockerfile \
+                     -- backend frontend Dockerfile Dockerfile.base \
                      | grep -vE '(^[0-9a-f]+ backend/tests/|\.test\.tsx?$|^[0-9a-f]+ frontend/vitest\.config\.ts$)' \
                      | sha256sum | cut -c1-16)
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
@@ -167,6 +183,35 @@ jobs:
             echo "exists=true" >> "$GITHUB_OUTPUT"
           else
             echo "$TAG not found (HTTP $CODE); gateway build required"
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # The base image's tag hashes ONLY the inputs that change its content:
+      # Dockerfile.base (the apt toolchain) and the two dependency files. A
+      # backend or frontend code commit therefore yields the tag the registry
+      # already holds, the base_build job is skipped, and the api build pulls
+      # the existing base instead of re-running apt-get and uv sync. That is
+      # the whole point of splitting the image in two.
+      - id: base_tag
+        env:
+          GHCR_PAT: ${{ secrets.GHCR_PAT }}
+        run: |
+          set -euo pipefail
+          TAG=base-$(git ls-tree -r HEAD --format='%(objectname) %(path)' \
+                     -- backend/pyproject.toml backend/uv.lock Dockerfile.base \
+                     | sha256sum | cut -c1-16)
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+          BEARER=$(printf '%s' "$GHCR_PAT" | base64 -w0)
+          CODE=$(curl -s -o /dev/null -w '%{http_code}' \
+            -H "Authorization: Bearer $BEARER" \
+            -H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.v2+json' \
+            "https://ghcr.io/v2/${BASE_IMAGE#ghcr.io/}/manifests/$TAG")
+          if [ "$CODE" = "200" ]; then
+            echo "$TAG already in the registry; skipping base build"
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "$TAG not found (HTTP $CODE); base build required"
             echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
 
@@ -427,10 +472,49 @@ jobs:
           cache-from: type=gha,scope=gateway
           cache-to: type=gha,mode=max,scope=gateway
 
-  build:
+  # The heavy base image (Dockerfile.base): Python, uv, the OCR toolchain and
+  # the pinned venv. Built only when its tag is missing from GHCR — i.e. only
+  # when Dockerfile.base, pyproject.toml or uv.lock actually changed. The api
+  # image below starts FROM it, so this is the "prebuilt when the dependency
+  # set did not change" half of the pipeline: a code-only commit skips this
+  # job entirely and pulls the existing base from GHCR as ordinary layers,
+  # never dragging the LibreOffice blob through the layer cache.
+  #
+  # Its own registry cache keeps a rebuild fast when only one input changed:
+  # an apt line change reuses the cached venv layer and vice versa.
+  base_build:
     needs: [plan]
+    if: needs.plan.outputs.base_exists != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ secrets.GHCR_USERNAME }}
+          password: ${{ secrets.GHCR_PAT }}
+
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: Dockerfile.base
+          push: true
+          tags: |
+            ${{ env.BASE_IMAGE }}:${{ needs.plan.outputs.base_tag }}
+            ${{ github.ref == 'refs/heads/main' && format('{0}:latest', env.BASE_IMAGE) || '' }}
+          cache-from: type=registry,ref=${{ env.BASE_IMAGE }}:buildcache
+          cache-to: type=registry,mode=max,ref=${{ env.BASE_IMAGE }}:buildcache
+
+  build:
+    needs: [plan, base_build]
     # Nothing to do when an image for this exact content is already published.
-    if: needs.plan.outputs.exists != 'true'
+    # base_build may be `skipped` (base already in GHCR); a skipped dependency
+    # must not cancel a build this run genuinely needs.
+    if: >-
+      needs.plan.outputs.exists != 'true' &&
+      (needs.base_build.result == 'success' || needs.base_build.result == 'skipped')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -445,8 +529,16 @@ jobs:
           username: ${{ secrets.GHCR_USERNAME }}
           password: ${{ secrets.GHCR_PAT }}
 
-      # GHA layer caching is the point of the whole exercise — Koyeb rebuilt
-      # from scratch on every deploy, this reuses unchanged layers.
+      # build-args pins the exact base this run's tag was computed against —
+      # never :latest, which would let a base rebuild silently change the api
+      # image's content without changing its tag.
+      #
+      # Registry layer cache is primary: it lives beside the image in GHCR, is
+      # not subject to the 10GB/seven-day GHA cache eviction, and the large
+      # layers (node_modules, the Next build, the app) round-trip through the
+      # registry faster than through the GHA backend. GHA cache stays as a
+      # fallback in cache-from so the pre-existing warm scope keeps working
+      # during the transition; only the registry receives new cache writes.
       - uses: docker/build-push-action@v7
         with:
           context: .
@@ -454,8 +546,13 @@ jobs:
           tags: |
             ${{ env.IMAGE }}:${{ needs.plan.outputs.tag }}
             ${{ github.ref == 'refs/heads/main' && format('{0}:latest', env.IMAGE) || '' }}
-          cache-from: type=gha,scope=backend
-          cache-to: type=gha,mode=max,scope=backend
+          build-args: |
+            BASE_TAG=${{ needs.plan.outputs.base_tag }}
+          cache-from: |
+            type=registry,ref=${{ env.IMAGE }}:buildcache
+            type=gha,scope=backend
+          cache-to: |
+            type=registry,mode=max,ref=${{ env.IMAGE }}:buildcache
 
   deploy:
     # `!cancelled()` is load-bearing. Without it GitHub skips this job whenever
@@ -476,8 +573,9 @@ jobs:
       (needs.gateway_test.result == 'success' || needs.gateway_test.result == 'skipped') &&
       (needs.frontend_test.result == 'success' || needs.frontend_test.result == 'skipped') &&
       (needs.build.result == 'success' || needs.build.result == 'skipped') &&
+      (needs.base_build.result == 'success' || needs.base_build.result == 'skipped') &&
       (needs.gateway_build.result == 'success' || needs.gateway_build.result == 'skipped')
-    needs: [plan, test, gateway_test, frontend_test, build, gateway_build]
+    needs: [plan, test, gateway_test, frontend_test, build, base_build, gateway_build]
     runs-on: ubuntu-latest
     steps:
       # Full history: the default shallow clone has no parent commits, so
@@ -541,9 +639,10 @@ jobs:
             CHANGED=$(git diff --name-only "$BEFORE" "$GITHUB_SHA")
             echo "changed files:"; echo "$CHANGED" | sed 's/^/  /'
 
-            # Anything shared (Dockerfile, workflow, deploy scripts) counts as a
-            # backend change: it can alter how either service is built or run.
-            if echo "$CHANGED" | grep -qE '^(backend/|Dockerfile$|\.github/)'; then
+            # Anything shared (Dockerfile, base Dockerfile, workflow, deploy
+            # scripts) counts as a backend change: it can alter how either
+            # service is built or run.
+            if echo "$CHANGED" | grep -qE '^(backend/|Dockerfile(\.base)?$|\.github/)'; then
               BACKEND=true
             else
               BACKEND=false
