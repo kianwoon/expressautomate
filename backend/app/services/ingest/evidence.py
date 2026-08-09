@@ -63,7 +63,10 @@ def _currency_symbols(configured: str) -> tuple[tuple[str, str], ...]:
         symbol, _, code = entry.partition("=")
         if symbol.strip() and code.strip():
             pairs.append((symbol.strip(), code.strip().upper()))
-    # Longest first so "S$" is not read as the ambiguous bare "$".
+    # Longest first so the explicit form ("S$") is tried before the symbol it
+    # contains ("$"). Both map to SGD in the default deployment, so the order
+    # does not change the answer; it keeps the longer, unambiguous spelling
+    # authoritative if an operator ever maps "$" to something else.
     return tuple(sorted(pairs, key=lambda p: len(p[0]), reverse=True))
 
 

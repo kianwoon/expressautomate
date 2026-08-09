@@ -499,10 +499,14 @@ class Settings(BaseSettings):
     # as currency KLN. Which codes are real is a property of the market a
     # deployment serves, not of this code — Singapore sees these.
     SALARY_CURRENCY_CODES: str = "SGD,USD,MYR,EUR,GBP,AUD,HKD,CNY,JPY,INR,PHP,IDR,THB"
-    # Symbol-to-code map. A bare "$" is deliberately absent: in Singapore mail
-    # it is SGD or USD depending on the sender, and picking one would file a
-    # 30% error as a fact.
-    SALARY_CURRENCY_SYMBOLS: str = "S$=SGD,RM=MYR,€=EUR,£=GBP,¥=JPY,₹=INR"
+    # Symbol-to-code map. The bare "$" is mapped to SGD because this
+    # deployment serves Singapore recruitment exclusively — the mail that says
+    # "$5,500" means the same dollars the recruiter will place the candidate
+    # for, and leaving it unnamed is what made a stated band abstain from the
+    # score. "S$" and "$" both map to SGD so the explicit and the bare form
+    # agree (longest match wins, so "S$" is tried first). A deployment serving
+    # a market where "$" is ambiguous should set its own map.
+    SALARY_CURRENCY_SYMBOLS: str = "S$=SGD,$=SGD,RM=MYR,€=EUR,£=GBP,¥=JPY,₹=INR"
     # Plausibility window for a parsed salary figure. Outside it the number is
     # something else the sentence mentioned — working hours, a headcount, a
     # postcode — and the whole string is refused rather than half-read. Both

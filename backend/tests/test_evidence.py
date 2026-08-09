@@ -26,7 +26,7 @@ def _confidence_floor(monkeypatch):
     """
     monkeypatch.setattr(settings, "EXTRACTION_VERIFIED_CONFIDENCE", 0.8)
     monkeypatch.setattr(settings, "SALARY_CURRENCY_CODES", "SGD,USD,MYR,EUR,GBP")
-    monkeypatch.setattr(settings, "SALARY_CURRENCY_SYMBOLS", "S$=SGD,RM=MYR,£=GBP")
+    monkeypatch.setattr(settings, "SALARY_CURRENCY_SYMBOLS", "S$=SGD,$=SGD,RM=MYR,£=GBP")
     monkeypatch.setattr(settings, "SALARY_MIN_CREDIBLE", 100.0)
     monkeypatch.setattr(settings, "SALARY_MAX_CREDIBLE", 10_000_000.0)
 
@@ -324,7 +324,15 @@ def test_the_confidence_floor_comes_from_settings(monkeypatch):
 
 
 def test_salary_parsing_extracts_a_range():
-    assert parse_salary("$5,000-$7,000") == (5000.0, 7000.0, None)
+    # The bare "$" is SGD in this deployment, so the currency is named too.
+    assert parse_salary("$5,000-$7,000") == (5000.0, 7000.0, "SGD")
+
+
+def test_a_bare_dollar_is_read_as_sgd():
+    """This deployment serves Singapore: a bare "$" is the same dollars as
+    "S$", and a band the email stated must not abstain for want of a code."""
+    assert parse_salary("$5,500 - $6,400") == (5500.0, 6400.0, "SGD")
+    assert parse_salary("S$5,500") == (5500.0, 5500.0, "SGD")
 
 
 def test_salary_parsing_extracts_a_currency_when_stated():
@@ -450,9 +458,14 @@ def test_a_capped_salary_is_still_usable_enough_to_verify():
 
 
 def test_a_shouted_word_is_not_mistaken_for_a_currency():
-    """Reproduced: "KLN" and "OTE" were filed as currency codes."""
+    """Reproduced: "KLN" and "OTE" were filed as currency codes.
+
+    "OTE 90,000" carries no "$" so the symbol map cannot rescue it — the only
+    thing that could name a currency is the 3-letter scan, and "OTE" must not
+    pass it.
+    """
     assert parse_salary("KLN pays 3500") == (3500.0, 3500.0, None)
-    assert parse_salary("OTE $90,000") == (90000.0, 90000.0, None)
+    assert parse_salary("OTE 90,000") == (90000.0, 90000.0, None)
 
 
 def test_the_recognised_currencies_come_from_settings(monkeypatch):
