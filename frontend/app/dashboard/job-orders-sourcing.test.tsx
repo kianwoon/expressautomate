@@ -1,5 +1,5 @@
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { Client } from "./clients";
 import { Shortlist } from "./job-orders-sourcing";
@@ -23,6 +23,8 @@ vi.mock("./clients", async () => {
 });
 
 const getSourcing = vi.fn();
+const getSourcingRun = vi.fn();
+const listSourcingRuns = vi.fn();
 const namesFor = vi.fn<(ids: string[], known: ReadonlyMap<string, string>) => Promise<Map<string, string>>>(
   async () => new Map(),
 );
@@ -32,6 +34,8 @@ vi.mock("./sourcing", async () => {
   return {
     ...actual,
     getSourcing: (...args: unknown[]) => getSourcing(...args),
+    getSourcingRun: (...args: unknown[]) => getSourcingRun(...args),
+    listSourcingRuns: (...args: unknown[]) => listSourcingRuns(...args),
     namesFor: (ids: string[], known: ReadonlyMap<string, string>) => namesFor(ids, known),
     recordSubmission: vi.fn(),
   };
@@ -137,8 +141,18 @@ afterEach(() => {
   vi.restoreAllMocks();
   getClient.mockReset();
   getSourcing.mockReset();
+  getSourcingRun.mockReset();
+  listSourcingRuns.mockReset();
   namesFor.mockReset();
   namesFor.mockResolvedValue(new Map());
+  // The panel lists its run history on mount; an empty history is the default
+  // every existing test expects. Set here AND in beforeEach so the very first
+  // test of a file — which runs before any afterEach has — sees it too.
+  listSourcingRuns.mockResolvedValue([]);
+});
+
+beforeEach(() => {
+  listSourcingRuns.mockResolvedValue([]);
 });
 
 describe("Shortlist client identification", () => {
@@ -169,6 +183,91 @@ describe("Shortlist client identification", () => {
     await screen.findByText("No client mention in this email.");
     expect(getClient).not.toHaveBeenCalled();
     expect(screen.queryByText("Meridian Partners")).toBeNull();
+  });
+});
+
+describe("Shortlist run history", () => {
+  it("shows the history dropdown once there are two runs, newest first", async () => {
+    getSourcing.mockResolvedValue(view({ run: run({ id: "run-2" }), matches: [] }));
+    listSourcingRuns.mockResolvedValue([
+      run({ id: "run-2", created_at: "2026-07-31T10:00:00Z" }),
+      run({ id: "run-1", created_at: "2026-07-30T10:00:00Z" }),
+    ]);
+
+    render(<Shortlist row={opportunity()} />);
+
+    const select = (await screen.findByRole("combobox")) as HTMLSelectElement;
+    // The latest run leads the history and is the default selection.
+    expect(select).toBeTruthy();
+    expect(select.value).toBe("run-2");
+    expect(Array.from(select.options).map((o) => o.value)).toEqual(["run-2", "run-1"]);
+  });
+
+  it("loads an earlier run by id when selected, and returns to the latest", async () => {
+    getSourcing.mockResolvedValue(view({ run: run({ id: "run-2" }), matches: [] }));
+    getSourcingRun.mockResolvedValue(
+      view({
+        run: run({ id: "run-1", candidates_considered: 5 }),
+        matches: [match({ candidate_id: "cand-old" })],
+      }),
+    );
+    listSourcingRuns.mockResolvedValue([
+      run({ id: "run-2", created_at: "2026-07-31T10:00:00Z" }),
+      run({ id: "run-1", created_at: "2026-07-30T10:00:00Z" }),
+    ]);
+    namesFor.mockResolvedValue(new Map([["cand-old", "Old Candidate"]]));
+
+    render(<Shortlist row={opportunity()} />);
+
+    const select = (await screen.findByRole("combobox")) as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: "run-1" } });
+
+    await waitFor(() => expect(getSourcingRun).toHaveBeenCalledWith("op-1", "run-1"));
+    await screen.findByText("Old Candidate");
+
+    // Switching back to the newest run fetches the latest again.
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "run-2" } });
+    await waitFor(() => expect(getSourcing).toHaveBeenCalledWith("op-1"));
+  });
+
+  it("keeps the history dropdown hidden for a single run", async () => {
+    getSourcing.mockResolvedValue(view({ run: run({ id: "run-1" }), matches: [] }));
+    listSourcingRuns.mockResolvedValue([run({ id: "run-1" })]);
+
+    render(<Shortlist row={opportunity()} />);
+
+    await waitFor(() => expect(getSourcing).toHaveBeenCalled());
+    expect(screen.queryByRole("combobox")).toBeNull();
+  });
+});
+
+describe("Shortlist server-reported submissions", () => {
+  it("renders Submitted for a match the server already marks submitted", async () => {
+    getSourcing.mockResolvedValue(
+      view({
+        run: run({ client_id: "cl-1" }),
+        matches: [
+          match({ candidate_id: "cand-1", submitted: true }),
+          match({ candidate_id: "cand-2", submitted: false }),
+        ],
+      }),
+    );
+    getClient.mockResolvedValue(client());
+    namesFor.mockResolvedValue(
+      new Map([
+        ["cand-1", "Jane Tan"],
+        ["cand-2", "Bob Lee"],
+      ]),
+    );
+
+    render(<Shortlist row={opportunity()} />);
+
+    await screen.findByText("Jane Tan");
+    // Exactly one row is "Submitted": the one the server flags. The other
+    // keeps its action, so a colleague's submission renders truthfully even
+    // though this session never clicked.
+    expect(screen.getAllByText("Submitted").length).toBe(1);
+    expect(screen.getByText("Mark Bob Lee submitted")).toBeTruthy();
   });
 });
 

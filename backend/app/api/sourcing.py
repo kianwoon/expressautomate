@@ -48,7 +48,8 @@ from datetime import UTC, datetime, time
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
+from sqlalchemy.exc import IntegrityError
 
 from app.api.auth import _require_session_with_role
 from app.core.config import settings
@@ -103,7 +104,9 @@ def serialize_run(run: SourcingRun) -> dict:
     }
 
 
-def serialize_match(match, *, visible: bool, masked: dict | None = None) -> dict:
+def serialize_match(
+    match, *, visible: bool, masked: dict | None = None, submitted: bool = False
+) -> dict:
     """One match, disclosed to exactly the tier this viewer is entitled to.
 
     Sourcing scores the whole agency on purpose — an agency that cannot
@@ -121,6 +124,14 @@ def serialize_match(match, *, visible: bool, masked: dict | None = None) -> dict
     person fits this job order, not anything about them: no name beyond the
     abbreviation, no history, no quote. Withholding it would leave a row that
     cannot be ranked or reasoned about, which is the same as dropping it.
+
+    `submitted` is whether the candidate already stands submitted to the
+    run's resolved client — computed at read time, so a submission recorded
+    after the run was scored (by this recruiter or a colleague) shows up on
+    the next read rather than being frozen into the stored run. The flag is
+    still carried on a redacted match: it is a fact about the candidate's
+    relationship to the client, the same tier as the id itself, and the
+    redacted row renders no submit affordance to act on it.
     """
     common = {
         "candidate_id": str(match.candidate_id),
@@ -130,6 +141,7 @@ def serialize_match(match, *, visible: bool, masked: dict | None = None) -> dict
         # away on the way out would undo that in the last step.
         "score": str(match.score),
         "visible": visible,
+        "submitted": submitted,
     }
     if visible:
         return {
@@ -180,11 +192,31 @@ async def start_sourcing(request: Request, opportunity_id: uuid.UUID) -> dict:
 
         # Counted, and refused, before anything is written. A run created and
         # then rejected would be a `pending` row no worker will ever claim.
+        #
+        # Serialised per tenant with a transaction-scoped advisory lock. The
+        # count and the insert below are two statements, and two recruiters
+        # clicking at once must not both read the count before either has
+        # written — without the lock the daily cap is a soft overage, and with
+        # it the second caller sees the first's committed run and gets the
+        # honest 429. The lock is held until this transaction commits, so the
+        # count it protects is the count the insert lands against.
+        #
+        # `failed` runs do not count. A run whose enqueue failed is terminal —
+        # `rescan_stuck` never retries it — so a retry after an outage would
+        # otherwise spend a slot on a run that never ran, and a long Redis
+        # outage could exhaust the whole daily quota on dead rows.
+        await session.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+            {"key": f"tenant:{tenant_uuid}"},
+        )
         used = (
             await session.execute(
                 select(func.count())
                 .select_from(SourcingRun)
-                .where(SourcingRun.created_at >= _midnight_utc())
+                .where(
+                    SourcingRun.created_at >= _midnight_utc(),
+                    SourcingRun.state != SourcingRun.FAILED,
+                )
             )
         ).scalar_one()
         if used >= settings.SOURCING_DAILY_RUN_QUOTA:
@@ -273,6 +305,37 @@ async def latest_sourcing(request: Request, opportunity_id: uuid.UUID) -> dict:
         return await _with_matches(session, tenant_uuid, run, user_uuid, role)
 
 
+@router.get("/opportunities/{opportunity_id}/sourcing/runs")
+async def list_sourcing_runs(request: Request, opportunity_id: uuid.UUID) -> dict:
+    """Every run for this job order, newest first — the index the panel's run
+    history reads.
+
+    Declared before `sourcing/{run_id}` on purpose: a literal segment must
+    precede a `{param}` segment on the same prefix, or FastAPI matches
+    `/sourcing/runs` to the parameter route first and answers 422 for a UUID
+    that is not one — the include-order failure `test_the_sourcing_paths_are_
+    declared_and_under_api` exists to catch.
+
+    Runs are never deleted, and a job order gets a handful a day at most, so
+    the whole list is cheap to return and the frontend renders it directly.
+    """
+    user_uuid, tenant_uuid, role = await _require_session_with_role(request)
+
+    async with tenant_session(tenant_uuid) as session:
+        await load_visible_opportunity(session, opportunity_id, user_uuid, role)
+        runs = (
+            await session.execute(
+                select(SourcingRun)
+                .where(SourcingRun.opportunity_id == opportunity_id)
+                # `id` breaks the tie, exactly as `latest_sourcing` does: two
+                # runs created in one transaction share `created_at`, and the
+                # order must not depend on which one the plan returns first.
+                .order_by(SourcingRun.created_at.desc(), SourcingRun.id.desc())
+            )
+        ).scalars()
+        return {"runs": [serialize_run(run) for run in runs]}
+
+
 @router.get("/opportunities/{opportunity_id}/sourcing/{run_id}")
 async def one_sourcing_run(
     request: Request, opportunity_id: uuid.UUID, run_id: uuid.UUID
@@ -337,13 +400,42 @@ async def _with_matches(
             .all()
         )
 
+    # Which of the run's candidates already stand submitted to the run's
+    # resolved client. Read here, at read time, not baked into the stored run:
+    # a submission recorded after scoring (a colleague's, or this recruiter's
+    # own from an earlier run) must appear on the next read. A run with no
+    # resolved client has nothing to be submitted to, so every match is false
+    # and the UI disables the action rather than pretending otherwise.
+    submitted_ids: set[uuid.UUID] = set()
+    if ids and run.client_id is not None:
+        submitted_ids = set(
+            (
+                await session.execute(
+                    select(CandidateSubmission.candidate_id).where(
+                        CandidateSubmission.tenant_id == tenant_uuid,
+                        CandidateSubmission.client_id == run.client_id,
+                        CandidateSubmission.candidate_id.in_(ids),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+
     serialized = []
     for match in matches:
         visible = match.candidate_id in visible_ids
         masked = (
             None if visible else await masked_candidate(session, match.candidate_id)
         )
-        serialized.append(serialize_match(match, visible=visible, masked=masked))
+        serialized.append(
+            serialize_match(
+                match,
+                visible=visible,
+                masked=masked,
+                submitted=match.candidate_id in submitted_ids,
+            )
+        )
     return {"run": serialize_run(run), "matches": serialized}
 
 
@@ -418,14 +510,24 @@ async def record_submission(
             submitted_by=user_uuid,
         )
         session.add(record)
-        await session.flush()
-        # `submitted_at` is a server default, so it is unset on the object
-        # until it is read back. Refreshed explicitly rather than left to lazy
-        # load: an async session cannot fetch an expired attribute on
-        # attribute access, and the response would be a MissingGreenlet.
-        await session.refresh(record)
-        body_out = _serialize_submission(record)
-        await session.commit()
+        try:
+            await session.flush()
+            # `submitted_at` is a server default, so it is unset on the object
+            # until it is read back. Refreshed explicitly rather than left to lazy
+            # load: an async session cannot fetch an expired attribute on
+            # attribute access, and the response would be a MissingGreenlet.
+            await session.refresh(record)
+            body_out = _serialize_submission(record)
+            await session.commit()
+        except IntegrityError:
+            # The pre-check above catches the ordinary repeat, but two
+            # submissions racing between that read and this write both pass it.
+            # The unique key decides, and the loser must read as the same 409
+            # the winner's pre-check would have produced — never a 500.
+            raise HTTPException(
+                status_code=409,
+                detail="This candidate has already been submitted to this client.",
+            ) from None
         return body_out
 
 

@@ -96,6 +96,25 @@ export function opportunitySourcingPath(id: string): string {
 }
 
 /**
+ * Every run a job order has ever had, newest first — the index behind the
+ * panel's run history ("the list I sent on Tuesday"). A literal segment, so
+ * it must be declared before the `{run_id}` parameter route server-side, and
+ * a function for the same id-in-path reason as `opportunitySourcingPath`.
+ */
+export function opportunitySourcingRunsPath(id: string): string {
+  return `${OPPORTUNITIES_PATH}/${encodeURIComponent(id)}/sourcing/runs`;
+}
+
+/**
+ * One earlier run of a job order, so a shortlist the recruiter already acted
+ * on stays reachable after a newer run replaced it on screen. Same encoding
+ * discipline as every other id-in-path helper here.
+ */
+export function opportunitySourcingRunPath(id: string, runId: string): string {
+  return `${OPPORTUNITIES_PATH}/${encodeURIComponent(id)}/sourcing/${encodeURIComponent(runId)}`;
+}
+
+/**
  * The Job Intelligence analysis for one job order: POST runs the three-stage
  * analysis (understand the work → infer the ideal person → plan the search)
  * and stores it, GET reads the stored analysis back.

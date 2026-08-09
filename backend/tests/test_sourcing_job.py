@@ -100,7 +100,7 @@ async def _opportunity(tenant_id: uuid.UUID, **fields) -> uuid.UUID:
 
 
 async def _candidate(
-    tenant_id: uuid.UUID, *, name: str, title: str, skills=(), sex: str | None = None
+    tenant_id: uuid.UUID, *, name: str, title: str | None = None, skills=(), sex: str | None = None
 ) -> uuid.UUID:
     cid = uuid.uuid4()
     async with AdminSessionLocal() as s:
@@ -607,3 +607,86 @@ async def test_conflicting_sex_codes_do_not_narrow(agency):
     # client meant, so the pool stays whole.
     assert row.sex_prefilter_applied is False
     assert len(await _matches(tenant_id, run_id)) == 1
+
+
+async def test_the_semantic_stage_runs_the_vector_query_against_the_roster(
+    agency, monkeypatch
+):
+    """Regression for the `IN :ids` expansion bug.
+
+    The ANN query scopes to the eligible roster with `candidate_id IN (:ids…)`.
+    Before the fix that rendered as a single `IN ($1)` parameter — a Postgres
+    syntax error at parse time — so any run with embeddings configured and at
+    least one eligible candidate failed instead of completing. The existing
+    suite never caught it because no DB-backed test drove the semantic stage
+    with a non-empty roster.
+
+    This test does, through a real tenant session: embeddings forced on,
+    `embed_one` stubbed to a fixed vector, and a candidate who matches only by
+    CV meaning (no structured fields at all) to prove the vector query runs,
+    returns its row, and that row is ranked.
+    """
+    tenant_id = agency
+    # `job_title_raw` is the field `opportunity_text_for_embedding` reads —
+    # without it there is no JD text to embed and the stage skips itself.
+    opportunity_id = await _opportunity(tenant_id, job_title_raw="staff nurse")
+    structured = await _candidate(
+        tenant_id, name="Jane Tan", title="staff nurse", skills=("triage",)
+    )
+    semantic_only = await _candidate(tenant_id, name="Sam Goh", title=None)
+
+    # Force the embeddings path on, and stub the network call with a fixed
+    # vector aligned with the seeded rows (same pattern as the Job Intelligence
+    # occupation integration test).
+    monkeypatch.setattr(settings, "EMBEDDING_BASE_URL", "https://embed.test/v1")
+    monkeypatch.setattr(settings, "EMBEDDING_API_KEY", "test-key")
+
+    # allow-hardcode: a 1536-dim unit vector. The seeded rows share this
+    # direction, so cosine similarity is ~1.0 and both candidates are returned.
+    fixed = [1.0] + [0.0] * (settings.EMBEDDING_DIM - 1)
+
+    async def _fake_embed_one(_text, **_kwargs):
+        return fixed
+
+    monkeypatch.setattr(sourcing_jobs, "embed_one", _fake_embed_one)
+
+    # Seed embeddings under the admin role; the vector literal is inlined (not
+    # bound) because a `::vector` cast in a bound parameter is a syntax error
+    # under asyncpg — the same reason the occupation test inlines it.
+    literal = "[" + ",".join(str(v) for v in fixed) + "]"
+    async with AdminSessionLocal() as s:
+        for candidate_id in (structured, semantic_only):
+            await s.execute(
+                text(
+                    "INSERT INTO candidate_embeddings"
+                    " (id, tenant_id, candidate_id, model, dim, embedding)"
+                    f" VALUES (:id, :t, :c, :m, :d, '{literal}'::vector)"
+                ),
+                {
+                    "id": uuid.uuid4(),
+                    "t": tenant_id,
+                    "c": candidate_id,
+                    "m": settings.EMBEDDING_MODEL,
+                    "d": settings.EMBEDDING_DIM,
+                },
+            )
+        await s.commit()
+
+    run_id = await _run(tenant_id, opportunity_id)
+    await run_sourcing(
+        None,
+        tenant_id=str(tenant_id),
+        opportunity_id=str(opportunity_id),
+        run_id=str(run_id),
+    )
+
+    row = await _row(run_id)
+    assert row.state == SourcingRun.DONE
+    assert row.candidates_considered == 2
+
+    kept = {m.candidate_id for m in await _matches(tenant_id, run_id)}
+    # The structured candidate scores on title and skills; the semantic-only
+    # one has nothing structured to compare, yet its CV embedding matches the
+    # job order — the semantic component is what keeps it on the list.
+    assert structured in kept
+    assert semantic_only in kept

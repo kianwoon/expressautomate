@@ -317,6 +317,9 @@
       "GET",
       "POST"
     ],
+    "/api/opportunities/{opportunity_id}/sourcing/runs": [
+      "GET"
+    ],
     "/api/opportunities/{opportunity_id}/sourcing/{run_id}": [
       "GET"
     ],

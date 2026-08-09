@@ -426,6 +426,21 @@
 }
 
 .src-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.src-head-actions { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; justify-content: flex-end; }
+/* The run-history dropdown. Compact on purpose — it sits beside the primary
+   control in a panel header, not in a form. */
+.src-history { display: inline-flex; align-items: baseline; gap: 6px; font-size: 0.75rem; color: var(--ink-500); }
+.src-history-select {
+  font: inherit;
+  font-size: 0.75rem;
+  color: var(--ink-700);
+  border: 1px solid var(--line, rgba(0, 0, 0, 0.12));
+  border-radius: 4px;
+  background: var(--surface, #fff);
+  padding: 2px 4px;
+  max-width: 180px;
+}
+.src-history-select:focus-visible { outline: 2px solid var(--blue-500); outline-offset: 1px; }
 /* The one control that is always here — and therefore where focus lands after
    an action removes the control that was pressed. */
 .src-start {

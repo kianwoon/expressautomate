@@ -461,9 +461,13 @@ async def run_sourcing(
         run = await session.get(SourcingRun, record)
         if run is None:  # pragma: no cover - deleted mid-run
             return
-        # Everyone eligible was looked at, and the count says so even though
-        # only `kept` of them were stored: "we read two thousand and these are
-        # the best twenty" is the thing a recruiter wants to know.
+        # What was actually scored is what is counted, even though only `kept`
+        # of them were stored: "we scored two thousand and these are the best
+        # twenty" is the thing a recruiter wants to know. Where the client's
+        # coded sex preference narrowed the pool first, the count is the
+        # narrowed roster — `prefilter_dropped` in the run's note says how many
+        # the preference removed, so the two figures together read as the full
+        # eligible roster without the count overstating who was scored.
         run.candidates_considered = len(candidate_ids)
         run.shortlisted = len(kept)
         run.model_name = settings.EXTRACTION_MODEL_FAST or None

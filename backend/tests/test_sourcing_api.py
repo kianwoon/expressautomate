@@ -250,6 +250,31 @@ async def test_past_the_quota_nothing_is_created(agency, queued, monkeypatch) ->
     assert len(queued) == 1
 
 
+async def test_failed_runs_do_not_count_toward_the_quota(agency, queued, monkeypatch) -> None:
+    """A run that failed to queue is terminal — `rescan_stuck` never retries
+    it — so it must not spend the agency's daily slot. Otherwise a Redis
+    outage could exhaust the whole quota on dead rows, and each retry would
+    tighten the noose rather than recover."""
+    tenant_id, user_id = agency
+    opportunity_id, _message_id = await _opportunity(tenant_id, user_id)
+    monkeypatch.setattr(settings, "SOURCING_DAILY_RUN_QUOTA", 1)
+
+    async with AdminSessionLocal() as s:
+        await s.execute(
+            text(
+                "INSERT INTO sourcing_runs (id, tenant_id, opportunity_id, state,"
+                " failure_reason) VALUES (:i, :t, :o, 'failed', 'queue down')"
+            ),
+            {"i": uuid.uuid4(), "t": tenant_id, "o": opportunity_id},
+        )
+        await s.commit()
+
+    async with _http(tenant_id, user_id) as http:
+        response = await http.post(f"/api/opportunities/{opportunity_id}/sourcing")
+
+    assert response.status_code == 202
+
+
 async def test_a_run_that_could_not_be_queued_says_so_and_is_retryable(
     agency, enqueue_fails
 ) -> None:
@@ -393,6 +418,86 @@ async def test_a_job_order_with_no_run_is_not_a_404(agency) -> None:
     assert response.json() == {"run": None, "matches": []}
 
 
+async def test_matches_carry_whether_already_submitted(agency, queued) -> None:
+    """The panel's "Submitted" state must be true across recruiters and after
+    a remount, not only for the session that clicked. The flag is computed at
+    read time against the run's resolved client, so a submission recorded
+    after the run was scored appears on the next read."""
+    tenant_id, user_id = agency
+    opportunity_id, message_id = await _opportunity(tenant_id, user_id)
+    client_id = await _client(tenant_id, "Acme Health", "acme.sg")
+    # The run resolves this client from the email mention; without it the run
+    # has no client to be submitted to and the flag is trivially false.
+    await _mention(tenant_id, client_id, message_id, "email_domain")
+    submitted_candidate = await _candidate(tenant_id, "Ann Ng")
+    other_candidate = await _candidate(tenant_id, "Bob Lee")
+
+    async with _http(tenant_id, user_id) as http:
+        run_id = uuid.UUID(
+            (await http.post(f"/api/opportunities/{opportunity_id}/sourcing")).json()["id"]
+        )
+        async with AdminSessionLocal() as s:
+            for candidate_id, score in (
+                (submitted_candidate, "0.9000"),
+                (other_candidate, "0.5000"),
+            ):
+                await s.execute(
+                    text(
+                        "INSERT INTO sourcing_matches (id, tenant_id, run_id, candidate_id,"
+                        " score, reasons) VALUES (:i, :t, :r, :c, :s, '[]'::jsonb)"
+                    ),
+                    {
+                        "i": uuid.uuid4(),
+                        "t": tenant_id,
+                        "r": run_id,
+                        "c": candidate_id,
+                        "s": score,
+                    },
+                )
+            await s.execute(
+                text(
+                    "INSERT INTO candidate_submissions (id, tenant_id, candidate_id, client_id)"
+                    " VALUES (:i, :t, :c, :cl)"
+                ),
+                {"i": uuid.uuid4(), "t": tenant_id, "c": submitted_candidate, "cl": client_id},
+            )
+            await s.commit()
+
+        body = (await http.get(f"/api/opportunities/{opportunity_id}/sourcing")).json()
+
+    by_id = {m["candidate_id"]: m for m in body["matches"]}
+    assert by_id[str(submitted_candidate)]["submitted"] is True
+    assert by_id[str(other_candidate)]["submitted"] is False
+
+
+async def test_a_run_with_no_client_reports_nothing_submitted(agency, queued) -> None:
+    """A run whose client could not be resolved has nothing to be submitted
+    to, so every match is `submitted: false` — the UI disables the action
+    rather than pretending a submission could be recorded."""
+    tenant_id, user_id = agency
+    opportunity_id, _message_id = await _opportunity(tenant_id, user_id)
+    candidate_id = await _candidate(tenant_id, "Ann Ng")
+
+    async with _http(tenant_id, user_id) as http:
+        run_id = uuid.UUID(
+            (await http.post(f"/api/opportunities/{opportunity_id}/sourcing")).json()["id"]
+        )
+        async with AdminSessionLocal() as s:
+            await s.execute(
+                text(
+                    "INSERT INTO sourcing_matches (id, tenant_id, run_id, candidate_id,"
+                    " score, reasons) VALUES (:i, :t, :r, :c, :s, '[]'::jsonb)"
+                ),
+                {"i": uuid.uuid4(), "t": tenant_id, "r": run_id, "c": candidate_id, "s": "0.9000"},
+            )
+            await s.commit()
+
+        body = (await http.get(f"/api/opportunities/{opportunity_id}/sourcing")).json()
+
+    assert body["run"]["client_id"] is None
+    assert [m["submitted"] for m in body["matches"]] == [False]
+
+
 async def test_an_earlier_run_is_still_addressable(agency, queued) -> None:
     """"The list I sent on Tuesday" is the point of storing a run."""
     tenant_id, user_id = agency
@@ -424,6 +529,48 @@ async def test_another_agency_cannot_read_a_run(agency, other_agency, queued) ->
         assert (
             await http.get(f"/api/opportunities/{opportunity_id}/sourcing")
         ).status_code == 404
+
+
+async def test_every_run_is_listed_newest_first(agency, queued) -> None:
+    """The run-history index: all of a job order's runs, newest first, so the
+    panel can offer "the list I sent on Tuesday" without guessing ids."""
+    tenant_id, user_id = agency
+    opportunity_id, _message_id = await _opportunity(tenant_id, user_id)
+
+    async with _http(tenant_id, user_id) as http:
+        first = (await http.post(f"/api/opportunities/{opportunity_id}/sourcing")).json()["id"]
+        second = (await http.post(f"/api/opportunities/{opportunity_id}/sourcing")).json()["id"]
+        body = (await http.get(f"/api/opportunities/{opportunity_id}/sourcing/runs")).json()
+
+    assert [r["id"] for r in body["runs"]] == [second, first]
+    # Each entry carries what the panel labels it with.
+    assert body["runs"][0]["state"] == SourcingRun.PENDING
+    assert body["runs"][0]["created_at"] is not None
+
+
+async def test_a_job_order_with_no_runs_lists_none(agency) -> None:
+    tenant_id, user_id = agency
+    opportunity_id, _message_id = await _opportunity(tenant_id, user_id)
+
+    async with _http(tenant_id, user_id) as http:
+        response = await http.get(f"/api/opportunities/{opportunity_id}/sourcing/runs")
+
+    assert response.status_code == 200
+    assert response.json() == {"runs": []}
+
+
+async def test_another_agency_cannot_list_runs(agency, other_agency, queued) -> None:
+    tenant_id, user_id = agency
+    other_tenant, other_user = other_agency
+    opportunity_id, _message_id = await _opportunity(tenant_id, user_id)
+
+    async with _http(tenant_id, user_id) as http:
+        await http.post(f"/api/opportunities/{opportunity_id}/sourcing")
+
+    async with _http(other_tenant, other_user) as http:
+        response = await http.get(f"/api/opportunities/{opportunity_id}/sourcing/runs")
+
+    assert response.status_code == 404
 
 
 # --- submissions ----------------------------------------------------------
@@ -676,6 +823,7 @@ def test_the_sourcing_paths_are_declared_and_under_api() -> None:
     paths = set(app.openapi()["paths"])
     for expected in (
         "/api/opportunities/{opportunity_id}/sourcing",
+        "/api/opportunities/{opportunity_id}/sourcing/runs",
         "/api/opportunities/{opportunity_id}/sourcing/{run_id}",
         "/api/candidates/{candidate_id}/submissions",
         "/api/candidates/{candidate_id}/submissions/{submission_id}",

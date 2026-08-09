@@ -32,7 +32,7 @@ import uuid
 from collections import defaultdict
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import bindparam, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.candidate import Candidate, CandidateDocument, CandidateRole, CandidateSkill
@@ -224,9 +224,21 @@ async def semantic_neighbors(
     # reliable way to cast a Python list to it. SQLAlchemy's pgvector dialect
     # can express this, but the raw statement is shorter and identical in
     # effect — and this is a read, so no ORM bookkeeping is wanted.
+    #
+    # The vector literal is INLINED into the statement text, never bound as a
+    # parameter. SQLAlchemy's `text()` does not recognise `:q` as a bind when
+    # it is immediately followed by a type cast — `:q::vector` fails the
+    # parameter regex's lookahead — so the bound form is left in the SQL as a
+    # literal `:q` and PostgreSQL rejects it at parse time. That is the second
+    # bug in this function's history: the first (`IN :ids` with a tuple) was
+    # caught when it shipped; this one would only ever have been caught by a
+    # test that actually ran the query, which is what the integration test in
+    # `test_sourcing_job.py` now does. The literal is safe to inline: it is
+    # built exclusively from floats returned by the embedding provider, never
+    # from user input.
     vector_literal = "[" + ",".join(str(float(v)) for v in query_vector) + "]"
-    sql = """
-        SELECT candidate_id, 1 - (embedding <=> :q::vector) AS similarity
+    sql = f"""
+        SELECT candidate_id, 1 - (embedding <=> '{vector_literal}'::vector) AS similarity
         FROM candidate_embeddings
         WHERE tenant_id = :tenant_id
           AND model = :model
@@ -234,18 +246,29 @@ async def semantic_neighbors(
     params: dict = {
         "tenant_id": tenant_id,
         "model": model,
-        "q": vector_literal,
     }
     if candidate_ids:
         # Scope to the eligible roster when the caller passed one. The list is
-        # inlined as a parameter tuple rather than formatted into the string,
-        # so a candidate id containing unexpected characters cannot become SQL.
-        params["ids"] = tuple(candidate_ids)
+        # sent as an *expanding* bind parameter: SQLAlchemy renders
+        # `IN ($1, $2, …)` with one placeholder per id, which is the only form
+        # PostgreSQL accepts. The plain `IN :ids` shape renders as a single
+        # `IN ($1)` and is a syntax error at parse time — the first bug this
+        # function shipped with, guarded by the same integration test. A
+        # candidate id can never be formatted into the SQL string, so the ids
+        # stay out of the statement text no matter what characters they
+        # contain.
+        params["ids"] = list(candidate_ids)
         sql += "  AND candidate_id IN :ids\n"
-    sql += "  ORDER BY embedding <=> :q::vector\n  LIMIT :k"
+    sql += f"""  ORDER BY embedding <=> '{vector_literal}'::vector
+  LIMIT :k"""
     params["k"] = k
 
-    rows = (await session.execute(sql, params)).all()
+    statement = (
+        text(sql).bindparams(bindparam("ids", expanding=True))
+        if candidate_ids
+        else text(sql)
+    )
+    rows = (await session.execute(statement, params)).all()
     return {row.candidate_id: float(row.similarity) for row in rows}
 
 

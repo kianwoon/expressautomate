@@ -3,6 +3,8 @@
 import {
   candidateSubmissionsPath,
   opportunitySourcingPath,
+  opportunitySourcingRunPath,
+  opportunitySourcingRunsPath,
 } from "../api";
 import { ApiError, getCandidate, readError } from "./candidates";
 
@@ -81,6 +83,17 @@ export type SourcingMatch = {
   candidate_id: string;
   score: string;
   /**
+   * Whether this candidate already stands submitted to the run's resolved
+   * client. Computed by the server at read time — a submission recorded after
+   * the run was scored (by this recruiter or a colleague) shows up on the
+   * next read rather than being frozen into the stored run — so the panel's
+   * "Submitted" state is true across recruiters and after a remount, not only
+   * for this session's clicks. False when the run has no resolved client,
+   * since there is then no client to be submitted to. Absent on an older
+   * server response, so treated as false by default.
+   */
+  submitted?: boolean;
+  /**
    * `false` for a candidate the caller does not own or hold a share on.
    * Sourcing scores the whole agency's book on purpose — an agency has to be
    * able to shortlist across its own database — but the API redacts a match
@@ -128,6 +141,34 @@ export async function startSourcing(opportunityId: string): Promise<SourcingRun>
 
 export async function getSourcing(opportunityId: string): Promise<SourcingView> {
   const res = await fetch(opportunitySourcingPath(opportunityId), {
+    credentials: "include",
+    headers: { Accept: "application/json" },
+  });
+  if (!res.ok) throw new ApiError(await readError(res));
+  return (await res.json()) as SourcingView;
+}
+
+/** Every run for this job order, newest first. The panel reads it once to know
+ *  what history exists, then `getSourcingRun` fetches whichever one the
+ *  recruiter selects. */
+export async function listSourcingRuns(opportunityId: string): Promise<SourcingRun[]> {
+  const res = await fetch(opportunitySourcingRunsPath(opportunityId), {
+    credentials: "include",
+    headers: { Accept: "application/json" },
+  });
+  if (!res.ok) throw new ApiError(await readError(res));
+  const body = (await res.json()) as { runs: SourcingRun[] };
+  return body.runs;
+}
+
+/** One earlier run and its matches, in exactly the shape `getSourcing` returns
+ *  for the latest — so a selected history run renders through the same code
+ *  path as the live one, including its own client, safeguards and matches. */
+export async function getSourcingRun(
+  opportunityId: string,
+  runId: string,
+): Promise<SourcingView> {
+  const res = await fetch(opportunitySourcingRunPath(opportunityId, runId), {
     credentials: "include",
     headers: { Accept: "application/json" },
   });

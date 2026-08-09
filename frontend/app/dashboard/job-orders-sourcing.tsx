@@ -13,10 +13,13 @@ import type { CandidateCollision } from "./candidates";
 import "./clients/clients.css";
 import { flagged } from "./codes";
 import { eligibilityFor, type Eligibility, type EligibilityFinding } from "./eligibility";
+import { when } from "./format";
 import type { Opportunity } from "./opportunities";
 import {
   getSourcing,
+  getSourcingRun,
   inFlight,
+  listSourcingRuns,
   namesFor,
   recordSubmission,
   startSourcing,
@@ -103,6 +106,13 @@ export function Shortlist({ row }: { row: Opportunity }) {
   const [reclaimFocus, setReclaimFocus] = useState(false);
   const startRef = useRef<HTMLButtonElement | null>(null);
 
+  // The run history — every run this job order has ever had, newest first —
+  // is the "the list I sent on Tuesday" index. `selectedRunId` is null while
+  // the panel shows the latest run (the default, and the one it polls); set
+  // to an id while the recruiter is reading an earlier one.
+  const [runs, setRuns] = useState<SourcingRun[]>([]);
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
+
   // The run carries only `client_id` — a bare UUID is not an identification,
   // so the client record is fetched here to put a name and a logo beside it.
   // `null` when the run has no resolved client (never fetched, see below) or
@@ -123,7 +133,9 @@ export function Shortlist({ row }: { row: Opportunity }) {
 
   const refetch = useCallback(async () => {
     try {
-      const data = await getSourcing(row.id);
+      const data = selectedRunId
+        ? await getSourcingRun(row.id, selectedRunId)
+        : await getSourcing(row.id);
       setView({ status: "ready", data });
       if (data.matches.length > 0) {
         // A redacted match (`visible: false`) already carries its masked
@@ -153,14 +165,33 @@ export function Shortlist({ row }: { row: Opportunity }) {
             },
       );
     }
+  }, [row.id, selectedRunId]);
+
+  // The history index, refreshed on its own so a failure to list runs — a
+  // secondary read, purely to populate the dropdown — can never take the
+  // shortlist itself down.
+  const refreshRuns = useCallback(async () => {
+    try {
+      setRuns(await listSourcingRuns(row.id));
+    } catch {
+      // Left out on purpose: the panel shows the latest run regardless, and
+      // the history reappears on the next successful read.
+    }
   }, [row.id]);
 
   useEffect(() => {
     void refetch();
-  }, [refetch]);
+    void refreshRuns();
+  }, [refetch, refreshRuns]);
 
   const run = view.status === "ready" ? view.data.run : null;
-  const waiting = inFlight(run);
+  // The run that decides whether the panel is waiting. While the latest run
+  // is in flight the "Find candidates again" button stays disabled and the
+  // panel polls — even when the recruiter is reading an earlier run — because
+  // starting a second run while one is queued is the redundancy the panel
+  // exists to prevent.
+  const latestRun = runs[0] ?? (selectedRunId === null ? run : null);
+  const waiting = inFlight(latestRun);
   const clientId = run?.client_id ?? null;
 
   // Guarded on `clientId` being non-null: an unresolved run (§ the
@@ -187,14 +218,23 @@ export function Shortlist({ row }: { row: Opportunity }) {
     };
   }, [clientId]);
 
-  // Only while the run is `pending` or `running`. A `done` or `failed` run is
-  // a finished record, and asking again is a request whose answer cannot
-  // change — every open panel, forever, for nothing.
+  // Only while the run is `pending` or `running`, and only while the panel is
+  // watching the latest run. A `done` or `failed` run is a finished record,
+  // and asking again is a request whose answer cannot change — every open
+  // panel, forever, for nothing. An earlier run the recruiter is reading is
+  // finished too, so it is not polled; the latest run's progress appears the
+  // moment they switch back to it.
   useEffect(() => {
-    if (!waiting) return;
-    const timer = setInterval(() => void refetch(), SOURCING_POLL_MS);
+    if (!waiting || selectedRunId !== null) return;
+    const timer = setInterval(() => {
+      void refetch();
+      // The history is refreshed beside the view so the dropdown's label for
+      // the latest run keeps up with the state the panel is showing — a run
+      // that just finished must not be named "running" next to its own "Done".
+      void refreshRuns();
+    }, SOURCING_POLL_MS);
     return () => clearInterval(timer);
-  }, [waiting, refetch]);
+  }, [waiting, selectedRunId, refetch, refreshRuns]);
 
   // Focus, deferred until the control can actually take it.
   //
@@ -221,14 +261,41 @@ export function Shortlist({ row }: { row: Opportunity }) {
       const started = await startSourcing(row.id);
       // Shown immediately rather than waited for: the POST answers 202 with
       // the run itself, so the panel can say "queued" before the first poll.
+      // The selection returns to the latest run, and the new run leads the
+      // history so the dropdown names it from the start.
       setView({ status: "ready", data: { run: started, matches: [] } });
+      setSelectedRunId(null);
+      setRuns((prev) => [started, ...prev.filter((r) => r.id !== started.id)]);
       setSubmitted(new Set());
       setEligibility(new Map());
+      // Names are joined per candidate id and would otherwise survive from
+      // the previous run — harmless for stable ids, but a re-run should not
+      // keep displaying names it has not fetched for this run. The server's
+      // per-match `submitted` flag carries the durable submission state, so
+      // clearing the local overlay here cannot hide a real submission.
+      setNames(new Map());
     } catch (err) {
       setError(err instanceof Error ? err.message : "We could not start a shortlist just now.");
     } finally {
       setStarting(false);
     }
+  }
+
+  /** Switch which run the panel is showing. The newest run and the empty
+   *  selection both mean "the latest"; any other id is an earlier run. */
+  function selectRun(value: string) {
+    const latestId = runs[0]?.id ?? "";
+    const next = value === "" || value === latestId ? null : value;
+    if (next === selectedRunId) return;
+    setSelectedRunId(next);
+    // The local "submitted" overlay is keyed by candidate id only, but a
+    // run's matches are submitted against *that run's* resolved client —
+    // which can differ between runs. Carrying the overlay across a switch
+    // would claim a submission to client A as one to client B. The durable
+    // per-match `submitted` flag the server sends re-derives the truth for
+    // the newly shown run.
+    setSubmitted(new Set());
+    setRowError(null);
   }
 
   async function submit(candidateId: string, clientId: string) {
@@ -256,15 +323,35 @@ export function Shortlist({ row }: { row: Opportunity }) {
     <section className="src" aria-label="Shortlist">
       <div className="src-head">
         <span className="row-k">Shortlist</span>
-        <button
-          type="button"
-          ref={startRef}
-          className="src-start"
-          onClick={() => void start()}
-          disabled={starting || waiting}
-        >
-          {starting ? "Starting…" : run ? "Find candidates again" : "Find candidates"}
-        </button>
+        <div className="src-head-actions">
+          {runs.length > 1 && (
+            // Only once there is something to switch between. One run is the
+            // current one and needs no way to leave it.
+            <label className="src-history">
+              <span className="src-history-k">Run</span>
+              <select
+                className="src-history-select"
+                value={selectedRunId ?? runs[0]?.id ?? ""}
+                onChange={(event) => selectRun(event.target.value)}
+              >
+                {runs.map((r) => (
+                  <option key={r.id} value={r.id}>
+                    {runLabel(r)}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          <button
+            type="button"
+            ref={startRef}
+            className="src-start"
+            onClick={() => void start()}
+            disabled={starting || waiting}
+          >
+            {starting ? "Starting…" : run ? "Find candidates again" : "Find candidates"}
+          </button>
+        </div>
       </div>
 
       {error && (
@@ -305,7 +392,7 @@ export function Shortlist({ row }: { row: Opportunity }) {
                   name={names.get(match.candidate_id) ?? null}
                   eligibility={eligibility.get(match.candidate_id)}
                   clientId={run.client_id}
-                  submitted={submitted.has(match.candidate_id)}
+                  submitted={submitted.has(match.candidate_id) || match.submitted === true}
                   busy={submitting === match.candidate_id}
                   disabled={submitting !== null}
                   error={rowError?.id === match.candidate_id ? rowError.message : null}
@@ -333,6 +420,19 @@ function ClientBadge({ client }: { client: Client }) {
       <span className="src-client-name">{client.name}</span>
     </div>
   );
+}
+
+/** What one run is called in the history dropdown. The timestamp is the
+ *  anchor ("the list I sent on Tuesday"); the state says what it is — a
+ *  finished run names its shortlist size, an unfinished one names where it
+ *  stopped, and a failed one says so rather than wearing a size it never
+ *  produced. */
+function runLabel(run: SourcingRun): string {
+  const stamp = when(run.created_at) ?? "A run";
+  if (run.state === "failed") return `${stamp} — failed`;
+  if (run.state === "done") return `${stamp} — ${run.shortlisted ?? 0} shortlisted`;
+  if (run.state === "pending") return `${stamp} — queued`;
+  return `${stamp} — running`;
 }
 
 /** What the run is doing, in words. Every state says something: a run that
@@ -464,6 +564,10 @@ function Match({
   /** The client the run excluded against, or null when it could not be told —
    *  in which case there is nothing to submit *to*. */
   clientId: string | null;
+  /** True when the candidate already stands submitted to the run's client —
+   *  from this session's clicks (the local overlay) OR from the server's
+   *  read-time `match.submitted`, so a colleague's submission, or one from
+   *  before this panel opened, renders as "Submitted" too. */
   submitted: boolean;
   busy: boolean;
   disabled: boolean;
