@@ -450,7 +450,7 @@
      only ever a way of keeping the row quiet, never a way of hiding it. */
 .src-act { transition: none; opacity: 1; }
 /* `.src-start` no longer has rules of its own — the button is `.btn
-   btn-secondary` now, and `.btn`'s own transitions are unchanged under
+   btn-primary` now, and `.btn`'s own transitions are unchanged under
    reduced motion, so there is nothing left to disable here. */
 /* Same reasoning as `.ci-pulse`: it is the only thing saying the shortlist
      has not finished, so it stops moving rather than disappearing. */
@@ -473,11 +473,12 @@
   max-width: 180px;
 }
 .src-history-select:focus-visible { outline: 2px solid var(--blue-500); outline-offset: 1px; }
-/* The "Find candidates" button carries the shared `.btn .btn-secondary`
-   treatment (applied in `job-orders-sourcing.tsx`), so it matches the modal's
-   other buttons by construction rather than bespoke rules. It remains the one
-   control that is always here — where focus lands after an action removes the
-   control that was pressed. */
+/* The "Find candidates" button carries the shared `.btn .btn-primary`
+   treatment (applied in `job-orders-sourcing.tsx`) — the same weight as the
+   header's "Run analysis", since both start an AI computation — so it matches
+   the modal's other primary buttons by construction rather than bespoke
+   rules. It remains the one control that is always here — where focus lands
+   after an action removes the control that was pressed. */
 .src-note { margin-top: 8px; font-size: 0.8125rem; color: var(--ink-500); max-width: 72ch; }
 .src-state {
   margin-top: 8px;
