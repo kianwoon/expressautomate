@@ -741,6 +741,10 @@
    two cards, when they are one record split for legibility. */
 .dlg-modal-wide.jo-detail-modal {
   max-width: 1120px;
+  /* The close × floats in the top-right padding; without this the absolute
+     position is relative to the nearest positioned ancestor, which is not
+     this card. */
+  position: relative;
 }
 .jo-detail-modal .jo-modal-grid {
   display: grid;
@@ -1056,32 +1060,34 @@
 .jo-detail-run:disabled { opacity: 0.55; cursor: default; }
 .jo-detail-run:focus-visible { outline: 2px solid #2563eb; outline-offset: 2px; }
 
-/* The close × at the far right of the title row. A compact, quiet square —
-   it is the exit, not an action, so it reads as a small chrome element rather
-   than competing with Run-analysis. Disabled while a save or move is in
-   flight, matching the Dialog's own guarded close. */
+/* The close × in the modal's upper-right corner. It floats in the card's top
+   padding (`.jo-detail-modal` is `position: relative`), so it sits clear of
+   the title row below it, and the card's own padding keeps it off the rounded
+   corner. Red because closing discards the view you are on — the same signal
+   the rest of the app uses for a destructive action. Disabled while a save or
+   move is in flight, matching the Dialog's own guarded close. */
 .jo-detail-close {
+  position: absolute;
+  top: 8px;
+  right: 8px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  flex: 0 0 auto;
-  align-self: center;
   width: 28px;
   height: 28px;
-  margin-left: -4px;
   font: inherit;
   font-size: 1.25rem;
   line-height: 1;
-  color: var(--ink-500);
+  color: #dc2626;
   background: none;
   border: 0;
   border-radius: 6px;
   cursor: pointer;
   transition: color 150ms ease, background 150ms ease;
 }
-.jo-detail-close:hover { color: var(--ink-900); background: var(--surface-alt); }
-.jo-detail-close:disabled { color: var(--ink-300); cursor: default; background: none; }
-.jo-detail-close:focus-visible { outline: 2px solid var(--blue-500); outline-offset: 2px; }
+.jo-detail-close:hover { color: #b91c1c; background: var(--red-50, #fdf1f1); }
+.jo-detail-close:disabled { color: #f5c2c2; cursor: default; background: none; }
+.jo-detail-close:focus-visible { outline: 2px solid #dc2626; outline-offset: 2px; }
 
 /* The four-section tab bar. Mirrors the settings `.nt-tabs` visual (flex row,
    gap, transparent bottom border on inactive, currentColor on active, opacity

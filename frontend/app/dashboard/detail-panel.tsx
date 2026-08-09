@@ -316,28 +316,31 @@ function Detail({
                   ? "Re-run analysis"
                   : "Run analysis"}
           </button>
-          {/* The close affordance, pinned to the far right of the title row.
-              The backdrop click and Escape already close the modal, but
-              neither is discoverable — a visible × is where a user looks
-              first, and the one control that is always reachable from
-              anywhere in the record. Disabled rather than no-op'd while a
-              save or move is in flight, so a keyboard user can see why the
-              modal will not leave yet. */}
-          <button
-            type="button"
-            className="jo-detail-close"
-            onClick={onClose}
-            disabled={busy}
-            aria-label="Close"
-          >
-            <span aria-hidden="true">×</span>
-          </button>
         </span>
       }
       titleId="jo-detail-title"
       onClose={busy ? () => {} : onClose}
       className="dlg-modal-wide jo-detail-modal"
     >
+      {/* The close affordance, pinned to the modal's upper-right corner (the
+          card is `position: relative`; the button floats in its top padding,
+          clear of the title row below). The backdrop click and Escape already
+          close the modal, but neither is discoverable — a visible × is where
+          a user looks first, and the one control always reachable from
+          anywhere in the record. Red because closing is the destructive half
+          of "I am done here" — the same signal the rest of the app uses for
+          a destructive action. Disabled rather than no-op'd while a save or
+          move is in flight, so a keyboard user can see why the modal will
+          not leave yet. */}
+      <button
+        type="button"
+        className="jo-detail-close"
+        onClick={onClose}
+        disabled={busy}
+        aria-label="Close"
+      >
+        <span aria-hidden="true">×</span>
+      </button>
       {ji.runError && (
         <p className="body jo-detail-error" role="alert">
           {ji.runError}
