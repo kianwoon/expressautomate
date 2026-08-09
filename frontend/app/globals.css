@@ -786,7 +786,7 @@ footer { border-top: 1px solid var(--line); padding: 48px 0 40px; color: var(--i
   display: flex; align-items: center; gap: 7px;
   justify-content: flex-end;
 }
-.footer-origin svg { flex: none; }
+.footer-origin svg, .footer-origin img { flex: none; }
 
 @media (max-width: 860px) {
   section { padding: 40px 0; }
