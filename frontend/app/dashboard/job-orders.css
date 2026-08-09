@@ -274,7 +274,7 @@
 .jo-review[data-state="needs_review"] { background: var(--amber-050); color: var(--amber-700); }
 .jo-review[data-state="reviewed"] { background: var(--teal-050); color: var(--teal-500); }
 
-/* The eight columns at their full width. Each is fitted to the widest thing it
+/* The seven columns at their full width. Each is fitted to the widest thing it
    actually holds — the measurements are on `COLUMNS` in `job-orders-table.tsx`
    — and they sum to 100 so `table-layout: fixed` has nothing left to hand out.
    In CSS rather than inline on the `<col>` elements so the narrow case below
@@ -283,15 +283,18 @@
    The floor is 1000px, down from 1040: the Received column now shows the date
    short ("30 Jul" via `dayShort`), so it holds ~72px instead of ~96 and the
    column and the floor shrank with it. The two points that came off Received
-   went to Quality, whose pill was the column that read as chopped off. */
+   went to Quality, whose pill was the column that read as chopped off.
+
+   Location stopped being a column (the panel shows it whole, like Requirements
+   and Description), and its 12% went to the columns that wrap: Position, Hours
+   and Duration grew most, Salary and Company took the rest. */
 .jo-table-jobs { min-width: 1000px; }
 .jo-table-jobs col[data-col="received"] { width: 8%; }
-.jo-table-jobs col[data-col="company"] { width: 14%; }
-.jo-table-jobs col[data-col="position"] { width: 14%; }
-.jo-table-jobs col[data-col="salary"] { width: 10%; }
-.jo-table-jobs col[data-col="hours"] { width: 13%; }
-.jo-table-jobs col[data-col="duration"] { width: 10%; }
-.jo-table-jobs col[data-col="location"] { width: 12%; }
+.jo-table-jobs col[data-col="company"] { width: 15%; }
+.jo-table-jobs col[data-col="position"] { width: 17%; }
+.jo-table-jobs col[data-col="salary"] { width: 12%; }
+.jo-table-jobs col[data-col="hours"] { width: 16%; }
+.jo-table-jobs col[data-col="duration"] { width: 13%; }
 .jo-table-jobs col[data-col="quality"] { width: 19%; }
 
 /* Below the table's full width, Hours and Duration come out rather than every
@@ -305,15 +308,15 @@
    dropped: Received is shorter now. 730 is the number that matters most — the
    list column on a 1280px laptop lands near 779px, and the old 780 floor left
    Quality a pixel or two behind the scroll. Under 730, the card scrolls; above
-   it, all six columns are on screen.
+   it, all five columns are on screen.
 
    `display: none` on the `<col>` AND on its cells, both needed, and it has to
    be `display: none` on the column rather than `width: 0`. A zero-width column
-   still occupies a slot: the six surviving cells then shift left into slots
-   1–6, land on the two zeroed columns, and Location and Quality render at 0px
-   with 38% of the table left blank — the original complaint, worse. Removing
-   the column removes the slot, so the cells line up with the widths below.
-   Those six sum to 100 again, so the freed 23% is redistributed on purpose
+   still occupies a slot: the five surviving cells then shift left into slots
+   1–5, land on the two zeroed columns, and Quality renders at 0px with the
+   trailing width left blank — the original complaint, worse. Removing the
+   column removes the slot, so the cells line up with the widths below.
+   Those five sum to 100 again, so the freed 29% is redistributed on purpose
    rather than by whatever the browser does with a short sum. */
 @container jo-list (max-width: 999px) {
   .jo-table-jobs { min-width: 730px; }
@@ -325,10 +328,9 @@
   .jo-table-jobs th:nth-child(5), .jo-table-jobs td:nth-child(5),
   .jo-table-jobs th:nth-child(6), .jo-table-jobs td:nth-child(6) { display: none; }
   .jo-table-jobs col[data-col="received"] { width: 10%; }
-  .jo-table-jobs col[data-col="company"] { width: 18%; }
-  .jo-table-jobs col[data-col="position"] { width: 18%; }
-  .jo-table-jobs col[data-col="salary"] { width: 13%; }
-  .jo-table-jobs col[data-col="location"] { width: 16%; }
+  .jo-table-jobs col[data-col="company"] { width: 20%; }
+  .jo-table-jobs col[data-col="position"] { width: 25%; }
+  .jo-table-jobs col[data-col="salary"] { width: 20%; }
   .jo-table-jobs col[data-col="quality"] { width: 25%; }
 }
 

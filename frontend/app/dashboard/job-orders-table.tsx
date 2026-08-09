@@ -9,12 +9,15 @@ import { QualityBadge } from "./quality";
 /**
  * The list half of the master–detail.
  *
- * Requirements and description are no longer columns. They are paragraphs, and
- * clamping a paragraph into a fixed-width cell was always a compromise made
- * because there was nowhere else to put it; the panel beside the table is that
- * somewhere. Both are still searchable, because a recruiter looking for
- * "forklift licence" is looking in the requirements — the search runs over the
- * data, not over what is on screen.
+ * Requirements, description and location are no longer columns. They are
+ * paragraphs (or, for location, a short answer to "where"), and clamping a
+ * paragraph into a fixed-width cell was always a compromise made because there
+ * was nowhere else to put it; the panel beside the table is that somewhere.
+ * They are still searchable, because a recruiter looking for "forklift
+ * licence" is looking in the requirements — the search runs over the data, not
+ * over what is on screen. Location left the table the same way Requirements
+ * and Description did: the panel shows it whole, and the width it freed went
+ * to the columns that were still wrapping.
  *
  * allow-hardcode: user-facing copy rendered to the page, not a list anything
  * is matched against.
@@ -27,7 +30,6 @@ export type SortKey =
   | "salary"
   | "hours"
   | "duration"
-  | "location"
   | "quality";
 
 export type Sort = { key: SortKey; descending: boolean };
@@ -52,9 +54,6 @@ export const DEFAULT_SORT: Sort = { key: "received", descending: true };
  *    of padding, so it needs 166px and gets 190. At the 10% it had, it got 96
  *    and the pill folded into a four-line block — the column read as chopped
  *    off, and it set the height of every row carrying that state.
- *  - Location, 12%: "Not mentioned" is 96px of italic, so the cell needs 124px
- *    and gets 120. It is the commonest value in the column; at 9% it wrapped
- *    to three lines.
  *  - Hours and Duration are the raw paragraphs, clamped to two lines (see
  *    `.jo-clamp`). They need enough width for two lines to say something: at
  *    10% they held about seven characters a line, which is how "Not mentioned"
@@ -64,10 +63,16 @@ export const DEFAULT_SORT: Sort = { key: "received", descending: true };
  *  The floor moved down from 1040 once Received gave up the year, rather than
  *  taking Quality's room from the others, which had none to give.
  *
+ *  Location is gone from this list, like Requirements and Description before
+ *  it — the panel shows it whole, and it is still searchable. Its 12% went to
+ *  the columns that wrap: Position, Hours and Duration grew most, and Salary
+ *  and Company took the rest, so the prose the email wrote has room to break
+ *  between words.
+ *
  *  1000px is still more than the list column is ever given: `.jo-split` hands
  *  it 1.85 of 2.85 parts, so even a 1440px screen leaves it about 900px and
  *  the last column would sit off the edge behind a scrollbar nobody found.
- *  Rather than crush eight columns, the two prose ones — Hours and Duration —
+ *  Rather than crush seven columns, the two prose ones — Hours and Duration —
  *  are dropped below that width by a container query in `job-orders.css`,
  *  which takes the floor to 730px. They are the two already clamped to two
  *  lines here and shown whole in the panel, so nothing becomes unreachable.
@@ -81,7 +86,6 @@ const COLUMNS: { key: SortKey; label: string }[] = [
   { key: "salary", label: "Salary" },
   { key: "hours", label: "Hours" },
   { key: "duration", label: "Duration" },
-  { key: "location", label: "Location" },
   { key: "quality", label: "Quality" },
 ];
 
@@ -218,7 +222,6 @@ export function JobOrdersTable({
                 </td>
                 <Td clamp>{row.working_hours_raw}</Td>
                 <Td clamp>{row.duration_raw}</Td>
-                <Td clamp>{row.location_raw}</Td>
                 <td className="jo-td">
                   <QualityBadge row={row} />
                   {/* No column of its own — there is no width left for one at
