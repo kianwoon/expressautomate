@@ -10,28 +10,43 @@
  * Imported once, from `page.tsx`, which is the root every component using
  * these classes renders under.
  */
-/* The clients list column: the table and its pager together, as one grid
-   child of `.jo-split`, so the pager sits directly under the last row rather
-   than under the whole split. The candidates page solves the same problem
-   with its own `.cand-list` in `app.css`; this is the clients screen's own
-   copy rather than a shared class, for the same reason `.cand-list`'s own
-   comment gives — this stylesheet is scoped to clients, so a shared name
-   would make the candidates page depend on CSS that is not about it.
-   `min-width: 0` is what actually matters: without it a grid item defaults to
-   the intrinsic width of its content, and a fixed-layout table would push
-   this column wider than the 1.85fr `.jo-split` gives it. */
-.cl-list { min-width: 0; }
+/* The lede under the page heading runs the width of the full-width table it
+   introduces — the same treatment the candidates page gives its own lede now
+   that the detail opens as a modal over the list instead of in a side
+   column. */
+.cl-lede { max-width: none; }
 
-/* The lede under the page heading is measured to the table column it
-   introduces rather than to `.lede`'s 62ch: `.jo-split` gives the list 1.85 of
-   its 2.85 parts after the 20px gap, and the sentence is meant to end where
-   that table does. The numbers restate the split's own — change them together.
-   Below 1080px the split becomes a single full-width column (globals.css), so
-   the lede widens with it; the media query keeps the two in step. */
-.cl-lede { max-width: calc((100% - 20px) * 1.85 / 2.85); }
-@media (max-width: 1080px) {
-  .cl-lede { max-width: none; }
+/* The client detail modal, and its close ×. The panel became a popup over the
+   list, the same move job orders and candidates made before it: the modal is
+   the shared `.dlg-modal-wide` width, `position: relative` so the close
+   button can float in its top padding, and the button itself mirrors
+   `.jo-detail-close` / `.cand-detail-close` — red because closing discards
+   the view you are on. */
+.dlg-modal-wide.cl-detail-modal {
+  position: relative;
 }
+.cl-detail-close {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  font: inherit;
+  font-size: 1.25rem;
+  line-height: 1;
+  color: #dc2626;
+  background: none;
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: color 150ms ease, background 150ms ease;
+}
+.cl-detail-close:hover { color: #b91c1c; background: var(--red-50, #fdf1f1); }
+.cl-detail-close:disabled { color: #f5c2c2; cursor: default; background: none; }
+.cl-detail-close:focus-visible { outline: 2px solid #dc2626; outline-offset: 2px; }
 
 /* ── Clients: status, suspension, contacts ───────────────────────────────
    Added with the manual-administration work. The chips row gained a button

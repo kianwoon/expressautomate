@@ -5,21 +5,30 @@ import { useEffect, useRef, useState } from "react";
 import { CLIENTS_PATH } from "../../api";
 import type { Client, ClientMention, ClientPage, Contact, MatchedBy } from "../clients";
 import { getClient, mergeClient, suspendClient, unmergeClient, unsuspendClient } from "../clients";
+import { Dialog } from "../dialog";
 import { day, when } from "../format";
 import { ClientForm } from "./client-form";
 import { ClientLogo } from "./client-logo";
 
 /**
- * One client in full, beside the list.
+ * One client in full, as a popup over the list.
  *
- * A client-specific sibling of `candidate-panel.tsx`. There is still no
- * delete — clients are archived, never destroyed — and no owner-only action:
- * every button here is open to any signed-in user.
+ * A client-specific sibling of `candidate-panel.tsx`, written beside it
+ * rather than folded into it: the review status, the mentions and the merge
+ * pointer are all specific to a company record and have no equivalent on a
+ * person. There is still no delete — clients are archived, never destroyed —
+ * and no owner-only action: every button here is open to any signed-in user.
+ *
+ * The modal opens in edit mode, the same "edit-on-by-default" deal the
+ * candidate panel gives its fields: a recruiter who clicked a row did so to
+ * act on it, and the form is that action. The read-only record — mentions,
+ * facts, the action buttons — is one Cancel away.
  *
  * Editing lives in `client-form.tsx` rather than in this file. That is a size
  * decision as much as a structural one: this panel was already past 450 lines
  * before the commercial fields existed, and a twenty-control form inside it
- * would have made the one file nobody wants to open.
+ * would have made the one file nobody wants to open. The form renders here in
+ * its `bare` mode — no dialog of its own, because this panel is already one.
  *
  * Suspend and Unsuspend call the API from here rather than being threaded
  * through the page as `onConfirm`/`onArchive` are, following `MergePicker`
@@ -50,14 +59,18 @@ const MATCHED_BY_LABEL: Record<MatchedBy, string> = {
 
 export function ClientPanel({
   row,
+  onClose,
   onConfirm,
   onArchive,
   onRestore,
   onChanged,
   onDetailChanged,
   onSelectClient,
+  defaultEditing = true,
 }: {
   row: Client | null;
+  /** Closes the modal. The parent owns the `selectedId`; this just clears it. */
+  onClose: () => void;
   onConfirm: () => Promise<void>;
   onArchive: () => Promise<void>;
   /** Undoes an archive. Archiving is reversible by design, so this is offered
@@ -73,55 +86,63 @@ export function ClientPanel({
   /** Selects another client by id in the parent's detail pane — the panel's
    *  only navigation hook, used to jump to a merge survivor. */
   onSelectClient: (id: string) => void;
+  /** Opens in edit mode. The panel is a popup over the list now, and the form
+   *  is what a recruiter who clicked a row asked for; the read-only record is
+   *  one Cancel away. Tests that pin the read-only half pass `false`. */
+  defaultEditing?: boolean;
 }) {
-  if (!row) {
-    return (
-      <aside className="card jo-detail" aria-label="Client details">
-        <span className="eyebrow">Details</span>
-        <p className="body jo-detail-empty">
-          Select a client to see the evidence behind it — which emails mentioned it and how each
-          one was matched.
-        </p>
-      </aside>
-    );
-  }
+  if (!row) return null;
 
   return (
     <Detail
       key={row.id}
       row={row}
+      onClose={onClose}
       onConfirm={onConfirm}
       onArchive={onArchive}
       onRestore={onRestore}
       onChanged={onChanged}
       onDetailChanged={onDetailChanged}
       onSelectClient={onSelectClient}
+      defaultEditing={defaultEditing}
     />
   );
 }
 
 function Detail({
   row,
+  onClose,
   onConfirm,
   onArchive,
   onRestore,
   onChanged,
   onDetailChanged,
   onSelectClient,
+  defaultEditing,
 }: {
   row: Client;
+  onClose: () => void;
   onConfirm: () => Promise<void>;
   onArchive: () => Promise<void>;
   onRestore: () => Promise<void>;
   onChanged: () => void;
   onDetailChanged: () => void;
   onSelectClient: (id: string) => void;
+  defaultEditing: boolean;
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [editing, setEditing] = useState(false);
+  // Opens in edit mode — see `defaultEditing` on `ClientPanel`. A merged
+  // client never does: its record is a pointer to the survivor, not a form.
+  const [editing, setEditing] = useState(row.status !== "merged" && defaultEditing);
   const [askingReason, setAskingReason] = useState(false);
   const [reason, setReason] = useState("");
+  // The form's own saving flag, mirrored here so the modal's close button and
+  // Escape stay guarded while the form is saving — see `onSavingChange` on
+  // `ClientForm`.
+  const [formSaving, setFormSaving] = useState(false);
+
+  const modalBusy = busy || formSaving;
 
   async function run(action: () => Promise<void>, failMessage: string) {
     if (busy) return;
@@ -163,7 +184,29 @@ function Detail({
   }
 
   return (
-    <aside className="card jo-detail" aria-label="Client details">
+    <Dialog
+      titleId="cl-detail-title"
+      onClose={modalBusy ? () => {} : onClose}
+      className="dlg-modal-wide cl-detail-modal"
+      title={row.name}
+    >
+      {/* The close affordance, pinned to the modal's upper-right corner — the
+          same treatment as the job-order modal's `.jo-detail-close`. The
+          backdrop click and Escape already close the modal, but neither is
+          discoverable — a visible × is where a user looks first, and the one
+          control always reachable from anywhere in the record. Red because
+          closing discards the view you are on. Disabled while a save or move
+          is in flight, matching the Dialog's own guarded close. */}
+      <button
+        type="button"
+        className="cl-detail-close"
+        onClick={onClose}
+        disabled={modalBusy}
+        aria-label="Close"
+      >
+        <span aria-hidden="true">×</span>
+      </button>
+
       <div className="jo-detail-head">
         <span className="eyebrow">Details</span>
         <span className="eyebrow">{STATUS_LABEL[row.status]}</span>
@@ -180,18 +223,18 @@ function Detail({
           else. */}
       {row.status === "suspended" && <SuspensionBanner row={row} />}
 
-      {editing && (
+      {editing ? (
         <ClientForm
           client={row}
+          bare
+          onSavingChange={setFormSaving}
           onCancel={() => setEditing(false)}
           onDone={() => {
             setEditing(false);
             onChanged();
           }}
         />
-      )}
-
-      {row.status === "merged" ? (
+      ) : row.status === "merged" ? (
         <MergedInto row={row} onUnmerge={unmerge} busy={busy} onSelectClient={onSelectClient} />
       ) : (
         <>
@@ -231,122 +274,128 @@ function Detail({
         </>
       )}
 
-      <div className="jo-detail-actions">
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-          {row.status === "unconfirmed" && (
-            <button
-              type="button"
-              className="btn btn-primary"
-              disabled={busy}
-              onClick={() => run(onConfirm, "We could not save that just now.")}
-            >
-              {busy ? "Saving…" : "Confirm"}
-            </button>
-          )}
-          {row.status !== "archived" && row.status !== "merged" && (
-            <button
-              type="button"
-              className="btn btn-secondary"
-              disabled={busy}
-              onClick={() => run(onArchive, "We could not save that just now.")}
-            >
-              {busy ? "Saving…" : "Archive"}
-            </button>
-          )}
-          {row.status === "archived" && (
-            <button
-              type="button"
-              className="btn btn-secondary"
-              disabled={busy}
-              onClick={() => run(onRestore, "We could not save that just now.")}
-            >
-              {busy ? "Saving…" : "Restore"}
-            </button>
-          )}
-          {/* Each offered only for the status that accepts it — the server
-              refuses the others with a 400, and a button whose only outcome
-              is an error message is not an offer. Suspend is `confirmed`
-              only; unconfirmed means nobody has agreed this client is real
-              yet, so there is nothing to put on hold. */}
-          {row.status === "confirmed" && !askingReason && (
-            <button
-              type="button"
-              className="btn btn-secondary"
-              disabled={busy}
-              onClick={() => setAskingReason(true)}
-            >
-              Suspend…
-            </button>
-          )}
-          {row.status === "suspended" && (
-            <button
-              type="button"
-              className="btn btn-primary"
-              disabled={busy}
-              onClick={() => void unsuspend()}
-            >
-              {busy ? "Saving…" : "Unsuspend"}
-            </button>
-          )}
-          {row.status !== "merged" && (
-            <button
-              type="button"
-              className="btn btn-secondary"
-              disabled={busy}
-              onClick={() => setEditing(true)}
-            >
-              Edit
-            </button>
-          )}
-        </div>
-
-        {askingReason && (
-          <div className="cl-suspend-ask">
-            <label className="body" style={{ display: "grid", gap: 4 }}>
-              <span className="row-k">Why is this client on hold? (optional)</span>
-              <input
-                className="jo-search"
-                autoFocus
-                value={reason}
-                onChange={(event) => setReason(event.target.value)}
-                placeholder="Unpaid invoice, contract under review…"
-              />
-            </label>
-            <p className="body jo-sub">
-              Whatever you type here is what the recruiter trying to submit a candidate will be
-              shown when the submission is refused. Leave it blank if there is nothing to say.
-            </p>
-            <div style={{ display: "flex", gap: 10 }}>
+      {/* The action buttons are the read-only half of the record: while the
+          form is open, Save and Cancel are the only two that mean anything,
+          and showing Archive / Suspend / Edit beside them would read as three
+          competing ways to act on the same row. */}
+      {!editing && (
+        <div className="jo-detail-actions">
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            {row.status === "unconfirmed" && (
               <button
                 type="button"
                 className="btn btn-primary"
                 disabled={busy}
-                onClick={() => void suspend()}
+                onClick={() => run(onConfirm, "We could not save that just now.")}
               >
-                {busy ? "Saving…" : "Suspend client"}
+                {busy ? "Saving…" : "Confirm"}
               </button>
+            )}
+            {row.status !== "archived" && row.status !== "merged" && (
               <button
                 type="button"
                 className="btn btn-secondary"
                 disabled={busy}
-                onClick={() => {
-                  setAskingReason(false);
-                  setReason("");
-                }}
+                onClick={() => run(onArchive, "We could not save that just now.")}
               >
-                Cancel
+                {busy ? "Saving…" : "Archive"}
               </button>
-            </div>
+            )}
+            {row.status === "archived" && (
+              <button
+                type="button"
+                className="btn btn-secondary"
+                disabled={busy}
+                onClick={() => run(onRestore, "We could not save that just now.")}
+              >
+                {busy ? "Saving…" : "Restore"}
+              </button>
+            )}
+            {/* Each offered only for the status that accepts it — the server
+                refuses the others with a 400, and a button whose only outcome
+                is an error message is not an offer. Suspend is `confirmed`
+                only; unconfirmed means nobody has agreed this client is real
+                yet, so there is nothing to put on hold. */}
+            {row.status === "confirmed" && !askingReason && (
+              <button
+                type="button"
+                className="btn btn-secondary"
+                disabled={busy}
+                onClick={() => setAskingReason(true)}
+              >
+                Suspend…
+              </button>
+            )}
+            {row.status === "suspended" && (
+              <button
+                type="button"
+                className="btn btn-primary"
+                disabled={busy}
+                onClick={() => void unsuspend()}
+              >
+                {busy ? "Saving…" : "Unsuspend"}
+              </button>
+            )}
+            {row.status !== "merged" && (
+              <button
+                type="button"
+                className="btn btn-secondary"
+                disabled={busy}
+                onClick={() => setEditing(true)}
+              >
+                Edit
+              </button>
+            )}
           </div>
-        )}
-      </div>
+
+          {askingReason && (
+            <div className="cl-suspend-ask">
+              <label className="body" style={{ display: "grid", gap: 4 }}>
+                <span className="row-k">Why is this client on hold? (optional)</span>
+                <input
+                  className="jo-search"
+                  autoFocus
+                  value={reason}
+                  onChange={(event) => setReason(event.target.value)}
+                  placeholder="Unpaid invoice, contract under review…"
+                />
+              </label>
+              <p className="body jo-sub">
+                Whatever you type here is what the recruiter trying to submit a candidate will be
+                shown when the submission is refused. Leave it blank if there is nothing to say.
+              </p>
+              <div style={{ display: "flex", gap: 10 }}>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  disabled={busy}
+                  onClick={() => void suspend()}
+                >
+                  {busy ? "Saving…" : "Suspend client"}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  disabled={busy}
+                  onClick={() => {
+                    setAskingReason(false);
+                    setReason("");
+                  }}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {error && (
         <p className="body jo-detail-error" role="alert">
           {error}
         </p>
       )}
-    </aside>
+    </Dialog>
   );
 }
 

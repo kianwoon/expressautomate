@@ -157,12 +157,11 @@ function Workspace() {
     />
   );
 
-  // Open on the first row once the page loads, same fallback as candidates:
-  // a panel that starts blank spends the first screenful asking to be
-  // clicked, and here that row is the top of the review queue.
-  useEffect(() => {
-    if (!selectedId && items.length > 0) setSelectedId(items[0].id);
-  }, [items, selectedId]);
+  // The detail is a modal opened on demand, so there is no always-open panel
+  // to keep fed: `selectedId` is null until a row is clicked, and the modal is
+  // mounted only while it is set. The earlier "open on the first row" fallback
+  // existed to keep an always-visible panel from starting blank — no longer
+  // needed once the panel only appears when asked for.
 
   // The panel needs the full record — mentions are only on the single-record
   // GET, never on a list row — so it is fetched separately whenever the
@@ -250,8 +249,9 @@ function Workspace() {
       <h1 style={{ fontSize: "clamp(1.75rem, 3.4vw, 2.5rem)" }}>
         The companies behind your job orders.
       </h1>
-      {/* Measured to the table it introduces, not to `.lede`'s 62ch — `.cl-lede`
-          in clients.css carries the numbers and the responsive step. */}
+      {/* The list below is full width — `.jo-list` fills the wrap — so the lede
+          matches it instead of stopping at `.lede`'s 62ch. Same move the
+          candidates page made when its detail became a modal. */}
       <p className="lede cl-lede" style={{ marginTop: 18 }}>
         Most of these were proposed automatically from an email. Confirm the ones that are real,
         archive what is not, and merge duplicates as they turn up — and add one yourself when a
@@ -382,23 +382,29 @@ function Workspace() {
           <p className="body jo-note" aria-live="polite">
             Showing {offset + 1}–{offset + items.length} of {total.toLocaleString()}.
           </p>
-          <div className="jo-split">
-            {/* The pager lives in this column, directly under the table it
-                steps through — the same placement job orders and candidates
-                use in `.jo-list` / `.cand-list`. Below the whole split it sat
-                under the detail panel too, which is unrelated to paging. */}
-            <div className="cl-list">
-              <ClientsTable
-                rows={items}
-                selectedId={selectedId}
-                onSelect={setSelectedId}
-                sort={sort}
-                onSort={onSort}
-              />
-              {pager}
-            </div>
+          {/* Full width: the table and its pager together, the same `.jo-list`
+              shape the job orders and candidates pages use. The detail opens
+              as a modal over the list rather than beside it, so the table
+              keeps the whole row whether a client is open or not. */}
+          <div className="jo-list">
+            <ClientsTable
+              rows={items}
+              selectedId={selectedId}
+              onSelect={setSelectedId}
+              sort={sort}
+              onSort={onSort}
+            />
+            {pager}
+          </div>
+          {/* Mounted only while a row is open. The modal owns nothing about the
+              selection — clearing it (Escape, backdrop, paging) is the parent's
+              job, done through `setSelectedId(null)`. A fetch error shows the
+              message beside the list rather than opening an empty modal. */}
+          {selectedId && detail && !detailError && (
             <ClientPanel
-              row={detailError ? null : detail}
+              key={detail.id}
+              row={detail}
+              onClose={() => setSelectedId(null)}
               onConfirm={doConfirm}
               onArchive={doArchive}
               onRestore={doRestore}
@@ -406,7 +412,7 @@ function Workspace() {
               onDetailChanged={refetchDetail}
               onSelectClient={setSelectedId}
             />
-          </div>
+          )}
           {detailError && (
             <p className="body jo-detail-error" role="alert">
               {detailError}

@@ -59,6 +59,47 @@ afterEach(() => {
 });
 
 describe("ClientPanel logo wiring", () => {
+  it("opens in edit mode: the form is shown before the read-only record", () => {
+    // The modal's default is edit-on-by-default — a recruiter who clicked a
+    // row did so to act on it, and Save changes is that action. The read-only
+    // half (facts, mentions, the action buttons) waits behind one Cancel.
+    render(
+      <ClientPanel
+        row={client()}
+        onClose={() => {}}
+        onConfirm={async () => {}}
+        onArchive={async () => {}}
+        onRestore={async () => {}}
+        onChanged={() => {}}
+        onDetailChanged={() => {}}
+        onSelectClient={() => {}}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Save changes" })).toBeTruthy();
+    expect(screen.queryByText("Looked after by")).toBeNull();
+  });
+
+  it("Cancel leaves edit mode and shows the read-only record", () => {
+    render(
+      <ClientPanel
+        row={client()}
+        onClose={() => {}}
+        onConfirm={async () => {}}
+        onArchive={async () => {}}
+        onRestore={async () => {}}
+        onChanged={() => {}}
+        onDetailChanged={() => {}}
+        onSelectClient={() => {}}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect(screen.getByText("Looked after by")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Save changes" })).toBeNull();
+  });
+
   it("routes a logo upload to onDetailChanged alone, never onChanged", async () => {
     // Routed by URL rather than by call order: the panel also renders
     // `ClientAssignee`, which reads the staff list and the signed-in user. An
@@ -84,6 +125,7 @@ describe("ClientPanel logo wiring", () => {
     render(
       <ClientPanel
         row={client()}
+        onClose={() => {}}
         onConfirm={async () => {}}
         onArchive={async () => {}}
         onRestore={async () => {}}
@@ -113,6 +155,10 @@ describe("ClientPanel logo wiring", () => {
     render(
       <ClientPanel
         row={client()}
+        // Read-only half pinned: the panel opens in edit mode by default, and
+        // the action buttons are the read-only half's — see `defaultEditing`.
+        defaultEditing={false}
+        onClose={() => {}}
         onConfirm={async () => {}}
         onArchive={onArchive}
         onRestore={async () => {}}

@@ -186,6 +186,8 @@ export function ClientForm({
   client,
   onDone,
   onCancel,
+  bare = false,
+  onSavingChange,
 }: {
   /** `null` for create. */
   client: Client | null;
@@ -196,6 +198,17 @@ export function ClientForm({
    *  the server and the caller's list has not heard about it yet. `null`
    *  otherwise, so a plain cancel-with-nothing-created stays a no-op. */
   onCancel: (createdId: string | null) => void;
+  /** Renders the form body without the dialog chrome, for callers that
+   *  already supply a modal. `client-panel.tsx` opens its own dialog in edit
+   *  mode, and this form's own `<Dialog>` inside it would layer two overlays
+   *  and trap focus against each other — so the panel asks for the body alone
+   *  and the title it would have shown is the panel's title. */
+  bare?: boolean;
+  /** Called with the form's own saving flag. A caller embedding the form
+   *  (`bare`) has no dialog of the form's own to guard the close with, so
+   *  this is how it keeps Escape / the backdrop / its close button from
+   *  discarding a save that is still in flight. */
+  onSavingChange?: (saving: boolean) => void;
 }) {
   const [form, setForm] = useState<FormState>(() => toFormState(client));
   // Captured once at mount so an edit is diffed against what the record held,
@@ -212,6 +225,14 @@ export function ClientForm({
   const [createdId, setCreatedId] = useState<string | null>(null);
 
   const editingId = client?.id ?? createdId;
+
+  /** Keeps the local flag and the caller's copy in step — see
+   *  `onSavingChange`. Only meaningful when the form is embedded (`bare`);
+   *  standalone, the form's own dialog reads `saving` directly. */
+  function setSavingFlag(next: boolean) {
+    setSaving(next);
+    onSavingChange?.(next);
+  }
 
   function set<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -304,7 +325,7 @@ export function ClientForm({
   async function submit(event: FormEvent) {
     event.preventDefault();
     if (!canSubmit) return;
-    setSaving(true);
+    setSavingFlag(true);
     setError(null);
     setDomainError(null);
 
@@ -328,7 +349,7 @@ export function ClientForm({
       }
     } catch (err) {
       showFailure(err, "We could not save that client just now.");
-      setSaving(false);
+      setSavingFlag(false);
       return;
     }
 
@@ -339,21 +360,16 @@ export function ClientForm({
       setError(
         `The client was saved, but a contact was not: ${detail} Fix the contact and save again — the client will not be added twice.`,
       );
-      setSaving(false);
+      setSavingFlag(false);
       return;
     }
 
-    setSaving(false);
+    setSavingFlag(false);
     onDone(savedClient);
   }
 
-  return (
-    <Dialog
-      titleId="client-form-title"
-      className="dlg-modal-wide"
-      onClose={saving ? () => {} : () => onCancel(createdId)}
-      title={client ? `Edit ${client.name}` : "Add client"}
-    >
+  const body = (
+    <>
       {error && (
         <p className="body jo-detail-error" role="alert" style={{ marginTop: 12 }}>
           {error}
@@ -536,6 +552,19 @@ export function ClientForm({
           </button>
         </div>
       </form>
+    </>
+  );
+
+  if (bare) return body;
+
+  return (
+    <Dialog
+      titleId="client-form-title"
+      className="dlg-modal-wide"
+      onClose={saving ? () => {} : () => onCancel(createdId)}
+      title={client ? `Edit ${client.name}` : "Add client"}
+    >
+      {body}
     </Dialog>
   );
 }
