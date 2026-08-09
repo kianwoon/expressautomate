@@ -387,11 +387,11 @@ async def classify_email(
     # system with a suspiciously indecisive model — the failure mode this
     # codebase keeps meeting, where a missing setting produces plausible
     # output instead of an error.
-    if not settings.cerebras_configured(settings.CLASSIFIER_MODEL):
+    if not settings.deepseek_configured(settings.CLASSIFIER_MODEL):
         log.error(
             "llm_not_configured",
             job="classify_email",
-            detail="Set CEREBRAS_BASE_URL, CEREBRAS_API_KEY and CLASSIFIER_MODEL.",
+            detail="Set DEEPSEEK_BASE_URL, DEEPSEEK_API_KEY and CLASSIFIER_MODEL.",
         )
         raise RuntimeError("The classifier has no model configured.")
 
@@ -490,11 +490,11 @@ async def classify_batch(ctx, *, tenant_id: str, email_message_ids: list[str]) -
     # gives: the gate fails open, so an unconfigured deployment would mark
     # every email `uncertain`, send all of them to extraction, and look like a
     # working system with an indecisive model.
-    if not settings.cerebras_configured(settings.CLASSIFIER_MODEL):
+    if not settings.deepseek_configured(settings.CLASSIFIER_MODEL):
         log.error(
             "llm_not_configured",
             job="classify_batch",
-            detail="Set CEREBRAS_BASE_URL, CEREBRAS_API_KEY and CLASSIFIER_MODEL.",
+            detail="Set DEEPSEEK_BASE_URL, DEEPSEEK_API_KEY and CLASSIFIER_MODEL.",
         )
         raise RuntimeError("The classifier has no model configured.")
 
@@ -591,12 +591,12 @@ async def extract_email(
     # `extract` falls back to the fast model at a higher reasoning effort. A
     # guard demanding it would refuse a deployment that is perfectly able to
     # extract.
-    if not settings.cerebras_configured(settings.EXTRACTION_MODEL_FAST):
+    if not settings.deepseek_configured(settings.EXTRACTION_MODEL_FAST):
         log.error(
             "llm_not_configured",
             job="extract_email",
             detail=(
-                "Set CEREBRAS_BASE_URL, CEREBRAS_API_KEY and EXTRACTION_MODEL_FAST."
+                "Set DEEPSEEK_BASE_URL, DEEPSEEK_API_KEY and EXTRACTION_MODEL_FAST."
             ),
         )
         raise RuntimeError("Extraction has no model configured.")

@@ -139,8 +139,8 @@ async def infer_work(
         prompt,
         model=model(),
         schema=None,
-        base_url=settings.CEREBRAS_BASE_URL,
-        api_key=settings.CEREBRAS_API_KEY,
+        base_url=settings.DEEPSEEK_BASE_URL,
+        api_key=settings.DEEPSEEK_API_KEY,
         extra_body={
             "max_tokens": settings.EXTRACTION_MAX_TOKENS,
             "reasoning_effort": settings.EXTRACTION_REASONING_EFFORT_FAST,

@@ -19,8 +19,8 @@ _CONTEXT = "Job title: Logistics Manager\nJob description: Run the warehouse day
 
 @pytest.fixture(autouse=True)
 def _configured(monkeypatch):
-    monkeypatch.setattr(settings, "CEREBRAS_BASE_URL", "https://cerebras.test/v1")
-    monkeypatch.setattr(settings, "CEREBRAS_API_KEY", "test-key")
+    monkeypatch.setattr(settings, "DEEPSEEK_BASE_URL", "https://deepseek.test/v1")
+    monkeypatch.setattr(settings, "DEEPSEEK_API_KEY", "test-key")
     monkeypatch.setattr(settings, "EXTRACTION_MODEL_FAST", "test/fast")
 
 

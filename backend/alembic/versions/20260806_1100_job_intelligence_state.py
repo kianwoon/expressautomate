@@ -9,7 +9,7 @@ and relaxes the three result columns to nullable, so the row can exist in a
 `pending` or `running` state before any analysis has been written.
 
 The analysis now runs as an arq job (the three LLM calls have no business
-inside an HTTP request, and they must run in the worker process where Cerebras
+inside an HTTP request, and they must run in the worker process where DeepSeek
 is configured — the api process has no LLM credentials). The row therefore has
 to outlive the request that created it: `pending` from POST until the worker
 claims it, then `done` or `failed`. Mirrors `sourcing_runs` exactly.

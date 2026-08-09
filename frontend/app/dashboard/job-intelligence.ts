@@ -9,7 +9,7 @@ import { ApiError, readError } from "./candidates";
  * The one place that talks to the Job Intelligence endpoints.
  *
  * The analysis runs as a background job: POST creates a `pending` row and
- * returns 202 immediately (the three Cerebras calls run in the worker, not the
+ * returns 202 immediately (the three DeepSeek calls run in the worker, not the
  * request), and GET reads the row back in whatever state it is in. The panel
  * polls GET until the row is terminal, exactly as the sourcing panel polls a
  * run.

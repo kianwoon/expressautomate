@@ -38,8 +38,8 @@ CV = (
 @pytest.fixture(autouse=True)
 def _configured_extraction(monkeypatch):
     """Every test gets its own models. Nothing here ever calls one."""
-    monkeypatch.setattr(settings, "CEREBRAS_BASE_URL", "https://cerebras.test/v1")
-    monkeypatch.setattr(settings, "CEREBRAS_API_KEY", "test-key")
+    monkeypatch.setattr(settings, "DEEPSEEK_BASE_URL", "https://deepseek.test/v1")
+    monkeypatch.setattr(settings, "DEEPSEEK_API_KEY", "test-key")
     monkeypatch.setattr(settings, "EXTRACTION_MODEL_FAST", "test/fast")
     monkeypatch.setattr(settings, "EXTRACTION_MODEL_STRONG", "test/strong")
     monkeypatch.setattr(settings, "EXTRACTION_REASONING_EFFORT_FAST", "low")
@@ -280,13 +280,13 @@ async def test_extraction_never_asks_a_provider_to_compile_the_schema():
     assert CV in career_call["prompt"]
 
 
-async def test_extraction_goes_to_cerebras_with_a_configured_budget():
+async def test_extraction_goes_to_deepseek_with_a_configured_budget():
     llm = _Spy(_payload(title=_FABRICATED), _payload())
 
     await extract_cv(CV, llm=llm)
 
-    assert llm.calls[0]["base_url"] == settings.CEREBRAS_BASE_URL
-    assert llm.calls[0]["api_key"] == settings.CEREBRAS_API_KEY
+    assert llm.calls[0]["base_url"] == settings.DEEPSEEK_BASE_URL
+    assert llm.calls[0]["api_key"] == settings.DEEPSEEK_API_KEY
     assert llm.calls[0]["extra_body"]["max_tokens"] == settings.EXTRACTION_MAX_TOKENS
     # Salary call (no reasoning_effort) + career calls (fast, strong).
     career_efforts = [

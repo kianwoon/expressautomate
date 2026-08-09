@@ -352,12 +352,13 @@ class Settings(BaseSettings):
     # `.env.example` alongside the Job Intelligence knobs.
     CANDIDATE_INTELLIGENCE_MODEL: str = ""
 
-    # --- Cerebras (the classifier and extraction) ---
+    # --- DeepSeek (the classifier and extraction) ---
     # The gate is the highest-volume call in the system — one per email, on
     # every email, forever — so it runs on its own provider rather than through
-    # the router the extraction calls use. Measured at ~36ms round trip against
-    # gpt-oss-120b, which matters because the gate sits between a fetched email
-    # and everything else.
+    # the router the extraction calls use. DeepSeek replaced DeepSeek as that
+    # provider (the gate used to measure ~36ms round trip against
+    # deepseek-v4-flash), because the gate sits between a fetched email and
+    # everything else.
     #
     # Extraction joined it after the router path failed in production, not on
     # principle. The escalation model (§32) rejected our twelve-field schema
@@ -365,8 +366,8 @@ class Settings(BaseSettings):
     # at `extracting` with nothing to show for it. The same document, sent as
     # prompt text with a plain `json_object` response format, is answered
     # correctly here in ~1.5s and at a fraction of the price.
-    CEREBRAS_BASE_URL: str = ""
-    CEREBRAS_API_KEY: str = ""
+    DEEPSEEK_BASE_URL: str = ""
+    DEEPSEEK_API_KEY: str = ""
 
     # --- Embeddings (semantic candidate matching) ---
     # Routed through OpenRouter — the same provider the extraction and
@@ -383,7 +384,7 @@ class Settings(BaseSettings):
     # key.
     #
     # Privacy parity: CV text already leaves the system for LLM explanations
-    # (Cerebras). Embeddings send the same text through the same router the
+    # (DeepSeek). Embeddings send the same text through the same router the
     # extraction calls already use, so no new data boundary is crossed.
     EMBEDDING_BASE_URL: str = "https://openrouter.ai/api/v1"
     EMBEDDING_API_KEY: str = ""
@@ -414,14 +415,14 @@ class Settings(BaseSettings):
     # would multiply the cost of the cheap stage for no better answer.
     CLASSIFIER_CHARS_PER_EMAIL: int = Field(default=1200, gt=0)
     # Reasoning models spend this budget before emitting anything. Set too low,
-    # `gpt-oss-120b` returns a `reasoning` field and no `content` at all —
+    # the gate's model returns a `reasoning` field and no `content` at all —
     # verified, not theorised — so this must leave room for both.
     CLASSIFIER_MAX_TOKENS: int = Field(default=4000, gt=0)
     # How often the supervisor sweeps for `fetched` rows to classify. This is
     # the latency an email waits before the gate sees it at all, now that
     # `fetch_email` no longer enqueues a per-email job: batching trades a
     # little delay for the per-call overhead paid once instead of once each.
-    # `gpt-oss-120b` reasons before it answers, and at the default effort it
+    # The gate's model reasons before it answers, and at the default effort it
     # spends the whole budget doing so and returns no content — verified
     # against the live API, not theorised. Configurable because the right
     # answer is a property of the model, and the model is configurable.
@@ -956,7 +957,7 @@ class Settings(BaseSettings):
     SOURCING_DAILY_RUN_QUOTA: int = Field(default=100, gt=0)
 
     # --- Job Intelligence ---
-    # The wall clock one analysis may take: three Cerebras calls (understand →
+    # The wall clock one analysis may take: three DeepSeek calls (understand →
     # persona → search) in sequence. Generous because a reasoning-heavy JD can
     # make each call slow, and a job this cuts short is left at `running` for
     # `rescan_stuck` to re-enqueue. Three calls × the per-call LLM timeout is
@@ -967,7 +968,7 @@ class Settings(BaseSettings):
     # Same reasoning as `SOURCING_MAX_ATTEMPTS`: a crashed worker deserves a
     # retry, a job order that crashes the pipeline every time does not.
     JOB_INTELLIGENCE_MAX_ATTEMPTS: int = Field(default=3, gt=0)
-    # The Candidate Intelligence analysis: three Cerebras calls (career →
+    # The Candidate Intelligence analysis: three DeepSeek calls (career →
     # capability → profile) in the worker, the same shape Job Intelligence
     # takes. Same timeout ceiling (LLM work bounded by model latency) and the
     # same attempt cap (a candidate that crashes the pipeline every time
@@ -1079,7 +1080,7 @@ class Settings(BaseSettings):
             return False
         return all(models)
 
-    def cerebras_configured(self, *models: str) -> bool:
+    def deepseek_configured(self, *models: str) -> bool:
         """The same question as `llm_configured`, asked of the gate's provider.
 
         Kept separate rather than adding a flag to `llm_configured`: the two
@@ -1087,7 +1088,7 @@ class Settings(BaseSettings):
         because the *other* provider was configured is exactly how the gate
         would end up classifying real mail against a hostless URL.
         """
-        if not (self.CEREBRAS_BASE_URL and self.CEREBRAS_API_KEY):
+        if not (self.DEEPSEEK_BASE_URL and self.DEEPSEEK_API_KEY):
             return False
         return all(models)
 

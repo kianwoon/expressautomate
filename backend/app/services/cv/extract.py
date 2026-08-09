@@ -191,8 +191,8 @@ async def _extract_salary(
             build_salary_prompt(window),
             model=settings.EXTRACTION_MODEL_FAST,
             schema=None,
-            base_url=settings.CEREBRAS_BASE_URL,
-            api_key=settings.CEREBRAS_API_KEY,
+            base_url=settings.DEEPSEEK_BASE_URL,
+            api_key=settings.DEEPSEEK_API_KEY,
             extra_body={
                 "max_tokens": settings.EXTRACTION_MAX_TOKENS,
             },
@@ -235,8 +235,8 @@ async def _extract_career(text: str, resolve) -> tuple[CVResponse, LLMResult]:
                 prompt,
                 model=model,
                 schema=None,
-                base_url=settings.CEREBRAS_BASE_URL,
-                api_key=settings.CEREBRAS_API_KEY,
+                base_url=settings.DEEPSEEK_BASE_URL,
+                api_key=settings.DEEPSEEK_API_KEY,
                 extra_body={
                     "max_tokens": settings.EXTRACTION_MAX_TOKENS,
                     "reasoning_effort": effort,

@@ -2,10 +2,10 @@
 
 Mirrors `job_intelligence_jobs.py` for the same reasons that module exists:
 
-1. **The worker has Cerebras; the api does not.** The five LLM calls (history →
+1. **The worker has DeepSeek; the api does not.** The five LLM calls (history →
    automation → benchmark → gaps → residual) belong in the worker process, where
-   the Cerebras credentials live. A request-handler call would pass an empty
-   `CEREBRAS_BASE_URL`, fall back to OpenRouter, and 400.
+   the DeepSeek credentials live. A request-handler call would pass an empty
+   `DEEPSEEK_BASE_URL`, fall back to OpenRouter, and 400.
 
 2. **Five model calls have no business inside an HTTP request** — the row
    exists but the answer does not, exactly as `run_job_intelligence` and
@@ -163,7 +163,7 @@ async def run_candidate_intelligence(
     try:
         outcome = await analyze_candidate(candidate, roles, skills, cv_text)
     except (LLMInvalidJSON, Exception) as exc:
-        # A bad model answer, or a transport failure reaching Cerebras. Either
+        # A bad model answer, or a transport failure reaching DeepSeek. Either
         # is a failed run the recruiter can retry; neither is retried here,
         # because temperature zero makes a plain retry the same answer twice.
         log.warning(

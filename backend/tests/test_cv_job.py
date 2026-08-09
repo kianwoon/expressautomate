@@ -27,8 +27,8 @@ LINE = "Staff Nurse at Parkway Shenton from Mar 2019 to Mar 2020"
 def _configured(monkeypatch):
     """The job refuses to touch a row before a model is configured, so every
     test supplies one. Nothing here ever calls it."""
-    monkeypatch.setattr(settings, "CEREBRAS_BASE_URL", "https://cerebras.test/v1")
-    monkeypatch.setattr(settings, "CEREBRAS_API_KEY", "test-key")
+    monkeypatch.setattr(settings, "DEEPSEEK_BASE_URL", "https://deepseek.test/v1")
+    monkeypatch.setattr(settings, "DEEPSEEK_API_KEY", "test-key")
     monkeypatch.setattr(settings, "EXTRACTION_MODEL_FAST", "test/fast")
 
 

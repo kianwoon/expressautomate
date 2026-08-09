@@ -19,7 +19,7 @@ from app.services.llm.client import complete_json
 
 log = get_logger(__name__)
 
-# The JSON schema that used to live here is gone with the move to Cerebras:
+# The JSON schema that used to live here is gone with the move to DeepSeek:
 # both paths ask for a bare JSON object, which is the response format every
 # OpenAI-compatible endpoint implements. The shape is asked for in the prompt
 # and — crucially — checked on the way out, which is what actually protects
@@ -101,8 +101,8 @@ async def classify(text: str, llm=None) -> Classification:
             PROMPT.format(email=text[: settings.CLASSIFIER_CHARS_PER_EMAIL]),
             model=model,
             schema=None,
-            base_url=settings.CEREBRAS_BASE_URL,
-            api_key=settings.CEREBRAS_API_KEY,
+            base_url=settings.DEEPSEEK_BASE_URL,
+            api_key=settings.DEEPSEEK_API_KEY,
             extra_body={
                 "max_tokens": settings.CLASSIFIER_MAX_TOKENS,
                 "reasoning_effort": settings.CLASSIFIER_REASONING_EFFORT,
@@ -164,8 +164,8 @@ async def classify_many(texts: list[str], llm=None) -> list[Classification]:
             # object, which is the response format every OpenAI-compatible
             # endpoint implements.
             schema=None,
-            base_url=settings.CEREBRAS_BASE_URL,
-            api_key=settings.CEREBRAS_API_KEY,
+            base_url=settings.DEEPSEEK_BASE_URL,
+            api_key=settings.DEEPSEEK_API_KEY,
             extra_body={
                 "max_tokens": settings.CLASSIFIER_MAX_TOKENS,
                 "reasoning_effort": settings.CLASSIFIER_REASONING_EFFORT,

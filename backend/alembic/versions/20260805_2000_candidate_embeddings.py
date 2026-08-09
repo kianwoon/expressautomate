@@ -14,7 +14,7 @@ that re-embedding under a different model is an upsert here, not a churn of the
 core person record's `updated_at`.
 
 Privacy: the text sent to the embedding provider is CV text that already leaves
-the system for LLM explanations (Cerebras). Embeddings add no new data
+the system for LLM explanations (DeepSeek). Embeddings add no new data
 boundary; they add a second provider, gated by `EMBEDDING_API_KEY`.
 """
 

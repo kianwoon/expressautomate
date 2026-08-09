@@ -5,7 +5,7 @@ trusted: the schema rejects a value that quotes nothing, and evidence.py looks
 for the quotation in the email. The prompt only makes compliance likely; the
 code makes non-compliance visible.
 
-Runs on Cerebras, like the gate, and asks for a plain JSON object. Both of
+Runs on DeepSeek, like the gate, and asks for a plain JSON object. Both of
 those are scars. Extraction was routed through OpenRouter with a strict
 `json_schema` response format, and the escalation model rejected the schema —
 "the compiled grammar is too large" — for every email, so production held four
@@ -124,8 +124,8 @@ async def extract(source: str, *, llm=None) -> tuple[ExtractionResponse, LLMResu
                 prompt,
                 model=model,
                 schema=None,
-                base_url=settings.CEREBRAS_BASE_URL,
-                api_key=settings.CEREBRAS_API_KEY,
+                base_url=settings.DEEPSEEK_BASE_URL,
+                api_key=settings.DEEPSEEK_API_KEY,
                 extra_body={
                     "max_tokens": settings.EXTRACTION_MAX_TOKENS,
                     "reasoning_effort": effort,

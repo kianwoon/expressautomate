@@ -8,10 +8,10 @@ nothing with mail ingestion but the queue it arrives on.
 search) belong in the worker process, not the api process, for two reasons that
 are both load-bearing:
 
-1. **The worker has Cerebras; the api does not.** Extraction, classification
-   and explanation all run here because the Cerebras credentials live on the
+1. **The worker has DeepSeek; the api does not.** Extraction, classification
+   and explanation all run here because the DeepSeek credentials live on the
    worker service, not the api service. A request-handler call would pass an
-   empty `CEREBRAS_BASE_URL`, fall back to OpenRouter, and 400 — which is
+   empty `DEEPSEEK_BASE_URL`, fall back to OpenRouter, and 400 — which is
    exactly the failure the synchronous first cut shipped with.
 
 2. **Three model calls have no business inside an HTTP request.** Same argument
@@ -141,7 +141,7 @@ async def run_job_intelligence(
         async with tenant_session(tenant) as session:
             outcome = await analyze(opportunity, codes, session=session)
     except (LLMInvalidJSON, Exception) as exc:
-        # A bad model answer, or a transport failure reaching Cerebras. Either
+        # A bad model answer, or a transport failure reaching DeepSeek. Either
         # is a failed run the recruiter can retry; neither is retried here,
         # because temperature zero makes a plain retry the same answer twice.
         log.warning(

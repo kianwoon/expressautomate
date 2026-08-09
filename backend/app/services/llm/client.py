@@ -62,7 +62,7 @@ async def complete_json(
     is what keeps the suite from ever spending money on a real completion.
 
     `base_url` and `api_key` default to OpenRouter's, so extraction is
-    unchanged. They exist because the relevance gate runs on Cerebras — a
+    unchanged. They exist because the relevance gate runs on DeepSeek — a
     second provider, not a second client: the wire format is the same
     OpenAI-compatible one, and duplicating this module to change two strings
     would mean the next fix to response handling landing in only one of them.

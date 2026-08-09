@@ -216,11 +216,11 @@ async def ingest_candidate_cv(
     terminal and never retried; `failed` is the retryable terminal state for an
     unusable model answer.
     """
-    if not settings.cerebras_configured(settings.EXTRACTION_MODEL_FAST):
+    if not settings.deepseek_configured(settings.EXTRACTION_MODEL_FAST):
         log.error(
             "llm_not_configured",
             job="ingest_candidate_cv",
-            detail="Set CEREBRAS_BASE_URL, CEREBRAS_API_KEY and EXTRACTION_MODEL_FAST.",
+            detail="Set DEEPSEEK_BASE_URL, DEEPSEEK_API_KEY and EXTRACTION_MODEL_FAST.",
         )
         raise RuntimeError("CV ingest has no model configured.")
 

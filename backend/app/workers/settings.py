@@ -159,8 +159,8 @@ class WorkerSettings:
             name="compute_candidate_embedding",
             timeout=settings.EMBEDDING_TIMEOUT_SECONDS,
         ),
-        # The Job Intelligence analysis: three Cerebras calls (understand →
-        # persona → search) in the worker, where Cerebras is configured — the
+        # The Job Intelligence analysis: three DeepSeek calls (understand →
+        # persona → search) in the worker, where DeepSeek is configured — the
         # api process has no LLM credentials, so the first (synchronous) cut
         # fell back to OpenRouter and 400'd. `name` is explicit for the same
         # reason as its siblings: producers enqueue the string
@@ -171,7 +171,7 @@ class WorkerSettings:
             name="run_job_intelligence",
             timeout=settings.JOB_INTEL_JOB_TIMEOUT_SECONDS,
         ),
-        # The Candidate Intelligence analysis: three Cerebras calls (career →
+        # The Candidate Intelligence analysis: three DeepSeek calls (career →
         # capability → profile) in the worker, the same shape Job Intelligence
         # takes. `name` is explicit for the same reason as its siblings:
         # producers enqueue the string "run_candidate_intelligence", and a
