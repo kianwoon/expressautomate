@@ -14,6 +14,7 @@ from urllib.parse import parse_qs, quote, urlparse
 
 import httpx
 import pytest
+import requests
 from cryptography.fernet import Fernet, InvalidToken
 from sqlalchemy import text
 
@@ -1451,6 +1452,34 @@ async def test_a_callback_with_an_unknown_state_is_rejected(client) -> None:
         "/api/auth/microsoft/callback", params={"code": "x", "state": "never-issued"}
     )
     assert response.status_code == 400
+
+
+async def test_a_callback_that_cannot_reach_microsoft_is_502(
+    client, monkeypatch
+) -> None:
+    """The token exchange posts to login.microsoftonline.com, and a stalled or
+    refused connection there is Microsoft's problem, not the user's.
+
+    Found in production: a reconnect round trip hit MSAL's socket timeout and
+    the uncaught `requests.exceptions.ReadTimeout` surfaced as a bare 500
+    ("Internal Server Error") — which read as our outage when the honest
+    answer was "try again in a moment". `RequestException` is the family the
+    `requests`-based MSAL client raises for every network failure, so this
+    maps the whole family, matching how `mailbox_preview` treats Graph.
+    """
+    login = await client.get("/api/auth/microsoft/login")
+    assert login.status_code == 307
+
+    def hang(flow: dict, params: dict) -> dict:
+        raise requests.exceptions.ReadTimeout("Read timed out.")
+
+    monkeypatch.setattr(ms_auth, "complete_login", hang)
+    response = await client.get(
+        "/api/auth/microsoft/callback",
+        params={"code": "any-code", "state": state_of(login)},
+    )
+    assert response.status_code == 502
+    assert "again" in response.json()["detail"]
 
 
 async def test_reserved_scopes_are_not_passed_to_msal() -> None:

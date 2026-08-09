@@ -19,6 +19,7 @@ from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from pydantic import BaseModel
+from requests.exceptions import RequestException
 from sqlalchemy import select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
@@ -408,6 +409,18 @@ async def microsoft_callback(request: Request) -> RedirectResponse:
     except ValueError as exc:
         log.warning("ms_callback_rejected", reason="msal_rejected_flow")
         raise HTTPException(status_code=400, detail="Sign-in state is invalid or expired.") from exc
+    except RequestException as exc:
+        # The code exchange posts to login.microsoftonline.com, and a stalled
+        # or refused connection there is Microsoft's problem, not the user's —
+        # exactly the class of failure `mailbox_preview` maps to 502 for Graph.
+        # Without this arm a token exchange that timed out surfaced as a bare
+        # 500 ("Internal Server Error") on a reconnect, which read as our
+        # outage when the honest answer is "try again in a moment".
+        log.warning("ms_callback_unreachable", error=repr(exc))
+        raise HTTPException(
+            status_code=502,
+            detail="Microsoft did not answer in time. Try the sign-in again in a moment.",
+        ) from exc
 
     if "id_token_claims" not in result:
         # `error_description` can echo back user input; log the stable code only.

@@ -16,6 +16,7 @@ dependencies = [
     "python-multipart>=0.0.18",
     "structlog>=24.4",
     "msal>=1.31",
+    "requests>=2.31",
     "itsdangerous>=2.2",
     "aioboto3>=15.5.0",
     "arq>=0.28.0",
