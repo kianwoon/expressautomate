@@ -3,6 +3,7 @@
 import { type ReactNode } from "react";
 
 import { type CandidateIntelligence } from "./candidate-intelligence";
+import { AnalysisProgress } from "./intel-progress";
 
 /**
  * The Candidate Intelligence v2 panels — Assessment, Work, Education.
@@ -30,14 +31,7 @@ const NOTHING_YET =
 
 function StageNotice({ state }: { state: CandidateStageState }) {
   if (state.hasAnalysis) return null;
-  if (state.waiting)
-    return (
-      <p className="body cand-intel-state" aria-live="polite">
-        <span className="cand-intel-pulse" aria-hidden="true" />
-        Analysing this candidate. This can take a minute or two — the three stages
-        run in sequence.
-      </p>
-    );
+  if (state.waiting) return <AnalysisProgress subject="this candidate" />;
   if (state.failed && state.failureReason)
     return (
       <p className="body cand-intel-error" role="alert">

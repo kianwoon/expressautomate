@@ -3,6 +3,7 @@
 import { type ReactNode } from "react";
 
 import { type Intelligence, type IntelligenceView, type NoIntelligence } from "./job-intelligence";
+import { AnalysisProgress } from "./intel-progress";
 import { SalaryBenchmark, type Offer } from "./salary-benchmark";
 
 /**
@@ -40,14 +41,7 @@ const NOTHING_YET =
 
 function StageNotice({ state }: { state: StageState }) {
   if (state.hasAnalysis) return null;
-  if (state.waiting)
-    return (
-      <p className="body src-state" aria-live="polite">
-        <span className="src-pulse" aria-hidden="true" />
-        Analysing this job order. This can take a minute or two — the three stages
-        run in sequence.
-      </p>
-    );
+  if (state.waiting) return <AnalysisProgress subject="this job order" />;
   if (state.failed && state.failureReason)
     return (
       <p className="body src-error" role="alert">
