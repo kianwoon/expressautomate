@@ -873,6 +873,9 @@ select.gl-input:focus-visible { outline: 2px solid var(--blue-500); outline-offs
 /* Same reasoning as `.cv-pip`: it is the only thing saying the import has
      not finished, so it stops moving rather than disappearing. */
 .ci-pulse { animation: none; opacity: 1; }
+/* Same reasoning as `.ci-pulse`: the pulse is the only thing saying the
+     analysis has not finished, so it stops moving rather than disappearing. */
+.cand-intel-pulse { animation: none; opacity: 1; }
 
 }
 
@@ -1206,6 +1209,41 @@ select.gl-input:focus-visible { outline: 2px solid var(--blue-500); outline-offs
   flex: 0 0 auto;
 }
 
+/* The close × in the candidate modal's upper-right corner, mirroring the
+   job-order modal's `.jo-detail-close`. It floats in the card's top padding
+   (`.cand-detail-modal` is `position: relative`), clear of the title row
+   below it. Red because closing discards the view you are on — the same
+   signal the rest of the app uses for a destructive action. Disabled while
+   a save is in flight, matching the Dialog's own guarded close. */
+.dlg-modal-wide.cand-detail-modal {
+  /* The close × floats in the top-right padding; without this the absolute
+     position is relative to the nearest positioned ancestor, which is not
+     this card. */
+  position: relative;
+}
+.cand-detail-close {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  font: inherit;
+  font-size: 1.25rem;
+  line-height: 1;
+  color: #dc2626;
+  background: none;
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: color 150ms ease, background 150ms ease;
+}
+.cand-detail-close:hover { color: #b91c1c; background: var(--red-50, #fdf1f1); }
+.cand-detail-close:disabled { color: #f5c2c2; cursor: default; background: none; }
+.cand-detail-close:focus-visible { outline: 2px solid #dc2626; outline-offset: 2px; }
+
 /* ---- Candidate modal: tab bar + intelligence stages ----
    Self-contained here (not in job-orders.css) because the candidates route
    does not load job-orders.css. The Run-analysis button reuses the global
@@ -1249,6 +1287,29 @@ select.gl-input:focus-visible { outline: 2px solid var(--blue-500); outline-offs
    candidates route does not load job-orders.css. */
 .cand-intel-note { margin-top: 8px; font-size: 0.8125rem; color: var(--ink-500); max-width: 72ch; }
 .cand-intel-error { margin-top: 8px; font-size: 0.8125rem; color: var(--amber-700); max-width: 72ch; }
+
+/* The analysis-in-progress state. A slow pulse, not a spinner — the three
+   DeepSeek stages take as long as they take, and a spinning thing promises a
+   wait measured in the moment. Mirrors `.src-state`/`.src-pulse` from
+   job-orders.css, self-contained here because the candidates route does not
+   load that file. */
+.cand-intel-state {
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.8125rem;
+  color: var(--ink-700);
+  max-width: 72ch;
+}
+.cand-intel-pulse {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--blue-500);
+  animation: cv-pulse 1400ms ease-in-out infinite;
+}
 
 /* The headline — the one-line blunt read. Large, bold, first thing seen. */
 .cand-intel-headline {

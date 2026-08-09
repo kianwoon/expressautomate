@@ -32,8 +32,10 @@ function StageNotice({ state }: { state: CandidateStageState }) {
   if (state.hasAnalysis) return null;
   if (state.waiting)
     return (
-      <p className="body cand-intel-note">
-        Analysing this candidate. This takes a few seconds.
+      <p className="body cand-intel-state" aria-live="polite">
+        <span className="cand-intel-pulse" aria-hidden="true" />
+        Analysing this candidate. This can take a minute or two — the three stages
+        run in sequence.
       </p>
     );
   if (state.failed && state.failureReason)

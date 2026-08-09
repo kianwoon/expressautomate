@@ -505,6 +505,22 @@ function Detail({
         </span>
       }
     >
+      {/* The close affordance, pinned to the modal's upper-right corner — the
+          same treatment as the job-order modal's `.jo-detail-close`. The
+          backdrop click and Escape already close the modal, but neither is
+          discoverable — a visible × is where a user looks first, and the one
+          control always reachable from anywhere in the record. Red because
+          closing is the destructive half of "I am done here". Disabled while
+          a save is in flight, matching the Dialog's own guarded close. */}
+      <button
+        type="button"
+        className="cand-detail-close"
+        onClick={onClose}
+        disabled={busy}
+        aria-label="Close"
+      >
+        <span aria-hidden="true">×</span>
+      </button>
       {row.record_status === "merged" ? (
         <MergedInto row={row} onUnmerge={unmerge} busy={busy} />
       ) : (

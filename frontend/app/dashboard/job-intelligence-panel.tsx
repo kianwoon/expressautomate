@@ -42,8 +42,10 @@ function StageNotice({ state }: { state: StageState }) {
   if (state.hasAnalysis) return null;
   if (state.waiting)
     return (
-      <p className="body src-note">
-        Analysing this job order. This takes a few seconds.
+      <p className="body src-state" aria-live="polite">
+        <span className="src-pulse" aria-hidden="true" />
+        Analysing this job order. This can take a minute or two — the three stages
+        run in sequence.
       </p>
     );
   if (state.failed && state.failureReason)
