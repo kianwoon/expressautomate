@@ -322,6 +322,36 @@ describe("Shortlist score display", () => {
   });
 });
 
+describe("Shortlist score meaning", () => {
+  it("says what the percentage score means when a shortlist is shown", async () => {
+    getSourcing.mockResolvedValue(view({ run: run(), matches: [match()] }));
+    namesFor.mockResolvedValue(new Map([["cand-1", "Jane Tan"]]));
+
+    render(<Shortlist row={opportunity()} />);
+
+    await screen.findByText("Jane Tan");
+    expect(
+      screen.getByText(/Scores are a weighted match against this job order/i),
+    ).toBeTruthy();
+    // The percentage itself carries the same explanation on hover.
+    const score = screen.getByText("82%");
+    expect(score.getAttribute("title")).toMatch(/how well this candidate's record fits/i);
+    // Each scored criterion explains what its percentage is of, too.
+    expect(screen.getByText("80%").getAttribute("title")).toMatch(
+      /share of this criterion's possible weight/i,
+    );
+  });
+
+  it("does not show the score caption before any run exists", async () => {
+    getSourcing.mockResolvedValue(view({ run: null, matches: [] }));
+
+    render(<Shortlist row={opportunity()} />);
+
+    await screen.findByText(/Nobody has been shortlisted/i);
+    expect(screen.queryByText(/Scores are a weighted match/i)).toBeNull();
+  });
+});
+
 describe("Shortlist redacted matches", () => {
   it("renders the masked name and holder for a redacted match, never the raw id", async () => {
     getSourcing.mockResolvedValue(

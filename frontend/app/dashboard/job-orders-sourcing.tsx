@@ -384,23 +384,29 @@ export function Shortlist({ row }: { row: Opportunity }) {
             </p>
           )}
           {matches.length > 0 && (
-            <ol className="src-list">
-              {matches.map((match, index) => (
-                <Match
-                  key={match.candidate_id}
-                  match={match}
-                  rank={index + 1}
-                  name={names.get(match.candidate_id) ?? null}
-                  eligibility={eligibility.get(match.candidate_id)}
-                  clientId={run.client_id}
-                  submitted={submitted.has(match.candidate_id) || match.submitted === true}
-                  busy={submitting === match.candidate_id}
-                  disabled={submitting !== null}
-                  error={rowError?.id === match.candidate_id ? rowError.message : null}
-                  onSubmit={(clientId) => void submit(match.candidate_id, clientId)}
-                />
-              ))}
-            </ol>
+            <>
+              <p className="body src-note">
+                Scores are a weighted match against this job order: how well each candidate&apos;s
+                record fits what the email asked for.
+              </p>
+              <ol className="src-list">
+                {matches.map((match, index) => (
+                  <Match
+                    key={match.candidate_id}
+                    match={match}
+                    rank={index + 1}
+                    name={names.get(match.candidate_id) ?? null}
+                    eligibility={eligibility.get(match.candidate_id)}
+                    clientId={run.client_id}
+                    submitted={submitted.has(match.candidate_id) || match.submitted === true}
+                    busy={submitting === match.candidate_id}
+                    disabled={submitting !== null}
+                    error={rowError?.id === match.candidate_id ? rowError.message : null}
+                    onSubmit={(clientId) => void submit(match.candidate_id, clientId)}
+                  />
+                ))}
+              </ol>
+            </>
           )}
         </>
       )}
@@ -600,8 +606,15 @@ function Match({
         <span className={!redacted && name ? "src-name" : "src-name src-name-unknown"}>{who}</span>
         {/* The score as a whole percentage (0.3018 → 30%), for display only.
             The server's four-decimal score remains the source of truth for
-            the order; this is what a recruiter reads at a glance. */}
-        <span className="src-score">{percent(Number(match.score), match.score)}</span>
+            the order; this is what a recruiter reads at a glance. The title
+            says what the percentage is *of* — without it "30%" is a number
+            with no unit. */}
+        <span
+          className="src-score"
+          title="Match score — how well this candidate's record fits this job order, weighted across the criteria below."
+        >
+          {percent(Number(match.score), match.score)}
+        </span>
       </div>
 
       {redacted ? (
@@ -801,7 +814,14 @@ function Breakdown({ reasons }: { reasons: MatchReason[] | null }) {
               salary" in front of a recruiter when the truth is that nobody
               stated one. A scored component reads as the percentage of its
               weight the candidate earned (1.0736 of 2.0 → 54%). */}
-          <span className={reason.contribution === null ? "src-reason-v muted" : "src-reason-v"}>
+          <span
+            className={reason.contribution === null ? "src-reason-v muted" : "src-reason-v"}
+            title={
+              reason.contribution === null
+                ? undefined
+                : "The share of this criterion's possible weight the candidate earned."
+            }
+          >
             {reason.contribution === null
               ? (reason.note ?? "Nothing to compare")
               : percent(
