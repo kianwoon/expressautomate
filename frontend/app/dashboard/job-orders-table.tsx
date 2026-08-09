@@ -9,15 +9,15 @@ import { QualityBadge } from "./quality";
 /**
  * The list half of the master–detail.
  *
- * Requirements, description and location are no longer columns. They are
- * paragraphs (or, for location, a short answer to "where"), and clamping a
+ * Requirements, description, location and hours are no longer columns. They
+ * are paragraphs (or, for location, a short answer to "where"), and clamping a
  * paragraph into a fixed-width cell was always a compromise made because there
  * was nowhere else to put it; the panel beside the table is that somewhere.
  * They are still searchable, because a recruiter looking for "forklift
  * licence" is looking in the requirements — the search runs over the data, not
- * over what is on screen. Location left the table the same way Requirements
- * and Description did: the panel shows it whole, and the width it freed went
- * to the columns that were still wrapping.
+ * over what is on screen. Location and Hours left the table the same way
+ * Requirements and Description did: the panel shows each whole, and the width
+ * they freed went to the columns that were still wrapping.
  *
  * allow-hardcode: user-facing copy rendered to the page, not a list anything
  * is matched against.
@@ -28,7 +28,6 @@ export type SortKey =
   | "company"
   | "position"
   | "salary"
-  | "hours"
   | "duration"
   | "quality";
 
@@ -54,28 +53,28 @@ export const DEFAULT_SORT: Sort = { key: "received", descending: true };
  *    of padding, so it needs 166px and gets 190. At the 10% it had, it got 96
  *    and the pill folded into a four-line block — the column read as chopped
  *    off, and it set the height of every row carrying that state.
- *  - Hours and Duration are the raw paragraphs, clamped to two lines (see
- *    `.jo-clamp`). They need enough width for two lines to say something: at
- *    10% they held about seven characters a line, which is how "Not mentioned"
+ *  - Duration is the last raw paragraph, clamped to two lines (see
+ *    `.jo-clamp`). It needs enough width for two lines to say something: at
+ *    10% it held about seven characters a line, which is how "Not mentioned"
  *    came out as "Not mention / ed" — too narrow to break between words, so it
  *    broke inside one.
  *
  *  The floor moved down from 1040 once Received gave up the year, rather than
  *  taking Quality's room from the others, which had none to give.
  *
- *  Location is gone from this list, like Requirements and Description before
- *  it — the panel shows it whole, and it is still searchable. Its 12% went to
- *  the columns that wrap: Position, Hours and Duration grew most, and Salary
- *  and Company took the rest, so the prose the email wrote has room to break
- *  between words.
+ *  Location and Hours are gone from this list, like Requirements and
+ *  Description before them — the panel shows each whole, and both are still
+ *  searchable. The 28% they freed went to the columns that remain: Position
+ *  and Duration, the prose, grew most, then Salary, then Company, so the text
+ *  the email wrote has room to break between words.
  *
  *  1000px is still more than the list column is ever given: `.jo-split` hands
  *  it 1.85 of 2.85 parts, so even a 1440px screen leaves it about 900px and
  *  the last column would sit off the edge behind a scrollbar nobody found.
- *  Rather than crush seven columns, the two prose ones — Hours and Duration —
- *  are dropped below that width by a container query in `job-orders.css`,
- *  which takes the floor to 730px. They are the two already clamped to two
- *  lines here and shown whole in the panel, so nothing becomes unreachable.
+ *  Rather than crush six columns, the last prose one — Duration — is dropped
+ *  below that width by a container query in `job-orders.css`, which takes the
+ *  floor to 730px. It is already clamped to two lines here and shown whole in
+ *  the panel, so nothing becomes unreachable.
  *
  *  The widths live in CSS rather than inline, because the narrow case has to
  *  override them and an inline style cannot be overridden by a stylesheet. */
@@ -84,7 +83,6 @@ const COLUMNS: { key: SortKey; label: string }[] = [
   { key: "company", label: "Company" },
   { key: "position", label: "Position" },
   { key: "salary", label: "Salary" },
-  { key: "hours", label: "Hours" },
   { key: "duration", label: "Duration" },
   { key: "quality", label: "Quality" },
 ];
@@ -220,7 +218,6 @@ export function JobOrdersTable({
                     <Salary row={row} />
                   </div>
                 </td>
-                <Td clamp>{row.working_hours_raw}</Td>
                 <Td clamp>{row.duration_raw}</Td>
                 <td className="jo-td">
                   <QualityBadge row={row} />

@@ -274,7 +274,7 @@
 .jo-review[data-state="needs_review"] { background: var(--amber-050); color: var(--amber-700); }
 .jo-review[data-state="reviewed"] { background: var(--teal-050); color: var(--teal-500); }
 
-/* The seven columns at their full width. Each is fitted to the widest thing it
+/* The six columns at their full width. Each is fitted to the widest thing it
    actually holds — the measurements are on `COLUMNS` in `job-orders-table.tsx`
    — and they sum to 100 so `table-layout: fixed` has nothing left to hand out.
    In CSS rather than inline on the `<col>` elements so the narrow case below
@@ -285,24 +285,23 @@
    column and the floor shrank with it. The two points that came off Received
    went to Quality, whose pill was the column that read as chopped off.
 
-   Location stopped being a column (the panel shows it whole, like Requirements
-   and Description), and its 12% went to the columns that wrap: Position, Hours
-   and Duration grew most, Salary and Company took the rest. */
+   Location and Hours stopped being columns (the panel shows both whole, like
+   Requirements and Description), and the 28% they freed went to the columns
+   that remain: Position and Duration, the prose, grew most, then Salary, then
+   Company. */
 .jo-table-jobs { min-width: 1000px; }
 .jo-table-jobs col[data-col="received"] { width: 8%; }
-.jo-table-jobs col[data-col="company"] { width: 15%; }
-.jo-table-jobs col[data-col="position"] { width: 17%; }
-.jo-table-jobs col[data-col="salary"] { width: 12%; }
-.jo-table-jobs col[data-col="hours"] { width: 16%; }
-.jo-table-jobs col[data-col="duration"] { width: 13%; }
+.jo-table-jobs col[data-col="company"] { width: 17%; }
+.jo-table-jobs col[data-col="position"] { width: 20%; }
+.jo-table-jobs col[data-col="salary"] { width: 16%; }
+.jo-table-jobs col[data-col="duration"] { width: 20%; }
 .jo-table-jobs col[data-col="quality"] { width: 19%; }
 
-/* Below the table's full width, Hours and Duration come out rather than every
-   column being crushed or the last one being left off the right edge behind a
-   scrollbar nobody finds. They are the two prose fields — clamped to two lines
-   even at full width, and shown whole in the panel beside the table — so they
-   are the two that cost the least to drop and the only two nothing depends on
-   scanning.
+/* Below the table's full width, Duration comes out rather than every column
+   being crushed or the last one being left off the right edge behind a
+   scrollbar nobody finds. It is the last prose field — clamped to two lines
+   even at full width, and shown whole in the panel beside the table — so it
+   costs the least to drop and nothing depends on scanning it.
 
    The narrow floor is 730px, down from 780, for the same reason the full one
    dropped: Received is shorter now. 730 is the number that matters most — the
@@ -313,20 +312,18 @@
    `display: none` on the `<col>` AND on its cells, both needed, and it has to
    be `display: none` on the column rather than `width: 0`. A zero-width column
    still occupies a slot: the five surviving cells then shift left into slots
-   1–5, land on the two zeroed columns, and Quality renders at 0px with the
-   trailing width left blank — the original complaint, worse. Removing the
-   column removes the slot, so the cells line up with the widths below.
-   Those five sum to 100 again, so the freed 29% is redistributed on purpose
+   1–5, land on the zeroed column, and Quality renders at 0px with the trailing
+   width left blank — the original complaint, worse. Removing the column
+   removes the slot, so the cells line up with the widths below.
+   Those five sum to 100 again, so the freed 13% is redistributed on purpose
    rather than by whatever the browser does with a short sum. */
 @container jo-list (max-width: 999px) {
   .jo-table-jobs { min-width: 730px; }
-  .jo-table-jobs col[data-col="hours"],
   .jo-table-jobs col[data-col="duration"] { display: none; }
-  /* 5 and 6 are Hours and Duration, counted off `COLUMNS` in
-     `job-orders-table.tsx`. A cell carries no key to select on, so reordering
-     that array means changing these two numbers with it. */
-  .jo-table-jobs th:nth-child(5), .jo-table-jobs td:nth-child(5),
-  .jo-table-jobs th:nth-child(6), .jo-table-jobs td:nth-child(6) { display: none; }
+  /* 5 is Duration, counted off `COLUMNS` in `job-orders-table.tsx`. A cell
+     carries no key to select on, so reordering that array means changing this
+     number with it. */
+  .jo-table-jobs th:nth-child(5), .jo-table-jobs td:nth-child(5) { display: none; }
   .jo-table-jobs col[data-col="received"] { width: 10%; }
   .jo-table-jobs col[data-col="company"] { width: 20%; }
   .jo-table-jobs col[data-col="position"] { width: 25%; }

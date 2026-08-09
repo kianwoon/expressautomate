@@ -208,12 +208,12 @@ describe("the assignee avatar", () => {
     expect(screen.getByTitle("Priya Nair").className).toBe("jo-owner");
   });
 
-  it("does not add an eighth column", async () => {
+  it("does not add a seventh column", async () => {
     // The table is table-layout:fixed and the columns were fitted to their
-    // content — Location left the table, and the seven that remain still sum
-    // to 100% in job-orders.css.
+    // content — Location and Hours left the table, and the six that remain
+    // still sum to 100% in job-orders.css.
     render(table([opportunity({ assigned_user_id: "u-9", assignee_name: "Priya Nair" })]));
 
-    expect(screen.getAllByRole("columnheader")).toHaveLength(7);
+    expect(screen.getAllByRole("columnheader")).toHaveLength(6);
   });
 });
