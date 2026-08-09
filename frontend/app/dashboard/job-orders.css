@@ -287,14 +287,15 @@
 
    Location and Hours stopped being columns (the panel shows both whole, like
    Requirements and Description), and the 28% they freed went to the columns
-   that remain: Position and Duration, the prose, grew most, then Salary, then
-   Company. */
+   that remain. Position, the prose, grew most, then Company and Salary;
+   Duration stayed lean and its points went to the first columns, which carry
+   the row's identity. */
 .jo-table-jobs { min-width: 1000px; }
-.jo-table-jobs col[data-col="received"] { width: 8%; }
-.jo-table-jobs col[data-col="company"] { width: 17%; }
-.jo-table-jobs col[data-col="position"] { width: 20%; }
-.jo-table-jobs col[data-col="salary"] { width: 16%; }
-.jo-table-jobs col[data-col="duration"] { width: 20%; }
+.jo-table-jobs col[data-col="received"] { width: 9%; }
+.jo-table-jobs col[data-col="company"] { width: 19%; }
+.jo-table-jobs col[data-col="position"] { width: 22%; }
+.jo-table-jobs col[data-col="salary"] { width: 17%; }
+.jo-table-jobs col[data-col="duration"] { width: 14%; }
 .jo-table-jobs col[data-col="quality"] { width: 19%; }
 
 /* Tighter gutters than the shared `.jo-td`/`.jo-th` 14px: with Location and

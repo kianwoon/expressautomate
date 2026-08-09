@@ -49,24 +49,24 @@ export const DEFAULT_SORT: Sort = { key: "received", descending: true };
  *    13" laptop. The full date with year is the cell's `title` and lives in
  *    the panel; in a list scanned by recency the day and month are what the
  *    eye sorts on.
- *  - Quality, 19%: the "Needs review 7/9" pill is 138px and the cell adds 28px
- *    of padding, so it needs 166px and gets 190. At the 10% it had, it got 96
+ *  - Quality, 19%: the "Needs review 7/9" pill is 138px and the cell adds 20px
+ *    of padding, so it needs 158px and gets 190. At the 10% it had, it got 96
  *    and the pill folded into a four-line block — the column read as chopped
  *    off, and it set the height of every row carrying that state.
- *  - Duration is the last raw paragraph, clamped to two lines (see
- *    `.jo-clamp`). It needs enough width for two lines to say something: at
- *    10% it held about seven characters a line, which is how "Not mentioned"
- *    came out as "Not mention / ed" — too narrow to break between words, so it
- *    broke inside one.
+ *  - Duration, 14%: its values are short — "3 months", "Not mentioned" — so it
+ *    does not need a fifth of the table. At the 10% it had, "Not mentioned"
+ *    broke inside a word, so 14% is the floor that keeps those values to one
+ *    line; the points above that floor went to the first columns, which carry
+ *    the row's identity.
  *
  *  The floor moved down from 1040 once Received gave up the year, rather than
  *  taking Quality's room from the others, which had none to give.
  *
  *  Location and Hours are gone from this list, like Requirements and
  *  Description before them — the panel shows each whole, and both are still
- *  searchable. The 28% they freed went to the columns that remain: Position
- *  and Duration, the prose, grew most, then Salary, then Company, so the text
- *  the email wrote has room to break between words.
+ *  searchable. The 28% they freed went to the columns that remain: Position,
+ *  the prose, grew most, then Company and Salary, then Duration gave up its
+ *  slack so the first columns could breathe.
  *
  *  1000px is still more than the list column is ever given: `.jo-split` hands
  *  it 1.85 of 2.85 parts, so even a 1440px screen leaves it about 900px and
