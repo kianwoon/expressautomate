@@ -775,8 +775,8 @@ footer { border-top: 1px solid var(--line); padding: 48px 0 40px; color: var(--i
   font-size: 0.8125rem; font-weight: 650; color: var(--ink-900);
   letter-spacing: 0; text-transform: none;
 }
-.footer-col ul { list-style: none; display: grid; gap: 4px; margin-top: 12px; }
-.footer-col a { display: inline-flex; align-items: center; min-height: 32px; }
+.footer-col ul { list-style: none; display: grid; gap: 2px; margin-top: 12px; }
+.footer-col a { display: inline-flex; align-items: center; min-height: 24px; }
 .footer-col a:hover { color: var(--ink-900); }
 .footer-where { text-align: right; }
 /* The lion sits on the same baseline-ish line as the text and follows the
