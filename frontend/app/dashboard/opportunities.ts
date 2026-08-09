@@ -583,7 +583,7 @@ export type PlacementUpdate = {
   sex_requirement_reason: string | null;
 };
 
-/** One job order, for the candidates page's "Find candidates for this role"
+/** One job order, for the candidates page's "Browse eligible candidates"
  *  banner — the job title and company are the only fields that banner needs,
  *  but the single-record GET returns the whole row and there is no reason to
  *  ask for less. Thrown as `ApiError` like every other reader on this page,

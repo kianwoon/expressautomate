@@ -495,13 +495,17 @@ function Detail({
               a job-order picker over there — the recruiter already knows which
               role they are filling. A plain link, not a fetch: the candidates
               page reads `eligible_for` from the URL itself and does its own
-              409 handling if the placement type turns out not to be set. */}
+              409 handling if the placement type turns out not to be set.
+              Named "Browse" rather than "Find" so it cannot be mistaken for
+              the AI shortlist run ("Find candidates") in the Shortlist section
+              below — that one scores and ranks, this one opens the whole pool
+              limited to people who can legally take the role. */}
           <p className="jo-detail-find">
             <a
               className="btn btn-secondary"
               href={`/dashboard/candidates?eligible_for=${encodeURIComponent(placement.id)}`}
             >
-              Find candidates for this role
+              Browse eligible candidates
             </a>
           </p>
 
