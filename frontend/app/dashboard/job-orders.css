@@ -297,6 +297,13 @@
 .jo-table-jobs col[data-col="duration"] { width: 20%; }
 .jo-table-jobs col[data-col="quality"] { width: 19%; }
 
+/* Tighter gutters than the shared `.jo-td`/`.jo-th` 14px: with Location and
+   Hours gone the fixed columns have room to spare, and 14px each side now
+   reads as a wide gap between columns. Scoped here rather than in `app.css`
+   so clients, candidates and buddies keep the shared rhythm. */
+.jo-table-jobs .jo-th,
+.jo-table-jobs .jo-td { padding-left: 10px; padding-right: 10px; }
+
 /* Below the table's full width, Duration comes out rather than every column
    being crushed or the last one being left off the right edge behind a
    scrollbar nobody finds. It is the last prose field — clamped to two lines
