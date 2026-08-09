@@ -510,9 +510,21 @@ jobs:
   build:
     needs: [plan, base_build]
     # Nothing to do when an image for this exact content is already published.
-    # base_build may be `skipped` (base already in GHCR); a skipped dependency
-    # must not cancel a build this run genuinely needs.
+    #
+    # `!cancelled()` is not decoration. GitHub applies an implicit `success()`
+    # status check to any job `if` that names no status-check function, and
+    # `success()` is false when a needed job was SKIPPED — so without it, the
+    # `needs.base_build.result == 'skipped'` clause below never gets to act:
+    # the very run this condition exists for (base already in GHCR, base_build
+    # skipped, api image genuinely new) skips the build, and deploy then fails
+    # pointing at an image that was never pushed. This shipped once, as a red
+    # main from a frontend-only commit. `!cancelled()` (not `always()`) is the
+    # recommended override — it still lets a cancelled workflow cancel the
+    # build — and `needs.plan.result == 'success'` keeps a failed plan from
+    # building on empty outputs.
     if: >-
+      !cancelled() &&
+      needs.plan.result == 'success' &&
       needs.plan.outputs.exists != 'true' &&
       (needs.base_build.result == 'success' || needs.base_build.result == 'skipped')
     runs-on: ubuntu-latest
