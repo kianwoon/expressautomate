@@ -737,7 +737,7 @@ function Match({
     : null;
 
   return (
-    <li className={`src-row${selected ? " src-row-selected" : ""}`}>
+    <li className={`src-row${selected ? " src-row-selected" : ""}${!redacted && contact ? " src-row-has-wa" : ""}`}>
       <div className="src-row-main">
         {selectable && (
           <label className="src-select">
@@ -765,24 +765,28 @@ function Match({
         >
           {percent(Number(match.score), match.score)}
         </span>
-        {/* WhatsApp, always visible, on the same line as the name and score
-            rather than on a row of its own — a tile row between the name and
-            the card's detail would push that detail down by the tile's height
-            and leave a gap. Redacted rows have no record to read — only a
-            masked name — so there is no number to reach and no button. A
-            known candidate with no number gets the button anyway, disabled
-            with its reason on the tooltip, so a recruiter can see the
-            affordance exists and why it is off (the same honesty the
-            candidate panel uses). */}
-        {!redacted && contact && (
-          <WhatsappButton
-            row={{ id: match.candidate_id, full_name: contact.full_name, phone_e164: contact.phone_e164 }}
-            // No activity timeline in the shortlist; the server logs the
-            // event regardless, so there is nothing to refresh here.
-            onLogged={() => {}}
-          />
-        )}
       </div>
+
+      {/* WhatsApp, always visible, overlaid on the card's top-right corner —
+          NOT a flex item of `src-row-main`. In-flow, the 40px tile would
+          force the name row to be 40px tall and push the card's detail below
+          it down by that height; overlaid, the name row keeps its natural
+          text height and the detail follows immediately. The name row
+          reserves the tile's width (`src-row-has-wa .src-row-main`'s
+          `padding-right`), so the score never runs underneath it. Redacted
+          rows have no record to read — only a masked name — so there is no
+          number to reach and no button. A known candidate with no number
+          gets the button anyway, disabled with its reason on the tooltip, so
+          a recruiter can see the affordance exists and why it is off (the
+          same honesty the candidate panel uses). */}
+      {!redacted && contact && (
+        <WhatsappButton
+          row={{ id: match.candidate_id, full_name: contact.full_name, phone_e164: contact.phone_e164 }}
+          // No activity timeline in the shortlist; the server logs the
+          // event regardless, so there is nothing to refresh here.
+          onLogged={() => {}}
+        />
+      )}
 
       {redacted ? (
         // Everything below this point — eligibility, the score breakdown,

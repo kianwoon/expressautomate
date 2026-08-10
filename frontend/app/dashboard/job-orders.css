@@ -522,8 +522,16 @@
   padding: 8px 10px;
   border: 1px solid var(--line);
   border-radius: var(--radius);
+  /* The WhatsApp tile is overlaid on this card's top-right corner, so the
+     card is the positioning context for it. */
+  position: relative;
 }
 .src-row-main { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+/* Reserve the tile's width at the right of the name row. The tile is
+   absolutely positioned (`.src-row .wa-btn` below) so it no longer forces
+   the row to be tile-height; this padding is what keeps the score — which
+   `margin-left: auto` pushes right — from sliding underneath the overlay. */
+.src-row-has-wa .src-row-main { padding-right: 48px; }
 .src-rank { font-size: 0.75rem; color: var(--ink-500); min-width: 1.25em; }
 .src-name { font-size: 0.875rem; font-weight: 650; color: var(--ink-900); overflow-wrap: anywhere; }
 /* A name we could not read falls back to the id, which stays traceable but
@@ -651,18 +659,20 @@
 .src-batch-row[data-status="failed"] .src-batch-status,
 .src-batch-row[data-status="not_attempted"] .src-batch-status { color: var(--amber-700); }
 
-/* The WhatsApp tile inside a shortlist row. It sits on the same line as the
-   name and score (`src-row-main`), sized to be noticed rather than to
-   whisper — roughly the candidate panel's header tile. The mark keeps its
-   green because recognition is the point of the tile. The row's flex is
-   baseline-aligned for text; the tile overrides to center so its square does
-   not ride up or down against the text it sits beside. The score's
-   `margin-left: auto` already pushes the pair right, so the tile needs no
-   margin of its own. */
+/* The WhatsApp tile inside a shortlist row. Overlaid on the card's top-right
+   corner (`src-row` is the positioning context), so it adds no height to the
+   name row and the card's detail follows the name immediately — an in-flow
+   tile would have made the row tile-tall and pushed the detail down. Sized
+   to be noticed rather than to whisper — roughly the candidate panel's
+   header tile — and the mark keeps its green because recognition is the
+   point of the tile. The name row's `padding-right` (`src-row-has-wa`)
+   keeps the score out from under it. */
 .src-row .wa-btn {
+  position: absolute;
+  top: 8px;
+  right: 10px;
   width: 40px;
   height: 40px;
-  align-self: center;
 }
 .src-row .wa-btn:disabled { opacity: 0.4; cursor: default; }
 .src-row .wa-btn:focus-visible { outline: 2px solid var(--blue-500); outline-offset: 2px; }
