@@ -16,10 +16,10 @@ import {
   updateCandidate,
 } from "../candidates";
 import {
-  findCandidateJobs,
   type CandidateJobMatch,
   type CandidateJobReason,
-  type CandidateJobs,
+  type CandidateJobsPhase,
+  useCandidateJobs,
 } from "../candidate-jobs";
 import { CandidateCv } from "./candidate-cv";
 import { CandidateHistory } from "./candidate-history";
@@ -40,6 +40,7 @@ import {
 } from "./candidate-form";
 import { Dialog } from "../dialog";
 import { useCandidateIntelligence } from "../candidate-intelligence";
+import { when } from "../format";
 import {
   AssessmentStage,
   EducationStage,
@@ -246,13 +247,11 @@ function Detail({
   const ci = useCandidateIntelligence(row.id);
   const [activeTab, setActiveTab] = useState<CandidateTab>("details");
 
-  // Find Job: the best-fitting job orders, scored server-side on demand (pure
-  // arithmetic over the candidate's profile — nothing to poll or re-read). The
-  // result survives tab switches; the button re-runs and replaces it, so a
-  // recruiter who edits the profile can ask again.
-  const [jobs, setJobs] = useState<CandidateJobs | null>(null);
-  const [jobsLoading, setJobsLoading] = useState(false);
-  const [jobsError, setJobsError] = useState<string | null>(null);
+  // Find Job: the best-fitting job orders, scored server-side on demand and
+  // saved (one snapshot per candidate). The hook reads whatever was last
+  // saved when the modal opens, and `run()` re-scores and replaces it — so
+  // the Jobs tab reopens to the last result even after the modal is closed.
+  const jobs = useCandidateJobs(row.id);
 
   // The Details tab is the tallest (it carries the editable fields, activity
   // timeline and merge picker). Once measured, its height is locked as the
@@ -284,24 +283,10 @@ function Detail({
   }
 
   async function findJobs() {
-    if (jobsLoading) return;
-    setJobsLoading(true);
-    setJobsError(null);
-    try {
-      setJobs(await findCandidateJobs(row.id));
-      // Land on the Jobs tab — the shortlist is what the button is for.
-      setActiveTab("jobs");
-    } catch (err) {
-      setJobsError(
-        err instanceof Error ? err.message : "We could not find jobs for this candidate just now.",
-      );
-      // Land on the Jobs tab even on a failure: the error is rendered there,
-      // and the recruiter who clicked the button must see it rather than be
-      // left on a tab that gives no sign anything happened.
-      setActiveTab("jobs");
-    } finally {
-      setJobsLoading(false);
-    }
+    await jobs.run();
+    // Land on the Jobs tab — the shortlist (or the failure that replaced it)
+    // is what the button is for, and it is rendered there either way.
+    setActiveTab("jobs");
   }
 
   // The shared state every intelligence stage reads to decide empty vs loading
@@ -462,18 +447,18 @@ function Detail({
             )}
             {/* Find Job is a different kind of action from the analysis: it
                 scores the job orders this recruiter can see against the
-                candidate's profile, on demand — no run to poll, no stored
-                record. Styled as the other action buttons in the row so it
-                reads as one of them, not as a secondary control. */}
+                candidate's profile and saves the result, so the Jobs tab
+                reopens to it. Styled as the other action buttons in the row
+                so it reads as one of them, not as a secondary control. */}
             {row.record_status !== "merged" && (
               <button
                 type="button"
                 className="btn btn-primary"
                 onClick={() => void findJobs()}
-                disabled={jobsLoading}
+                disabled={jobs.starting}
                 title="Shortlist the job orders that best fit this candidate"
               >
-                {jobsLoading ? "Finding…" : "Find Job"}
+                {jobs.starting ? "Finding…" : "Find Job"}
               </button>
             )}
             {row.record_status !== "merged" && (
@@ -616,7 +601,12 @@ function Detail({
             <EducationStage intelligence={ci.analysis} state={stageState} />
           )}
           {activeTab === "jobs" && (
-            <JobsStage jobs={jobs} loading={jobsLoading} error={jobsError} onRun={findJobs} />
+            <JobsStage
+              phase={jobs.phase}
+              starting={jobs.starting}
+              runError={jobs.runError}
+              onRun={findJobs}
+            />
           )}
 
           {activeTab === "details" && (
@@ -1095,39 +1085,61 @@ const JOB_COMPONENT_LABELS: Record<string, string> = {
 };
 
 function JobsStage({
-  jobs,
-  loading,
-  error,
+  phase,
+  starting,
+  runError,
   onRun,
 }: {
-  jobs: CandidateJobs | null;
-  loading: boolean;
-  error: string | null;
+  phase: CandidateJobsPhase;
+  starting: boolean;
+  runError: string | null;
   onRun: () => void;
 }) {
   // Kept apart from "not run yet", and never collapsed into it: a failed read
   // rendered as "run Find Job" is a claim about the feature rather than about
   // our server.
-  if (error) {
+  if (runError) {
     return (
       <div className="cand-jobs">
         <p className="body cand-jobs-error" role="alert">
-          {error}
+          {runError}
         </p>
-        <button type="button" className="btn btn-secondary" onClick={onRun} disabled={loading}>
+        <button type="button" className="btn btn-secondary" onClick={onRun} disabled={starting}>
           Try again
         </button>
       </div>
     );
   }
-  if (loading && !jobs) {
+  if (phase.status === "loading") {
     return (
       <p className="body cand-jobs-note" aria-live="polite">
-        Scoring the job orders you can see against this candidate&rsquo;s profile.
+        Checking for a saved shortlist.
       </p>
     );
   }
-  if (!jobs) {
+  if (phase.status === "error") {
+    return (
+      <div className="cand-jobs">
+        <p className="body cand-jobs-error" role="alert">
+          {phase.message}
+        </p>
+        <button type="button" className="btn btn-secondary" onClick={onRun}>
+          Try again
+        </button>
+      </div>
+    );
+  }
+  const jobs = phase.view;
+  // Never run yet — the saved snapshot is absent, so the first action is
+  // "run Find Job", not "read the last result".
+  if (jobs.saved_at === null) {
+    if (starting) {
+      return (
+        <p className="body cand-jobs-note" aria-live="polite">
+          Scoring the job orders you can see against this candidate&rsquo;s profile.
+        </p>
+      );
+    }
     return (
       <p className="body cand-jobs-note">
         No shortlist yet. Use &ldquo;Find Job&rdquo; at the top to shortlist the job orders
@@ -1138,7 +1150,7 @@ function JobsStage({
   if (jobs.items.length === 0) {
     return (
       <p className="body cand-jobs-note">
-        Nothing scored high enough to be worth showing. {jobs.considered.toLocaleString()}{" "}
+        The last run found nothing worth showing. {jobs.considered.toLocaleString()}{" "}
         visible job order{jobs.considered === 1 ? " was" : "s were"} examined — adding skills or
         recent roles to this candidate is what changes the answer.
       </p>
@@ -1151,7 +1163,8 @@ function JobsStage({
         The best {jobs.items.length} of {jobs.scored.toLocaleString()} scoreable job order
         {jobs.scored === 1 ? "" : "s"} (of {jobs.considered.toLocaleString()} visible), ranked by
         how well each fits this candidate&rsquo;s profile. Scores are a weighted match across
-        title, skills, employer, salary and experience.
+        title, skills, employer, salary and experience. Last run{" "}
+        <time dateTime={jobs.saved_at}>{when(jobs.saved_at)}</time>.
       </p>
       <ol className="cand-jobs-list">
         {jobs.items.map((match, index) => (

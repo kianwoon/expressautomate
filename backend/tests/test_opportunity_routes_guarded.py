@@ -99,7 +99,7 @@ EXEMPT: dict[str, dict[str, str]] = {
         ),
     },
     "candidate_jobs.py": {
-        "find_candidate_jobs": (
+        "get_candidate_jobs": (
             "Candidate-scoped, not opportunity-scoped. The candidate is read "
             "by id through `load_visible_candidate` — the candidate guard, "
             "which is the correct one for a route keyed on a person. The job "
@@ -107,6 +107,14 @@ EXEMPT: dict[str, dict[str, str]] = {
             "`visible_opportunities` applied directly as a WHERE clause, the "
             "same way `list_opportunities` and `list_buddy_referrals` do, so a "
             "colleague's unshared job order is not even considered."
+        ),
+        "run_candidate_jobs": (
+            "Same candidate-scoped shape as `get_candidate_jobs`, plus it "
+            "writes a `candidate_job_shortlists` row of its own rather than "
+            "any row on the job order. It reads the candidate through "
+            "`load_visible_candidate` and scores only the vacancies "
+            "`visible_opportunities` admits — a colleague's unshared job "
+            "order is not even considered."
         ),
     },
 }

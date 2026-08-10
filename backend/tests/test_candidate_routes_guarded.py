@@ -152,6 +152,15 @@ EDIT_ONLY_EXEMPT: dict[str, dict[str, str]] = {
             "candidate through the read guard."
         ),
     },
+    "candidate_jobs.py": {
+        "run_candidate_jobs": (
+            "The row it writes is a `candidate_job_shortlists` row, not the "
+            "candidate. A share recipient may run Find Job on a candidate "
+            "shown to them — that is visibility, not edit rights, the same "
+            "rule the candidate intelligence route applies. The route still "
+            "loads the candidate through the read guard."
+        ),
+    },
 }
 
 

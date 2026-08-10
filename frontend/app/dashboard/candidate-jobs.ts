@@ -1,15 +1,25 @@
 "use client";
 
+import { useCallback, useEffect, useState } from "react";
+
 import { candidateJobsPath } from "../api";
 import { ApiError, readError } from "./candidates";
 
 /**
  * The "Find Job" shortlist: the best-fitting job orders for one candidate.
  *
- * Same split as `sourcing.ts`: the types and the fetch live here, the screen
- * lives in the candidate modal (`candidates/candidate-panel.tsx`). The fetch
- * goes out with `credentials: "include"` and comes back through `readError`,
- * so a refusal the server worded reaches the recruiter as written.
+ * The two halves of a saved result, mirroring `candidate-intelligence.ts`:
+ * POST runs the matcher and saves the snapshot (one row per candidate, so a
+ * re-run replaces rather than appends), and GET reads the saved snapshot back
+ * so the Jobs tab reopens to the last result without re-scoring. GET answers
+ * the same shape with `saved_at: null` when Find Job has never run, so "not
+ * run yet" is distinguishable from "ran, no matches".
+ *
+ * Same split as `sourcing.ts`: the types, the fetch and the hook live here,
+ * the screen lives in the candidate modal (`candidates/candidate-panel.tsx`).
+ * The fetches go out with `credentials: "include"` and come back through
+ * `readError`, so a refusal the server worded reaches the recruiter as
+ * written.
  */
 
 /** One named signal's contribution to a score.
@@ -79,14 +89,89 @@ export type CandidateJobs = {
     currency: string;
     period: string;
   } | null;
+  /** When the snapshot was saved — null when Find Job has never run for this
+   *  candidate, so "not run yet" reads differently from "ran, no matches". */
+  saved_at: string | null;
 };
 
-/** The best-fitting visible job orders for one candidate, best first. */
-export async function findCandidateJobs(id: string): Promise<CandidateJobs> {
-  const res = await fetch(candidateJobsPath(id), {
+/** Run Find Job for one candidate and save the result. The button's action. */
+export async function runCandidateJobs(candidateId: string): Promise<CandidateJobs> {
+  const res = await fetch(candidateJobsPath(candidateId), {
+    method: "POST",
     credentials: "include",
     headers: { Accept: "application/json" },
   });
   if (!res.ok) throw new ApiError(await readError(res));
   return (await res.json()) as CandidateJobs;
+}
+
+/** Read the last saved shortlist back. The tab's action. */
+export async function getCandidateJobs(candidateId: string): Promise<CandidateJobs> {
+  const res = await fetch(candidateJobsPath(candidateId), {
+    credentials: "include",
+    headers: { Accept: "application/json" },
+  });
+  if (!res.ok) throw new ApiError(await readError(res));
+  return (await res.json()) as CandidateJobs;
+}
+
+/**
+ * The Find Job state for one candidate, owned in one place.
+ *
+ * Extracted from the panel so the "Find Job" button can live in the modal
+ * header while the Jobs tab reads the same saved result — both need the same
+ * `run()`, the same `starting` flag, and the same mount read of whatever was
+ * last saved. Unlike `useCandidateIntelligence` there is no polling: the
+ * matcher is synchronous, so `run()` finishes with the answer in hand.
+ */
+export type CandidateJobsPhase =
+  | { status: "loading" }
+  | { status: "idle"; view: CandidateJobs }
+  | { status: "error"; message: string };
+
+export function useCandidateJobs(candidateId: string): {
+  phase: CandidateJobsPhase;
+  run: () => Promise<void>;
+  starting: boolean;
+  runError: string | null;
+} {
+  const [phase, setPhase] = useState<CandidateJobsPhase>({ status: "loading" });
+  const [starting, setStarting] = useState(false);
+  const [runError, setRunError] = useState<string | null>(null);
+
+  // Stable across renders unless the candidate changes, so the mount effect
+  // fires once per candidate.
+  const refetch = useCallback(async () => {
+    try {
+      const view = await getCandidateJobs(candidateId);
+      setPhase({ status: "idle", view });
+    } catch (err) {
+      setPhase({
+        status: "error",
+        message:
+          err instanceof Error ? err.message : "We could not read this shortlist just now.",
+      });
+    }
+  }, [candidateId]);
+
+  useEffect(() => {
+    void refetch();
+  }, [refetch]);
+
+  const run = useCallback(async () => {
+    setStarting(true);
+    setRunError(null);
+    try {
+      const view = await runCandidateJobs(candidateId);
+      setPhase({ status: "idle", view });
+    } catch (err) {
+      setRunError(
+        err instanceof Error ? err.message : "We could not run Find Job just now.",
+      );
+    } finally {
+      setStarting(false);
+    }
+  }, [candidateId]);
+
+  return { phase, run, starting, runError };
 }

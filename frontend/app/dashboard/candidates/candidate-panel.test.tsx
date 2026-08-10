@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { Me } from "../../auth";
 import type { Candidate } from "../candidates";
-import { findCandidateJobs } from "../candidate-jobs";
+import type { CandidateJobMatch, CandidateJobs } from "../candidate-jobs";
 import { resetMembers } from "../members";
 import { CandidatePanel } from "./candidate-panel";
 
@@ -30,7 +30,6 @@ vi.mock("./candidate-whatsapp", () => ({
   WhatsappActivityTimeline: () => null,
   WhatsappButton: () => null,
 }));
-vi.mock("../candidate-jobs", () => ({ findCandidateJobs: vi.fn() }));
 
 let authState: Me | null = null;
 
@@ -97,19 +96,58 @@ function candidate(overrides: Partial<Candidate> = {}): Candidate {
   } as Candidate;
 }
 
+/** A Find Job response. `saved_at: null` is the never-run shape. */
+function jobsView(
+  items: CandidateJobMatch[],
+  overrides: Partial<CandidateJobs> = {},
+): CandidateJobs {
+  return {
+    items,
+    considered: items.length,
+    scored: items.length,
+    limit: 5,
+    candidate_salary: null,
+    saved_at: "2026-08-11T02:00:00Z",
+    ...overrides,
+  };
+}
+
+// What the real `useCandidateJobs` hook receives through the stubbed fetch:
+// the mount read (GET) and the run (POST) each answer with their own view, so
+// the panel tests exercise the real hook, not a fake one.
+let jobsGet: CandidateJobs;
+let jobsRun: CandidateJobs;
+/** When set, the run (POST) fails with this detail instead of answering. */
+let jobsRunError: string | null = null;
+let jobsPostCalls = 0;
+
 beforeEach(() => {
   authState = me("u-1", "member");
   resetMembers();
-  vi.mocked(findCandidateJobs).mockResolvedValue({
-    items: [],
-    considered: 0,
-    scored: 0,
-    limit: 5,
-    candidate_salary: null,
-  });
+  jobsGet = jobsView([], { saved_at: null });
+  jobsRun = jobsView([], { saved_at: null });
+  jobsRunError = null;
+  jobsPostCalls = 0;
   vi.stubGlobal(
     "fetch",
-    vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => [] }),
+    vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/jobs")) {
+        const method = init?.method ?? "GET";
+        if (method === "POST") {
+          jobsPostCalls += 1;
+          if (jobsRunError)
+            return Promise.resolve({
+              ok: false,
+              status: 500,
+              json: async () => ({ detail: jobsRunError }),
+            });
+          return Promise.resolve({ ok: true, status: 200, json: async () => jobsRun });
+        }
+        return Promise.resolve({ ok: true, status: 200, json: async () => jobsGet });
+      }
+      return Promise.resolve({ ok: true, status: 200, json: async () => [] });
+    }),
   );
 });
 
@@ -166,9 +204,11 @@ describe("who holds a candidate, on the panel", () => {
 });
 
 describe("Find Job on the candidate panel", () => {
-  it("shows the shortlist after Find Job, best first, with the score", async () => {
-    vi.mocked(findCandidateJobs).mockResolvedValue({
-      items: [
+  // The fixture the run answers with: one strong match and an absent salary,
+  // the same reasons shape the earlier fixes pinned.
+  function runView(overrides: Partial<CandidateJobs> = {}): CandidateJobs {
+    return jobsView(
+      [
         {
           id: "jo-1",
           company_name_raw: "Acme Health",
@@ -213,13 +253,19 @@ describe("Find Job on the candidate panel", () => {
           ],
         },
       ],
-      considered: 6,
-      scored: 6,
-      limit: 5,
-      // The candidate has no salary expectation on record, so the salary
-      // absence is a candidate-level fact stated once — not on the card.
-      candidate_salary: null,
-    });
+      {
+        considered: 6,
+        scored: 6,
+        // The candidate has no salary expectation on record, so the salary
+        // absence is a candidate-level fact stated once — not on the card.
+        candidate_salary: null,
+        ...overrides,
+      },
+    );
+  }
+
+  it("shows the shortlist after Find Job, best first, with the score", async () => {
+    jobsRun = runView();
 
     render(panel(candidate()));
     fireEvent.click(screen.getByRole("button", { name: "Find Job" }));
@@ -237,11 +283,79 @@ describe("Find Job on the candidate panel", () => {
     expect(
       screen.getByText(/no salary expectation on file.*on every job order/),
     ).toBeTruthy();
-    expect(findCandidateJobs).toHaveBeenCalledWith("cand-1");
+    // Exactly one run fired — the button's POST — and no read happened beyond
+    // the modal's mount GET.
+    expect(jobsPostCalls).toBe(1);
+  });
+
+  it("replaces the shown dataset when Find Job runs again", async () => {
+    jobsRun = runView();
+    render(panel(candidate()));
+    fireEvent.click(screen.getByRole("button", { name: "Find Job" }));
+    expect(await screen.findByText("Staff Nurse")).toBeTruthy();
+
+    // The agency's vacancies changed; a re-run must swap the old shortlist
+    // for the new one, not keep the stale results on the tab.
+    jobsRun = runView({
+      items: [
+        {
+          id: "jo-9",
+          company_name_raw: "Freight Co",
+          job_title_raw: "Warehouse Assistant",
+          location_raw: null,
+          salary_raw: null,
+          salary_min: null,
+          salary_max: null,
+          salary_currency: null,
+          salary_period: null,
+          working_hours_raw: null,
+          duration_raw: null,
+          requirements: null,
+          employment_type: null,
+          assigned_user_id: null,
+          received_datetime: null,
+          score: "0.7421",
+          review_status: "new",
+          quality_state: "likely",
+          reasons: [
+            {
+              name: "title",
+              weight: "3.0",
+              raw: "0.5000",
+              contribution: "1.5000",
+              note: null,
+            },
+          ],
+        },
+      ],
+      considered: 7,
+      scored: 7,
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Find Job" }));
+
+    expect(await screen.findByText("Warehouse Assistant")).toBeTruthy();
+    // The old shortlist is gone — replaced, not appended.
+    expect(screen.queryByText("Staff Nurse")).toBeNull();
+    expect(screen.queryByText(/at Acme Health/)).toBeNull();
+    expect(jobsPostCalls).toBe(2);
+  });
+
+  it("reopens to the last saved result without running again", async () => {
+    // The tab's own action: opening the modal reads the saved snapshot, so the
+    // last Find Job result is there when the recruiter clicks Jobs.
+    jobsGet = runView();
+
+    render(panel(candidate()));
+    fireEvent.click(screen.getByRole("tab", { name: "Jobs" }));
+
+    expect(await screen.findByText("Staff Nurse")).toBeTruthy();
+    expect(screen.getByText(/Last run/)).toBeTruthy();
+    // No run happened: only the mount read, never a POST.
+    expect(jobsPostCalls).toBe(0);
   });
 
   it("keeps the generic salary note when the candidate has a salary but a job order lacks one", async () => {
-    vi.mocked(findCandidateJobs).mockResolvedValue({
+    jobsRun = runView({
       items: [
         {
           id: "jo-1",
@@ -282,7 +396,6 @@ describe("Find Job on the candidate panel", () => {
       ],
       considered: 1,
       scored: 1,
-      limit: 5,
       // The candidate's own salary expectation IS on record — so this job
       // order's salary absence is job-specific, and the generic note stands.
       candidate_salary: { amount: 3000, currency: "SGD", period: "month" },
@@ -297,25 +410,19 @@ describe("Find Job on the candidate panel", () => {
   });
 
   it("says so when nothing scored high enough", async () => {
-    vi.mocked(findCandidateJobs).mockResolvedValue({
-      items: [],
-      considered: 2,
-      scored: 0,
-      limit: 5,
-      candidate_salary: null,
-    });
+    jobsRun = jobsView([], { considered: 2, scored: 0 });
 
     render(panel(candidate()));
     fireEvent.click(screen.getByRole("button", { name: "Find Job" }));
 
     expect(
-      await screen.findByText(/Nothing scored high enough to be worth showing/),
+      await screen.findByText(/last run found nothing worth showing/),
     ).toBeTruthy();
     expect(screen.getByText(/2 visible job orders were examined/)).toBeTruthy();
   });
 
-  it("shows the server's message when the read fails", async () => {
-    vi.mocked(findCandidateJobs).mockRejectedValue(new Error("We could not reach the server."));
+  it("shows the server's message when the run fails", async () => {
+    jobsRunError = "We could not reach the server.";
 
     render(panel(candidate()));
     fireEvent.click(screen.getByRole("button", { name: "Find Job" }));

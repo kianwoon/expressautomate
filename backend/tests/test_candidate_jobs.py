@@ -38,6 +38,7 @@ async def _seed_tenant(role: str = "owner") -> tuple[uuid.UUID, uuid.UUID]:
 async def _drop_tenant(tid: uuid.UUID) -> None:
     async with AdminSessionLocal() as s:
         for table in (
+            "candidate_job_shortlists",
             "candidate_skills",
             "candidate_roles",
             "candidates",
@@ -67,6 +68,13 @@ async def _http(tid: uuid.UUID, uid: uuid.UUID) -> AsyncClient:
     client = AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
     sign_in(client, uid, tid)
     return client
+
+
+async def _run(http: AsyncClient, cid: uuid.UUID) -> dict:
+    """Run Find Job and return the response body — the button's action."""
+    res = await http.post(f"/api/candidates/{cid}/jobs")
+    assert res.status_code == 200, res.text
+    return res.json()
 
 
 async def _candidate(
@@ -202,7 +210,7 @@ async def test_shortlists_top_five_best_first(agency) -> None:
     )
 
     async with await _http(tid, uid) as http:
-        body = (await http.get(f"/api/candidates/{cid}/jobs")).json()
+        body = await _run(http, cid)
 
     assert len(body["items"]) == 5
     ids = [row["id"] for row in body["items"]]
@@ -230,6 +238,73 @@ async def test_shortlists_top_five_best_first(agency) -> None:
     # candidate-side absence flag carries it — and salary really did score.
     assert body["candidate_salary"] == {"amount": 3000.0, "currency": "SGD", "period": "month"}
     assert by_name["salary"]["raw"] == "1.0000"
+    # The run was saved: the Jobs tab reopens to this snapshot, not a blank.
+    assert body["saved_at"] is not None
+
+
+async def test_get_before_any_run_is_the_never_run_shape(agency) -> None:
+    """A candidate Find Job has never been run for answers with `saved_at:
+    null` — the Jobs tab's "No shortlist yet" state, distinguishable from
+    "ran, nothing matched"."""
+    tid, uid = agency
+    cid = await _candidate(tid, uid)
+
+    async with await _http(tid, uid) as http:
+        body = (await http.get(f"/api/candidates/{cid}/jobs")).json()
+
+    assert body == {
+        "items": [],
+        "considered": 0,
+        "scored": 0,
+        "limit": 5,
+        "candidate_salary": None,
+        "saved_at": None,
+    }
+
+
+async def test_get_returns_the_last_saved_run(agency) -> None:
+    """POST runs and saves; GET reads the snapshot back — the two halves of
+    the button and the tab."""
+    tid, uid = agency
+    cid = await _candidate(tid, uid)
+    await _opportunity(tid, title="Staff Nurse", company="Acme Health")
+
+    async with await _http(tid, uid) as http:
+        ran = await _run(http, cid)
+        got = (await http.get(f"/api/candidates/{cid}/jobs")).json()
+
+    assert got["items"] == ran["items"]
+    assert got["considered"] == ran["considered"]
+    assert got["scored"] == ran["scored"]
+    assert got["candidate_salary"] == ran["candidate_salary"]
+    assert got["saved_at"] == ran["saved_at"]
+
+
+async def test_running_twice_replaces_the_snapshot(agency) -> None:
+    """Re-running upserts on (tenant_id, candidate_id) — one row per
+    candidate, always the latest run, never a history."""
+    tid, uid = agency
+    cid = await _candidate(tid, uid)
+    await _opportunity(tid, title="Staff Nurse", company="Acme Health")
+
+    async with await _http(tid, uid) as http:
+        first = await _run(http, cid)
+        # The agency gains another vacancy; the next run must reflect it.
+        await _opportunity(tid, title="Driver", company="Other Clinic")
+        second = await _run(http, cid)
+
+    assert len(second["items"]) == len(first["items"]) + 1
+    async with AdminSessionLocal() as s:
+        rows = (
+            await s.execute(
+                text(
+                    "SELECT count(*) FROM candidate_job_shortlists "
+                    "WHERE candidate_id = :c"
+                ),
+                {"c": cid},
+            )
+        ).scalar_one()
+    assert rows == 1
 
 
 async def test_a_job_order_with_nothing_comparable_is_not_scored(agency) -> None:
@@ -252,14 +327,16 @@ async def test_a_job_order_with_nothing_comparable_is_not_scored(agency) -> None
     await _opportunity(tid, title="Driver", company="Other Clinic")
 
     async with await _http(tid, uid) as http:
-        body = (await http.get(f"/api/candidates/{cid}/jobs")).json()
+        body = await _run(http, cid)
 
     assert body["items"] == []
     assert body["considered"] == 2
     assert body["scored"] == 0
     # No salary anywhere on the candidate's record — the flag says so, and the
-    # screen states the salary absence once instead of on every card.
+    # screen states the salary absence once instead of on every card. The run
+    # was still saved, so the tab can say "last run found nothing".
     assert body["candidate_salary"] is None
+    assert body["saved_at"] is not None
 
 
 async def test_superseded_revisions_are_excluded(agency) -> None:
@@ -273,7 +350,7 @@ async def test_superseded_revisions_are_excluded(agency) -> None:
     )
 
     async with await _http(tid, uid) as http:
-        body = (await http.get(f"/api/candidates/{cid}/jobs")).json()
+        body = await _run(http, cid)
 
     assert [row["id"] for row in body["items"]] == [str(stale)]
     assert body["considered"] == 1
@@ -287,8 +364,10 @@ async def test_foreign_candidate_is_404(agency, other_agency) -> None:
     async with await _http(tid, other_uid) as http:
         # The cookie names the OTHER tenant's user, so `cid` belongs to a
         # different agency — 404, never 403, exactly as by-id reads behave.
-        res = await http.get(f"/api/candidates/{cid}/jobs")
-    assert res.status_code == 404
+        get_res = await http.get(f"/api/candidates/{cid}/jobs")
+        post_res = await http.post(f"/api/candidates/{cid}/jobs")
+    assert get_res.status_code == 404
+    assert post_res.status_code == 404
 
 
 async def test_a_recruiter_only_sees_what_they_can_see() -> None:
@@ -312,18 +391,18 @@ async def test_a_recruiter_only_sees_what_they_can_see() -> None:
         )
 
         async with await _http(tid, viewer) as http:
-            body = (await http.get(f"/api/candidates/{mine}/jobs")).json()
+            body = await _run(http, mine)
 
         # Only the viewer's own job order was examined — a colleague's book is
         # not this recruiter's to match against.
         assert body["considered"] == 1
         assert len(body["items"]) == 1
 
-        # And the colleague's candidate is a 404 to this viewer, exactly as the
-        # by-id candidate route behaves.
+        # And the colleague's candidate is a 404 to this viewer on the run
+        # action too, exactly as the by-id candidate route behaves.
         theirs = await _candidate(tid, colleague)
         async with await _http(tid, viewer) as http:
-            res = await http.get(f"/api/candidates/{theirs}/jobs")
+            res = await http.post(f"/api/candidates/{theirs}/jobs")
         assert res.status_code == 404
     finally:
         await _drop_tenant(tid)

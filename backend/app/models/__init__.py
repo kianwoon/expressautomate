@@ -2,6 +2,7 @@ from app.models.buddy import Buddy, BuddyReferral, UserEmail
 from app.models.candidate import Candidate, CandidateFieldOverride, CandidateSkill
 from app.models.candidate_access_request import CandidateAccessRequest
 from app.models.candidate_intelligence import CandidateIntelligence
+from app.models.candidate_jobs import CandidateJobShortlist
 from app.models.candidate_share import CandidateShare
 from app.models.client import Client, ClientMention
 from app.models.client_discovery import ClientDiscoveryRun
@@ -40,6 +41,7 @@ __all__ = [
     "CandidateAccessRequest",
     "CandidateFieldOverride",
     "CandidateIntelligence",
+    "CandidateJobShortlist",
     "CandidateShare",
     "CandidateSkill",
     "Client",

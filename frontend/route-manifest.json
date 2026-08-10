@@ -98,7 +98,8 @@
       "POST"
     ],
     "/api/candidates/{candidate_id}/jobs": [
-      "GET"
+      "GET",
+      "POST"
     ],
     "/api/candidates/{candidate_id}/merge": [
       "POST"
