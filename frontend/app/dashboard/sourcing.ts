@@ -74,11 +74,11 @@ export type MatchReason = {
  * One person on the shortlist.
  *
  * `candidate_id` and no name: these routes never join the candidate record,
- * so the screen fetches the names itself (`namesFor` below). `score` is a
- * string for the reason `MatchReason`'s numbers are, and the order the server
- * sent — score descending, then candidate id — is the order to render. Never
- * re-sorted here: sorting strings numerically is a bug waiting to happen, and
- * the server has already done it properly.
+ * so the screen fetches the contact facts itself (`contactsFor` below).
+ * `score` is a string for the reason `MatchReason`'s numbers are, and the
+ * order the server sent — score descending, then candidate id — is the order
+ * to render. Never re-sorted here: sorting strings numerically is a bug
+ * waiting to happen, and the server has already done it properly.
  */
 export type SourcingMatch = {
   candidate_id: string;
@@ -117,6 +117,20 @@ export type SourcingMatch = {
   reasons: MatchReason[] | null;
   explanation: string | null;
   explanation_evidence: string | null;
+};
+
+/**
+ * The contact facts a shortlist row needs about one candidate: the name to
+ * show and the E.164 phone number a recruiter can WhatsApp. Both come from
+ * the same `getCandidate` read, so they travel together.
+ *
+ * `phone_e164` is `null` for a landline as well as for "no number at all",
+ * exactly like `Candidate.phone_e164` — the WhatsApp button uses that to
+ * decide whether it is inert, and the reason copy covers both cases.
+ */
+export type SourcingContact = {
+  full_name: string;
+  phone_e164: string | null;
 };
 
 export type SourcingView = { run: SourcingRun | null; matches: SourcingMatch[] };
@@ -212,7 +226,7 @@ export async function recordSubmission(
 }
 
 /**
- * The names behind a shortlist's candidate ids.
+ * The contact facts behind a shortlist's candidate ids.
  *
  * The matches carry ids only, and a list of UUIDs is not a shortlist. One
  * request per person rather than a list call: the stored shortlist is capped
@@ -221,21 +235,25 @@ export async function recordSubmission(
  * ten small reads. Already-known ids are skipped, so a poll that returns the
  * same shortlist again costs nothing.
  *
- * A name that cannot be read is left out rather than faked — the caller shows
- * the id, which at least remains traceable. One archived or since-deleted
+ * A candidate that cannot be read is left out rather than faked — the caller
+ * shows the id, which at least remains traceable, and offers no WhatsApp
+ * button, since there is no number to reach. One archived or since-deleted
  * candidate must not take the whole shortlist down with it.
  */
-export async function namesFor(
+export async function contactsFor(
   ids: string[],
-  known: ReadonlyMap<string, string>,
-): Promise<Map<string, string>> {
+  known: ReadonlyMap<string, SourcingContact>,
+): Promise<Map<string, SourcingContact>> {
   const wanted = ids.filter((id) => !known.has(id));
   const found = new Map(known);
   await Promise.all(
     wanted.map(async (id) => {
       try {
         const candidate = await getCandidate(id);
-        found.set(id, candidate.full_name);
+        found.set(id, {
+          full_name: candidate.full_name,
+          phone_e164: candidate.phone_e164,
+        });
       } catch {
         /* left out on purpose; the row falls back to the id */
       }

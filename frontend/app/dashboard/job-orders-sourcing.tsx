@@ -7,6 +7,7 @@ import { getClient, type Client } from "./clients";
 import { ClientLogo } from "./clients/client-logo";
 import { HeldByColleague } from "./candidates/candidate-form";
 import type { CandidateCollision } from "./candidates";
+import { WhatsappButton } from "./candidates/candidate-whatsapp";
 // Only `clients/page.tsx` imported this before — `ClientLogo`'s own classes
 // (`cl-logo-*`) live here, and this screen is the first place outside the
 // clients panel to render that component.
@@ -16,14 +17,15 @@ import { eligibilityFor, type Eligibility, type EligibilityFinding } from "./eli
 import { when } from "./format";
 import type { Opportunity } from "./opportunities";
 import {
+  contactsFor,
   getSourcing,
   getSourcingRun,
   inFlight,
   listSourcingRuns,
-  namesFor,
   recordSubmission,
   startSourcing,
   type MatchReason,
+  type SourcingContact,
   type SourcingMatch,
   type SourcingRun,
   type SourcingView,
@@ -92,7 +94,11 @@ type View =
 
 export function Shortlist({ row }: { row: Opportunity }) {
   const [view, setView] = useState<View>({ status: "loading" });
-  const [names, setNames] = useState<ReadonlyMap<string, string>>(new Map());
+  // The contact facts (name + WhatsApp number) behind the matches' candidate
+  // ids. `undefined` for an id means "not fetched yet", and an id that fails
+  // to read is simply absent — the row falls back to the raw id and renders
+  // no WhatsApp button, because there is no number to reach.
+  const [contacts, setContacts] = useState<ReadonlyMap<string, SourcingContact>>(new Map());
   // `null` per id means "could not be read", kept apart from "not fetched
   // yet" (the id simply absent) so a stale flag from a previous poll is never
   // shown while a fresh one is still in flight.
@@ -121,14 +127,14 @@ export function Shortlist({ row }: { row: Opportunity }) {
   // logo are shown rather than a fabricated one.
   const [client, setClient] = useState<Client | null>(null);
 
-  // The names are joined here rather than expected from the sourcing routes,
+  // The contacts are joined here rather than expected from the sourcing routes,
   // which carry candidate ids and nothing else. Held in a ref so the fetch
-  // below can skip ids it already has without naming `names` as a dependency
+  // below can skip ids it already has without naming `contacts` as a dependency
   // and re-running itself on its own result. One request per candidate is
   // only reasonable because a run keeps a bounded shortlist — the size of
   // this join is the cap the worker applied, not the size of the database.
-  const known = useRef<ReadonlyMap<string, string>>(names);
-  known.current = names;
+  const known = useRef<ReadonlyMap<string, SourcingContact>>(contacts);
+  known.current = contacts;
   const knownEligibility = useRef<ReadonlyMap<string, Eligibility | null>>(eligibility);
   knownEligibility.current = eligibility;
 
@@ -143,13 +149,13 @@ export function Shortlist({ row }: { row: Opportunity }) {
         // `full_name` on the match payload — fetching it by id would 404,
         // since the caller cannot read a candidate record it does not hold,
         // and that 404 is exactly what used to fall back to a raw UUID on
-        // screen. Only ids the caller can actually read go to `namesFor` and
+        // screen. Only ids the caller can actually read go to `contactsFor` and
         // to the eligibility check, which is the same "must hold the
         // candidate" read.
         const ids = data.matches
           .filter((match) => match.visible !== false)
           .map((match) => match.candidate_id);
-        setNames(await namesFor(ids, known.current));
+        setContacts(await contactsFor(ids, known.current));
         setEligibility(await eligibilityFor(row.id, ids, knownEligibility.current));
       }
     } catch (err) {
@@ -209,7 +215,7 @@ export function Shortlist({ row }: { row: Opportunity }) {
         const fetched = await getClient(clientId);
         if (!cancelled) setClient(fetched);
       } catch {
-        // Left out on purpose, same as `namesFor`: an unreadable client
+        // Left out on purpose, same as `contactsFor`: an unreadable client
         // record must not block or fake the rest of the shortlist.
         if (!cancelled) setClient(null);
       }
@@ -269,12 +275,12 @@ export function Shortlist({ row }: { row: Opportunity }) {
       setRuns((prev) => [started, ...prev.filter((r) => r.id !== started.id)]);
       setSubmitted(new Set());
       setEligibility(new Map());
-      // Names are joined per candidate id and would otherwise survive from
+      // Contacts are joined per candidate id and would otherwise survive from
       // the previous run — harmless for stable ids, but a re-run should not
       // keep displaying names it has not fetched for this run. The server's
       // per-match `submitted` flag carries the durable submission state, so
       // clearing the local overlay here cannot hide a real submission.
-      setNames(new Map());
+      setContacts(new Map());
     } catch (err) {
       setError(err instanceof Error ? err.message : "We could not start a shortlist just now.");
     } finally {
@@ -395,7 +401,7 @@ export function Shortlist({ row }: { row: Opportunity }) {
                     key={match.candidate_id}
                     match={match}
                     rank={index + 1}
-                    name={names.get(match.candidate_id) ?? null}
+                    contact={contacts.get(match.candidate_id) ?? null}
                     eligibility={eligibility.get(match.candidate_id)}
                     clientId={run.client_id}
                     submitted={submitted.has(match.candidate_id) || match.submitted === true}
@@ -550,7 +556,7 @@ function Safeguards({ row, run }: { row: Opportunity; run: SourcingRun }) {
 function Match({
   match,
   rank,
-  name,
+  contact,
   eligibility,
   clientId,
   submitted,
@@ -562,8 +568,9 @@ function Match({
   match: SourcingMatch;
   rank: number;
   /** Null when the candidate record could not be read. The id is shown
-   *  instead, which is at least traceable — never a blank row. */
-  name: string | null;
+   *  instead, which is at least traceable — never a blank row — and no
+   *  WhatsApp button is offered, since there is no number to reach. */
+  contact: SourcingContact | null;
   /** `undefined` while the fetch is still out, `null` if it failed, and the
    *  record itself once read. Three states, three different renders — see
    *  `EligibilityFlags`. */
@@ -587,7 +594,9 @@ function Match({
   // that used to leave a raw UUID on screen; `refetch` above no longer even
   // tries. `full_name` is rendered verbatim, never expanded or prettified.
   const redacted = match.visible === false;
-  const who = redacted ? (match.full_name ?? match.candidate_id) : (name ?? match.candidate_id);
+  const who = redacted
+    ? (match.full_name ?? match.candidate_id)
+    : (contact?.full_name ?? match.candidate_id);
 
   const collision: CandidateCollision | null = redacted
     ? {
@@ -603,7 +612,7 @@ function Match({
         <span className="src-rank" aria-hidden="true">
           {rank}
         </span>
-        <span className={!redacted && name ? "src-name" : "src-name src-name-unknown"}>{who}</span>
+        <span className={!redacted && contact ? "src-name" : "src-name src-name-unknown"}>{who}</span>
         {/* The score as a whole percentage (0.3018 → 30%), for display only.
             The server's four-decimal score remains the source of truth for
             the order; this is what a recruiter reads at a glance. The title
@@ -659,6 +668,20 @@ function Match({
       )}
 
       <div className="src-row-acts">
+        {/* WhatsApp, offered wherever the candidate is known. Redacted rows
+            have no record to read — only a masked name — so there is no
+            number to reach and no button. A known candidate with no number
+            gets the button anyway, disabled with its reason on the tooltip,
+            so a recruiter can see the affordance exists and why it is off
+            (the same honesty the candidate panel uses). */}
+        {!redacted && contact && (
+          <WhatsappButton
+            row={{ id: match.candidate_id, full_name: contact.full_name, phone_e164: contact.phone_e164 }}
+            // No activity timeline in the shortlist; the server logs the
+            // event regardless, so there is nothing to refresh here.
+            onLogged={() => {}}
+          />
+        )}
         {redacted ? null : submitted ? (
           <span className="src-done">Submitted</span>
         ) : clientId ? (

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 
 import { SETTINGS_ACCOUNT_PATH, SETTINGS_WHATSAPP_PATH } from "../../api";
 import { useAuth } from "../../auth";
@@ -54,6 +54,12 @@ export function whatsappUrl(phoneE164: string, message: string): string {
   return `https://web.whatsapp.com/send?phone=${digits}&text=${encodeURIComponent(message)}`;
 }
 
+/** The fields the button actually reads off a candidate row. Narrowed from
+ *  the full `Candidate` so the shortlist — which has the id, name and number
+ *  but no full record — can render the same button without fabricating the
+ *  rest of a candidate. */
+export type WhatsappRecipient = Pick<Candidate, "id" | "full_name" | "phone_e164">;
+
 /** Why the button is inert. `phone_e164` is deliberately left `null` for a
  *  landline as well as for "no number at all", so the reason has to cover
  *  both rather than implying a number is simply missing. */
@@ -104,7 +110,7 @@ export function WhatsappButton({
   row,
   onLogged,
 }: {
-  row: Candidate;
+  row: WhatsappRecipient;
   /** Called after the activity POST succeeds, so the timeline below can
    *  refetch. Not called when the popup was blocked — nothing was opened, so
    *  there is nothing new to show. */
@@ -113,6 +119,9 @@ export function WhatsappButton({
   const [open, setOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const disabled = !row.phone_e164;
+  // A button per shortlist row means several disabled buttons can sit on one
+  // page; a fixed id would point every `aria-describedby` at the first one.
+  const disabledReasonId = useId();
 
   return (
     <>
@@ -127,12 +136,12 @@ export function WhatsappButton({
         // who otherwise has only the glyph to go on.
         aria-label={disabled ? NO_NUMBER_REASON : `WhatsApp ${row.full_name}`}
         title={disabled ? NO_NUMBER_REASON : `WhatsApp ${row.full_name}`}
-        aria-describedby={disabled ? "wa-disabled-reason" : undefined}
+        aria-describedby={disabled ? disabledReasonId : undefined}
       >
         <WhatsappGlyph />
       </button>
       {disabled && (
-        <span id="wa-disabled-reason" className="sr-only" hidden>
+        <span id={disabledReasonId} className="sr-only" hidden>
           {NO_NUMBER_REASON}
         </span>
       )}
@@ -293,7 +302,7 @@ function WhatsappModal({
   onClose,
   onLogged,
 }: {
-  row: Candidate;
+  row: WhatsappRecipient;
   onClose: () => void;
   onLogged: () => void;
 }) {

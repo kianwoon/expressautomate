@@ -4,13 +4,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Client } from "./clients";
 import { Shortlist } from "./job-orders-sourcing";
 import type { Opportunity } from "./opportunities";
-import type { SourcingMatch, SourcingRun, SourcingView } from "./sourcing";
+import type { SourcingContact, SourcingMatch, SourcingRun, SourcingView } from "./sourcing";
 
 /**
  * Follows `client-logo.test.tsx`'s pattern: modules the component depends on
  * are mocked directly rather than faking `fetch` for every one of them, since
  * this screen pulls from `sourcing.ts`, `eligibility.ts`, `candidates.ts` (via
- * `namesFor`) and now `clients.ts` all at once.
+ * `contactsFor`) and now `clients.ts` all at once.
  *
  * allow-hardcode: the strings below are test fixtures.
  */
@@ -25,9 +25,9 @@ vi.mock("./clients", async () => {
 const getSourcing = vi.fn();
 const getSourcingRun = vi.fn();
 const listSourcingRuns = vi.fn();
-const namesFor = vi.fn<(ids: string[], known: ReadonlyMap<string, string>) => Promise<Map<string, string>>>(
-  async () => new Map(),
-);
+const contactsFor = vi.fn<
+  (ids: string[], known: ReadonlyMap<string, SourcingContact>) => Promise<Map<string, SourcingContact>>
+>(async () => new Map());
 
 vi.mock("./sourcing", async () => {
   const actual = await vi.importActual<typeof import("./sourcing")>("./sourcing");
@@ -36,7 +36,8 @@ vi.mock("./sourcing", async () => {
     getSourcing: (...args: unknown[]) => getSourcing(...args),
     getSourcingRun: (...args: unknown[]) => getSourcingRun(...args),
     listSourcingRuns: (...args: unknown[]) => listSourcingRuns(...args),
-    namesFor: (ids: string[], known: ReadonlyMap<string, string>) => namesFor(ids, known),
+    contactsFor: (ids: string[], known: ReadonlyMap<string, SourcingContact>) =>
+      contactsFor(ids, known),
     recordSubmission: vi.fn(),
   };
 });
@@ -143,8 +144,8 @@ afterEach(() => {
   getSourcing.mockReset();
   getSourcingRun.mockReset();
   listSourcingRuns.mockReset();
-  namesFor.mockReset();
-  namesFor.mockResolvedValue(new Map());
+  contactsFor.mockReset();
+  contactsFor.mockResolvedValue(new Map());
   // The panel lists its run history on mount; an empty history is the default
   // every existing test expects. Set here AND in beforeEach so the very first
   // test of a file — which runs before any afterEach has — sees it too.
@@ -215,8 +216,7 @@ describe("Shortlist run history", () => {
       run({ id: "run-2", created_at: "2026-07-31T10:00:00Z" }),
       run({ id: "run-1", created_at: "2026-07-30T10:00:00Z" }),
     ]);
-    namesFor.mockResolvedValue(new Map([["cand-old", "Old Candidate"]]));
-
+    contactsFor.mockResolvedValue(new Map([["cand-old", { full_name: "Old Candidate", phone_e164: null }]]));
     render(<Shortlist row={opportunity()} />);
 
     const select = (await screen.findByRole("combobox")) as HTMLSelectElement;
@@ -253,10 +253,10 @@ describe("Shortlist server-reported submissions", () => {
       }),
     );
     getClient.mockResolvedValue(client());
-    namesFor.mockResolvedValue(
+    contactsFor.mockResolvedValue(
       new Map([
-        ["cand-1", "Jane Tan"],
-        ["cand-2", "Bob Lee"],
+        ["cand-1", { full_name: "Jane Tan", phone_e164: null }],
+        ["cand-2", { full_name: "Bob Lee", phone_e164: null }],
       ]),
     );
 
@@ -274,7 +274,7 @@ describe("Shortlist server-reported submissions", () => {
 describe("Shortlist score display", () => {
   it("renders the overall score as a whole percentage", async () => {
     getSourcing.mockResolvedValue(view({ run: run(), matches: [match({ score: "0.3018" })] }));
-    namesFor.mockResolvedValue(new Map([["cand-1", "Jane Tan"]]));
+    contactsFor.mockResolvedValue(new Map([["cand-1", { full_name: "Jane Tan", phone_e164: null }]]));
 
     render(<Shortlist row={opportunity()} />);
 
@@ -305,7 +305,7 @@ describe("Shortlist score display", () => {
         ],
       }),
     );
-    namesFor.mockResolvedValue(new Map([["cand-1", "Jane Tan"]]));
+    contactsFor.mockResolvedValue(new Map([["cand-1", { full_name: "Jane Tan", phone_e164: null }]]));
 
     render(<Shortlist row={opportunity()} />);
 
@@ -325,7 +325,7 @@ describe("Shortlist score display", () => {
 describe("Shortlist score meaning", () => {
   it("says what the percentage score means when a shortlist is shown", async () => {
     getSourcing.mockResolvedValue(view({ run: run(), matches: [match()] }));
-    namesFor.mockResolvedValue(new Map([["cand-1", "Jane Tan"]]));
+    contactsFor.mockResolvedValue(new Map([["cand-1", { full_name: "Jane Tan", phone_e164: null }]]));
 
     render(<Shortlist row={opportunity()} />);
 
@@ -381,8 +381,8 @@ describe("Shortlist redacted matches", () => {
     expect(screen.queryByText("cand-private")).toBeNull();
     // The redacted id is never sent to the by-id candidate lookup — that is
     // exactly the request that used to 404 and fall back to the raw UUID.
-    await waitFor(() => expect(namesFor).toHaveBeenCalled());
-    expect(namesFor.mock.calls[0][0]).toEqual([]);
+    await waitFor(() => expect(contactsFor).toHaveBeenCalled());
+    expect(contactsFor.mock.calls[0][0]).toEqual([]);
   });
 
   it("still renders explanation and reasons unchanged for a visible match", async () => {
@@ -392,14 +392,14 @@ describe("Shortlist redacted matches", () => {
         matches: [match({ candidate_id: "cand-visible" })],
       }),
     );
-    namesFor.mockResolvedValue(new Map([["cand-visible", "Jane Tan"]]));
+    contactsFor.mockResolvedValue(new Map([["cand-visible", { full_name: "Jane Tan", phone_e164: null }]]));
 
     render(<Shortlist row={opportunity()} />);
 
     await screen.findByText("Jane Tan");
     expect(screen.getByText("Strong match on skills and recent tenure.")).toBeTruthy();
     expect(screen.getByText("5 years as an accountant at a mid-size firm.")).toBeTruthy();
-    expect(namesFor.mock.calls[0][0]).toEqual(["cand-visible"]);
+    expect(contactsFor.mock.calls[0][0]).toEqual(["cand-visible"]);
   });
 
   it("shows the request-access affordance only when can_request_access is true", async () => {
@@ -428,5 +428,58 @@ describe("Shortlist redacted matches", () => {
       screen.getByText((_, el) => el?.tagName === "P" && el.textContent === "Held by Rafi."),
     ).toBeTruthy();
     expect(screen.queryByText("Request access")).toBeNull();
+  });
+});
+
+describe("Shortlist WhatsApp affordance", () => {
+  it("renders an enabled WhatsApp button for a visible match with a number", async () => {
+    getSourcing.mockResolvedValue(view({ run: run(), matches: [match()] }));
+    contactsFor.mockResolvedValue(
+      new Map([["cand-1", { full_name: "Jane Tan", phone_e164: "+6591234567" }]]),
+    );
+
+    render(<Shortlist row={opportunity()} />);
+
+    const button = (await screen.findByRole("button", {
+      name: "WhatsApp Jane Tan",
+    })) as HTMLButtonElement;
+    expect(button.disabled).toBe(false);
+  });
+
+  it("renders a disabled WhatsApp button with the reason for a visible match without a number", async () => {
+    getSourcing.mockResolvedValue(view({ run: run(), matches: [match()] }));
+    contactsFor.mockResolvedValue(new Map([["cand-1", { full_name: "Jane Tan", phone_e164: null }]]));
+
+    render(<Shortlist row={opportunity()} />);
+
+    const button = (await screen.findByRole("button", {
+      name: "No WhatsApp-reachable number on file for this candidate.",
+    })) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+  });
+
+  it("renders no WhatsApp button for a redacted match", async () => {
+    getSourcing.mockResolvedValue(
+      view({
+        run: run(),
+        matches: [
+          match({
+            candidate_id: "cand-private",
+            visible: false,
+            full_name: "Wei Ming T.",
+            held_by: "Sarah Lim",
+            can_request_access: true,
+            reasons: null,
+            explanation: null,
+            explanation_evidence: null,
+          }),
+        ],
+      }),
+    );
+
+    render(<Shortlist row={opportunity()} />);
+
+    await waitFor(() => expect(screen.getAllByText("Wei Ming T.").length).toBeGreaterThan(0));
+    expect(screen.queryByRole("button", { name: /WhatsApp/ })).toBeNull();
   });
 });

@@ -72,7 +72,7 @@ export async function getEligibility(
 }
 
 /** `null` marks a candidate whose eligibility could not be read — shown as
- *  its own state rather than silently dropped, unlike `namesFor` in
+ *  its own state rather than silently dropped, unlike `contactsFor` in
  *  `sourcing.ts` where a missing name can fall back to the id. There is no
  *  id-shaped fallback for a compliance flag: saying nothing here reads as
  *  "nothing to flag", which is the one thing it must never imply. */

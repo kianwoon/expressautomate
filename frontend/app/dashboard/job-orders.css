@@ -449,6 +449,9 @@
 /* The row's action stops fading in and is simply there — the reveal was
      only ever a way of keeping the row quiet, never a way of hiding it. */
 .src-act { transition: none; opacity: 1; }
+/* The WhatsApp tile sits beside it and reveals the same way, so it stops
+     fading under reduced motion too. */
+.src-row .wa-btn { transition: none; opacity: 1; }
 /* `.src-start` no longer has rules of its own — the button is `.btn
    btn-primary` now, and `.btn`'s own transitions are unchanged under
    reduced motion, so there is nothing left to disable here. */
@@ -583,7 +586,31 @@
 .src-elig-quiet .src-elig-row[data-outcome="not_applicable"] { background: none; }
 .src-elig-asof { margin-top: 4px; font-size: 0.6875rem; }
 
-.src-row-acts { margin-top: 6px; min-height: 1.5em; }
+.src-row-acts {
+  margin-top: 6px;
+  min-height: 1.5em;
+  /* The WhatsApp tile now shares the row with the submit action, so the two
+     sit side by side rather than stacking. */
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+/* The WhatsApp tile inside a shortlist row. The candidate panel's tile is
+   42px — sized for a header full of text buttons — which would tower over a
+   0.75rem text action here. Shrunk to the same visual weight, and revealed
+   with the row's other action on hover/focus so a quiet row stays quiet; the
+   mark keeps its green because recognition is the point of the tile. */
+.src-row .wa-btn {
+  width: 20px;
+  height: 20px;
+  opacity: 0;
+  transition: opacity 150ms ease, filter 150ms ease;
+}
+.src-row:hover .wa-btn,
+.src-row:focus-within .wa-btn { opacity: 1; }
+.src-row .wa-btn:disabled { opacity: 0.4; cursor: default; }
+.src-row .wa-btn:focus-visible { opacity: 1; outline: 2px solid var(--blue-500); outline-offset: 2px; }
 /* Revealed by hover AND by `:focus-within`, so the control is reachable by
    keyboard without a mouse ever having been near the row. */
 .src-act {
