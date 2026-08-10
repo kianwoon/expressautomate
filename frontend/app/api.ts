@@ -472,6 +472,12 @@ export function candidateArchivePath(id: string): string {
   return `${candidatePath(id)}/archive`;
 }
 
+/** The best-fitting job orders for one candidate — the "Find Job" shortlist
+ *  in the candidate modal. The reverse of the opportunity sourcing paths. */
+export function candidateJobsPath(id: string): string {
+  return `${candidatePath(id)}/jobs`;
+}
+
 /**
  * The Candidate Intelligence analysis for one candidate: POST runs the
  * three-stage analysis (career → capability → profile) and stores it, GET reads

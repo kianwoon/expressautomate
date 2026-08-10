@@ -1,8 +1,9 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { Me } from "../../auth";
 import type { Candidate } from "../candidates";
+import { findCandidateJobs } from "../candidate-jobs";
 import { resetMembers } from "../members";
 import { CandidatePanel } from "./candidate-panel";
 
@@ -29,6 +30,7 @@ vi.mock("./candidate-whatsapp", () => ({
   WhatsappActivityTimeline: () => null,
   WhatsappButton: () => null,
 }));
+vi.mock("../candidate-jobs", () => ({ findCandidateJobs: vi.fn() }));
 
 let authState: Me | null = null;
 
@@ -98,6 +100,12 @@ function candidate(overrides: Partial<Candidate> = {}): Candidate {
 beforeEach(() => {
   authState = me("u-1", "member");
   resetMembers();
+  vi.mocked(findCandidateJobs).mockResolvedValue({
+    items: [],
+    considered: 0,
+    scored: 0,
+    limit: 5,
+  });
   vi.stubGlobal(
     "fetch",
     vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => [] }),
@@ -153,5 +161,105 @@ describe("who holds a candidate, on the panel", () => {
     render(panel(candidate({ owner: { id: "u-2", name: "Sarah Lim" }, can_edit: true })));
     const save = screen.getByRole("button", { name: "Save changes" });
     expect(save.hasAttribute("disabled")).toBe(false);
+  });
+});
+
+describe("Find Job on the candidate panel", () => {
+  it("shows the shortlist after Find Job, best first, with the score", async () => {
+    vi.mocked(findCandidateJobs).mockResolvedValue({
+      items: [
+        {
+          id: "jo-1",
+          company_name_raw: "Acme Health",
+          job_title_raw: "Staff Nurse",
+          location_raw: "Singapore",
+          salary_raw: "SGD 3,000/month",
+          salary_min: 2800,
+          salary_max: 3500,
+          salary_currency: "SGD",
+          salary_period: "month",
+          working_hours_raw: null,
+          duration_raw: null,
+          requirements: null,
+          employment_type: null,
+          assigned_user_id: null,
+          received_datetime: "2026-08-01T09:00:00Z",
+          score: "0.9508",
+          review_status: "new",
+          quality_state: "likely",
+          reasons: [
+            {
+              name: "title",
+              weight: "3.0",
+              raw: "1.0000",
+              contribution: "3.0000",
+              note: null,
+            },
+            {
+              name: "salary",
+              weight: "2.0",
+              raw: null,
+              contribution: null,
+              note: "No comparable salary: one side is missing, or the currencies differ.",
+            },
+          ],
+        },
+      ],
+      considered: 6,
+      scored: 6,
+      limit: 5,
+    });
+
+    render(panel(candidate()));
+    fireEvent.click(screen.getByRole("button", { name: "Find Job" }));
+
+    expect(await screen.findByText("Staff Nurse")).toBeTruthy();
+    expect(screen.getByText(/at Acme Health/)).toBeTruthy();
+    // The score renders as a whole percentage, and the breakdown as the share
+    // of the component's weight the job order earned.
+    expect(screen.getByText("95%")).toBeTruthy();
+    expect(screen.getByText("100%")).toBeTruthy();
+    // An absent component says what was missing rather than drawing an empty bar.
+    expect(
+      screen.getByText("No comparable salary: one side is missing, or the currencies differ."),
+    ).toBeTruthy();
+    expect(findCandidateJobs).toHaveBeenCalledWith("cand-1");
+  });
+
+  it("says so when nothing scored high enough", async () => {
+    vi.mocked(findCandidateJobs).mockResolvedValue({
+      items: [],
+      considered: 2,
+      scored: 0,
+      limit: 5,
+    });
+
+    render(panel(candidate()));
+    fireEvent.click(screen.getByRole("button", { name: "Find Job" }));
+
+    expect(
+      await screen.findByText(/Nothing scored high enough to be worth showing/),
+    ).toBeTruthy();
+    expect(screen.getByText(/2 visible job orders were examined/)).toBeTruthy();
+  });
+
+  it("shows the server's message when the read fails", async () => {
+    vi.mocked(findCandidateJobs).mockRejectedValue(new Error("We could not reach the server."));
+
+    render(panel(candidate()));
+    fireEvent.click(screen.getByRole("button", { name: "Find Job" }));
+
+    expect(await screen.findByText("We could not reach the server.")).toBeTruthy();
+  });
+
+  it("lands on the Jobs tab when it runs", async () => {
+    render(panel(candidate()));
+    fireEvent.click(screen.getByRole("button", { name: "Find Job" }));
+
+    // The Jobs tab is now the selected one — the shortlist is what the button
+    // is for, so the recruiter is taken to it rather than left on Details.
+    expect((await screen.findByRole("tab", { name: "Jobs" })).getAttribute("aria-selected")).toBe(
+      "true",
+    );
   });
 });

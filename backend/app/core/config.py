@@ -987,6 +987,12 @@ class Settings(BaseSettings):
     # call over the top of its shortlist, so this is a spend ceiling before it
     # is anything else — the same reason `CV_DAILY_PARSE_QUOTA` exists.
     SOURCING_DAILY_RUN_QUOTA: int = Field(default=100, gt=0)
+    # How many job orders "Find Job" shortlists for a candidate. The candidate
+    # modal's reverse-direction matcher scores every current revision the
+    # recruiter can see and keeps this many of the best — the same shape the
+    # sourcing run's `SOURCING_MAX_MATCHES` gives the forward direction, with
+    # the cap small because the result is shown in a modal rather than paged.
+    CANDIDATE_JOBS_TOP_N: int = Field(default=5, gt=0)
 
     # --- Job Intelligence ---
     # The wall clock one analysis may take: three DeepSeek calls (understand →

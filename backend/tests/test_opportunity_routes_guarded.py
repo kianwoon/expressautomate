@@ -98,6 +98,17 @@ EXEMPT: dict[str, dict[str, str]] = {
             "shows exactly the rows behind the count the recruiter clicked."
         ),
     },
+    "candidate_jobs.py": {
+        "find_candidate_jobs": (
+            "Candidate-scoped, not opportunity-scoped. The candidate is read "
+            "by id through `load_visible_candidate` — the candidate guard, "
+            "which is the correct one for a route keyed on a person. The job "
+            "orders are never read one at a time: they are listed with "
+            "`visible_opportunities` applied directly as a WHERE clause, the "
+            "same way `list_opportunities` and `list_buddy_referrals` do, so a "
+            "colleague's unshared job order is not even considered."
+        ),
+    },
 }
 
 

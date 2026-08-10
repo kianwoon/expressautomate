@@ -15,6 +15,12 @@ import {
   unmergeCandidate,
   updateCandidate,
 } from "../candidates";
+import {
+  findCandidateJobs,
+  type CandidateJobMatch,
+  type CandidateJobReason,
+  type CandidateJobs,
+} from "../candidate-jobs";
 import { CandidateCv } from "./candidate-cv";
 import { CandidateHistory } from "./candidate-history";
 import { CandidateShareDialog } from "./candidate-share";
@@ -141,14 +147,16 @@ const DELETE_GLYPH = (
 
 /** The candidate modal's tabs. Details holds the existing editable record;
  *  the other three are the Candidate Intelligence stages — the same shape the
- *  job-order modal's Origin/Work/Person/Search tabs take. */
-type CandidateTab = "details" | "assessment" | "work" | "education";
+ *  job-order modal's Origin/Work/Person/Search tabs take — and Jobs is the
+ *  "Find Job" shortlist of best-fitting job orders. */
+type CandidateTab = "details" | "assessment" | "work" | "education" | "jobs";
 
 const CANDIDATE_TABS: { key: CandidateTab; label: string }[] = [
   { key: "details", label: "Details" },
   { key: "assessment", label: "Assessment" },
   { key: "work", label: "Work" },
   { key: "education", label: "Education" },
+  { key: "jobs", label: "Jobs" },
 ];
 
 export function CandidatePanel({
@@ -238,6 +246,14 @@ function Detail({
   const ci = useCandidateIntelligence(row.id);
   const [activeTab, setActiveTab] = useState<CandidateTab>("details");
 
+  // Find Job: the best-fitting job orders, scored server-side on demand (pure
+  // arithmetic over the candidate's profile — nothing to poll or re-read). The
+  // result survives tab switches; the button re-runs and replaces it, so a
+  // recruiter who edits the profile can ask again.
+  const [jobs, setJobs] = useState<CandidateJobs | null>(null);
+  const [jobsLoading, setJobsLoading] = useState(false);
+  const [jobsError, setJobsError] = useState<string | null>(null);
+
   // The Details tab is the tallest (it carries the editable fields, activity
   // timeline and merge picker). Once measured, its height is locked as the
   // panel's min-height so switching to a shorter Career/Capability/Profile tab
@@ -265,6 +281,27 @@ function Detail({
     await ci.run();
     // Land on the Assessment tab — the sharp headline read.
     setActiveTab("assessment");
+  }
+
+  async function findJobs() {
+    if (jobsLoading) return;
+    setJobsLoading(true);
+    setJobsError(null);
+    try {
+      setJobs(await findCandidateJobs(row.id));
+      // Land on the Jobs tab — the shortlist is what the button is for.
+      setActiveTab("jobs");
+    } catch (err) {
+      setJobsError(
+        err instanceof Error ? err.message : "We could not find jobs for this candidate just now.",
+      );
+      // Land on the Jobs tab even on a failure: the error is rendered there,
+      // and the recruiter who clicked the button must see it rather than be
+      // left on a tab that gives no sign anything happened.
+      setActiveTab("jobs");
+    } finally {
+      setJobsLoading(false);
+    }
   }
 
   // The shared state every intelligence stage reads to decide empty vs loading
@@ -423,6 +460,22 @@ function Detail({
                       : "Run analysis"}
               </button>
             )}
+            {/* Find Job is a different kind of action from the analysis: it
+                scores the job orders this recruiter can see against the
+                candidate's profile, on demand — no run to poll, no stored
+                record. Secondary, so it does not compete with the two primary
+                buttons beside it. */}
+            {row.record_status !== "merged" && (
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => void findJobs()}
+                disabled={jobsLoading}
+                title="Shortlist the job orders that best fit this candidate"
+              >
+                {jobsLoading ? "Finding…" : "Find Job"}
+              </button>
+            )}
             {row.record_status !== "merged" && (
               <button
                 type="button"
@@ -561,6 +614,9 @@ function Detail({
           )}
           {activeTab === "education" && (
             <EducationStage intelligence={ci.analysis} state={stageState} />
+          )}
+          {activeTab === "jobs" && (
+            <JobsStage jobs={jobs} loading={jobsLoading} error={jobsError} onRun={findJobs} />
           )}
 
           {activeTab === "details" && (
@@ -1008,4 +1064,186 @@ function MergePicker({ candidateId, onMerged }: { candidateId: string; onMerged:
       )}
     </div>
   );
+}
+
+/**
+ * The Jobs tab: the "Find Job" shortlist.
+ *
+ * A candidate-specific sibling of the job-order modal's `Shortlist` section —
+ * the same score and breakdown vocabulary, read in the other direction. Where
+ * sourcing stores an async run, this is a synchronous read: the server scores
+ * the visible current revisions against the candidate's profile and returns
+ * the top few, best first. The order the server sent is the order to render —
+ * never re-sorted here, since the scores arrive as strings from a NUMERIC
+ * column.
+ *
+ * allow-hardcode: the copy below is recruiter-facing text, not a list anything
+ * is matched against.
+ */
+
+/** What each scoring component is called in front of a recruiter. An unknown
+ *  name falls back to itself, so a component added server-side shows up as
+ *  something rather than vanishing from the breakdown. */
+const JOB_COMPONENT_LABELS: Record<string, string> = {
+  title: "Job title",
+  semantic: "CV match",
+  skills: "Skills",
+  employer: "Employer",
+  salary: "Salary",
+  tenure: "Experience",
+  recency: "Recent activity",
+};
+
+function JobsStage({
+  jobs,
+  loading,
+  error,
+  onRun,
+}: {
+  jobs: CandidateJobs | null;
+  loading: boolean;
+  error: string | null;
+  onRun: () => void;
+}) {
+  // Kept apart from "not run yet", and never collapsed into it: a failed read
+  // rendered as "run Find Job" is a claim about the feature rather than about
+  // our server.
+  if (error) {
+    return (
+      <div className="cand-jobs">
+        <p className="body cand-jobs-error" role="alert">
+          {error}
+        </p>
+        <button type="button" className="btn btn-secondary" onClick={onRun} disabled={loading}>
+          Try again
+        </button>
+      </div>
+    );
+  }
+  if (loading && !jobs) {
+    return (
+      <p className="body cand-jobs-note" aria-live="polite">
+        Scoring the job orders you can see against this candidate&rsquo;s profile.
+      </p>
+    );
+  }
+  if (!jobs) {
+    return (
+      <p className="body cand-jobs-note">
+        No shortlist yet. Use &ldquo;Find Job&rdquo; at the top to shortlist the job orders
+        that best fit this candidate&rsquo;s profile.
+      </p>
+    );
+  }
+  if (jobs.items.length === 0) {
+    return (
+      <p className="body cand-jobs-note">
+        Nothing scored high enough to be worth showing. {jobs.considered.toLocaleString()}{" "}
+        visible job order{jobs.considered === 1 ? " was" : "s were"} examined — adding skills or
+        recent roles to this candidate is what changes the answer.
+      </p>
+    );
+  }
+  return (
+    <div className="cand-jobs">
+      <p className="body cand-jobs-note">
+        The best {jobs.items.length} of {jobs.scored.toLocaleString()} scoreable job order
+        {jobs.scored === 1 ? "" : "s"} (of {jobs.considered.toLocaleString()} visible), ranked by
+        how well each fits this candidate&rsquo;s profile. Scores are a weighted match across
+        title, skills, employer, salary and experience.
+      </p>
+      <ol className="cand-jobs-list">
+        {jobs.items.map((match, index) => (
+          <li key={match.id} className="cand-jobs-row">
+            <span className="cand-jobs-rank" aria-hidden="true">
+              {index + 1}
+            </span>
+            <div className="cand-jobs-body">
+              <div className="cand-jobs-head">
+                <span className="cand-jobs-title">
+                  {match.job_title_raw ?? "Untitled role"}
+                  {match.company_name_raw && (
+                    <span className="cand-jobs-company"> at {match.company_name_raw}</span>
+                  )}
+                </span>
+                <span
+                  className="cand-jobs-score"
+                  title="Match score — how well this job order fits the candidate's profile."
+                >
+                  {percent(Number(match.score), match.score)}
+                </span>
+              </div>
+              <JobFacts match={match} />
+              {match.review_status === "needs_review" && (
+                <p className="body cand-jobs-chip">Needs review</p>
+              )}
+              <JobBreakdown reasons={match.reasons} />
+            </div>
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
+}
+
+/** The raw facts a recruiter scans before the score: what the vacancy is, in
+ *  the words the email carried. Each `_raw` string is shown as recorded —
+ *  never normalised, because the recruiter recognises what the client wrote. */
+function JobFacts({ match }: { match: CandidateJobMatch }) {
+  const parts = [
+    match.salary_raw,
+    match.location_raw,
+    match.duration_raw,
+    match.working_hours_raw,
+    match.employment_type,
+  ].filter((p): p is string => Boolean(p));
+  if (parts.length === 0) return null;
+  return <p className="body cand-jobs-facts">{parts.join(" · ")}</p>;
+}
+
+/** Why this job order is where it is. The arithmetic behind the score, so
+ *  "why is it third?" has an answer on the page rather than in a log. */
+function JobBreakdown({ reasons }: { reasons: CandidateJobReason[] | null }) {
+  if (!reasons || reasons.length === 0) return null;
+
+  return (
+    <ul className="cand-jobs-reasons">
+      {reasons.map((reason) => (
+        <li key={reason.name} className="cand-jobs-reason">
+          <span className="cand-jobs-reason-k">
+            {JOB_COMPONENT_LABELS[reason.name] ?? reason.name}
+          </span>
+          {/* Null means nothing was recorded to compare, which is not the same
+              as scoring zero — saying "0%" here would put "a poor fit on
+              salary" in front of a recruiter when the truth is that nobody
+              stated one. A scored component reads as the percentage of its
+              weight the job order earned. */}
+          <span
+            className={reason.contribution === null ? "cand-jobs-reason-v muted" : "cand-jobs-reason-v"}
+            title={
+              reason.contribution === null
+                ? undefined
+                : "The share of this criterion's possible weight the job order earned."
+            }
+          >
+            {reason.contribution === null
+              ? (reason.note ?? "Nothing to compare")
+              : percent(
+                  Number(reason.contribution) / Number(reason.weight),
+                  `${reason.contribution} of ${reason.weight}`,
+                )}
+          </span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/** A 0–1 fraction as a whole percentage, for display only. The stored numbers
+ *  are strings (a NUMERIC column; a float round-trip would show
+ *  0.6499999999999999 for a value the scorer computed exactly), and are
+ *  parsed here purely to render — never to compare or re-order, which is the
+ *  server's job. Falls back to `fallback` when the fraction is not finite. */
+function percent(fraction: number, fallback: string): string {
+  return Number.isFinite(fraction) ? `${Math.round(fraction * 100)}%` : fallback;
 }

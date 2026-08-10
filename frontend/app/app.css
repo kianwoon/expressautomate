@@ -1297,6 +1297,86 @@ select.gl-input:focus-visible { outline: 2px solid var(--blue-500); outline-offs
 .cand-intel-note { margin-top: 8px; font-size: 0.8125rem; color: var(--ink-500); max-width: 72ch; }
 .cand-intel-error { margin-top: 8px; font-size: 0.8125rem; color: var(--amber-700); max-width: 72ch; }
 
+/* ---- Candidate modal: Find Job shortlist ----
+   The Jobs tab's ranked list of best-fitting job orders. Self-contained here
+   because the candidates route does not load job-orders.css — the `.src-*`
+   shortlist styles in that file are deliberately not reused, so this screen
+   keeps its own compact card vocabulary. */
+.cand-jobs { margin-top: 4px; }
+.cand-jobs-note { margin-top: 8px; font-size: 0.8125rem; color: var(--ink-500); max-width: 72ch; }
+.cand-jobs-error { margin-top: 8px; font-size: 0.8125rem; color: var(--amber-700); max-width: 72ch; }
+.cand-jobs-list {
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.cand-jobs-row {
+  display: flex;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-alt);
+}
+.cand-jobs-rank {
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--blue-500);
+  color: #fff;
+  font-size: 0.8125rem;
+  font-weight: 650;
+}
+.cand-jobs-body { flex: 1 1 auto; min-width: 0; }
+.cand-jobs-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+.cand-jobs-title { font-size: 0.9375rem; font-weight: 650; color: var(--ink-900); }
+.cand-jobs-company { font-weight: 500; color: var(--ink-600); }
+.cand-jobs-score {
+  flex: 0 0 auto;
+  font-size: 0.875rem;
+  font-weight: 700;
+  color: var(--blue-700);
+  cursor: default;
+}
+.cand-jobs-facts {
+  margin: 4px 0 0;
+  font-size: 0.8125rem;
+  color: var(--ink-600);
+}
+.cand-jobs-chip {
+  display: inline-block;
+  margin: 6px 0 0;
+  padding: 2px 8px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--amber-700);
+  background: var(--amber-050);
+  border-radius: 999px;
+}
+.cand-jobs-reasons {
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+}
+.cand-jobs-reason { display: flex; align-items: baseline; gap: 6px; font-size: 0.8125rem; }
+.cand-jobs-reason-k { color: var(--ink-500); }
+.cand-jobs-reason-v { font-weight: 600; color: var(--ink-800); }
+
 /* ---- Analysis in progress (Job + Candidate Intelligence) ----
    The prominent "the model is working" state shown while an analysis runs.
    The previous 6px pulsing dot was invisible next to the wait it describes;

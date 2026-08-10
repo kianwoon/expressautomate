@@ -18,6 +18,7 @@ from app.api import (
     candidate_documents,
     candidate_imports,
     candidate_intelligence,
+    candidate_jobs,
     candidate_merge,
     candidate_ownership,
     candidate_roles,
@@ -161,6 +162,11 @@ api.include_router(candidate_imports.router)
 # owns `/candidates/{candidate_id}`, and `/candidates/{id}/whatsapp-send`
 # would be shadowed if that generic route were declared first.
 api.include_router(candidate_whatsapp.router)
+# Before `candidates`, for the same reason every candidate sub-router is: this
+# router owns the narrower path `/candidates/{candidate_id}/jobs`, and
+# declaring it first keeps it reachable if `candidates` ever grows a
+# `{candidate_id}/{something}` route.
+api.include_router(candidate_jobs.router)
 # Before `candidates`, for the same reason: `/candidates/{id}/claim` and
 # `/candidates/{id}/assign` are narrower than anything `candidates` owns
 # today, and declaring them first keeps them so if it ever grows a
