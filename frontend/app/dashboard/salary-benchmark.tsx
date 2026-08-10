@@ -71,7 +71,13 @@ function isSGD(offer: Offer): boolean {
  * absent. Extraction doesn't always populate salary_min/max (e.g. "S$4800 to
  * S$5200"), but the numbers are right there in the raw text — leaving the chart
  * without an offer bar because of an upstream parse gap is worse than reading
- * them here. Returns [min, max] or null when no numbers are found.
+ * them here. Returns [min, max] or null when no usable range can be read.
+ *
+ * The same fails-closed rule as the backend's `parse_salary`: a salary sentence
+ * that names more than two figures ("$4500 basic max + $800 rotating shift
+ * allowance; $3500 for fresh degree") is not a range this parser understands,
+ * and picking a pair out of it is how an allowance became a range endpoint.
+ * Refusing leaves the offer unmarked rather than misbenchmarked.
  *
  * Looks for patterns like "4800 to 5200", "4800-5200", "$5,000", "S$4800".
  */
@@ -84,8 +90,13 @@ export function parseRawSalary(raw: string | null | undefined): [number, number]
   const values = nums.map(Number).filter((n) => !isNaN(n) && n > 0);
   if (values.length === 0) return null;
   if (values.length === 1) return [values[0], values[0]];
-  // A range: take the first two distinct values.
-  return [values[0], values[1]];
+  // More than two figures means the text holds something this parser has not
+  // identified (an allowance, tiered rates, a reference number) — the same
+  // refusal as the backend's `parse_salary`, so an allowance can never become
+  // a range endpoint. With exactly two figures, order them ascending like the
+  // backend does, so a reversed reading cannot draw a backwards bar.
+  if (values.length > 2) return null;
+  return [Math.min(values[0], values[1]), Math.max(values[0], values[1])];
 }
 
 export function monthlyGrossSGD(offer: Offer): number | null {
@@ -212,10 +223,14 @@ function offerLabel(offer: Offer): string {
     // The raw text is the sender's own words — always more useful than a dash.
     return offer.raw || "—";
   }
+  // Read low→high even when the row was typed with the figures reversed: a
+  // range label of "4,500–800" would look like a typo to a recruiter.
+  const low = min != null && max != null ? Math.min(min, max) : (min ?? max);
+  const high = min != null && max != null ? Math.max(min, max) : null;
   const amount =
-    min != null && max != null && min !== max
-      ? `${min.toLocaleString()}–${max.toLocaleString()}`
-      : (min ?? max)!.toLocaleString();
+    low != null && high != null && low !== high
+      ? `${low.toLocaleString()}–${high.toLocaleString()}`
+      : low!.toLocaleString();
   // Show S$ when the offer is SGD (explicitly or inferred from $ in raw text).
   const currency = isSGD(offer) ? "S$ " : offer.currency ? `${offer.currency} ` : "";
   const period = offer.period ? ` / ${offer.period}` : "";
@@ -239,8 +254,12 @@ export function SalaryBenchmark({
   // falls back to parsing the raw salary text (extraction doesn't always
   // populate the structured fields, but the numbers are in the text).
   const offerRange = offerRangeSGD(offer);
-  const offerMin = offerRange?.[0] ?? null;
-  const offerMax = offerRange?.[1] ?? null;
+  // Normalise to ascending order whatever the source: a reversed min/max would
+  // otherwise draw a negative-width bar, silently erasing the offer from the
+  // track. The raw-text parser now refuses to emit one, but a hand-typed row
+  // should not be able to either.
+  const offerMin = offerRange ? Math.min(offerRange[0], offerRange[1]) : null;
+  const offerMax = offerRange ? Math.max(offerRange[0], offerRange[1]) : null;
   const hasOfferRange = offerMin != null && offerMax != null && offerMin > 0;
 
   // Scale from 0 to 110% of the largest value, so both bars fit with headroom.
@@ -322,8 +341,9 @@ export function SalaryBenchmark({
         </p>
       ) : (
         <p className="body jo-sub jo-benchmark-note">
-          Offer not directly comparable to the survey (currency or period
-          differs). Percentiles shown for reference.
+          Offer not directly comparable to the survey — its currency, period, or
+          salary range could not be read as one monthly gross figure.
+          Percentiles shown for reference.
         </p>
       )}
 

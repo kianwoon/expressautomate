@@ -26,6 +26,8 @@ FIELDS = (
     "job_description",
     "requirements",
     "salary",
+    "salary_min",
+    "salary_max",
     "salary_period",
     "working_hours",
     "work_arrangement",
@@ -75,6 +77,19 @@ class ExtractedJob(BaseModel):
     job_description: ExtractedField | None = None
     requirements: ExtractedField | None = None
     salary: ExtractedField | None = None
+    # The lowest and highest monthly gross figures the client would pay for the
+    # role, as structured numbers. They exist because the raw `salary` sentence
+    # can describe a compound offer ("$4500 basic max + $800 rotating shift
+    # allowance") that the deterministic `parse_salary` refuses (>2 figures),
+    # yet a recruiter needs a usable range to benchmark against MOM wages.
+    # Each is still an `ExtractedField` — value + a verbatim quote — so the
+    # anti-fabrication machinery applies to them exactly as to every other
+    # field. `_value_is_corroborated` additionally accepts a bound equal to the
+    # sum of two quoted figures, which is what lets "$4500 basic + $800
+    # allowance" verify as 5300 without inventing a number the email never
+    # wrote.
+    salary_min: ExtractedField | None = None
+    salary_max: ExtractedField | None = None
     salary_period: ExtractedField | None = None
     working_hours: ExtractedField | None = None
     work_arrangement: ExtractedField | None = None
@@ -92,7 +107,7 @@ def json_schema() -> dict:
     """Schema sent to the model. Derived, so it cannot drift from the parser.
 
     Sent as *text inside the prompt* rather than as a `json_schema` response
-    format. Twelve nested objects is a large grammar, and a provider that
+    format. Fourteen nested objects is a large grammar, and a provider that
     compiles the schema into one refused this exact document: "the compiled
     grammar is too large". That failure is uniform — every email, every time —
     so extraction asks for a plain JSON object and states the shape in prose,
@@ -106,7 +121,7 @@ def json_schema() -> dict:
 
     Optionality is therefore expressed in the type, not by omission from
     `required`: a field the email does not mention comes back as `null`. That
-    is a better contract anyway — the model answers for all twelve fields
+    is a better contract anyway — the model answers for all fourteen fields
     every time, so "not mentioned" is a statement rather than a silence that
     could equally mean the model forgot.
     """

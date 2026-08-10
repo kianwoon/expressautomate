@@ -389,7 +389,7 @@ class Settings(BaseSettings):
     # everything else.
     #
     # Extraction joined it after the router path failed in production, not on
-    # principle. The escalation model (§32) rejected our twelve-field schema
+    # principle. The escalation model (§32) rejected our fourteen-field schema
     # outright — "the compiled grammar is too large" — and every real email sat
     # at `extracting` with nothing to show for it. The same document, sent as
     # prompt text with a plain `json_object` response format, is answered
@@ -465,7 +465,7 @@ class Settings(BaseSettings):
     # email on a strong model routinely spends a minute generating, and a
     # timeout here costs the whole extraction plus a retry's worth of tokens.
     LLM_TIMEOUT_SECONDS: float = 90.0
-    # An extraction answers for twelve fields per vacancy and quotes the email
+    # An extraction answers for fourteen fields per vacancy and quotes the email
     # for each, so its completions are an order of magnitude longer than the
     # gate's one-word verdicts. Too low and the response is truncated mid-JSON,
     # which arrives as `LLMInvalidJSON` and looks like a model problem.
@@ -481,7 +481,10 @@ class Settings(BaseSettings):
     EXTRACTION_REASONING_EFFORT_STRONG: str = "high"
     # Stamped onto every extraction so a prompt change is attributable — without
     # it, a quality regression cannot be told from a change in the mail itself.
-    PROMPT_VERSION: str = "v1"
+    # v2: the model-facing schema gained `salary_min`/`salary_max` so compound
+    # offers ("$4500 basic + $800 allowance") store a usable range instead of
+    # being refused by the deterministic parser.
+    PROMPT_VERSION: str = "v2"
     # The self-reported confidence a fully verified extraction must clear to be
     # called `verified` rather than `likely`. Tunable because the right number
     # is a property of the model, not of this code: swapping the extraction

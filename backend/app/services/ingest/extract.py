@@ -48,6 +48,14 @@ Rules:
   omit the offsets. Never infer, estimate, or fill in a typical value.
 - `salary_period` is one of: hour, day, month, year. Extract it separately from
   the amount.
+- `salary_min` and `salary_max` are the lowest and highest MONTHLY GROSS figures
+  the client would pay for this role, as plain numbers in `value` (e.g. "2700"
+  or "5300"). When the salary is compound — basic plus an allowance, bonus or
+  incentive ("$4500 basic max + $800 rotating shift allowance") — `salary_max`
+  is the total the client pays (5300), and `value` may equal the sum of figures
+  the quoted `evidence` states. Set `salary_min` to the lowest stated figure
+  and `salary_max` to the highest. If only one figure is stated, put it in both.
+  If the email states no salary at all, set both to "{not_mentioned}".
 - `work_arrangement` is one of: onsite, hybrid, remote.
 
 Return JSON matching this schema:
@@ -106,7 +114,7 @@ async def extract(source: str, *, llm=None) -> tuple[ExtractionResponse, LLMResu
 
     `schema=None` is deliberate and is the fix for the production outage: it
     asks for a bare `json_object`. The schema itself travels in the prompt, so
-    nothing has to compile a twelve-field grammar, and there is no request here
+    nothing has to compile a fourteen-field grammar, and there is no request here
     that a provider can reject on shape.
 
     `llm` defaults to None rather than to `complete_json` for the reason

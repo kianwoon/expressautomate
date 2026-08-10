@@ -48,7 +48,13 @@ from app.db.rls import tenant_session
 from app.models import EmailMessage, Opportunity
 from app.services.client_matching import match_client
 from app.services.events import KIND_EXTRACTION, publish
-from app.services.ingest.evidence import parse_salary, parse_salary_period, quality_state, verify
+from app.services.ingest.evidence import (
+    parse_salary,
+    parse_salary_period,
+    quality_state,
+    salary_currency,
+    verify,
+)
 from app.services.ingest.glossary import DetectedCode, GlossaryEntry, detect
 from app.services.ingest.schema import ExtractedField, ExtractedJob, ExtractionResponse
 from app.services.llm.client import LLMResult
@@ -255,19 +261,81 @@ def _norm(value: str | None) -> str:
     return (value or "").strip().casefold()
 
 
-def _salary_key(job: ExtractedJob) -> tuple:
+def _resolved_salary(
+    job: ExtractedJob, source: str
+) -> tuple[float | None, float | None, str | None]:
+    """The salary range to store: verified structured bounds, else the parse.
+
+    The LLM's `salary_min`/`salary_max` are the richer reading of a compound
+    offer ("$4500 basic max + $800 rotating shift allowance" -> 4500–5300) that
+    the deterministic `parse_salary` refuses — it fails closed on more than two
+    figures. A bound is only trusted when it verified against the source (§15):
+    `verify` ran inside `quality_state`, but the raw-text `salary` field is the
+    fallback when the model emitted no usable bound (e.g. a pre-schema row, or
+    a bound whose evidence did not check out). Every number that lands in the
+    columns has therefore either been quoted or arithmetically derived from a
+    quote — never authored from nothing.
+    """
+    lo = _verified_bound(job.salary_min, source)
+    hi = _verified_bound(job.salary_max, source)
+    if lo is not None or hi is not None:
+        return lo, hi, _bound_currency(job)
+    if job.salary is not None and not job.salary.is_missing:
+        return parse_salary(job.salary.value)
+    return None, None, None
+
+
+def _verified_bound(field: ExtractedField | None, source: str) -> float | None:
+    """The bound's value as a number, when the field verified against source.
+
+    `verify` checks the quote is in the email and the value follows from it
+    (including the additive-sum rule for these fields); the value then has to
+    be a number at all — a model could write "not stated" into the value with
+    a real quote behind it, and a non-number must not reach a Numeric column.
+    """
+    if field is None or field.is_missing:
+        return None
+    if not verify(field, source, allow_salary_sum=True):
+        return None
+    try:
+        return float(field.value.replace(",", ""))
+    except ValueError:
+        return None
+
+
+def _bound_currency(job: ExtractedJob) -> str | None:
+    """The currency for a structured salary range.
+
+    The bound fields carry the figures but the raw `salary` field (or either
+    bound's own evidence) carries the currency marker, so read it from there —
+    the same `_currency` scan the deterministic parser uses.
+    """
+    for field in (job.salary, job.salary_min, job.salary_max):
+        if field is None or field.is_missing:
+            continue
+        currency = salary_currency(field.evidence or field.value)
+        if currency:
+            return currency
+    return None
+
+
+def _salary_key(job: ExtractedJob, source: str) -> tuple:
     """The parsed salary of a new job as a comparable tuple.
 
     Raw salary strings would compare "SGD 6,000" against "6k" as different
     when they are the same figure; the parsed min/max/currency/period is what
     a recruiter compares, so it is what a revision comparison compares.
+
+    Uses the same resolution as `_insert_opportunity` — verified structured
+    bounds when present, else the deterministic parse — so a job whose
+    compound salary ("$4500 basic + $800 allowance") stores as 4500–5300
+    compares against the stored row's 4500–5300, not against a NULL the
+    raw parser could not produce.
     """
-    if job.salary is None or job.salary.is_missing:
-        return (None, None, None, None)
-    salary_min, salary_max, currency = parse_salary(job.salary.value)
+    salary_min, salary_max, currency = _resolved_salary(job, source)
     return (
-        round(float(salary_min), 2) if salary_min is not None else None,
-        round(float(salary_max), 2) if salary_max is not None else None,
+        salary_min,
+        salary_max,
         currency,
         parse_salary_period(_value(job.salary_period)),
     )
@@ -299,7 +367,7 @@ def _same_vacancy(job: ExtractedJob, row) -> bool:
     )
 
 
-def _requirements_changed(job: ExtractedJob, codes, job_count: int, row) -> bool:
+def _requirements_changed(job: ExtractedJob, codes, job_count: int, row, source: str) -> bool:
     """Did this email state different requirements than the row already holds?
 
     The fields a client changes when they change a job order: the requirements
@@ -311,12 +379,17 @@ def _requirements_changed(job: ExtractedJob, codes, job_count: int, row) -> bool
     `sex_requirement` is derived from the client's shorthand codes (C/F ->
     female), so an email that drops the code — "open to male, all races" —
     reads as a change, which is correct: the requirement was lifted.
+
+    `source` reaches `_salary_key`, which must verify the structured salary
+    bounds against the email before they can be compared — the same resolution
+    `_insert_opportunity` uses, so the comparison never pits a verified bound
+    against an unverified one.
     """
     new_sex, _ = _sex_requirement_for(job, codes, job_count)
     return not (
         _norm(_value(job.requirements)) == _norm(row.requirements)
         and new_sex == row.sex_requirement
-        and _salary_key(job) == _row_salary_key(row)
+        and _salary_key(job, source) == _row_salary_key(row)
         and _norm(_value(job.working_hours)) == _norm(row.working_hours_raw)
         and _norm(_value(job.duration)) == _norm(row.duration_raw)
         and _norm(_value(job.employment_type)) == _norm(row.employment_type)
@@ -434,6 +507,7 @@ async def persist(
                     codes,
                     len(jobs),
                     client_id=matched.client_id if matched else None,
+                    source=source,
                 )
             await _insert_evidence(session, tenant_id, extraction_id, opportunity_id, job, source)
             await _insert_codes(session, tenant_id, opportunity_id, job, codes, len(jobs))
@@ -601,6 +675,7 @@ async def _maybe_supersede(
     codes,
     job_count: int,
     client_id: uuid.UUID | None,
+    source: str,
 ) -> None:
     """Link an older open opportunity to this one when the email *revises* it.
 
@@ -695,7 +770,7 @@ async def _maybe_supersede(
     if used_fallback and len(predecessors) > 1:
         return
 
-    changed = [c for c in predecessors if _requirements_changed(job, codes, job_count, c)]
+    changed = [c for c in predecessors if _requirements_changed(job, codes, job_count, c, source)]
     if not changed:
         # Identical content. A same-conversation re-forward is already hidden
         # by the read-time dedupe (a later row in the same thread), so there is
@@ -809,9 +884,7 @@ async def _insert_opportunity(
     this vacancy (`C/F`/`O/F` → female), set alongside an audit reason naming the
     codes. Both are NULL when no sex is implied — the ordinary case.
     """
-    salary_min = salary_max = currency = None
-    if job.salary is not None and not job.salary.is_missing:
-        salary_min, salary_max, currency = parse_salary(job.salary.value)
+    salary_min, salary_max, currency = _resolved_salary(job, source)
 
     sex_requirement, sex_requirement_reason = _sex_requirement_for(job, codes, job_count)
     state = quality_state(job, source)
@@ -916,7 +989,17 @@ async def _insert_evidence(
         # the offsets it located back onto the field, and a dict literal
         # evaluates its values in order — reading `start_char` first would
         # store the model's arithmetic and then discover it was wrong.
-        valid = verify(field, source)
+        #
+        # The salary bounds are verified with the additive-sum rule: a bound
+        # may be a figure the email never wrote in full ("$4500 basic + $800
+        # allowance" -> 5300), and that is the only derived number the model
+        # is allowed to author. `quality_state` uses the same flag, so the
+        # evidence row and the row's verdict can never disagree.
+        valid = verify(
+            field,
+            source,
+            allow_salary_sum=name in ("salary_min", "salary_max"),
+        )
         await session.execute(
             _INSERT_EVIDENCE,
             {

@@ -50,6 +50,16 @@ _FLOOR = re.compile(
 # The figure is the first number; "x" with optional spaces separates them.
 _MULTIPLIER = re.compile(r"(?P<figure>\d[\d,]*(?:\.\d+)?)\s*[xX]\s*\d{1,2}\b")
 
+# An additive marker in a salary sentence: the email is *adding* figures, not
+# listing alternatives. This is the guard that lets a computed salary bound
+# ("$4500 basic max + $800 rotating shift allowance" -> 5300) verify, while a
+# list of tiered rates ("$3500 for fresh degree; $2700 for fresh diploma")
+# cannot be summed into a fake maximum — no "+", no "allowance" word, no sum.
+_ADDITIVE = re.compile(
+    r"\+|\bplus\b|\ballowances?\b|\bbonus\b|\bincentive\b|\bon top of\b",
+    re.IGNORECASE,
+)
+
 
 @lru_cache(maxsize=8)
 def _currency_codes(configured: str) -> tuple[str, ...]:
@@ -85,6 +95,16 @@ def _currency(raw: str) -> str | None:
         if match.group(1).upper() in _currency_codes(settings.SALARY_CURRENCY_CODES):
             return match.group(1).upper()
     return None
+
+
+def salary_currency(raw: str | None) -> str | None:
+    """Public wrapper over the currency scan, for the salary-bound path.
+
+    `persist._bound_currency` needs the same "name a currency only when this
+    deployment recognises the token" rule that `parse_salary` applies, but it
+    is reading a structured bound's evidence rather than a full salary string.
+    """
+    return _currency(raw or "")
 
 
 def _amounts(raw: str) -> list[float]:
@@ -184,7 +204,7 @@ def locate(field: ExtractedField, source: str) -> tuple[int, int] | None:
     return min(spans, key=lambda span: abs(span[0] - field.start_char))
 
 
-def verify(field: ExtractedField, source: str) -> bool:
+def verify(field: ExtractedField, source: str, *, allow_salary_sum: bool = False) -> bool:
     """Is the field's quotation really in the email, and does the value follow?
 
     A missing field is vacuously valid — there is nothing to locate. Everything
@@ -196,6 +216,12 @@ def verify(field: ExtractedField, source: str) -> bool:
     A quote that is nowhere in the email fails, and that is §15 intact — the
     only thing that ever proved a value was not invented was the quote being
     real, and that check is stricter here than it was, not weaker.
+
+    `allow_salary_sum` is the one deliberate exception to "the value must be
+    quotable": a salary *bound* may be a figure the email never wrote in full,
+    provided it is the sum of exactly two figures the email did write and the
+    quote shows an additive structure ("$4500 basic max + $800 rotating shift
+    allowance" -> 5300). See `_value_is_corroborated`.
     """
     if field.is_missing:
         return True
@@ -203,10 +229,10 @@ def verify(field: ExtractedField, source: str) -> bool:
     if span is None:
         return False
     field.start_char, field.end_char = span
-    return _value_is_corroborated(field)
+    return _value_is_corroborated(field, allow_salary_sum=allow_salary_sum)
 
 
-def _value_is_corroborated(field: ExtractedField) -> bool:
+def _value_is_corroborated(field: ExtractedField, *, allow_salary_sum: bool = False) -> bool:
     """Does the value the model wrote follow from the text it quoted?
 
     Matching the quote against the source only proves the quote is real. It
@@ -220,12 +246,29 @@ def _value_is_corroborated(field: ExtractedField) -> bool:
     Only numbers are policed. A value is legitimately a normalisation of its
     quote for text fields — "monthly" for "per month" — and demanding a
     substring there would send every correctly normalised field to review.
+
+    With `allow_salary_sum`, a single claimed figure may also equal the sum of
+    exactly two quoted figures, when the quote marks them as additive (a "+",
+    "plus", or an allowance/bonus/incentive word). That is how a compound
+    offer — "$4500 basic max + $800 rotating shift allowance" — verifies a
+    computed 5300 ceiling without inventing a number the email never wrote.
+    The guards are deliberate: only one claimed figure, only two quoted
+    figures, and an explicit additive marker. A tiered list ("$3500 for fresh
+    degree; $2700 for fresh diploma") has no marker, so a claimed 6200 (their
+    sum) is refused — the email lists alternatives, it does not add them.
     """
     claimed = _amounts(field.value or "")
     if not claimed:
         return True
     quoted = _amounts(field.evidence or "")
-    return all(value in quoted for value in claimed)
+    if all(value in quoted for value in claimed):
+        return True
+    if allow_salary_sum and len(claimed) == 1 and len(quoted) == 2:
+        if _ADDITIVE.search(field.evidence or ""):
+            total = quoted[0] + quoted[1]
+            if abs(claimed[0] - total) < 0.005:
+                return True
+    return False
 
 
 def parse_salary(raw: str) -> tuple[float | None, float | None, str | None]:
@@ -366,27 +409,52 @@ def quality_state(job: ExtractedJob, source: str) -> str:
     calibrated probability, and must never outvote a span that does not exist.
     Confidence only ever demotes — it can turn `verified` into `likely`, never
     the reverse.
+
+    `salary_min`/`salary_max` are verified with the additive-sum rule: a bound
+    may be a computed figure ("$4500 basic + $800 allowance" -> 5300), which is
+    the only number in the whole pipeline the model is allowed to have derived
+    rather than quoted. The verification still holds it to the source.
     """
-    fields = [f for f in vars(job).values() if isinstance(f, ExtractedField)]
-    present = [f for f in fields if not f.is_missing]
+    fields = [
+        (name, f)
+        for name, f in vars(job).items()
+        if isinstance(f, ExtractedField)
+    ]
+    present = [(name, f) for name, f in fields if not f.is_missing]
 
     # An extraction that found nothing is a failure, not a confident empty
     # answer. Left as `verified` it would sit in the dashboard as a real
     # vacancy with every column blank.
     if not present:
         return "needs_review"
-    if any(not verify(f, source) for f in present):
+    if any(
+        not verify(f, source, allow_salary_sum=name in _SALARY_BOUND_FIELDS)
+        for name, f in present
+    ):
         return "needs_review"
 
-    if job.salary is not None and not job.salary.is_missing:
+    has_structured_bound = any(
+        name in _SALARY_BOUND_FIELDS
+        for name, _ in present
+    )
+    if job.salary is not None and not job.salary.is_missing or has_structured_bound:
         # Read the figures out of the evidence, never out of `value`. The
         # evidence has been checked against the source; `value` has not, and
         # trusting it here is what let a model-authored 9000 be recorded as a
-        # verified salary for an email that said $3500.
-        low, high, _currency = parse_salary(job.salary.evidence or "")
+        # verified salary for an email that said $3500. Only the raw `salary`
+        # field is parsed here — the structured bounds are already verified
+        # above, and `salary.evidence` is None when the field itself is.
+        low, high, _currency = (
+            parse_salary(job.salary.evidence or "")
+            if job.salary is not None and not job.salary.is_missing
+            else (None, None, None)
+        )
         # Verified evidence for a salary that carries no figure still yields
-        # nothing an `opportunities` row can store or filter on.
-        if low is None and high is None:
+        # nothing an `opportunities` row can store or filter on. A compound
+        # offer the deterministic parser refuses ("$4500 basic max + $800
+        # rotating shift allowance" — four figures) is saved by the structured
+        # bounds: if either bound verified, the row has a usable range.
+        if low is None and high is None and not has_structured_bound:
             return "needs_review"
         if job.salary_period is None or job.salary_period.is_missing:
             # An amount with no period is not comparable to any other amount,
@@ -397,7 +465,14 @@ def quality_state(job: ExtractedJob, source: str) -> str:
     # The weakest field sets the verdict: a row is only as trustworthy as the
     # column a recruiter is about to act on, and averaging would let eleven
     # easy fields hide the one that was guessed.
-    weakest = min(f.confidence for f in present)
+    weakest = min(f.confidence for _, f in present)
     return (
         "verified" if weakest >= settings.EXTRACTION_VERIFIED_CONFIDENCE else "likely"
     )
+
+
+# The two structured salary bound fields. Named once so the additive-sum rule
+# in `_value_is_corroborated` and the `quality_state` figure check share the
+# same list; a name here that is not an `ExtractedJob` attribute is a defect.
+# allow-hardcode: the field names of `ExtractedJob`, not configuration.
+_SALARY_BOUND_FIELDS = ("salary_min", "salary_max")

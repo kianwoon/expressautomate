@@ -492,3 +492,183 @@ def test_the_plausibility_floor_comes_from_settings(monkeypatch):
 def test_more_figures_than_a_range_can_explain_are_refused():
     """Picking the extremes of a set the parser cannot account for is a guess."""
     assert parse_salary("3500 to 4500, 13th month, 2 years exp") == (None, None, None)
+
+
+# --------------------------------------------------------------------------- //
+# structured salary bounds — the additive-sum corroboration rule
+# --------------------------------------------------------------------------- //
+
+# The compound-offer source: "$4500 basic max + $800 Rotating shift allowance;
+# $3500 for fresh Deg; $2700 for fresh dip". The deterministic parser refuses
+# it (four figures), which is exactly why the model emits structured bounds.
+COMPOUND_SOURCE = (
+    "Contract Biotechnologist. Salary up to $4500 basic max + $800 Rotating "
+    "shift allowance; $3500 for fresh Deg; $2700 for fresh dip and above "
+    "depending on exp."
+)
+
+
+def test_a_salary_max_equal_to_basic_plus_allowance_verifies():
+    """The whole point of the sum rule: 5300 = 4500 + 800, both quoted.
+
+    Without the rule this would fail — 5300 is nowhere in the email — and the
+    compound offer would have no usable benchmark. With it, the derived figure
+    is trusted because the quote shows the email adding the two figures.
+    """
+    start = COMPOUND_SOURCE.index("$4500 basic max + $800 Rotating shift allowance")
+    quote = "$4500 basic max + $800 Rotating shift allowance"
+    field = _field(
+        value="5300",
+        evidence=quote,
+        start_char=start,
+        end_char=start + len(quote),
+        confidence=0.95,
+    )
+
+    assert verify(field, COMPOUND_SOURCE, allow_salary_sum=True) is True
+
+
+def test_a_salary_max_sum_is_refused_without_the_sum_flag():
+    """The sum rule is opt-in for the two bound fields only.
+
+    Every other field in the pipeline must still quote its numbers verbatim:
+    the rule exists for `salary_min`/`salary_max` precisely because they are
+    the fields a compound offer needs, and it must not leak into, say,
+    `working_hours` or `requirements`.
+    """
+    start = COMPOUND_SOURCE.index("$4500 basic max + $800 Rotating shift allowance")
+    quote = "$4500 basic max + $800 Rotating shift allowance"
+    field = _field(
+        value="5300",
+        evidence=quote,
+        start_char=start,
+        end_char=start + len(quote),
+        confidence=0.95,
+    )
+
+    assert verify(field, COMPOUND_SOURCE) is False
+
+
+def test_a_salary_min_from_a_quoted_figure_still_verifies_directly():
+    """The floor needs no arithmetic: 2700 is stated, so the plain rule holds."""
+    start = COMPOUND_SOURCE.index("$2700 for fresh dip")
+    quote = "$2700 for fresh dip"
+    field = _field(
+        value="2700",
+        evidence=quote,
+        start_char=start,
+        end_char=start + len(quote),
+        confidence=0.95,
+    )
+
+    assert verify(field, COMPOUND_SOURCE, allow_salary_sum=True) is True
+
+
+def test_a_sum_needs_an_additive_marker():
+    """A tiered list is alternatives, not an addition — a claimed 6200 = 3500
+    + 2700 must not verify, because the email says "for fresh Deg; for fresh
+    dip", which is a choice of levels, not an arithmetic sum."""
+    start = COMPOUND_SOURCE.index("$3500 for fresh Deg; $2700 for fresh dip")
+    quote = "$3500 for fresh Deg; $2700 for fresh dip"
+    field = _field(
+        value="6200",
+        evidence=quote,
+        start_char=start,
+        end_char=start + len(quote),
+        confidence=0.95,
+    )
+
+    assert verify(field, COMPOUND_SOURCE, allow_salary_sum=True) is False
+
+
+def test_a_sum_must_use_exactly_two_quoted_figures():
+    """The rule is deliberately narrow: a single claimed figure may equal the
+    sum of exactly two quoted figures. A claimed 8000 = 4500+3500 drawn from a
+    quote containing 4500, 800 and 3500 is a three-figure quote, refused —
+    there is no way to tell which pair the email meant, so none is trusted."""
+    start = COMPOUND_SOURCE.index("$4500 basic max + $800 Rotating shift allowance; $3500")
+    quote = "$4500 basic max + $800 Rotating shift allowance; $3500"
+    field = _field(
+        value="8000",
+        evidence=quote,
+        start_char=start,
+        end_char=start + len(quote),
+        confidence=0.95,
+    )
+
+    assert verify(field, COMPOUND_SOURCE, allow_salary_sum=True) is False
+
+
+def test_a_compound_offer_with_verified_bounds_is_not_review():
+    """The whole pipeline change in one assertion: the deterministic parser
+    refuses the four-figure salary, but the verified structured bounds carry
+    the range, so the row is storable — not parked in review."""
+    start = COMPOUND_SOURCE.index("$4500 basic max + $800 Rotating shift allowance")
+    max_quote = "$4500 basic max + $800 Rotating shift allowance"
+    min_start = COMPOUND_SOURCE.index("$2700 for fresh dip")
+    min_quote = "$2700 for fresh dip"
+    period = COMPOUND_SOURCE.index("Salary up to $4500")
+    job = ExtractedJob(
+        job_title=_field(
+            value="Contract Biotechnologist",
+            evidence="Contract Biotechnologist",
+            start_char=0,
+            end_char=len("Contract Biotechnologist"),
+            confidence=0.95,
+        ),
+        salary=_field(
+            value="$4500 basic max + $800 Rotating shift allowance",
+            evidence="$4500 basic max + $800 Rotating shift allowance",
+            start_char=start,
+            end_char=start + len(max_quote),
+            confidence=0.95,
+        ),
+        salary_max=_field(
+            value="5300",
+            evidence=max_quote,
+            start_char=start,
+            end_char=start + len(max_quote),
+            confidence=0.95,
+        ),
+        salary_min=_field(
+            value="2700",
+            evidence=min_quote,
+            start_char=min_start,
+            end_char=min_start + len(min_quote),
+            confidence=0.95,
+        ),
+        salary_period=_field(
+            value="month",
+            evidence="Salary up to $4500",
+            start_char=period,
+            end_char=period + len("Salary up to $4500"),
+            confidence=0.95,
+        ),
+    )
+
+    assert quality_state(job, COMPOUND_SOURCE) == "verified"
+
+
+def test_a_fabricated_salary_max_still_lands_in_review():
+    """The sum rule is not a licence to invent. A claimed 5300 whose quote is
+    nowhere in the email fails `locate` exactly like any other fabrication —
+    the derived figure is only trusted when the email actually adds two stated
+    figures, and the derived figure equals their sum."""
+    job = ExtractedJob(
+        job_title=_field(
+            value="Contract Biotechnologist",
+            evidence="Contract Biotechnologist",
+            start_char=0,
+            end_char=len("Contract Biotechnologist"),
+            confidence=0.99,
+        ),
+        salary_max=_field(
+            value="5300",
+            evidence="up to $5300",
+            start_char=0,
+            end_char=10,
+            confidence=0.99,
+        ),
+    )
+
+    assert quality_state(job, COMPOUND_SOURCE) == "needs_review"

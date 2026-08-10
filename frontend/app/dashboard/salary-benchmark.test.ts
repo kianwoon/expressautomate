@@ -5,6 +5,7 @@ import {
   benchmarkBand,
   marketPercentile,
   monthlyGrossSGD,
+  parseRawSalary,
   type Offer,
 } from "./salary-benchmark";
 
@@ -22,6 +23,44 @@ const SGD_MONTHLY = (min: number, max?: number): Offer => ({
   max: max ?? min,
   currency: "SGD",
   period: "month",
+});
+
+// --------------------------------------------------------------------------- //
+// parseRawSalary — the raw-text fallback
+// --------------------------------------------------------------------------- //
+
+describe("parseRawSalary", () => {
+  it("parses a two-figure range", () => {
+    expect(parseRawSalary("S$4800 to S$5200")).toEqual([4800, 5200]);
+  });
+
+  it("parses a dashed two-figure range", () => {
+    expect(parseRawSalary("4800-5200")).toEqual([4800, 5200]);
+  });
+
+  it("parses a single figure as min == max", () => {
+    expect(parseRawSalary("$3500")).toEqual([3500, 3500]);
+  });
+
+  it("orders an out-of-order two-figure range ascending", () => {
+    expect(parseRawSalary("$4500 max, from $2700")).toEqual([2700, 4500]);
+  });
+
+  it("refuses a multi-figure sentence instead of guessing a range", () => {
+    // Regression: "$4500 basic max + $800 Rotating shift allowance" — the
+    // $800 allowance was read as the low end of a range, turning the offer
+    // into a $2,650 midpoint and the benchmark into a bogus "below market".
+    expect(
+      parseRawSalary(
+        "$4500 basic max + $800 Rotating shift allowance; $3500 for fresh Deg; $2700 for fresh dip and above depending on exp",
+      ),
+    ).toBeNull();
+  });
+
+  it("returns null when there is no text", () => {
+    expect(parseRawSalary(null)).toBeNull();
+    expect(parseRawSalary("")).toBeNull();
+  });
 });
 
 // --------------------------------------------------------------------------- //
@@ -53,6 +92,22 @@ describe("monthlyGrossSGD", () => {
 
   it("returns null when no salary figures exist", () => {
     expect(monthlyGrossSGD({ min: null, max: null, currency: "SGD", period: "month" })).toBeNull();
+  });
+
+  it("refuses a multi-figure raw salary rather than inventing a midpoint", () => {
+    // Regression: the "Contract Biotechnologist" offer — "$4500 basic max +
+    // $800 rotating shift allowance; $3500 fresh degree; $2700 fresh diploma".
+    // Four figures is not a range this parser can read, so the offer must be
+    // treated as not comparable instead of benchmarked at a $2,650 guess.
+    expect(
+      monthlyGrossSGD({
+        min: null,
+        max: null,
+        currency: null,
+        period: null,
+        raw: "$4500 basic max + $800 Rotating shift allowance; $3500 for fresh Deg; $2700 for fresh dip and above depending on exp",
+      }),
+    ).toBeNull();
   });
 
   it("uses a single-ended offer (only max)", () => {

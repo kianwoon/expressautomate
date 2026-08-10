@@ -159,6 +159,172 @@ async def test_persist_writes_an_opportunity_with_a_parsed_salary(
     assert row.received_datetime is not None, "denormalised for sorting"
 
 
+# The compound-offer source the deterministic `parse_salary` refuses (four
+# figures): "$4500 basic max + $800 Rotating shift allowance; $3500 for fresh
+# Deg; $2700 for fresh dip". The model's structured bounds carry the range.
+COMPOUND_SOURCE = (
+    "Contract Biotechnologist. Salary up to $4500 basic max + $800 Rotating "
+    "shift allowance; $3500 for fresh Deg; $2700 for fresh dip and above "
+    "depending on exp. Monthly."
+)
+
+
+def _compound_payload(**overrides) -> dict:
+    salary_at = COMPOUND_SOURCE.index("$4500 basic max + $800 Rotating shift allowance")
+    max_quote = "$4500 basic max + $800 Rotating shift allowance"
+    min_at = COMPOUND_SOURCE.index("$2700 for fresh dip")
+    min_quote = "$2700 for fresh dip"
+    period_at = COMPOUND_SOURCE.index("Monthly")
+    job = {
+        "job_title": {
+            "value": "Contract Biotechnologist",
+            "evidence": "Contract Biotechnologist",
+            "start_char": 0,
+            "end_char": len("Contract Biotechnologist"),
+            "confidence": 0.95,
+        },
+        "salary": {
+            "value": "up to $4500 basic max + $800 Rotating shift allowance",
+            "evidence": max_quote,
+            "start_char": salary_at,
+            "end_char": salary_at + len(max_quote),
+            "confidence": 0.9,
+        },
+        "salary_min": {
+            "value": "2700",
+            "evidence": min_quote,
+            "start_char": min_at,
+            "end_char": min_at + len(min_quote),
+            "confidence": 0.9,
+        },
+        "salary_max": {
+            "value": "5300",
+            "evidence": max_quote,
+            "start_char": salary_at,
+            "end_char": salary_at + len(max_quote),
+            "confidence": 0.9,
+        },
+        "salary_period": {
+            "value": "month",
+            "evidence": "Monthly",
+            "start_char": period_at,
+            "end_char": period_at + len("Monthly"),
+            "confidence": 0.9,
+        },
+    }
+    job.update(overrides)
+    return {"jobs": [job]}
+
+
+def _compound_response(**overrides) -> ExtractionResponse:
+    return ExtractionResponse.model_validate(_compound_payload(**overrides))
+
+
+async def test_persist_stores_verified_structured_salary_bounds(
+    admin_session, email_row
+):
+    """The compound offer becomes a real range: 2700–5300 in the columns.
+
+    This is the row the salary benchmark needs: before the structured bounds,
+    `parse_salary` refused the four-figure sentence, salary_min/max stayed
+    NULL, and the benchmark fell back to parsing the raw text into a bogus
+    $2,650 midpoint. Now the verified bounds land in the row and the benchmark
+    compares 4000 (the midpoint) against market — competitive, not "below".
+    """
+    _, _, eid = email_row
+    tid = email_row[0]
+
+    await persist(
+        tid, eid, _compound_response(), LLMResult(data={}, model="test/fast"), COMPOUND_SOURCE
+    )
+
+    row = (
+        await admin_session.execute(
+            text(
+                "SELECT job_title_raw, salary_min, salary_max, salary_currency,"
+                " salary_period, salary_raw, quality_state FROM opportunities"
+                " WHERE email_message_id = :e"
+            ),
+            {"e": eid},
+        )
+    ).one()
+    assert row.job_title_raw == "Contract Biotechnologist"
+    assert float(row.salary_min) == 2700.0
+    assert float(row.salary_max) == 5300.0
+    assert row.salary_currency == "SGD"
+    assert row.salary_period == "month"
+    assert row.quality_state == "verified"
+    # The sender's own words stay on the row for provenance — the range is a
+    # reading of the sentence, never a replacement for it.
+    assert "up to $4500 basic max" in row.salary_raw
+
+
+async def test_persist_records_the_bound_evidence_as_valid(admin_session, email_row):
+    tid, _, eid = email_row
+
+    await persist(
+        tid, eid, _compound_response(), LLMResult(data={}, model="test/fast"), COMPOUND_SOURCE
+    )
+
+    rows = (
+        await admin_session.execute(
+            text(
+                "SELECT field_name, evidence_valid FROM extraction_evidence ev"
+                " JOIN extractions ex ON ex.id = ev.extraction_id"
+                " WHERE ex.email_message_id = :e AND ev.field_name IN"
+                " ('salary_min', 'salary_max')"
+            ),
+            {"e": eid},
+        )
+    ).all()
+    assert {r.field_name for r in rows} == {"salary_min", "salary_max"}
+    assert all(r.evidence_valid for r in rows)
+
+
+async def test_a_fabricated_salary_max_falls_back_to_null_not_a_guess(
+    admin_session, email_row
+):
+    """A bound that does not verify (§15) must not reach the columns.
+
+    The sum rule is narrow: 5300 only verifies when the quote shows the email
+    adding 4500 and 800. A fabricated 9000 with an unrelated quote fails
+    verification, so that bound stays NULL — and the row goes to review
+    rather than presenting an invented figure as fact. The verified floor
+    (2700) is still stored: verification is per-bound, not all-or-nothing.
+    """
+    _, _, eid = email_row
+    tid = email_row[0]
+
+    payload = _compound_payload()
+    payload["jobs"][0]["salary_max"] = {
+        "value": "9000",
+        "evidence": "salary is SGD 9,000",
+        "start_char": 0,
+        "end_char": 19,
+        "confidence": 0.99,
+    }
+    await persist(
+        tid,
+        eid,
+        ExtractionResponse.model_validate(payload),
+        LLMResult(data={}, model="test/fast"),
+        COMPOUND_SOURCE,
+    )
+
+    row = (
+        await admin_session.execute(
+            text(
+                "SELECT salary_min, salary_max, quality_state, review_status"
+                " FROM opportunities WHERE email_message_id = :e"
+            ),
+            {"e": eid},
+        )
+    ).one()
+    assert float(row.salary_min) == 2700.0, "the verified floor is still stored"
+    assert row.salary_max is None, "the fabricated ceiling must not land"
+    assert row.quality_state == "needs_review", "a failed bound must reach a human"
+
+
 async def test_persist_records_evidence_with_its_validity(admin_session, email_row):
     tid, _, eid = email_row
 
