@@ -18,6 +18,17 @@
  * status or send a merely-`disconnected` one through a needless re-pair, and
  * repeated re-pairing is itself a ban signal (plan §11).
  *
+ * **Retention amendment (2026-08-10):** `reconnecting` is no longer a short
+ * holding pen on the way to `disconnected`. A socket drop is ordinary —
+ * WhatsApp cycles connections, networks blip — so while a session's
+ * credentials are still stored, the gateway keeps reconnecting it: a quick
+ * exponential backoff, then a long park cadence, indefinitely. The session
+ * only reaches `disconnected`/`logged_out` when the credentials are gone
+ * (recruiter asked to stop, or WhatsApp has genuinely rejected the link
+ * `MAX_LOGOUT_ATTEMPTS` times in a row). Giving up after three ~second-spaced
+ * retries was how a blip that outlasted them became a permanently dead
+ * session. See `MAX_RECONNECT_ATTEMPTS`/`RECONNECT_PARK_MS`/`MAX_LOGOUT_ATTEMPTS`.
+ *
  * ## Who restores what, and why boot-time restore is per-session, not global
  *
  * Plan §2 asks for "reconnect of all known sessions at boot". `wa_sessions`
@@ -133,9 +144,26 @@ export interface StatusCallback {
 
 /** QR strings rotate roughly every 20s (plan §5) before Baileys gives up. */
 const QR_TTL_MS = 20_000;
-/** After this many consecutive close-and-retry cycles, stop and report `disconnected`
- *  rather than retrying forever against a dead network or a banned number. */
-const MAX_RECONNECT_ATTEMPTS = 3;
+/** After this many consecutive close-and-retry cycles, stop the *quick*
+ *  exponential backoff and switch to the long park interval. The session is
+ *  never given up on while its credentials are stored — a socket drop is
+ *  ordinary (WhatsApp cycles connections, networks blip, Koyeb's mesh has
+ *  opinions), and the old "give up after three ~second-spaced retries" was
+ *  how a blip that outlasted them became a permanently dead session. */
+const MAX_RECONNECT_ATTEMPTS = 5;
+/** Cadence a parked session keeps trying to come back at, once the quick
+ *  retries are exhausted. Far enough apart that a genuinely-dead device is
+ *  not hammering WhatsApp every few seconds (the repeated-reconnect pattern
+ *  plan §11 warns about), but often enough that a phone that comes back
+ *  online reconnects within minutes. */
+export const RECONNECT_PARK_MS = 300_000;
+/** Consecutive `loggedOut`-coded closes before the session is treated as a
+ *  genuine logout. WhatsApp can answer a reconnect with 401 for transient
+ *  server-side reasons; a device that has *really* been logged out keeps
+ *  401ing on every attempt. Letting a few fall through to the normal
+ *  reconnect path is what keeps a spurious 401 from destroying the stored
+ *  credentials — and re-pairing is itself a ban signal (plan §11). */
+export const MAX_LOGOUT_ATTEMPTS = 5;
 
 /** First retry waits this long; each subsequent one doubles. */
 const RECONNECT_BASE_MS = 1_000;
@@ -166,6 +194,13 @@ interface Runtime {
   phoneNumber: string | null;
   connectedAt: Date | null;
   reconnectAttempts: number;
+  /** Consecutive `loggedOut` closes without an `open` in between. Reset on
+   *  every successful open; when it passes `MAX_LOGOUT_ATTEMPTS` the close is
+   *  a genuine logout and the stored credentials are destroyed. Keeping this
+   *  separate from `reconnectAttempts` is what lets the first few 401s fall
+   *  through to the normal reconnect path without being confused with a
+   *  logout. */
+  logoutAttempts: number;
   /** Bumped when the session is deliberately ended, so a sleeping retry can
    *  tell it has been superseded and abandon itself. */
   generation: number;
@@ -511,6 +546,9 @@ export class SessionManager {
         // whatever speed the machine allowed — the exact repeated-reconnect
         // pattern the plan calls a ban signal.
         reconnectAttempts: carriedAttempts,
+        // Same carried semantics: a reconnect that keeps 401ing accumulates
+        // these, and only the count decides when a 401 is a genuine logout.
+        logoutAttempts: 0,
         // Bumped whenever the session is deliberately ended, so a retry that
         // was already sleeping can tell it has been superseded.
         generation: 0,
@@ -582,6 +620,7 @@ export class SessionManager {
       runtime.qrExpiresAt = null;
       runtime.statusDetail = null;
       runtime.reconnectAttempts = 0;
+      runtime.logoutAttempts = 0;
       runtime.connectedAt = new Date();
       runtime.phoneNumber = runtime.socket?.user?.id ? jidToE164(runtime.socket.user.id) : runtime.phoneNumber;
       // A session restored from stored credentials never shows a QR, so this
@@ -598,30 +637,38 @@ export class SessionManager {
       const statusCode = (update.lastDisconnect?.error as Boom | undefined)?.output?.statusCode;
       const loggedOut = statusCode === DisconnectReason.loggedOut;
 
+      // A 401 close is not instantly terminal. WhatsApp can answer a
+      // reconnect with `loggedOut` for transient server-side reasons, and the
+      // cost of guessing wrong is high: clearing the credentials destroys a
+      // session that a simple retry would have brought back, and the forced
+      // re-pairing is itself a ban signal (plan §11). So the first few 401s
+      // fall through to the normal reconnect path below, exactly like any
+      // other close. Only when a session has 401ed `MAX_LOGOUT_ATTEMPTS`
+      // times in a row — a genuinely de-registered device 401s on *every*
+      // attempt, and the counter is reset on every successful open — is it
+      // treated as a real logout, and only then are the credentials
+      // destroyed so a fresh QR can be issued.
       if (loggedOut) {
-        runtime.status = 'logged_out';
-        runtime.statusDetail = 'WhatsApp ended the link — re-pairing is required.';
-        runtime.qr = null;
-        runtime.qrExpiresAt = null;
-        await this.#store.clear(ref);
-        this.#runtimes.delete(keyFor(ref));
-        await this.#push(ref, snapshotOf(runtime), runtime.statusDetail);
-        return;
+        runtime.logoutAttempts += 1;
+        if (runtime.logoutAttempts > MAX_LOGOUT_ATTEMPTS) {
+          runtime.status = 'logged_out';
+          runtime.statusDetail = 'WhatsApp ended the link — re-pairing is required.';
+          runtime.qr = null;
+          runtime.qrExpiresAt = null;
+          await this.#store.clear(ref);
+          this.#runtimes.delete(keyFor(ref));
+          await this.#push(ref, snapshotOf(runtime), runtime.statusDetail);
+          return;
+        }
       }
 
       runtime.reconnectAttempts += 1;
-      if (runtime.reconnectAttempts > MAX_RECONNECT_ATTEMPTS) {
-        runtime.status = 'disconnected';
-        runtime.statusDetail = 'Reconnect attempts exhausted.';
-        this.#runtimes.delete(keyFor(ref));
-        await this.#push(ref, snapshotOf(runtime), runtime.statusDetail);
-        return;
-      }
-
       const attempts = runtime.reconnectAttempts;
       const generation = runtime.generation;
       runtime.status = 'reconnecting';
-      runtime.statusDetail = 'Connection dropped; retrying.';
+      runtime.statusDetail = loggedOut
+        ? 'WhatsApp rejected the link; retrying.'
+        : 'Connection dropped; retrying.';
       // The dead socket is dropped, but the runtime deliberately stays in the
       // map. Removing it was a bug: `reconnecting` is pushed, which nudges the
       // browser, which refetches `GET /session`, which found no runtime, saw
@@ -632,11 +679,16 @@ export class SessionManager {
       runtime.socket = null;
       await this.#push(ref, snapshotOf(runtime), runtime.statusDetail);
 
-      // Wait before retrying, longer each time. Reconnecting instantly and
-      // forever is what a banned or blocked number looks like from WhatsApp's
-      // side, and it is the behaviour most likely to turn a temporary refusal
-      // into a permanent one.
-      await this.#sleep(backoffMs(attempts));
+      // Wait before retrying, longer each time — then, once the quick
+      // backoff is exhausted, settle into a long park cadence. Reconnecting
+      // instantly and forever is what a banned or blocked number looks like
+      // from WhatsApp's side, and it is the behaviour most likely to turn a
+      // temporary refusal into a permanent one. But the session is never
+      // *given up on* while its credentials are stored: a drop is ordinary,
+      // and the park keeps trying until the phone comes back or the session
+      // is deliberately ended.
+      const parked = attempts > MAX_RECONNECT_ATTEMPTS;
+      await this.#sleep(parked ? RECONNECT_PARK_MS : backoffMs(attempts));
 
       // The wait is long enough for the session to have been ended, or
       // replaced, while it elapsed. A retry that ignored that would resurrect
@@ -646,7 +698,8 @@ export class SessionManager {
 
       // Baileys does not auto-reconnect; a fresh socket over the same
       // (now-updated) auth state is what resumes without a new QR. Reusing the
-      // runtime keeps the attempt count, so the ceiling above is reachable.
+      // runtime keeps the attempt count, so a session that never comes back
+      // parks instead of retrying at whatever speed the machine allowed.
       await this.#open(ref, attempts, runtime);
     }
   }

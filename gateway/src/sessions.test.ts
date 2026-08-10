@@ -15,7 +15,12 @@ import { Pool } from 'pg';
 
 import { ValueCipher } from './crypto.js';
 import type { SessionRef } from './store.js';
-import { SessionManager, type SocketFactory } from './sessions.js';
+import {
+  MAX_LOGOUT_ATTEMPTS,
+  RECONNECT_PARK_MS,
+  SessionManager,
+  type SocketFactory,
+} from './sessions.js';
 
 const DSN = process.env.WA_GATEWAY_TEST_DATABASE_URL ?? '';
 const SKIP = DSN === '' ? 'set WA_GATEWAY_TEST_DATABASE_URL (see scripts/test-db.sh)' : false;
@@ -364,11 +369,16 @@ describe('SessionManager', { skip: SKIP }, () => {
     assert.equal(a.status, 'pairing');
   });
 
-  test('a session that will not come back stops retrying, and waits longer each time', async () => {
+  test('a session that will not come back keeps trying, and waits longer each time', async () => {
     // Each retry used to build a runtime with the attempt count reset, so the
     // ceiling was unreachable and a dead session reconnected at whatever speed
     // the machine allowed — the repeated-reconnect pattern the plan names as a
-    // ban signal.
+    // ban signal. The fix has two halves: the backoff still grows (quick
+    // attempts, then a long park), and the session is *never given up on*
+    // while its credentials are stored — the retention amendment means a drop
+    // that outlasts the quick retries must not strand the session at
+    // `disconnected`, because nothing in the system ever claims a
+    // `disconnected` row to bring it back.
     const ref = await seedTenantAndUser();
     const counting = countingSocketFactory();
     const waits: number[] = [];
@@ -382,16 +392,95 @@ describe('SessionManager', { skip: SKIP }, () => {
     await manager.pair(ref);
     // Drop the connection repeatedly. Every close lands on whichever socket is
     // current, exactly as a genuinely unreachable number would behave.
-    for (let i = 0; i < 6; i += 1) {
+    for (let i = 0; i < 7; i += 1) {
       counting.emitLatest('connection.update', { connection: 'close' });
       await new Promise((resolve) => setImmediate(resolve));
     }
 
     const final = await manager.status(ref);
-    assert.equal(final.status, 'disconnected', 'retries must be given up on, not repeated forever');
+    assert.equal(
+      final.status,
+      'reconnecting',
+      'a session with stored credentials must keep retrying, never be given up on',
+    );
     assert.ok(waits.length >= 2, `expected several backoff waits, saw ${waits.length}`);
     const [first, second] = waits as [number, number];
     assert.ok(second > first, `each wait must exceed the last: ${first} then ${second}`);
+    // Once past the quick backoff, the cadence settles at the park interval —
+    // bounded, so a dead session is not hammering WhatsApp every few seconds.
+    assert.equal(waits[waits.length - 1], RECONNECT_PARK_MS, 'parked retries wait the long interval');
+
+    // And the session still comes back when the connection succeeds again —
+    // this is the retention property the whole amendment exists for.
+    counting.emitLatest('connection.update', { connection: 'open' });
+    await new Promise((resolve) => setImmediate(resolve));
+    const recovered = await manager.status(ref);
+    assert.equal(recovered.status, 'connected', 'a parked session must resume when it reconnects');
+  });
+
+  test('a single 401 close does not destroy the session — it reconnects like any drop', async () => {
+    // Retention amendment: WhatsApp can answer a reconnect with a
+    // loggedOut-coded close for transient server-side reasons. The old code
+    // treated *any* 401 as a genuine logout, cleared the stored credentials,
+    // and forced a re-pair — and repeated re-pairing is itself a ban signal
+    // (plan §11). A single 401 must fall through to the normal reconnect path
+    // and leave the session recoverable.
+    const ref = await seedTenantAndUser();
+    const first = fakeSocketFactory();
+    const manager1 = new SessionManager(pool, cipher, { socketFactory: first.factory });
+    await manager1.pair(ref);
+    first.emit('creds.update'); // persists creds so the store has something to keep
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    first.emit('connection.update', { connection: 'open' });
+
+    first.emit('connection.update', {
+      connection: 'close',
+      lastDisconnect: { error: new Boom('Stream Errored (401)', { statusCode: 401 }) },
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const during = await manager1.status(ref);
+    assert.equal(during.status, 'reconnecting', 'a 401 is not a logout until it keeps happening');
+
+    // Credentials must still be stored: a fresh manager resumes the session
+    // with no QR, exactly like after a process restart.
+    const second = fakeSocketFactory();
+    const manager2 = new SessionManager(pool, cipher, { socketFactory: second.factory });
+    const restored = await manager2.status(ref);
+    assert.equal(restored.qr, null, 'credentials must not be destroyed by a single 401');
+  });
+
+  test('a session that keeps 401ing is finally treated as logged out and cleared', async () => {
+    // The other half of the amendment: a genuinely de-registered device 401s
+    // on *every* attempt. After MAX_LOGOUT_ATTEMPTS of them in a row the
+    // close is a real logout — creds are cleared and the UI is told that
+    // re-pairing is required, so the next Connect genuinely shows a QR.
+    const ref = await seedTenantAndUser();
+    const counting = countingSocketFactory();
+    const manager = new SessionManager(pool, cipher, { socketFactory: counting.factory });
+    await manager.pair(ref);
+    counting.emitLatest('connection.update', { connection: 'open' });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    for (let i = 0; i < MAX_LOGOUT_ATTEMPTS + 1; i += 1) {
+      counting.emitLatest('connection.update', {
+        connection: 'close',
+        lastDisconnect: { error: new Boom('Stream Errored (401)', { statusCode: 401 }) },
+      });
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+
+    const final = await manager.status(ref);
+    assert.equal(final.status, 'logged_out', 'persistent 401s must end in a genuine logout');
+    assert.equal(final.qr, null);
+
+    // The credentials are gone, so nothing can silently resume the session —
+    // the next pair genuinely needs a fresh QR.
+    const second = fakeSocketFactory();
+    const manager2 = new SessionManager(pool, cipher, { socketFactory: second.factory });
+    const after = await manager2.status(ref);
+    assert.equal(after.status, 'disconnected', 'cleared credentials mean no silent resume');
+    assert.equal(after.qr, null);
   });
 
   test('asking about a session mid-backoff reports reconnecting and opens nothing', async () => {

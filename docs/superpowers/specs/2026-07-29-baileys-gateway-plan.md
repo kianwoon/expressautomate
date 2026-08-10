@@ -117,7 +117,35 @@ Statuses on `wa_sessions.status`, CHECK-constrained:
 - **Writer: the gateway only**, always via the FastAPI internal callback (so
   FastAPI is the single DB writer and the SSE publisher). Sources:
   `connection.update` (open→`connected`, close+`loggedOut`→`logged_out`,
-  close otherwise→`reconnecting` then `disconnected` after 3 failed retries).
+  close otherwise→`reconnecting`, then — after the 2026-08-10 retention
+  amendment below — **kept** `reconnecting` on a long park cadence rather
+  than falling to `disconnected`).
+
+**Amended 2026-08-10 (session retention).** A production session paired and
+then died 33 minutes later: a `loggedOut`-coded close destroyed its stored
+credentials, the row fell to `disconnected`, and nothing ever looked at a
+`disconnected` row again — a permanent death, exactly the "after a while it
+disconnects" symptom. Two changes, both in `gateway/src/sessions.ts`:
+
+- **A socket drop is no longer given up on.** The old "3 failed retries →
+  `disconnected`" terminal state was a ~10-second window: any WhatsApp-side
+  blip, server connection cycle, or Koyeb-mesh hiccup that outlasted it
+  stranded the session, because the liveness sweep never claims
+  `disconnected` rows. Now a session whose credentials are still stored keeps
+  reconnecting: exponential backoff, then a **park** at
+  `RECONNECT_PARK_MS` (5 min) indefinitely. It only reports `disconnected`
+  when the credentials are gone (recruiter stopped it, or a real logout).
+- **A 401 is not instantly a logout.** Baileys can answer a reconnect with a
+  `loggedOut`-coded close for transient server-side reasons. The old code
+  cleared the credentials on the first one — and re-pairing is itself a ban
+  signal (§11). The first `MAX_LOGOUT_ATTEMPTS` (5) consecutive 401s now fall
+  through the normal reconnect path (the counter resets on every successful
+  `open`); only a session that 401s on every attempt is treated as a genuine
+  logout, credentials cleared, UI told re-pairing is required.
+
+The liveness sweep (`wa_sweep_claim_due_sessions`) deliberately still claims
+only `connected`/`reconnecting` rows: after these changes a recoverable
+session never sits at `disconnected`, so there is nothing left to reclaim.
 - API knows a session died two ways: the pushed callback, plus a liveness
   sweep in the existing supervisor (`backend/app/workers/tasks.py`, new
   periodic task) that calls gateway `GET /sessions/{user}` every 60 s and
