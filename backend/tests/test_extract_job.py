@@ -325,6 +325,286 @@ async def test_a_fabricated_salary_max_falls_back_to_null_not_a_guess(
     assert row.quality_state == "needs_review", "a failed bound must reach a human"
 
 
+# --------------------------------------------------------------------------- //
+# deliberate replay — re-reading an extracted email under a newer prompt
+# --------------------------------------------------------------------------- //
+
+# The real-world shape this feature exists for: the same email read twice. The
+# first run — an older prompt — produced a row whose salary the deterministic
+# parser could not read (four figures), so salary_min/max are NULL. The replay
+# under a newer prompt emits structured bounds, and the deterministic
+# opportunity id is identical — so the replay must refresh the row rather than
+# collide with it.
+#
+# `_legacy_compound_payload` is the first run: the v1 prompt had no
+# `salary_min`/`salary_max` fields, so the model could not have answered them.
+# Its `salary` value is the FULL four-figure sentence — which is what makes the
+# deterministic `parse_salary` refuse (>2 figures) and leaves the salary
+# columns NULL, exactly as the old rows in production look.
+def _legacy_compound_payload(**overrides) -> dict:
+    payload = _compound_payload()
+    del payload["jobs"][0]["salary_min"]
+    del payload["jobs"][0]["salary_max"]
+    full = (
+        "Salary up to $4500 basic max + $800 Rotating shift allowance;"
+        " $3500 for fresh Deg; $2700 for fresh dip and above depending on exp"
+    )
+    payload["jobs"][0]["salary"] = {
+        "value": full,
+        "evidence": full,
+        "start_char": COMPOUND_SOURCE.index(full),
+        "end_char": COMPOUND_SOURCE.index(full) + len(full),
+        "confidence": 0.9,
+    }
+    payload["jobs"][0].update(overrides)
+    return payload
+
+
+def _legacy_compound_response(**overrides) -> ExtractionResponse:
+    return ExtractionResponse.model_validate(_legacy_compound_payload(**overrides))
+
+
+async def test_a_deliberate_replay_refreshes_the_extracted_fields(
+    admin_session, email_row
+):
+    """The gap the module docstring names: a replay under a better prompt used
+    to be a no-op for opportunities — the new extraction row landed with its
+    evidence but the improved values were discarded by `ON CONFLICT DO
+    NOTHING`. Now the extraction-derived columns are refreshed."""
+    tid, _, eid = email_row
+
+    # First run: the old prompt, no structured bounds. `_resolved_salary` falls
+    # back to `parse_salary`, which refuses the four-figure compound sentence →
+    # salary columns stay NULL.
+    await persist(
+        tid, eid, _legacy_compound_response(), LLMResult(data={}, model="test/fast"),
+        COMPOUND_SOURCE,
+    )
+
+    # Replay: the same email, the newer prompt, structured salary bounds.
+    await persist(
+        tid, eid, _compound_response(), LLMResult(data={}, model="test/fast"),
+        COMPOUND_SOURCE,
+        replay=True,
+    )
+
+    row = (
+        await admin_session.execute(
+            text(
+                "SELECT job_title_raw, salary_min, salary_max, quality_state"
+                " FROM opportunities WHERE email_message_id = :e"
+            ),
+            {"e": eid},
+        )
+    ).one()
+    assert row.job_title_raw == "Contract Biotechnologist"
+    assert float(row.salary_min) == 2700.0, "the replay's improved floor lands"
+    assert float(row.salary_max) == 5300.0, "the replay's improved ceiling lands"
+    assert row.quality_state == "verified"
+
+
+async def test_a_replay_preserves_the_assignee(admin_session, email_row):
+    """A claim is a person's decision; a replay of the same email is not
+    entitled to move the row to whoever the newer prompt happened to match."""
+    tid, _, eid = email_row
+    owner = uuid.uuid4()
+    await admin_session.execute(
+        text(
+            "INSERT INTO users (id, tenant_id, email, role)"
+            " VALUES (:i, :t, 'owner@example.com', 'recruiter')"
+        ),
+        {"i": owner, "t": tid},
+    )
+    await admin_session.commit()
+
+    await persist(
+        tid, eid, _legacy_compound_response(), LLMResult(data={}, model="test/fast"),
+        COMPOUND_SOURCE,
+    )
+    await admin_session.execute(
+        text("UPDATE opportunities SET assigned_user_id = :o WHERE email_message_id = :e"),
+        {"o": owner, "e": eid},
+    )
+    await admin_session.commit()
+
+    await persist(
+        tid, eid, _compound_response(), LLMResult(data={}, model="test/fast"),
+        COMPOUND_SOURCE,
+        replay=True,
+    )
+
+    row = (
+        await admin_session.execute(
+            text(
+                "SELECT assigned_user_id FROM opportunities WHERE email_message_id = :e"
+            ),
+            {"e": eid},
+        )
+    ).one()
+    assert row.assigned_user_id == owner
+
+
+async def test_a_replay_preserves_a_human_override(admin_session, email_row):
+    """The module's own rule, tested: replay must never overwrite a human
+    correction. `opportunity_field_overrides` is the boundary, so a corrected
+    column is skipped while the rest of the row still refreshes."""
+    tid, _, eid = email_row
+
+    await persist(
+        tid, eid, _legacy_compound_response(), LLMResult(data={}, model="test/fast"),
+        COMPOUND_SOURCE,
+    )
+    opportunity_id = (
+        await admin_session.execute(
+            text("SELECT id FROM opportunities WHERE email_message_id = :e"),
+            {"e": eid},
+        )
+    ).scalar_one()
+    await admin_session.execute(
+        text(
+            "INSERT INTO opportunity_field_overrides (id, tenant_id, opportunity_id,"
+            " field_name, ai_value, human_value) VALUES (:i, :t, :o, 'job_title_raw',"
+            " 'Contract Biotechnologist', 'Contract Biotech Manager')"
+        ),
+        {"i": uuid.uuid4(), "t": tid, "o": opportunity_id},
+    )
+    # A human correction is recorded in the override table AND applied to the
+    # row — the override table is what replay must not clobber, and the row is
+    # what the correction was applied to.
+    await admin_session.execute(
+        text(
+            "UPDATE opportunities SET job_title_raw = 'Contract Biotech Manager'"
+            " WHERE id = :o"
+        ),
+        {"o": opportunity_id},
+    )
+    await admin_session.commit()
+
+    # The replay writes the same title back (it is unchanged in the email) —
+    # but the override is the one thing that must win.
+    await persist(
+        tid, eid, _compound_response(), LLMResult(data={}, model="test/fast"),
+        COMPOUND_SOURCE,
+        replay=True,
+    )
+
+    row = (
+        await admin_session.execute(
+            text(
+                "SELECT job_title_raw, salary_min FROM opportunities"
+                " WHERE email_message_id = :e"
+            ),
+            {"e": eid},
+        )
+    ).one()
+    assert row.job_title_raw == "Contract Biotech Manager", "the human correction wins"
+    assert float(row.salary_min) == 2700.0, "the rest of the row still refreshes"
+
+
+async def test_a_replay_preserves_a_reviewed_sign_off(admin_session, email_row):
+    """`reviewed` is a person's sign-off. A re-read of the same email does not
+    undo it, even when the fresh verdict would be `needs_review`."""
+    tid, _, eid = email_row
+
+    await persist(
+        tid, eid, _legacy_compound_response(), LLMResult(data={}, model="test/fast"),
+        COMPOUND_SOURCE,
+    )
+    await admin_session.execute(
+        text(
+            "UPDATE opportunities SET review_status = 'reviewed'"
+            " WHERE email_message_id = :e"
+        ),
+        {"e": eid},
+    )
+    await admin_session.commit()
+
+    await persist(
+        tid, eid, _compound_response(), LLMResult(data={}, model="test/fast"),
+        COMPOUND_SOURCE,
+        replay=True,
+    )
+
+    row = (
+        await admin_session.execute(
+            text(
+                "SELECT review_status FROM opportunities WHERE email_message_id = :e"
+            ),
+            {"e": eid},
+        )
+    ).one()
+    assert row.review_status == "reviewed"
+
+
+async def test_a_replay_does_not_notify_again(admin_session, email_row):
+    """A vacancy that already exists is not new, so a replay must not re-notify
+    — that is the duplicate-notification bug the conflict clause exists to
+    prevent, and gating the emit on `inserted` keeps it prevented."""
+    tid, _, eid = email_row
+
+    await persist(
+        tid, eid, _legacy_compound_response(), LLMResult(data={}, model="test/fast"),
+        COMPOUND_SOURCE,
+    )
+    first = (
+        await admin_session.execute(
+            text(
+                "SELECT count(*) FROM notification_deliveries nd"
+                " JOIN opportunities o ON o.id = nd.subject_id"
+                " WHERE o.email_message_id = :e"
+            ),
+            {"e": eid},
+        )
+    ).scalar_one()
+
+    await persist(
+        tid, eid, _compound_response(), LLMResult(data={}, model="test/fast"),
+        COMPOUND_SOURCE,
+        replay=True,
+    )
+
+    second = (
+        await admin_session.execute(
+            text(
+                "SELECT count(*) FROM notification_deliveries nd"
+                " JOIN opportunities o ON o.id = nd.subject_id"
+                " WHERE o.email_message_id = :e"
+            ),
+            {"e": eid},
+        )
+    ).scalar_one()
+    assert first >= 0
+    assert second == first, "a replay adds no notification"
+
+
+async def test_a_crash_retry_still_does_not_refresh(admin_session, email_row):
+    """The separation is the point: `replay=False` (a crash retry) must stay a
+    no-op for the opportunity, exactly as before — otherwise a worker that died
+    between persist and finish would overwrite the recruiter's claim on retry."""
+    tid, _, eid = email_row
+
+    await persist(
+        tid, eid, _legacy_compound_response(), LLMResult(data={}, model="test/fast"),
+        COMPOUND_SOURCE,
+    )
+    await persist(
+        tid, eid, _compound_response(), LLMResult(data={}, model="test/fast"),
+        COMPOUND_SOURCE,
+    )
+
+    row = (
+        await admin_session.execute(
+            text(
+                "SELECT salary_min, salary_max FROM opportunities"
+                " WHERE email_message_id = :e"
+            ),
+            {"e": eid},
+        )
+    ).one()
+    assert row.salary_min is None
+    assert row.salary_max is None
+
+
 async def test_persist_records_evidence_with_its_validity(admin_session, email_row):
     tid, _, eid = email_row
 

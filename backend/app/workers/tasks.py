@@ -46,7 +46,23 @@ RESUME_JOB = {
     "classifying": "classify_email",
     "classified": "extract_email",
     "extracting": "extract_email",
+    # A worker killed mid-replay leaves the email at `replaying`. It must
+    # resume as a *replay*, not as a plain extraction: the row already exists,
+    # and `extract_email` would no-op on it (`persist(replay=False)`), silently
+    # discarding the improved values the replay exists to write.
+    "replaying": "replay_email",
 }
+
+# allow-hardcode: SQL statement, not a phrase list.
+# The replay half of extraction: emails whose latest extraction ran under an
+# older prompt than the deployment now uses, claimed atomically so two sweeps
+# cannot hand the same email to two workers. The claim writes, so it goes
+# through a SECURITY DEFINER resolver like `claim_fetched_email_rows` — this
+# sweep sets no `app.tenant_id`, and a direct UPDATE against `email_messages`
+# (FORCE ROW LEVEL SECURITY) would match nothing at all, silently.
+_CLAIM_REPLAY = text(
+    "SELECT * FROM claim_replay_email_rows(:limit, :prompt_version)"
+)
 
 # allow-hardcode: SQL statements, not a phrase list.
 _STALLED = text("SELECT * FROM stalled_email_rows(:pending_minutes, :working_minutes)")
@@ -340,6 +356,53 @@ async def classify_fetched() -> int:
     if rows:
         log.info("classify_batches_enqueued", emails=len(rows), batches=batches)
     return batches
+
+
+async def replay_stale_extractions() -> int:
+    """Re-read emails whose latest extraction ran under an older prompt.
+
+    The systemic half of the structured-salary fix: a prompt upgrade only helps
+    emails extracted *after* it lands, and old rows stay as the old prompt left
+    them — which is how a "Contract Biotechnologist" email extracted before the
+    structured salary bounds existed ended up with NULL salary columns. This
+    sweep finds exactly those emails (latest extraction's `prompt_version` is
+    not the one now configured), claims them to `replaying`, and enqueues
+    `replay_email`, which re-extracts under the current prompt and refreshes the
+    rows (`persist(replay=True)`).
+
+    Bounded per sweep so a backlog drains gradually rather than paying for every
+    historical email in one run. A replay that a worker crashes mid-flight is
+    recovered by `rescan_stuck` — `replaying` maps to `replay_email` in
+    `RESUME_JOB` — so nothing is stranded and nothing silently re-runs as a
+    plain extraction.
+    """
+    async with SessionLocal() as session:
+        rows = (
+            await session.execute(
+                _CLAIM_REPLAY,
+                {
+                    "limit": settings.REPLAY_SWEEP_LIMIT,
+                    "prompt_version": settings.PROMPT_VERSION,
+                },
+            )
+        ).all()
+        await session.commit()
+
+    requeued = 0
+    for row in rows:
+        if await enqueue(
+            "replay_email",
+            email_message_id=str(row.id),
+            tenant_id=str(row.tenant_id),
+            mailbox_id=str(row.mailbox_id),
+        ):
+            requeued += 1
+
+    if rows:
+        log.info(
+            "replay_extractions_claimed", emails=len(rows), requeued=requeued
+        )
+    return requeued
 
 
 async def renew_subscriptions() -> int:

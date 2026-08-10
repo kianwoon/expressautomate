@@ -468,6 +468,16 @@ class Settings(BaseSettings):
     # and enqueued as hundreds of batches at once, and every one of them would
     # be in flight — at `classifying` — before the first had answered.
     CLASSIFY_SWEEP_LIMIT: int = Field(default=200, gt=0)
+    # Deliberate re-extraction of emails whose latest extraction ran under an
+    # older prompt version (see `replay_stale_extractions` in tasks.py). On its
+    # own, slower clock than classification: every replayed email costs a model
+    # call, so a prompt upgrade drains a backlog gradually rather than paying
+    # for all of it at once. The claim resolver caps a single sweep too, and
+    # `RESUME_JOB` maps a worker-killed `replaying` row back to `replay_email`,
+    # so nothing is stranded and nothing is silently re-run as a plain
+    # extraction.
+    REPLAY_SWEEP_INTERVAL_SECONDS: float = Field(default=600.0, gt=0)
+    REPLAY_SWEEP_LIMIT: int = Field(default=25, gt=0)
     # Generous next to GRAPH_TIMEOUT_SECONDS on purpose: a long recruitment
     # email on a strong model routinely spends a minute generating, and a
     # timeout here costs the whole extraction plus a retry's worth of tokens.

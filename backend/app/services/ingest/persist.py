@@ -12,19 +12,27 @@ inserts nothing the second time. Without that, the retry minted fresh ids, the
 notification dedupe index never fired, and the recruiter was told twice about
 one vacancy.
 
-The cost is that a deliberate *replay* under a better prompt is currently a
-no-op for opportunities: the new `extractions` row lands with its evidence, but
-the improved field values are discarded by the same `ON CONFLICT DO NOTHING`
-that makes retries safe. Nothing distinguishes the two cases today because
-nothing replays yet. Whoever builds replay must separate them — most likely by
-keying the id on the extraction rather than the email — and should not simply
-drop the conflict clause, which would restore the duplicate-notification bug.
+The cost used to be that a deliberate *replay* under a better prompt was a no-op
+for opportunities: the new `extractions` row landed with its evidence, but the
+improved field values were discarded by the same `ON CONFLICT DO NOTHING` that
+makes retries safe. Replay now exists — `replay_stale_extractions` re-reads
+emails whose latest extraction ran under an older prompt — and it is separated
+from retry by an explicit `replay=True` on `persist`, which refreshes only the
+extraction-derived columns (`_REPLAYABLE`) and never the columns a person or the
+pipeline decided (`assigned_user_id`, `client_id`, `opportunity_field_overrides`
+corrections, a `reviewed` sign-off, a lawful `sex_requirement`). The conflict
+clause was never dropped, so the duplicate-notification bug the clause exists to
+prevent stays prevented: a replay notifies nobody, because a vacancy that
+already exists is not new.
 
 Positional keying carries a second caveat worth knowing before replay exists:
 it assumes the model returns the same jobs in the same order for the same
 email. That holds at temperature zero and does not hold across a prompt or
 model change, where job 2 of the new run may be a different vacancy from job 2
-of the old one.
+of the old one. The replay UPDATE therefore refreshes the row the id names and
+leaves identity matching to the review queue — a row whose title/company/location
+changed under the new prompt is a different vacancy and the reviewer sees both
+the old and new values in the audit trail.
 
 One deliberate UPDATE exists: `_maybe_supersede` points an older open
 opportunity at the row that just replaced it when a later email *changes* the
@@ -163,6 +171,44 @@ _INSERT_EVIDENCE = text(
 # because a pattern built from the folded text would look for `cf` and match
 # the letters of an ordinary word.
 _SELECT_GLOSSARY = text("SELECT code, meaning, attribute FROM glossary_codes ORDER BY code")
+
+# The columns a deliberate replay may refresh, keyed by the model field they
+# come from. Deliberately NOT every column the INSERT writes: `client_id` and
+# `assigned_user_id` are matched/claimed once and may have been corrected by a
+# person since, `received_datetime` is denormalised from the email (unchanged),
+# and `superseded_by_opportunity_id`/`placement_type` are lifecycle state. A
+# replay refreshes what the extraction produced; it never re-decides what a
+# human or the pipeline already decided.
+# allow-hardcode: the target columns of a table, not configuration.
+_REPLAYABLE = {
+    "company_name_raw",
+    "job_title_raw",
+    "job_description",
+    "requirements",
+    "working_hours_raw",
+    "work_arrangement",
+    "employment_type",
+    "duration_raw",
+    "location_raw",
+    "salary_min",
+    "salary_max",
+    "salary_currency",
+    "salary_period",
+    "salary_raw",
+    "skills",
+    "quality_state",
+    "review_status",
+    "sex_requirement",
+    "sex_requirement_reason",
+}
+
+# Which columns a human may have corrected, and that replay must therefore not
+# overwrite. `field_name` on `opportunity_field_overrides` is the DB column name
+# (the same vocabulary `_SIMPLE` maps to), so the check is a plain membership
+# test against the columns replay would otherwise write.
+_SELECT_OVERRIDES = text(
+    "SELECT field_name FROM opportunity_field_overrides WHERE opportunity_id = :id"
+)
 
 # The matcher needs the sender, which lives on the message rather than in the
 # extraction. Read inside the same transaction so it cannot disagree with what
@@ -407,6 +453,7 @@ async def persist(
     *,
     original_sender_email: str | None = None,
     original_sender_name: str | None = None,
+    replay: bool = False,
 ) -> list[uuid.UUID]:
     """Record one model run and every vacancy it found. Returns the new ids.
 
@@ -414,6 +461,18 @@ async def persist(
     without its evidence, or two of three vacancies — would look like a
     complete answer to everything downstream, and there is nothing in the data
     that could later tell it apart from one.
+
+    `replay` separates the two ways a job reaches here. The ordinary path
+    (`replay=False`) is a fresh extraction or a crash-retry: the deterministic
+    opportunity ids collide with the rows the first run wrote, and
+    `ON CONFLICT DO NOTHING` leaves them exactly as they were — which is what
+    keeps a retry from clobbering a recruiter's claim. A deliberate replay
+    (`replay=True`, enqueued by `replay_stale_extractions`) is a re-read of the
+    same email under a newer prompt, and its whole point is a *better* answer:
+    the extraction-derived columns are refreshed (see `_REPLAYABLE`), while the
+    columns a person or the pipeline decided — `assigned_user_id`, `client_id`,
+    human corrections in `opportunity_field_overrides`, a `reviewed` sign-off, a
+    lawful `sex_requirement` — are left untouched.
     """
     extraction_id = uuid.uuid4()
     opportunity_ids: list[uuid.UUID] = []
@@ -491,6 +550,7 @@ async def persist(
                 len(jobs),
                 client_id=matched.client_id if matched else None,
                 assigned_user_id=matched.assigned_user_id if matched else None,
+                replay=replay,
             )
             # A revision link is one-shot: it must only point at a row this run
             # actually wrote. On a retry the id already exists and `inserted`
@@ -531,51 +591,58 @@ async def persist(
             # the exception itself were caught, so the savepoint is what keeps
             # the session usable afterwards, not just the try/except.
             state = quality_state(job, source)
-            try:
-                async with session.begin_nested():
-                    delivery_ids.extend(
-                        await emit(
-                            OpportunityEvent(
-                                kind=(
-                                    EVENT_OPPORTUNITY_NEEDS_REVIEW
-                                    if state == "needs_review"
-                                    else EVENT_OPPORTUNITY_NEW
+            # A notification is for a vacancy that is new to the recruiter. A
+            # replay is not: the row already exists and the recruiter already
+            # saw it, so re-notifying would be the duplicate-notification bug
+            # the module docstring warns about. Gate on `inserted` — the first
+            # insert of a row notifies, and neither a retry (id already written)
+            # nor a replay (same) does.
+            if inserted:
+                try:
+                    async with session.begin_nested():
+                        delivery_ids.extend(
+                            await emit(
+                                OpportunityEvent(
+                                    kind=(
+                                        EVENT_OPPORTUNITY_NEEDS_REVIEW
+                                        if state == "needs_review"
+                                        else EVENT_OPPORTUNITY_NEW
+                                    ),
+                                    tenant_id=tenant_id,
+                                    opportunity_id=opportunity_id,
+                                    # Raw, not normalised: this is what a
+                                    # recruiter recognises, and the message is
+                                    # read by a person.
+                                    job_title=_value(job.job_title),
+                                    company_name=_value(job.company),
+                                    location=_value(job.location),
+                                    salary=_value(job.salary),
+                                    # An assigned job order is one person's work;
+                                    # an unassigned one is the queue's, and the
+                                    # queue is everybody (`None`). An empty tuple
+                                    # would mean nobody at all.
+                                    recipient_user_ids=(
+                                        (matched.assigned_user_id,)
+                                        if matched and matched.assigned_user_id
+                                        else None
+                                    ),
                                 ),
-                                tenant_id=tenant_id,
-                                opportunity_id=opportunity_id,
-                                # Raw, not normalised: this is what a
-                                # recruiter recognises, and the message is
-                                # read by a person.
-                                job_title=_value(job.job_title),
-                                company_name=_value(job.company),
-                                location=_value(job.location),
-                                salary=_value(job.salary),
-                                # An assigned job order is one person's work;
-                                # an unassigned one is the queue's, and the
-                                # queue is everybody (`None`). An empty tuple
-                                # would mean nobody at all.
-                                recipient_user_ids=(
-                                    (matched.assigned_user_id,)
-                                    if matched and matched.assigned_user_id
-                                    else None
-                                ),
-                            ),
-                            session,
+                                session,
+                            )
                         )
+                except Exception:
+                    # Logged, not raised: a lost notification must be visible to
+                    # an operator, but it must never be the reason a valid
+                    # extraction disappears. Anything emit() partially wrote is
+                    # already gone — the savepoint rolled it back — so nothing
+                    # here is added to delivery_ids and enqueue_deliveries() will
+                    # never be asked about ids that do not exist.
+                    log.exception(
+                        "notify_emit_failed",
+                        tenant_id=str(tenant_id),
+                        opportunity_id=str(opportunity_id),
+                        extraction_id=str(extraction_id),
                     )
-            except Exception:
-                # Logged, not raised: a lost notification must be visible to
-                # an operator, but it must never be the reason a valid
-                # extraction disappears. Anything emit() partially wrote is
-                # already gone — the savepoint rolled it back — so nothing
-                # here is added to delivery_ids and enqueue_deliveries() will
-                # never be asked about ids that do not exist.
-                log.exception(
-                    "notify_emit_failed",
-                    tenant_id=str(tenant_id),
-                    opportunity_id=str(opportunity_id),
-                    extraction_id=str(extraction_id),
-                )
 
     # Outside the transaction, deliberately. Redis cannot join it, and a job
     # that starts before its row is committed reads nothing and exits without
@@ -871,14 +938,32 @@ async def _insert_opportunity(
     job_count: int,
     client_id: uuid.UUID | None = None,
     assigned_user_id: uuid.UUID | None = None,
+    replay: bool = False,
 ) -> bool:
-    """Write one vacancy. `ON CONFLICT (id) DO NOTHING` — there is no update
-    path, and that is what makes the assignment safe under replay.
+    """Write one vacancy, or refresh it under a deliberate replay.
 
-    `extract_email` re-runs after a crash, and a replay that recomputed
-    `assigned_user_id` would take a job order back off a recruiter who had
-    claimed it in the meantime. The claim is a person's decision; the match is
-    a guess about a starting point. Only the first insert gets to set it.
+    The ordinary path (`replay=False`) is `ON CONFLICT (id) DO NOTHING` — there
+    is no update path, and that is what makes the assignment safe under a
+    crash-retry. `extract_email` re-runs after a crash, and a retry that
+    recomputed `assigned_user_id` would take a job order back off a recruiter
+    who had claimed it in the meantime. The claim is a person's decision; the
+    match is a guess about a starting point. Only the first insert gets to set
+    it.
+
+    A deliberate replay (`replay=True`) is the one deliberate UPDATE this
+    module issues. The row already exists — a retry produced the same
+    deterministic id and inserted nothing — and the whole point of replaying is
+    a better answer under a newer prompt. So the extraction-derived columns are
+    refreshed, subject to the same discipline as everything else here:
+
+    - `assigned_user_id` and `client_id` are never touched (a claim / a match,
+      both possibly corrected by a person since the first run).
+    - a column with a human correction in `opportunity_field_overrides` is
+      skipped — replay must never overwrite a recruiter's fix.
+    - `review_status = 'reviewed'` is preserved: a person signed off the row,
+      and a re-read of the same email does not undo that.
+    - `sex_requirement` is preserved when a person set it (`sex_requirement_set_by`
+      is not NULL); only the pipeline-derived value is refreshed.
 
     `sex_requirement` is derived from the client's shorthand codes that apply to
     this vacancy (`C/F`/`O/F` → female), set alongside an audit reason naming the
@@ -917,7 +1002,70 @@ async def _insert_opportunity(
     # only ever be pointed at a row that actually appeared in this run, or a
     # retry under a different prompt would link against an id whose stored
     # content came from the *previous* run.
-    return result.rowcount == 1
+    inserted = result.rowcount == 1
+    if not inserted and replay:
+        # The refresh is keyed by COLUMN name, while `params` above is keyed by
+        # model field name for the `_SIMPLE` fields — replay maps them across so
+        # `_refresh_opportunity` can compare against `opportunity_field_overrides`
+        # (whose `field_name` is the DB column name).
+        column_params = dict(params)
+        for field_name, column in _SIMPLE.items():
+            column_params[column] = params[field_name]
+        await _refresh_opportunity(session, opportunity_id, column_params)
+    return inserted
+
+
+async def _refresh_opportunity(session, opportunity_id: uuid.UUID, params: dict) -> None:
+    """Refresh a row in place after a deliberate replay.
+
+    Writes only the columns in `_REPLAYABLE`, minus any column a person
+    corrected in `opportunity_field_overrides`. A human fix is the one thing
+    this module must never clobber, so the overrides are read in the same
+    transaction as the write — a correction landing between the two would be
+    overwritten, which is exactly the race this ordering closes.
+
+    `review_status` and `sex_requirement` carry their own guards inside the
+    UPDATE: `reviewed` is a person's sign-off and `sex_requirement_set_by` marks
+    a lawful judgement, and neither is a fresh read of the same email entitled
+    to erase.
+    """
+    overridden = {
+        row[0]
+        for row in (
+            await session.execute(_SELECT_OVERRIDES, {"id": opportunity_id})
+        ).all()
+    }
+    columns = sorted(_REPLAYABLE - overridden)
+    if not columns:
+        return
+    setters = []
+    values = {"id": opportunity_id}
+    for column in columns:
+        if column == "review_status":
+            setters.append(
+                "review_status = CASE WHEN review_status = 'reviewed'"
+                " THEN review_status ELSE :review_status END"
+            )
+            values["review_status"] = params["review_status"]
+        elif column == "sex_requirement":
+            setters.append(
+                "sex_requirement = CASE WHEN sex_requirement_set_by IS NULL"
+                " THEN :sex_requirement ELSE sex_requirement END"
+            )
+            values["sex_requirement"] = params["sex_requirement"]
+        elif column == "sex_requirement_reason":
+            setters.append(
+                "sex_requirement_reason = CASE WHEN sex_requirement_set_by IS NULL"
+                " THEN :sex_requirement_reason ELSE sex_requirement_reason END"
+            )
+            values["sex_requirement_reason"] = params["sex_requirement_reason"]
+        else:
+            setters.append(f"{column} = :{column}")
+            values[column] = params[column]
+    await session.execute(
+        text(f"UPDATE opportunities SET {', '.join(setters)} WHERE id = :id"),
+        values,
+    )
 
 
 def _skills(job: ExtractedJob) -> list[str]:

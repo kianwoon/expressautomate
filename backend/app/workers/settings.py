@@ -33,6 +33,7 @@ from app.workers.jobs import (
     fetch_email,
     reauthorize_subscription,
     recreate_subscription,
+    replay_email,
 )
 from app.workers.queue import redis_settings
 from app.workers.sourcing_jobs import run_sourcing
@@ -79,6 +80,7 @@ class WorkerSettings:
         classify_batch,
         classify_email,
         extract_email,
+        replay_email,
         backfill_mailbox_job,
         delta_sync_mailbox,
         recreate_subscription,

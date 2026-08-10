@@ -176,6 +176,19 @@ _FINISH_EXTRACTION = text(
     " WHERE id = :id"
 )
 
+# The replay claim. `replay_stale_extractions` has already moved the email to
+# `replaying` (claim_replay_email_rows, a SECURITY DEFINER resolver that runs
+# with no tenant context); this job accepts exactly that state and none other,
+# so a plain `extract_email` can never accidentally consume a replay claim and
+# run it without the replay flag. A row stuck at `replaying` after a killed
+# worker is re-enqueued by `rescan_stuck` (RESUME_JOB maps it here), which is
+# what makes a mid-replay crash recoverable as a replay rather than as an
+# ordinary extraction that would no-op on the already-existing rows.
+_REPLAY_CLAIM = text(
+    "SELECT processing_status, body_html_r2_key, subject, sender_email"
+    " FROM email_messages WHERE id = :id AND processing_status = 'replaying'"
+)
+
 _FAIL_EXTRACTION = text(
     "UPDATE email_messages SET processing_status = 'failed', last_error = :error"
     " WHERE id = :id"
@@ -694,6 +707,100 @@ async def extract_email(
 
     log.info(
         "extraction_recorded",
+        email_message_id=email_message_id,
+        opportunities=len(ids),
+        model=result.model,
+    )
+
+
+async def replay_email(
+    ctx, *, email_message_id: str, tenant_id: str, mailbox_id: str
+) -> None:
+    """Re-read one already-extracted email under the current prompt.
+
+    The deliberate half of extraction: `replay_stale_extractions` finds emails
+    whose latest extraction ran under an older prompt version, claims them to
+    `replaying`, and enqueues this job. `persist(replay=True)` refreshes the
+    extraction-derived columns of the existing opportunity rows — the whole
+    point of replaying is that a newer prompt answers better (see
+    `_REPLAYABLE` in persist.py for what may and may not change).
+
+    Deliberately NOT the same job as `extract_email`, even though the body is
+    nearly identical. The difference is the one flag: `extract_email` runs
+    `persist(replay=False)`, so a retry of it can never accidentally refresh —
+    and refresh is exactly what a crash-recovered replay must do, which is why
+    `RESUME_JOB` maps `replaying` here and not to `extract_email`. Sharing the
+    body through a flag would let one misplaced call erase that separation.
+    """
+    from app.services.ingest.extract import extract
+    from app.services.ingest.forwarding import extract_original_sender
+    from app.services.ingest.persist import persist
+    from app.services.ingest.preprocess import to_text
+    from app.services.llm.client import LLMInvalidJSON
+
+    if not settings.deepseek_configured(settings.EXTRACTION_MODEL_FAST):
+        log.error(
+            "llm_not_configured",
+            job="replay_email",
+            detail=(
+                "Set DEEPSEEK_BASE_URL, DEEPSEEK_API_KEY and EXTRACTION_MODEL_FAST."
+            ),
+        )
+        raise RuntimeError("Extraction has no model configured.")
+
+    tenant = uuid.UUID(tenant_id)
+    mailbox = uuid.UUID(mailbox_id)
+
+    async with tenant_session(tenant) as session:
+        row = (
+            await session.execute(
+                _REPLAY_CLAIM, {"id": email_message_id, "mailbox_id": mailbox}
+            )
+        ).one_or_none()
+
+    if row is None:
+        # Unknown row, a tenant that does not own it, or a claim the sweep never
+        # made — RLS already decided the first two, and the status guard decided
+        # the third. Nothing to do and nothing to report.
+        log.info("replay_skipped_unknown_row", email_message_id=email_message_id)
+        return
+    if row.processing_status != "replaying":
+        log.info(
+            "replay_skipped_not_claimed",
+            email_message_id=email_message_id,
+            status=row.processing_status,
+        )
+        return
+
+    html = await body_store().get(row.body_html_r2_key) or ""
+    source = to_text(html, subject=row.subject, sender=row.sender_email)
+
+    try:
+        response, result = await extract(source)
+    except LLMInvalidJSON as exc:
+        # Same discipline as `extract_email`: both models were asked and neither
+        # answered in the required shape. The email is left for a human to look
+        # at rather than retried on the same tokens.
+        log.warning("replay_failed", email_message_id=email_message_id, error=str(exc))
+        await _fail_extraction(tenant, email_message_id, str(exc))
+        return
+
+    original_sender = extract_original_sender(source)
+    ids = await persist(
+        tenant, uuid.UUID(email_message_id), response, result, source,
+        original_sender_email=original_sender.email if original_sender else None,
+        original_sender_name=original_sender.name if original_sender else None,
+        replay=True,
+    )
+    status = "extracted" if ids else "no_opportunity"
+
+    async with tenant_session(tenant) as session:
+        await session.execute(
+            _FINISH_EXTRACTION, {"status": status, "id": email_message_id}
+        )
+
+    log.info(
+        "replay_recorded",
         email_message_id=email_message_id,
         opportunities=len(ids),
         model=result.model,

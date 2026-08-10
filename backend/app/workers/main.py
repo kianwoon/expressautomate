@@ -50,6 +50,7 @@ def build_tasks() -> list[PeriodicTask]:
         ensure_subscriptions,
         flush_notifications,
         renew_subscriptions,
+        replay_stale_extractions,
         rescan_stuck,
         sweep_stale_wa_sends,
         sweep_wa_liveness,
@@ -96,6 +97,12 @@ def build_tasks() -> list[PeriodicTask]:
         # `app/workers/tasks.py`.
         await sweep_wa_liveness()
 
+    async def _replay() -> None:
+        # Re-read emails extracted under an older prompt so a prompt upgrade
+        # refreshes historical rows, not just new ones. Its own clock: replay
+        # costs a model call per email, so it drains a backlog gradually.
+        await replay_stale_extractions()
+
     return [
         PeriodicTask("rescan_stuck", settings.RESCAN_INTERVAL_SECONDS, _rescan),
         PeriodicTask(
@@ -120,6 +127,11 @@ def build_tasks() -> list[PeriodicTask]:
             "sweep_wa_liveness",
             settings.WA_LIVENESS_SWEEP_INTERVAL_SECONDS,
             _sweep_wa_liveness,
+        ),
+        PeriodicTask(
+            "replay_stale_extractions",
+            settings.REPLAY_SWEEP_INTERVAL_SECONDS,
+            _replay,
         ),
     ]
 
