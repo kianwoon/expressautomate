@@ -697,6 +697,32 @@ async def _maybe_supersede(
 
     changed = [c for c in predecessors if _requirements_changed(job, codes, job_count, c)]
     if not changed:
+        # Identical content. A same-conversation re-forward is already hidden
+        # by the read-time dedupe (a later row in the same thread), so there is
+        # nothing to write. A *cross-conversation* copy — the client or a buddy
+        # sends the same job order again as a fresh email — is not: the dedupe
+        # partitions by conversation_id and would let it show as a second open
+        # row. Point the new row at the existing one, so the dedupe hides it
+        # (a row with `superseded_by` set is hidden) and the loader resolves
+        # the copy to the canonical row. `used_fallback` means this is the
+        # cross-conversation path and the uniqueness guard above already
+        # reduced it to one unambiguous predecessor.
+        if used_fallback:
+            canonical = predecessors[0]
+            await session.execute(
+                update(Opportunity)
+                .where(Opportunity.id == new_opportunity_id)
+                .values(
+                    superseded_by_opportunity_id=canonical.id,
+                    superseded_at=func.now(),
+                )
+            )
+            log.info(
+                "opportunity_duplicate_linked",
+                tenant_id=str(tenant_id),
+                duplicate_opportunity_id=str(new_opportunity_id),
+                canonical_opportunity_id=str(canonical.id),
+            )
         return
 
     # Every current open instance of this vacancy is superseded, not just the

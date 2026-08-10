@@ -96,6 +96,16 @@ def duplicate_opportunity_ids(visible) -> Subquery:
     # Rows to hide: superseded rows, and rows whose conversation has an earlier
     # email than their own — the later re-forwards — unless they are the
     # successor of a supersede link (the current revision).
+    #
+    # OUTER join to `open_earliest`, and the join must not be allowed to drop
+    # the superseded branch. A duplicate in a conversation of its own — an
+    # identical job order that arrived as a brand-new email — has no open
+    # earliest row in that conversation (its only row is itself, now
+    # superseded), so an INNER join would discard it before the
+    # `superseded_by_opportunity_id IS NOT NULL` predicate could match. With an
+    # outer join the superseded row survives and is hidden by that branch; the
+    # later-re-forward branch simply never fires for it (`earliest_at` is NULL,
+    # so the comparison is NULL and the `and_` collapses).
     dupes: Select = (
         select(Opportunity.id)
         .select_from(Opportunity)
@@ -103,6 +113,7 @@ def duplicate_opportunity_ids(visible) -> Subquery:
         .join(
             open_earliest,
             open_earliest.c.conversation_id == email.conversation_id,
+            isouter=True,
         )
         .where(
             or_(

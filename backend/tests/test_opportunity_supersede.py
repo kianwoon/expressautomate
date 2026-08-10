@@ -624,3 +624,80 @@ async def test_a_revision_carries_the_assignee_onto_the_successor(
         assert new_row.superseded_by_opportunity_id is None
     finally:
         await cleanup_tenant(tenant_id)
+
+
+async def test_an_identical_copy_in_a_new_thread_is_hidden_by_default(
+    client, captured_events,
+) -> None:
+    """A duplicate that arrives as a brand-new email (different conversation)
+    must not show as a second open row — the read-time dedupe only collapses
+    same-conversation re-forwards, so the write path links the copy to the
+    canonical row."""
+    from app.db.rls import tenant_session
+    from app.services.ingest.persist import persist
+    from app.services.visibility import load_visible_opportunity
+
+    tenant_id, recruiter = await seed_tenant_with_user()
+    try:
+        _, first_message = await _mailbox_and_message(
+            tenant_id, recruiter, sender_email="hr@acme.com.sg",
+            conversation_id="conv-dup-a",
+        )
+        _, second_message = await _mailbox_and_message(
+            tenant_id, recruiter, sender_email="hr@acme.com.sg",
+            conversation_id="conv-dup-b",  # a different thread, same content
+        )
+
+        first, result, source = _extraction("Acme Pte Ltd", "Female, Chinese only")
+        first_ids = await persist(tenant_id, first_message, first, result, source=source)
+
+        same, result, source = _extraction("Acme Pte Ltd", "Female, Chinese only")
+        second_ids = await persist(tenant_id, second_message, same, result, source=source)
+
+        old_row = await _opportunity_row(first_ids[0])
+        new_row = await _opportunity_row(second_ids[0])
+        # The copy is linked to the canonical row, not the other way round.
+        assert new_row.superseded_by_opportunity_id == old_row.id
+        assert old_row.superseded_by_opportunity_id is None
+
+        # The loader resolves the copy to the canonical row.
+        async with tenant_session(tenant_id) as session:
+            loaded = await load_visible_opportunity(
+                session, second_ids[0], recruiter, "recruiter"
+            )
+            assert loaded.id == first_ids[0]
+    finally:
+        await cleanup_tenant(tenant_id)
+
+
+async def test_the_list_hides_a_cross_conversation_duplicate_by_default(
+    client, captured_events,
+) -> None:
+    """Default list shows one row for an identical job order, even when it
+    arrived twice in two different conversations."""
+    from app.services.ingest.persist import persist
+
+    tenant_id, recruiter = await seed_tenant_with_user()
+    try:
+        _, first_message = await _mailbox_and_message(
+            tenant_id, recruiter, sender_email="hr@acme.com.sg",
+            conversation_id="conv-dup-c",
+        )
+        _, second_message = await _mailbox_and_message(
+            tenant_id, recruiter, sender_email="hr@acme.com.sg",
+            conversation_id="conv-dup-d",
+        )
+
+        first, result, source = _extraction("Acme Pte Ltd", "Female, Chinese only")
+        first_ids = await persist(tenant_id, first_message, first, result, source=source)
+        same, result, source = _extraction("Acme Pte Ltd", "Female, Chinese only")
+        second_ids = await persist(tenant_id, second_message, same, result, source=source)
+
+        sign_in(client, recruiter, tenant_id)
+        body = (await client.get("/api/opportunities?dedupe=true")).json()
+        shown = {row["id"] for row in body["items"]}
+        assert str(first_ids[0]) in shown
+        assert str(second_ids[0]) not in shown
+        assert body["hidden"] >= 1
+    finally:
+        await cleanup_tenant(tenant_id)
