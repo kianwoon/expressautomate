@@ -151,11 +151,36 @@ def whatsapp_draft_text(
     agency_name: str,
     job_title: str | None,
 ) -> str:
-    # With a title: "...regarding a Senior Engineer opportunity." Without one,
-    # the sentence is rewritten rather than leaving a blank ("regarding a
-    # opportunity") or a dangling article ("regarding a  opportunity") — step
-    # 1 has no job selector, so a candidate with no `current_title` on file is
-    # the common case, not an edge case.
+    return (
+        f"Hi {candidate_greeting_name},\n\n"
+        f"{whatsapp_message_body(
+            recruiter_name=recruiter_name,
+            agency_name=agency_name,
+            job_title=job_title,
+        )}"
+    )
+
+
+def whatsapp_message_body(
+    *,
+    recruiter_name: str | None,
+    agency_name: str,
+    job_title: str | None,
+) -> str:
+    """The outreach message without the greeting line.
+
+    Extracted from `whatsapp_draft_text` for the batch flow: a batch of
+    shortlisted candidates shares ONE body, and each candidate gets their own
+    greeting name prepended at send time. The greeting is the only part of
+    the template that is per-candidate, so the shared body is the whole
+    template minus that one line.
+
+    With a title: "...regarding a Senior Engineer opportunity." Without one,
+    the sentence is rewritten rather than leaving a blank ("regarding a
+    opportunity") or a dangling article ("regarding a  opportunity") — step 1
+    has no job selector, so a candidate with no `current_title` on file is
+    the common case, not an edge case.
+    """
     if job_title:
         article = _article_for(job_title)
         interest_line = (
@@ -173,7 +198,6 @@ def whatsapp_draft_text(
     else:
         intro_line = f"I am writing from {agency_name}."
     return (
-        f"Hi {candidate_greeting_name},\n\n"
         f"{intro_line}\n\n"
         f"{interest_line}\n\n"
         "Would you be available for a quick discussion?"
@@ -229,6 +253,42 @@ async def whatsapp_draft(request: Request, candidate_id: uuid.UUID) -> dict:
         job_title=candidate.current_title,
     )
     return {"phone_e164": candidate.phone_e164, "message": message}
+
+
+@router.get("/whatsapp-batch-draft")
+async def whatsapp_batch_draft(request: Request, job_title: str | None = None) -> dict:
+    """The message body a recruiter edits once and sends to several shortlisted
+    candidates.
+
+    The single-candidate draft (`GET /candidates/{id}/whatsapp-draft`) greets
+    one person by name; a batch greets each candidate individually at send
+    time, so the shared thing the recruiter edits is the template *without*
+    the greeting line — `whatsapp_message_body`. Rendered server-side for the
+    same reason the single draft is: the template lives in one testable place
+    instead of being duplicated in the frontend.
+
+    `job_title` is optional because the shortlist this feeds is for one job
+    order — the recruiter is reaching out *about that order*, so the body can
+    name it. The single-candidate draft instead uses the candidate's own
+    `current_title`, which is the right detail when messaging one person and
+    not a shared order.
+    """
+    user_uuid, tenant_uuid, _ = await _require_session_with_role(request)
+    async with tenant_session(tenant_uuid) as session:
+        user = (
+            await session.execute(select(User).where(User.id == user_uuid))
+        ).scalar_one()
+        tenant_name = (
+            await session.execute(select(Tenant.name).where(Tenant.id == tenant_uuid))
+        ).scalar_one()
+
+    return {
+        "message": whatsapp_message_body(
+            recruiter_name=recruiter_name(user.preferred_name, user.display_name),
+            agency_name=tenant_name,
+            job_title=job_title,
+        )
+    }
 
 
 class WhatsAppTranslateIn(BaseModel):
@@ -297,6 +357,16 @@ class WhatsAppSendIn(BaseModel):
     `GET /whatsapp-draft` does, rather than a second copy of the template
     living in whichever caller forgot to fetch the draft first.
 
+    `prepend_greeting` turns `message` from the whole message into the shared
+    *body* of a batch outreach: the server prepends `Hi {candidate_name},`
+    from the candidate's own row. The name is deliberately not taken from the
+    request — a client that sends the greeting it wants is a client that can
+    fabricate one, which §15 forbids. The batch modal edits the body once and
+    sends it to N candidates; each send still goes through this same endpoint,
+    so the spacing floor, the daily cap and the idempotency key all apply per
+    candidate exactly as they do for a single send. Requires `message`: a
+    greeting with no body is a message nobody chose.
+
     `client_request_id` is required, and required rather than optional on
     purpose: what it prevents is a recruiter sending the same message to the
     same candidate twice because the first response was slow, and an optional
@@ -307,6 +377,7 @@ class WhatsAppSendIn(BaseModel):
 
     message: str | None = None
     client_request_id: uuid.UUID
+    prepend_greeting: bool = False
 
 
 # The status in a 200 body. A plain `str` rather than a closed `Literal`, so
@@ -781,7 +852,23 @@ async def whatsapp_send(
         # Inside the tenant session, so agency B asking about agency A's
         # candidate gets a 404 before anything else happens (§18).
         candidate = await load_visible_candidate(session, candidate_id, user_uuid, role)
-        message = body.message or await _draft_for(session, candidate, user_uuid, tenant_uuid)
+        if body.prepend_greeting:
+            # Batch outreach: `message` is the shared body, and the greeting
+            # line is built here from the candidate's own row — never from
+            # the request. The name is the whole `full_name` for the same
+            # reason the draft route uses it (see `whatsapp_draft`), and it
+            # must be the same name the recruiter saw in the modal.
+            if not body.message or not body.message.strip():
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        "A message body is required for a batch send — a "
+                        "greeting with no message reaches nobody."
+                    ),
+                )
+            message = f"Hi {candidate.full_name.strip()},\n\n{body.message}"
+        else:
+            message = body.message or await _draft_for(session, candidate, user_uuid, tenant_uuid)
         phone_e164 = candidate.phone_e164
 
     if phone_e164 is None:

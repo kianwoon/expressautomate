@@ -7,7 +7,8 @@ import { getClient, type Client } from "./clients";
 import { ClientLogo } from "./clients/client-logo";
 import { HeldByColleague } from "./candidates/candidate-form";
 import type { CandidateCollision } from "./candidates";
-import { WhatsappButton } from "./candidates/candidate-whatsapp";
+import { WhatsappButton, WhatsappGlyph } from "./candidates/candidate-whatsapp";
+import { WhatsappBatchModal } from "./job-orders-whatsapp-batch";
 // Only `clients/page.tsx` imported this before — `ClientLogo`'s own classes
 // (`cl-logo-*`) live here, and this screen is the first place outside the
 // clients panel to render that component.
@@ -113,6 +114,14 @@ export function Shortlist({ row }: { row: Opportunity }) {
   const [reclaimFocus, setReclaimFocus] = useState(false);
   const startRef = useRef<HTMLButtonElement | null>(null);
 
+  // Batch WhatsApp outreach: which candidates the recruiter has ticked for
+  // one shared message, and whether the batch modal is open. Selection only
+  // ever holds ids the recruiter can actually WhatsApp (see `selectable` in
+  // `Match`), so a redacted match — held by a colleague, no number to reach —
+  // can never be selected.
+  const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
+  const [batchOpen, setBatchOpen] = useState(false);
+
   // The run history — every run this job order has ever had, newest first —
   // is the "the list I sent on Tuesday" index. `selectedRunId` is null while
   // the panel shows the latest run (the default, and the one it polls); set
@@ -157,6 +166,18 @@ export function Shortlist({ row }: { row: Opportunity }) {
           .map((match) => match.candidate_id);
         setContacts(await contactsFor(ids, known.current));
         setEligibility(await eligibilityFor(row.id, ids, knownEligibility.current));
+        // A selection from a previous run — or a match that turned redacted —
+        // must not linger as a ticked id that is no longer on the list. Prune
+        // to what is actually visible now; the batch modal reads from this
+        // same list, so it can never offer a candidate that vanished.
+        setSelected((prev) => {
+          const keep = new Set(ids);
+          let changed = false;
+          for (const id of prev) {
+            if (!keep.has(id)) changed = true;
+          }
+          return changed ? new Set([...prev].filter((id) => keep.has(id))) : prev;
+        });
       }
     } catch (err) {
       setView((prev) =>
@@ -275,6 +296,11 @@ export function Shortlist({ row }: { row: Opportunity }) {
       setRuns((prev) => [started, ...prev.filter((r) => r.id !== started.id)]);
       setSubmitted(new Set());
       setEligibility(new Map());
+      // A fresh run is a fresh list: the batch selection belonged to the old
+      // one, and carrying it across would offer candidates that are no longer
+      // there (or that a re-run ranked differently).
+      setSelected(new Set());
+      setBatchOpen(false);
       // Contacts are joined per candidate id and would otherwise survive from
       // the previous run — harmless for stable ids, but a re-run should not
       // keep displaying names it has not fetched for this run. The server's
@@ -325,6 +351,46 @@ export function Shortlist({ row }: { row: Opportunity }) {
   }
 
   const matches = view.status === "ready" ? view.data.matches : [];
+
+  // Which matches the recruiter can tick for a batch WhatsApp message: visible
+  // (never a redacted match held by a colleague) AND contact-known (the id
+  // failed to read, so there is no name or number to reach). The card-level
+  // tile stays on a no-number candidate as a disabled hint; selection is
+  // stricter — a candidate with no number would silently be skipped in the
+  // batch, and offering a tick for someone the batch cannot reach is how a
+  // recruiter ends up trusting a "sent to 5" that reached 4.
+  const selectableMatch = (match: SourcingMatch): boolean =>
+    match.visible !== false && contacts.get(match.candidate_id)?.phone_e164 != null;
+
+  const selectableCount = matches.filter(selectableMatch).length;
+  const isTopSelected = (n: number): boolean => {
+    const top = matches.filter(selectableMatch).slice(0, n).map((m) => m.candidate_id);
+    return top.length > 0 && top.every((id) => selected.has(id));
+  };
+  const selectTop = (n: number): void => {
+    setSelected(new Set(matches.filter(selectableMatch).slice(0, n).map((m) => m.candidate_id)));
+  };
+  const toggleSelect = (id: string): void => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+  // The batch modal reads the selected matches in rank order. `selected` only
+  // ever holds selectable ids, so every one of these has a contact with a
+  // number — no filter needed at the boundary.
+  const selectedCandidates = matches
+    .filter((m) => selected.has(m.candidate_id))
+    .map((m) => {
+      const contact = contacts.get(m.candidate_id);
+      return {
+        id: m.candidate_id,
+        full_name: contact?.full_name ?? m.candidate_id,
+        phone_e164: contact?.phone_e164 ?? null,
+      };
+    });
 
   return (
     <section className="src" aria-label="Shortlist">
@@ -395,6 +461,49 @@ export function Shortlist({ row }: { row: Opportunity }) {
                 Scores are a weighted match against this job order: how well each candidate&apos;s
                 record fits what the email asked for.
               </p>
+              {/* Batch WhatsApp outreach. Only meaningful once there is a
+                  choice to make — one candidate has no batch, they just have
+                  their own tile. The quick picks and the tickboxes select
+                  from the same `selected` set, and the button opens the batch
+                  modal with exactly those candidates. */}
+              {run.state === "done" && selectableCount > 1 && (
+                <div className="src-batch-bar">
+                  <div className="src-batch-quick">
+                    <span className="src-batch-quick-k">Message top</span>
+                    {[3, 5]
+                      .filter((n) => selectableCount >= n)
+                      .map((n) => (
+                        <button
+                          key={n}
+                          type="button"
+                          className="src-batch-quick-btn"
+                          onClick={() => selectTop(n)}
+                          aria-pressed={isTopSelected(n)}
+                        >
+                          Top {n}
+                        </button>
+                      ))}
+                    {selected.size > 0 && (
+                      <button
+                        type="button"
+                        className="src-batch-quick-btn"
+                        onClick={() => setSelected(new Set())}
+                      >
+                        Clear
+                      </button>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => setBatchOpen(true)}
+                    disabled={selected.size === 0}
+                  >
+                    <WhatsappGlyph size={16} />
+                    {selected.size === 0 ? "WhatsApp selected" : `WhatsApp ${selected.size} selected`}
+                  </button>
+                </div>
+              )}
               <ol className="src-list">
                 {matches.map((match, index) => (
                   <Match
@@ -408,6 +517,9 @@ export function Shortlist({ row }: { row: Opportunity }) {
                     busy={submitting === match.candidate_id}
                     disabled={submitting !== null}
                     error={rowError?.id === match.candidate_id ? rowError.message : null}
+                    selectable={selectableMatch(match)}
+                    selected={selected.has(match.candidate_id)}
+                    onToggle={() => toggleSelect(match.candidate_id)}
                     onSubmit={(clientId) => void submit(match.candidate_id, clientId)}
                   />
                 ))}
@@ -415,6 +527,14 @@ export function Shortlist({ row }: { row: Opportunity }) {
             </>
           )}
         </>
+      )}
+
+      {batchOpen && (
+        <WhatsappBatchModal
+          candidates={selectedCandidates}
+          jobTitle={row.job_title_raw}
+          onClose={() => setBatchOpen(false)}
+        />
       )}
     </section>
   );
@@ -563,6 +683,9 @@ function Match({
   busy,
   disabled,
   error,
+  selectable,
+  selected,
+  onToggle,
   onSubmit,
 }: {
   match: SourcingMatch;
@@ -586,6 +709,13 @@ function Match({
   busy: boolean;
   disabled: boolean;
   error: string | null;
+  /** Whether this row may be ticked for the batch WhatsApp message. Only
+   *  true for a visible match whose contact read back a number — a redacted
+   *  match has no record to reach, and a no-number candidate would silently
+   *  be skipped by the batch. */
+  selectable: boolean;
+  selected: boolean;
+  onToggle: () => void;
   onSubmit: (clientId: string) => void;
 }) {
   // A redacted match already carries the name it wants shown — masked and
@@ -607,8 +737,19 @@ function Match({
     : null;
 
   return (
-    <li className="src-row">
+    <li className={`src-row${selected ? " src-row-selected" : ""}`}>
       <div className="src-row-main">
+        {selectable && (
+          <label className="src-select">
+            <input
+              type="checkbox"
+              checked={selected}
+              onChange={onToggle}
+              aria-label={`WhatsApp ${who}`}
+            />
+            <span className="sr-only">Select for WhatsApp</span>
+          </label>
+        )}
         <span className="src-rank" aria-hidden="true">
           {rank}
         </span>

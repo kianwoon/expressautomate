@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { Client } from "./clients";
@@ -45,6 +45,18 @@ vi.mock("./sourcing", async () => {
 vi.mock("./eligibility", async () => {
   const actual = await vi.importActual<typeof import("./eligibility")>("./eligibility");
   return { ...actual, eligibilityFor: async () => new Map() };
+});
+
+const getWhatsappBatchDraft = vi.fn();
+const sendCandidateWhatsapp = vi.fn();
+
+vi.mock("./candidates", async () => {
+  const actual = await vi.importActual<typeof import("./candidates")>("./candidates");
+  return {
+    ...actual,
+    getWhatsappBatchDraft: (...args: unknown[]) => getWhatsappBatchDraft(...args),
+    sendCandidateWhatsapp: (...args: unknown[]) => sendCandidateWhatsapp(...args),
+  };
 });
 
 function opportunity(overrides: Partial<Opportunity> = {}): Opportunity {
@@ -146,6 +158,8 @@ afterEach(() => {
   listSourcingRuns.mockReset();
   contactsFor.mockReset();
   contactsFor.mockResolvedValue(new Map());
+  getWhatsappBatchDraft.mockReset();
+  sendCandidateWhatsapp.mockReset();
   // The panel lists its run history on mount; an empty history is the default
   // every existing test expects. Set here AND in beforeEach so the very first
   // test of a file — which runs before any afterEach has — sees it too.
@@ -481,5 +495,144 @@ describe("Shortlist WhatsApp affordance", () => {
 
     await waitFor(() => expect(screen.getAllByText("Wei Ming T.").length).toBeGreaterThan(0));
     expect(screen.queryByRole("button", { name: /WhatsApp/ })).toBeNull();
+  });
+});
+
+describe("Shortlist batch WhatsApp selection", () => {
+  function contact(id: string, full_name: string, phone_e164: string | null): [string, SourcingContact] {
+    return [id, { full_name, phone_e164 }];
+  }
+
+  it("shows the batch bar once two candidates are selectable, with tickboxes", async () => {
+    getSourcing.mockResolvedValue(
+      view({
+        run: run({ state: "done" }),
+        matches: [match({ candidate_id: "cand-1" }), match({ candidate_id: "cand-2" })],
+      }),
+    );
+    contactsFor.mockResolvedValue(
+      new Map([
+        contact("cand-1", "Jane Tan", "+6591234567"),
+        contact("cand-2", "Bob Lee", "+6597654321"),
+      ]),
+    );
+
+    render(<Shortlist row={opportunity()} />);
+
+    await screen.findByText("Jane Tan");
+    // The bar is only for a real choice: two or more reachable candidates.
+    expect(screen.getByRole("button", { name: /WhatsApp selected/ })).toBeTruthy();
+    // Each row is tickable.
+    expect(screen.getByRole("checkbox", { name: "WhatsApp Jane Tan" })).toBeTruthy();
+    expect(screen.getByRole("checkbox", { name: "WhatsApp Bob Lee" })).toBeTruthy();
+  });
+
+  it("does not show the batch bar when only one candidate is reachable", async () => {
+    getSourcing.mockResolvedValue(
+      view({
+        run: run({ state: "done" }),
+        matches: [match({ candidate_id: "cand-1" }), match({ candidate_id: "cand-2" })],
+      }),
+    );
+    // cand-2 has no number — selectable but the batch would skip it, so it
+    // must not be tickable and must not unlock the batch bar alone.
+    contactsFor.mockResolvedValue(
+      new Map([
+        contact("cand-1", "Jane Tan", "+6591234567"),
+        contact("cand-2", "Bob Lee", null),
+      ]),
+    );
+
+    render(<Shortlist row={opportunity()} />);
+
+    await screen.findByText("Jane Tan");
+    expect(screen.queryByRole("button", { name: /WhatsApp selected/ })).toBeNull();
+    expect(screen.getByRole("checkbox", { name: "WhatsApp Jane Tan" })).toBeTruthy();
+    expect(screen.queryByRole("checkbox", { name: "WhatsApp Bob Lee" })).toBeNull();
+  });
+
+  it("quick-picks top 3 and opens the batch modal with exactly those candidates", async () => {
+    getSourcing.mockResolvedValue(
+      view({
+        run: run({ state: "done" }),
+        matches: [
+          match({ candidate_id: "cand-1" }),
+          match({ candidate_id: "cand-2" }),
+          match({ candidate_id: "cand-3" }),
+          match({ candidate_id: "cand-4" }),
+        ],
+      }),
+    );
+    contactsFor.mockResolvedValue(
+      new Map([
+        contact("cand-1", "Jane Tan", "+6591234567"),
+        contact("cand-2", "Bob Lee", "+6597654321"),
+        contact("cand-3", "Ann Foo", "+6591122334"),
+        contact("cand-4", "Ivy Goh", "+6599988776"),
+      ]),
+    );
+    getWhatsappBatchDraft.mockResolvedValue({ message: "This is Wong from agency." });
+
+    render(<Shortlist row={opportunity()} />);
+
+    await screen.findByText("Jane Tan");
+    fireEvent.click(screen.getByRole("button", { name: "Top 3" }));
+    fireEvent.click(screen.getByRole("button", { name: "WhatsApp 3 selected" }));
+
+    await screen.findByText("WhatsApp 3 candidates");
+    // The three ticked candidates are listed in the modal; the fourth is not.
+    const modal = screen.getByRole("dialog");
+    expect(within(modal).getByText("Jane Tan")).toBeTruthy();
+    expect(within(modal).getByText("Bob Lee")).toBeTruthy();
+    expect(within(modal).getByText("Ann Foo")).toBeTruthy();
+    expect(within(modal).queryByText("Ivy Goh")).toBeNull();
+  });
+
+  it("sends sequentially and reports each candidate's outcome", async () => {
+    getSourcing.mockResolvedValue(
+      view({
+        run: run({ state: "done" }),
+        matches: [match({ candidate_id: "cand-1" }), match({ candidate_id: "cand-2" })],
+      }),
+    );
+    contactsFor.mockResolvedValue(
+      new Map([
+        contact("cand-1", "Jane Tan", "+6591234567"),
+        contact("cand-2", "Bob Lee", "+6597654321"),
+      ]),
+    );
+    getWhatsappBatchDraft.mockResolvedValue({ message: "This is Wong from agency." });
+    sendCandidateWhatsapp.mockResolvedValue({ status: "sent" });
+
+    render(<Shortlist row={opportunity()} />);
+
+    await screen.findByText("Jane Tan");
+    fireEvent.click(screen.getByRole("checkbox", { name: "WhatsApp Jane Tan" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "WhatsApp Bob Lee" }));
+    fireEvent.click(screen.getByRole("button", { name: "WhatsApp 2 selected" }));
+    await screen.findByText("WhatsApp 2 candidates");
+
+    fireEvent.click(screen.getByRole("button", { name: "Send to 2 candidates" }));
+
+    await waitFor(() =>
+      expect(screen.getAllByText("Sent").length).toBeGreaterThanOrEqual(2),
+    );
+    // One shared body went to each candidate, with the server-side greeting
+    // flag on — the client never composes the greeting itself.
+    expect(sendCandidateWhatsapp).toHaveBeenCalledTimes(2);
+    expect(sendCandidateWhatsapp).toHaveBeenNthCalledWith(
+      1,
+      "cand-1",
+      "This is Wong from agency.",
+      expect.any(String),
+      { prependGreeting: true },
+    );
+    expect(sendCandidateWhatsapp).toHaveBeenNthCalledWith(
+      2,
+      "cand-2",
+      "This is Wong from agency.",
+      expect.any(String),
+      { prependGreeting: true },
+    );
   });
 });

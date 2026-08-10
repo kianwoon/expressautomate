@@ -584,6 +584,73 @@
 .src-elig-asof { margin-top: 4px; font-size: 0.6875rem; }
 
 .src-row-acts { margin-top: 6px; min-height: 1.5em; }
+
+/* The batch WhatsApp toolbar: quick-pick buttons ("Message top 3 / top 5")
+   on the left and the "WhatsApp N selected" button on the right. Sits above
+   the list because it acts on the whole list, not one row. */
+.src-batch-bar {
+  margin-top: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.src-batch-quick { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
+.src-batch-quick-k { font-size: 0.75rem; color: var(--ink-500); }
+.src-batch-quick-btn {
+  font: inherit;
+  font-size: 0.75rem;
+  padding: 2px 8px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--ink-700);
+  cursor: pointer;
+}
+.src-batch-quick-btn:hover { background: var(--surface-alt); }
+.src-batch-quick-btn[aria-pressed="true"] {
+  background: var(--blue-50, #eef4ff);
+  border-color: var(--blue-500);
+  color: var(--blue-700, #1d4ed8);
+  font-weight: 600;
+}
+.src-batch-quick-btn:focus-visible { outline: 2px solid var(--blue-500); outline-offset: 1px; }
+
+/* The per-row tickbox for the batch message. Sits before the rank, inside
+   the same flex row, so the checkbox lines up with the name it selects. */
+.src-select { display: inline-flex; align-items: center; }
+.src-select input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--blue-600, #2563eb);
+  cursor: pointer;
+}
+.src-select input:focus-visible { outline: 2px solid var(--blue-500); outline-offset: 2px; }
+/* A selected row gets a quiet border tint so the recruiter can see the whole
+   batch at a glance, not just the ticks. */
+.src-row-selected { border-color: var(--blue-400, #60a5fa); background: var(--blue-50, #eef4ff); }
+
+/* The batch modal's per-candidate progress list. Each row shows the name and
+   a one-line status; the row being sent right now is marked so the recruiter
+   can see the batch is moving, not stuck. */
+.src-batch-list { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 4px; }
+.src-batch-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 0.8125rem;
+  padding: 4px 8px;
+  border-radius: 4px;
+}
+.src-batch-current { background: var(--blue-50, #eef4ff); }
+.src-batch-name { font-weight: 600; color: var(--ink-900); overflow-wrap: anywhere; }
+.src-batch-status { font-size: 0.75rem; color: var(--ink-500); text-align: right; }
+.src-batch-row[data-status="sent"] .src-batch-status { color: #2f7d54; font-weight: 600; }
+.src-batch-row[data-status="failed"] .src-batch-status,
+.src-batch-row[data-status="not_attempted"] .src-batch-status { color: var(--amber-700); }
+
 /* The WhatsApp tile below the score. Right-aligned so it sits under the
    percentage it follows, and permanent — a hover-revealed tile is one nobody
    knows is there, which defeats the point of putting WhatsApp on the card. */

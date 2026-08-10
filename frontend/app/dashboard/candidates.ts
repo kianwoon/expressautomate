@@ -36,6 +36,7 @@ import {
   candidateWhatsappDraftPath,
   candidateWhatsappSendPath,
   candidateWhatsappTranslatePath,
+  whatsappBatchDraftPath,
   WA_SESSION_PATH,
 } from "../api";
 import { cacheKey, cachedSignedUrl, forget } from "./signed-url-cache";
@@ -1060,6 +1061,23 @@ export async function getWhatsappDraft(id: string): Promise<WhatsappDraft> {
   return (await res.json()) as WhatsappDraft;
 }
 
+/** The shared body for a batch WhatsApp outreach: the draft template minus
+ *  the greeting line. `job_title` names the job order the shortlist is for —
+ *  the single-candidate draft uses the candidate's own title instead. The
+ *  returned text is what the recruiter edits once and sends to every selected
+ *  candidate; each candidate still receives their own `Hi {name},` greeting,
+ *  prepended server-side at send time. */
+export async function getWhatsappBatchDraft(
+  jobTitle: string | null,
+): Promise<{ message: string }> {
+  const res = await fetch(whatsappBatchDraftPath(jobTitle), {
+    credentials: "include",
+    headers: { Accept: "application/json" },
+  });
+  if (!res.ok) throw new ApiError(await readError(res));
+  return (await res.json()) as { message: string };
+}
+
 /** The languages the WhatsApp modal can render the draft in. English is the
  *  canonical source produced by `whatsapp_draft_text`; the others are
  *  translated on demand. The wire values match `WHATSAPP_LANGUAGES` on the
@@ -1205,12 +1223,17 @@ export async function sendCandidateWhatsapp(
   id: string,
   message: string,
   clientRequestId: string,
+  options: { prependGreeting?: boolean } = {},
 ): Promise<WhatsappSendResult> {
   const res = await fetch(candidateWhatsappSendPath(id), {
     method: "POST",
     credentials: "include",
     headers: { "Content-Type": "application/json", Accept: "application/json" },
-    body: JSON.stringify({ message, client_request_id: clientRequestId }),
+    body: JSON.stringify({
+      message,
+      client_request_id: clientRequestId,
+      prepend_greeting: options.prependGreeting === true,
+    }),
   });
   if (res.status === 409 || res.status === 429 || res.status === 422) {
     let detail = "We could not send that just now.";

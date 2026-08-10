@@ -557,6 +557,17 @@ export function candidateWhatsappDraftPath(id: string): string {
   return `${candidatePath(id)}/whatsapp-draft`;
 }
 
+/** The shared message body for batch WhatsApp outreach — the draft template
+ *  minus the greeting line, since each candidate is greeted by name at send
+ *  time. The job title comes as a query param because a batch is always for
+ *  one job order: the recruiter reaches out *about that order*. */
+export function whatsappBatchDraftPath(jobTitle: string | null): string {
+  const params = new URLSearchParams();
+  if (jobTitle) params.set("job_title", jobTitle);
+  const qs = params.toString();
+  return `/whatsapp-batch-draft${qs ? `?${qs}` : ""}`;
+}
+
 /** The candidate's activity log — now "WhatsApp opened", "sent" and "failed"
  *  entries, each recorded after the corresponding thing actually happened,
  *  never before. */

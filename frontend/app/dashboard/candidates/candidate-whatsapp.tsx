@@ -93,7 +93,7 @@ const WHATSAPP_LANGUAGES: ReadonlyArray<{ value: WhatsappLanguage; label: string
  *  `aria-hidden`, because the accessible name lives on the button and the
  *  modal's heading already reads "WhatsApp". A screen reader that announced
  *  both would say "WhatsApp WhatsApp". */
-function WhatsappGlyph({ size = 16 }: { size?: number }) {
+export function WhatsappGlyph({ size = 16 }: { size?: number }) {
   return (
     <img
       className="wa-mark"
