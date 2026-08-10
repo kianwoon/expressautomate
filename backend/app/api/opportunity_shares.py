@@ -49,10 +49,13 @@ async def share_opportunity(
     user_uuid, tenant_uuid, role = await _require_session_with_role(request)
 
     async with tenant_session(tenant_uuid) as session:
-        # Seeing it is the right to pass it on. 404 if not.
+        # Seeing it is the right to pass it on. 404 if not. Resolves supersede
+        # chains so a share attaches to the *current* revision — sharing a
+        # stale id shares the live job order, which is what the recruiter means.
         opportunity = await load_visible_opportunity(
             session, opportunity_id, user_uuid, role
         )
+        opportunity_id = opportunity.id
         # Read off the row while the session is open: the values are needed
         # after it closes, and a committed instance's attributes are expired.
         subject = (
@@ -184,12 +187,12 @@ async def list_shares(opportunity_id: uuid.UUID, request: Request) -> dict:
     user_uuid, tenant_uuid, role = await _require_session_with_role(request)
 
     async with tenant_session(tenant_uuid) as session:
-        await load_visible_opportunity(session, opportunity_id, user_uuid, role)
+        current = await load_visible_opportunity(session, opportunity_id, user_uuid, role)
         rows = (
             (
                 await session.execute(
                     select(OpportunityShare)
-                    .where(OpportunityShare.opportunity_id == opportunity_id)
+                    .where(OpportunityShare.opportunity_id == current.id)
                     .order_by(OpportunityShare.created_at)
                 )
             )
@@ -227,9 +230,12 @@ async def unshare_opportunity(
     user_uuid, tenant_uuid, role = await _require_session_with_role(request)
 
     async with tenant_session(tenant_uuid) as session:
+        # Resolves supersede chains: revoking sight of a stale id acts on the
+        # live job order.
         opportunity = await load_visible_opportunity(
             session, opportunity_id, user_uuid, role
         )
+        opportunity_id = opportunity.id
         share = (
             await session.execute(
                 select(OpportunityShare)

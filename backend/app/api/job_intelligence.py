@@ -34,7 +34,7 @@ from app.api.auth import _require_session_with_role
 from app.core.logging import get_logger
 from app.db.rls import tenant_session
 from app.models.job_intelligence import JobIntelligence
-from app.services.visibility import load_visible_opportunity
+from app.services.visibility import load_visible_opportunity, opportunity_chain_ids
 from app.workers.job_intelligence_jobs import JOB_RUN_JOB_INTELLIGENCE
 from app.workers.queue import enqueue
 
@@ -62,8 +62,10 @@ async def run_intelligence(request: Request, opportunity_id: uuid.UUID) -> dict:
         # Load under the visibility guard before writing the row — a share
         # recipient may run the analysis on work shown to them, which is
         # visibility rather than edit rights (the edit-exemption in the AST
-        # guard mirrors `start_sourcing`).
-        await load_visible_opportunity(session, opportunity_id, user_uuid, role)
+        # guard mirrors `start_sourcing`). Resolves supersede chains so the
+        # analysis runs on the *current* revision's requirements.
+        current = await load_visible_opportunity(session, opportunity_id, user_uuid, role)
+        opportunity_id = current.id
 
         # Upsert: one row per opportunity. A re-run resets a finished row to
         # `pending` rather than accumulating a second row, matching the
@@ -123,12 +125,19 @@ async def get_intelligence(request: Request, opportunity_id: uuid.UUID) -> dict:
     user_uuid, tenant_uuid, role = await _require_session_with_role(request)
 
     async with tenant_session(tenant_uuid) as session:
-        await load_visible_opportunity(session, opportunity_id, user_uuid, role)
+        current = await load_visible_opportunity(session, opportunity_id, user_uuid, role)
+        # An analysis recorded against an earlier revision still belongs to
+        # this job order, so the read covers every id in the chain. `id` breaks
+        # the tie deterministically: two rows can exist if a re-run landed on a
+        # new revision, and the panel wants the newest, not whichever row the
+        # planner returns first.
+        chain = await opportunity_chain_ids(session, current.id)
         row = (
             await session.execute(
-                select(JobIntelligence).where(
-                    JobIntelligence.opportunity_id == opportunity_id
-                )
+                select(JobIntelligence)
+                .where(JobIntelligence.opportunity_id.in_(chain))
+                .order_by(JobIntelligence.created_at.desc(), JobIntelligence.id.desc())
+                .limit(1)
             )
         ).scalar_one_or_none()
         if row is None:

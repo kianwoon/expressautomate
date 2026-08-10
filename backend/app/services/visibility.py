@@ -98,17 +98,40 @@ def can_edit(opportunity: Opportunity, user_id: uuid.UUID, role: str) -> bool:
 async def load_visible_opportunity(
     session: AsyncSession, opportunity_id: uuid.UUID, user_id: uuid.UUID, role: str
 ) -> Opportunity:
-    """404, never 403 — a 403 would confirm the row exists."""
-    row = (
+    """404, never 403 — a 403 would confirm the row exists.
+
+    Follows the supersede chain: a job order whose requirements were revised
+    by a later email is now *that* later row. Any consumer that loads by id —
+    the panel, `?eligible_for=`, sourcing, job intelligence — must read the
+    current revision's requirements, or a recruiter who opens a stale
+    notification would run matching against requirements the client replaced.
+    The successor lives in the same tenant (the FK enforces it), and the
+    visibility check ran on the row the caller named; this is the same job
+    order, merely current.
+    """
+    current = (
         await session.execute(
             select(Opportunity)
             .where(Opportunity.id == opportunity_id)
             .where(visible_opportunities(user_id, role))
         )
     ).scalar_one_or_none()
-    if row is None:
+    if current is None:
         raise HTTPException(status_code=404, detail="No such job order.")
-    return row
+    # Walk the chain of revisions. Bounded by the table size; each hop replaces
+    # the row with its successor, so the walk terminates and cannot loop.
+    while current.superseded_by_opportunity_id is not None:
+        successor = (
+            await session.execute(
+                select(Opportunity).where(
+                    Opportunity.id == current.superseded_by_opportunity_id
+                )
+            )
+        ).scalar_one_or_none()
+        if successor is None:
+            break
+        current = successor
+    return current
 
 
 async def load_editable_opportunity(
@@ -127,6 +150,64 @@ async def load_editable_opportunity(
             status_code=403, detail="This job order is shared with you, not assigned to you."
         )
     return row
+
+
+async def current_opportunity_id(
+    session: AsyncSession, opportunity_id: uuid.UUID
+) -> uuid.UUID:
+    """The id at the end of the supersede chain, without a visibility check.
+
+    Used by the workers, which run inside a tenant-scoped session where RLS is
+    the only boundary that matters — they never serve a request, so the
+    per-recruiter predicate has no caller to apply it to. A run or analysis
+    enqueued against one revision must score against the *current* revision
+    when a newer email superseded it between enqueue and execution, or
+    matching would use requirements the client already replaced.
+    """
+    current = opportunity_id
+    seen: set[uuid.UUID] = set()
+    while True:
+        seen.add(current)
+        superseded_by = (
+            await session.execute(
+                select(Opportunity.superseded_by_opportunity_id).where(
+                    Opportunity.id == current
+                )
+            )
+        ).scalar_one_or_none()
+        if superseded_by is None or superseded_by in seen:
+            return current
+        current = superseded_by
+
+
+async def opportunity_chain_ids(
+    session: AsyncSession, opportunity_id: uuid.UUID
+) -> list[uuid.UUID]:
+    """Every id in a supersede chain, oldest first.
+
+    A shortlist or analysis recorded against revision A must still be found
+    when the panel reads the job order after revision B superseded it: the
+    read routes query `opportunity_id IN chain` rather than only the current
+    id. Walks backward from the current revision through `superseded_by` links
+    (each hop is one query; chains are a handful of emails, not a list).
+    """
+    current = await current_opportunity_id(session, opportunity_id)
+    ids: list[uuid.UUID] = [current]
+    frontier = [current]
+    seen = {current}
+    while frontier:
+        parents = (
+            await session.execute(
+                select(Opportunity.id).where(
+                    Opportunity.superseded_by_opportunity_id.in_(frontier)
+                )
+            )
+        ).scalars().all()
+        new_parents = [p for p in parents if p not in seen]
+        ids.extend(new_parents)
+        seen.update(new_parents)
+        frontier = new_parents
+    return list(reversed(ids))
 
 
 def candidate_shared_with_me_exists(user_id: uuid.UUID) -> ColumnElement[bool]:

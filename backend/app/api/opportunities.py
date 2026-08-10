@@ -217,6 +217,19 @@ def _row_select(user_uuid: uuid.UUID):
     linked_client = aliased(Client)
     buddy = aliased(Buddy)
     buddy_referral = aliased(BuddyReferral)
+    # The row this one replaced, if this is a later revision of an open job
+    # order whose requirements the client changed. A correlated subquery rather
+    # than a join because the link is the *reverse* of
+    # `superseded_by_opportunity_id` (predecessor -> successor) and the list is
+    # read row by row. NULL for every ordinary job order — the common case.
+    predecessor = aliased(Opportunity)
+    revision_of = (
+        select(predecessor.id)
+        .where(predecessor.superseded_by_opportunity_id == Opportunity.id)
+        .correlate(Opportunity)
+        .scalar_subquery()
+        .label("revision_of_opportunity_id")
+    )
     # The buddy who referred this client — the person who actually owns the
     # account — resolved as a *correlated* subquery rather than a join. A
     # client can be referred by more than one buddy
@@ -258,6 +271,7 @@ def _row_select(user_uuid: uuid.UUID):
             linked_client.name.label("client_name"),
             shared_with_me_exists(user_uuid).label("shared_with_me"),
             one_buddy.c.name.label("buddy_name"),
+            revision_of,
         )
         # OUTER, and that matters: `email_message_id` is nullable — a job
         # order typed in by hand has no email at all, and a retention purge
@@ -308,6 +322,33 @@ async def _duplicate_opportunity_ids(session, visible) -> set[uuid.UUID]:
     dupes = duplicate_opportunity_ids(visible)
     rows = (await session.execute(select(dupes.c.id))).all()
     return {row[0] for row in rows}
+
+
+async def _current_revision_id(session, opportunity_id: uuid.UUID) -> uuid.UUID:
+    """The id at the end of the supersede chain, without a visibility check.
+
+    Only `claim_opportunity` uses this. Every other route resolves the chain
+    through `load_visible_opportunity`, which applies the per-recruiter
+    predicate; claim cannot, because its whole design is compare-and-set first,
+    visibility after — the loser of a race must get the honest 409, not a 404
+    about a row that is merely no longer unassigned. Following ids alone is
+    safe here: RLS confines every hop to the tenant, and the claim's UPDATE can
+    only match an unassigned row, which is visible to the entire agency anyway.
+    """
+    current = opportunity_id
+    seen: set[uuid.UUID] = set()
+    while True:
+        seen.add(current)
+        superseded_by = (
+            await session.execute(
+                select(Opportunity.superseded_by_opportunity_id).where(
+                    Opportunity.id == current
+                )
+            )
+        ).scalar_one_or_none()
+        if superseded_by is None or superseded_by in seen:
+            return current
+        current = superseded_by
 
 
 @router.get("/opportunities")
@@ -468,6 +509,7 @@ async def list_opportunities(
                 client_name,
                 shared_with_me,
                 buddy_name,
+                revision_of_opportunity_id=revision_of,
             )
             for (
                 opportunity,
@@ -477,6 +519,7 @@ async def list_opportunities(
                 client_name,
                 shared_with_me,
                 buddy_name,
+                revision_of,
             ) in rows
         ],
         "total": total,
@@ -637,18 +680,32 @@ async def get_opportunity(opportunity_id: uuid.UUID, request: Request) -> dict:
     user_uuid, tenant_uuid, role = await _require_session_with_role(request)
 
     async with tenant_session(tenant_uuid) as session:
-        await load_visible_opportunity(session, opportunity_id, user_uuid, role)
+        # Resolves supersede chains: the panel for a job order revised by a
+        # later email must show the current revision's requirements, not the
+        # stale row the client replaced. The row select below keys on the
+        # resolved id, or the loader and the read would disagree about which
+        # job order this is.
+        current = await load_visible_opportunity(session, opportunity_id, user_uuid, role)
         row = (
             await session.execute(
-                _row_select(user_uuid).where(Opportunity.id == opportunity_id)
+                _row_select(user_uuid).where(Opportunity.id == current.id)
             )
         ).one_or_none()
         if row is None:
             raise HTTPException(status_code=404, detail="No such job order.")
-        evidence = await _evidence_counts(session, [opportunity_id])
-        codes = await _decoded_codes(session, [opportunity_id])
+        evidence = await _evidence_counts(session, [current.id])
+        codes = await _decoded_codes(session, [current.id])
 
-    opportunity, internet_id, graph_id, assignee_name, client_name, shared, buddy_name = row
+    (
+        opportunity,
+        internet_id,
+        graph_id,
+        assignee_name,
+        client_name,
+        shared,
+        buddy_name,
+        revision_of,
+    ) = row
     return _payload(
         opportunity,
         internet_id,
@@ -659,6 +716,7 @@ async def get_opportunity(opportunity_id: uuid.UUID, request: Request) -> dict:
         client_name,
         shared,
         buddy_name,
+        revision_of_opportunity_id=revision_of,
     )
 
 
@@ -679,12 +737,14 @@ async def set_review_status(
     async with tenant_session(tenant_uuid) as session:
         # RLS keeps this inside the agency; it says nothing about which
         # recruiter inside that agency may change the row, which is what
-        # `load_editable_opportunity` decides.
-        await load_editable_opportunity(session, opportunity_id, user_uuid, role)
+        # `load_editable_opportunity` decides. It also resolves supersede
+        # chains, so the write lands on the *current* revision — an edit aimed
+        # at a stale id is an edit of the job order, not of its history.
+        current = await load_editable_opportunity(session, opportunity_id, user_uuid, role)
         updated = (
             await session.execute(
                 update(Opportunity)
-                .where(Opportunity.id == opportunity_id)
+                .where(Opportunity.id == current.id)
                 .values(review_status=new_status)
                 .returning(Opportunity.review_status)
             )
@@ -697,7 +757,7 @@ async def set_review_status(
         raise HTTPException(status_code=404, detail="No such job order.")
 
     return {
-        "id": str(opportunity_id),
+        "id": str(current.id),
         "review_status": _STORED_TO_FILTER.get(updated, updated),
     }
 
@@ -713,8 +773,9 @@ async def set_placement_type(
     async with tenant_session(tenant_uuid) as session:
         # The name written into `placement_type_set_by` goes against a
         # regulatory decision, so it must belong to someone actually given
-        # the job order — not merely someone it was shared with.
-        await load_editable_opportunity(session, opportunity_id, user_uuid, role)
+        # the job order — not merely someone it was shared with. Resolves
+        # supersede chains, so the write lands on the current revision.
+        current = await load_editable_opportunity(session, opportunity_id, user_uuid, role)
         # `id` alongside `placement_type` in RETURNING: `RETURNING` gives back
         # exactly what was written, which is ambiguous when the write itself
         # is NULL — clearing an already-NULL placement_type on a real row
@@ -728,7 +789,7 @@ async def set_placement_type(
         row = (
             await session.execute(
                 update(Opportunity)
-                .where(Opportunity.id == opportunity_id)
+                .where(Opportunity.id == current.id)
                 .values(
                     placement_type=body.placement_type,
                     placement_type_set_by=user_uuid,
@@ -741,7 +802,7 @@ async def set_placement_type(
     if row is None:
         raise HTTPException(status_code=404, detail="No such job order.")
 
-    return {"id": str(opportunity_id), "placement_type": row[1]}
+    return {"id": str(current.id), "placement_type": row[1]}
 
 
 @router.post("/opportunities/{opportunity_id}/occupational-requirement")
@@ -760,11 +821,12 @@ async def set_occupational_requirement(
     async with tenant_session(tenant_uuid) as session:
         # Same reason as `placement-type`: `sex_requirement_set_by` records a
         # lawful judgement, and a share is not the authority to make one.
-        await load_editable_opportunity(session, opportunity_id, user_uuid, role)
+        # Resolves supersede chains, so the write lands on the current revision.
+        current = await load_editable_opportunity(session, opportunity_id, user_uuid, role)
         updated = (
             await session.execute(
                 update(Opportunity)
-                .where(Opportunity.id == opportunity_id)
+                .where(Opportunity.id == current.id)
                 .values(
                     sex_requirement=body.sex_requirement,
                     sex_requirement_reason=(
@@ -783,7 +845,7 @@ async def set_occupational_requirement(
         raise HTTPException(status_code=404, detail="No such job order.")
 
     return {
-        "id": str(opportunity_id),
+        "id": str(current.id),
         "sex_requirement": updated[0],
         "sex_requirement_reason": updated[1],
     }
@@ -889,6 +951,7 @@ def _payload(
     client_name: str | None,
     shared_with_me: bool,
     buddy_name: str | None = None,
+    revision_of_opportunity_id: uuid.UUID | None = None,
 ) -> dict:
     """One row, with absences preserved as absences."""
     verified_fields, total_fields = evidence
@@ -946,6 +1009,22 @@ def _payload(
         "total_fields": total_fields,
         "received_datetime": (
             row.received_datetime.isoformat() if row.received_datetime else None
+        ),
+        # The revision chain, both directions. `superseded_by_opportunity_id`
+        # says this row was replaced by a later one (NULL = current); the list
+        # only ever shows current rows, but the field stays on the payload so a
+        # row fetched by id answers which revision it is. `revision_of` is the
+        # reverse: this row replaced an earlier one, which lets the UI say
+        # "requirements updated" rather than showing the new row as if it were
+        # a fresh vacancy.
+        "superseded_by_opportunity_id": (
+            str(row.superseded_by_opportunity_id)
+            if row.superseded_by_opportunity_id
+            else None
+        ),
+        "superseded_at": row.superseded_at.isoformat() if row.superseded_at else None,
+        "revision_of_opportunity_id": (
+            str(revision_of_opportunity_id) if revision_of_opportunity_id else None
         ),
         "company_name_raw": row.company_name_raw,
         "job_title_raw": row.job_title_raw,
@@ -1049,6 +1128,17 @@ async def claim_opportunity(opportunity_id: uuid.UUID, request: Request) -> dict
     user_uuid, tenant_uuid, role = await _require_session_with_role(request)
 
     async with tenant_session(tenant_uuid) as session:
+        # Resolve the supersede chain first — a claim must land on the current
+        # revision, never on a row a later email already replaced. This read is
+        # deliberately NOT `load_visible_opportunity`: it applies no visibility
+        # predicate, and that is safe because it only follows ids — RLS still
+        # confines every row to this tenant, and the compare-and-set below can
+        # only match an unassigned row, which is visible to the whole agency
+        # anyway. Applying visibility here would reintroduce the exact race the
+        # route exists to avoid: the loser's row is assigned, hence invisible,
+        # and they would get a 404 instead of the honest 409.
+        claim_target = await _current_revision_id(session, opportunity_id)
+
         # The compare-and-set goes FIRST, before any visibility read, and that
         # is safe rather than a shortcut: it can only match a row that is in
         # this tenant (RLS) and has `assigned_user_id IS NULL`, and an
@@ -1064,8 +1154,13 @@ async def claim_opportunity(opportunity_id: uuid.UUID, request: Request) -> dict
         claimed = (
             await session.execute(
                 update(Opportunity)
-                .where(Opportunity.id == opportunity_id)
+                .where(Opportunity.id == claim_target)
                 .where(Opportunity.assigned_user_id.is_(None))
+                # A superseded row is historical — its successor is the live job
+                # order, and `_current_revision_id` already resolved to it. If a
+                # supersede link lands between the pre-read and this CAS, the
+                # claim must not land on a row that is about to be hidden.
+                .where(Opportunity.superseded_by_opportunity_id.is_(None))
                 .values(assigned_user_id=user_uuid)
                 .returning(Opportunity.id)
             )
@@ -1088,7 +1183,7 @@ async def claim_opportunity(opportunity_id: uuid.UUID, request: Request) -> dict
             taken = (
                 await session.execute(
                     select(Opportunity.id)
-                    .where(Opportunity.id == opportunity_id)
+                    .where(Opportunity.id == claim_target)
                     .where(Opportunity.assigned_user_id.is_not(None))
                 )
             ).scalar_one_or_none()
@@ -1100,7 +1195,7 @@ async def claim_opportunity(opportunity_id: uuid.UUID, request: Request) -> dict
                 # back with a row, and 409 is the closer of the two answers:
                 # something happened to it, try again.
                 await load_visible_opportunity(
-                    session, opportunity_id, user_uuid, role
+                    session, claim_target, user_uuid, role
                 )
             raise HTTPException(
                 status_code=409, detail="Someone else has taken this job order."
@@ -1108,7 +1203,7 @@ async def claim_opportunity(opportunity_id: uuid.UUID, request: Request) -> dict
 
     # Nothing is emitted. You pressed the button; being told what you just did
     # is noise, and the colleagues who lost the race learn it from their 409.
-    return {"id": str(opportunity_id), "assigned_user_id": str(user_uuid)}
+    return {"id": str(claim_target), "assigned_user_id": str(user_uuid)}
 
 
 @router.post("/opportunities/{opportunity_id}/assign")
@@ -1125,6 +1220,8 @@ async def assign_opportunity(
     user_uuid, tenant_uuid, role = await _require_session_with_role(request)
 
     async with tenant_session(tenant_uuid) as session:
+        # Resolves supersede chains, so the assignment lands on the current
+        # revision — reassigning a stale id must move the live job order.
         opportunity = await load_editable_opportunity(
             session, opportunity_id, user_uuid, role
         )
@@ -1153,7 +1250,7 @@ async def assign_opportunity(
 
         await session.execute(
             update(Opportunity)
-            .where(Opportunity.id == opportunity_id)
+            .where(Opportunity.id == opportunity.id)
             .values(assigned_user_id=body.user_id)
         )
 
@@ -1317,9 +1414,12 @@ async def set_opportunity_client(
     user_uuid, tenant_uuid, role = await _require_session_with_role(request)
 
     async with tenant_session(tenant_uuid) as session:
+        # Resolves supersede chains: linking a stale id must link the live
+        # job order.
         opportunity = await load_visible_opportunity(
             session, opportunity_id, user_uuid, role
         )
+        opportunity_id = opportunity.id
         if not (
             opportunity.assigned_user_id is None
             or can_edit(opportunity, user_uuid, role)

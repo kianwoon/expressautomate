@@ -332,7 +332,8 @@ export function JobOrders({ me, heading = "h2" }: { me: Me; heading?: "h1" | "h2
             // filtered" from "fewer because gone".
             <p className="body jo-note muted">
               {hidden} duplicate{hidden === 1 ? "" : "s"} hidden — re-forwards of job
-              orders already here and still open. Turn off “Hide duplicates” to see them.
+              orders already here and still open, or older versions whose requirements
+              were updated. Turn off “Hide duplicates” to see them.
             </p>
           )}
 

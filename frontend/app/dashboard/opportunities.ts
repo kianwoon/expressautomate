@@ -145,6 +145,16 @@ export type Opportunity = {
   /** Visible to me because a colleague shared it, rather than because it is
    *  mine. Changes what may be done with it, not just how it is labelled. */
   shared_with_me: boolean;
+  /** The job order that replaced this one — a later email that *changed* an
+   *  open job order's requirements. NULL on the current revision, which is
+   *  what the list shows; set on the hidden row the client replaced. */
+  superseded_by_opportunity_id?: string | null;
+  /** When this row was replaced, for audit. NULL unless superseded. */
+  superseded_at?: string | null;
+  /** The job order this one replaced, if a later email revised it. NULL for
+   *  every ordinary job order — lets the UI say "requirements updated" rather
+   *  than showing the new row as if it were a fresh vacancy. */
+  revision_of_opportunity_id?: string | null;
 };
 
 /**

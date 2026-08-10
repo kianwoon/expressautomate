@@ -37,6 +37,7 @@ from app.models.opportunity import Opportunity
 from app.models.opportunity_code import OpportunityCode
 from app.services.job_intelligence.engine import analyze
 from app.services.llm.client import LLMInvalidJSON
+from app.services.visibility import current_opportunity_id
 
 log = get_logger(__name__)
 
@@ -116,6 +117,10 @@ async def run_job_intelligence(
         return
 
     async with tenant_session(tenant) as session:
+        # Resolve supersede chains: the analysis was enqueued against one
+        # revision, and a newer email may have superseded it since. It must
+        # read the *current* revision's requirements, never the replaced ones.
+        opportunity_key = await current_opportunity_id(session, opportunity_key)
         opportunity = (
             await session.execute(select(Opportunity).where(Opportunity.id == opportunity_key))
         ).scalar_one_or_none()

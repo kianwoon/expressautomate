@@ -432,6 +432,16 @@
 .jo-protected-note { margin-top: 16px; display: grid; gap: 8px; justify-items: start; }
 .jo-protected-note p { max-width: 62ch; }
 
+/* A job order whose requirements a later email updated. Blue rather than
+   amber: it is a change of fact to be aware of, not a protected characteristic
+   to be handled with care. */
+.jo-revision-badge {
+  display: inline-flex; align-items: center;
+  font-size: 0.75rem; font-weight: 650; padding: 4px 10px; border-radius: 999px;
+  background: var(--blue-050, #eef4fb); color: var(--blue-700, #1d4ed8);
+  border: 1px solid var(--blue-200, #bfdbfe);
+}
+
 /* Announced, never shown: the arrow is silent to a screen reader, and without
    this the code and the meaning run together as one phrase the sender never
    wrote. */

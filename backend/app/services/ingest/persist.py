@@ -26,20 +26,26 @@ email. That holds at temperature zero and does not hold across a prompt or
 model change, where job 2 of the new run may be a different vacancy from job 2
 of the old one.
 
-Human corrections live in `opportunity_field_overrides` and are never read or
-written here. That separation is what makes replay safe: this module physically
-cannot clobber a recruiter's fix, because it never issues an UPDATE against
-anything a human has touched.
+One deliberate UPDATE exists: `_maybe_supersede` points an older open
+opportunity at the row that just replaced it when a later email *changes* the
+job order's requirements (sex, race, salary...). It writes only the two
+supersede columns — never an extracted field, and never a human correction,
+which live in `opportunity_field_overrides` and are not read or written here.
+That separation is what keeps replay safe: this module physically cannot
+clobber a recruiter's fix, because it never issues an UPDATE against anything
+a human has touched.
 """
 
 import json
 import uuid
 
-from sqlalchemy import ARRAY, Text, bindparam, text
+from sqlalchemy import ARRAY, Text, bindparam, func, select, text, update
+from sqlalchemy.orm import aliased
 
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.db.rls import tenant_session
+from app.models import EmailMessage, Opportunity
 from app.services.client_matching import match_client
 from app.services.events import KIND_EXTRACTION, publish
 from app.services.ingest.evidence import parse_salary, parse_salary_period, quality_state, verify
@@ -237,6 +243,88 @@ def _dedup_jobs(jobs: list[ExtractedJob]) -> list[ExtractedJob]:
     return kept
 
 
+def _norm(value: str | None) -> str:
+    """Normalise a stored string for comparison: casefolded, stripped.
+
+    Two spellings of the same requirement ("Female" vs "female", " Chinese "
+    vs "Chinese") must compare equal; two genuinely different strings must not
+    collapse. `None` and the empty string both become the empty string, because
+    a field the email never mentioned is stored as NULL and means the same as
+    an extracted value of nothing.
+    """
+    return (value or "").strip().casefold()
+
+
+def _salary_key(job: ExtractedJob) -> tuple:
+    """The parsed salary of a new job as a comparable tuple.
+
+    Raw salary strings would compare "SGD 6,000" against "6k" as different
+    when they are the same figure; the parsed min/max/currency/period is what
+    a recruiter compares, so it is what a revision comparison compares.
+    """
+    if job.salary is None or job.salary.is_missing:
+        return (None, None, None, None)
+    salary_min, salary_max, currency = parse_salary(job.salary.value)
+    return (
+        round(float(salary_min), 2) if salary_min is not None else None,
+        round(float(salary_max), 2) if salary_max is not None else None,
+        currency,
+        parse_salary_period(_value(job.salary_period)),
+    )
+
+
+def _row_salary_key(row) -> tuple:
+    """The stored salary of an existing opportunity, same tuple shape."""
+    return (
+        round(float(row.salary_min), 2) if row.salary_min is not None else None,
+        round(float(row.salary_max), 2) if row.salary_max is not None else None,
+        row.salary_currency,
+        row.salary_period,
+    )
+
+
+def _same_vacancy(job: ExtractedJob, row) -> bool:
+    """Is the new job the same vacancy as the stored opportunity?
+
+    Identity is company + title + location: the columns a recruiter compares
+    to tell one posting from another. The requirements themselves are
+    deliberately excluded — whether they changed is the *next* question, and
+    comparing them here would make every requirement change a different
+    vacancy, which is exactly the bug this whole feature exists to fix.
+    """
+    return (
+        _norm(_value(job.company)) == _norm(row.company_name_raw)
+        and _norm(_value(job.job_title)) == _norm(row.job_title_raw)
+        and _norm(_value(job.location)) == _norm(row.location_raw)
+    )
+
+
+def _requirements_changed(job: ExtractedJob, codes, job_count: int, row) -> bool:
+    """Did this email state different requirements than the row already holds?
+
+    The fields a client changes when they change a job order: the requirements
+    text, the derived sex requirement, the salary, the hours, the duration, the
+    employment type, the work arrangement and the skills. Identity (company,
+    title, location) is not here — a revision keeps those and changes what the
+    job asks for, which is the difference this function exists to see.
+
+    `sex_requirement` is derived from the client's shorthand codes (C/F ->
+    female), so an email that drops the code — "open to male, all races" —
+    reads as a change, which is correct: the requirement was lifted.
+    """
+    new_sex, _ = _sex_requirement_for(job, codes, job_count)
+    return not (
+        _norm(_value(job.requirements)) == _norm(row.requirements)
+        and new_sex == row.sex_requirement
+        and _salary_key(job) == _row_salary_key(row)
+        and _norm(_value(job.working_hours)) == _norm(row.working_hours_raw)
+        and _norm(_value(job.duration)) == _norm(row.duration_raw)
+        and _norm(_value(job.employment_type)) == _norm(row.employment_type)
+        and _norm(_value(job.work_arrangement)) == _norm(row.work_arrangement)
+        and sorted(_skills(job)) == sorted(row.skills or [])
+    )
+
+
 async def persist(
     tenant_id: uuid.UUID,
     email_message_id: uuid.UUID,
@@ -319,7 +407,7 @@ async def persist(
         for index, job in enumerate(jobs):
             opportunity_id = _opportunity_id(email_message_id, index)
             opportunity_ids.append(opportunity_id)
-            await _insert_opportunity(
+            inserted = await _insert_opportunity(
                 session,
                 tenant_id,
                 email_message_id,
@@ -331,6 +419,22 @@ async def persist(
                 client_id=matched.client_id if matched else None,
                 assigned_user_id=matched.assigned_user_id if matched else None,
             )
+            # A revision link is one-shot: it must only point at a row this run
+            # actually wrote. On a retry the id already exists and `inserted`
+            # is False — the first run already linked (or deliberately did
+            # not), and re-running the comparison under a different prompt
+            # could link against content that is no longer the row's.
+            if inserted:
+                await _maybe_supersede(
+                    session,
+                    tenant_id,
+                    email_message_id,
+                    opportunity_id,
+                    job,
+                    codes,
+                    len(jobs),
+                    client_id=matched.client_id if matched else None,
+                )
             await _insert_evidence(session, tenant_id, extraction_id, opportunity_id, job, source)
             await _insert_codes(session, tenant_id, opportunity_id, job, codes, len(jobs))
 
@@ -488,6 +592,173 @@ async def _insert_codes(
         )
 
 
+async def _maybe_supersede(
+    session,
+    tenant_id: uuid.UUID,
+    email_message_id: uuid.UUID,
+    new_opportunity_id: uuid.UUID,
+    job: ExtractedJob,
+    codes,
+    job_count: int,
+    client_id: uuid.UUID | None,
+) -> None:
+    """Link an older open opportunity to this one when the email *revises* it.
+
+    The gap this closes: a client who changes a job order — "initially female,
+    Chinese only, now open to male, all races" — sends a *later* email about
+    the same vacancy. Today that later email either (a) lands in the same Graph
+    conversation and is hidden as a re-forward duplicate, silently keeping the
+    stale requirements on the list, or (b) arrives in a new thread and shows up
+    as a second open row with nothing tying the two together. Both lose the
+    change.
+
+    The rule: an existing **open, current** (`placement_type IS NULL`,
+    `superseded_by_opportunity_id IS NULL`) opportunity that is the same
+    vacancy — same conversation, or same client + same company/title/location —
+    is marked `superseded_by` this new row when the requirements differ. The
+    old row stays (append-only history is the audit trail); the read-time
+    dedupe then shows the successor and hides the predecessor.
+
+    The comparison is `_requirements_changed`, deliberately *not* "the email
+    differs": a re-forward with identical requirements is a duplicate, not a
+    revision, and the existing conversation-based dedupe already hides it.
+
+    Only ever points at a row inserted by *this* run (the caller gates on the
+    insert's rowcount): a retry re-running under a different prompt must not
+    link a new id whose stored content came from an earlier run.
+    """
+    conv = (
+        await session.execute(
+            select(EmailMessage.conversation_id).where(EmailMessage.id == email_message_id)
+        )
+    ).scalar_one_or_none()
+
+    # Same conversation is the primary signal — a re-forward or a reply in the
+    # same thread keeps the Graph conversation_id (verified against production,
+    # see opportunity_dedupe.py). When the conversation holds no candidate,
+    # fall back to the same client + identical role identity, for a genuinely
+    # new email about the same vacancy; that requires client_id on the new row
+    # or it cannot know which agency's opportunity to look at.
+    if conv is None and client_id is None:
+        return
+
+    email = aliased(EmailMessage)
+    base = (
+        select(Opportunity, email.conversation_id)
+        .join(email, email.id == Opportunity.email_message_id, isouter=True)
+        .where(Opportunity.tenant_id == tenant_id)
+        .where(Opportunity.placement_type.is_(None))
+        .where(Opportunity.superseded_by_opportunity_id.is_(None))
+        .where(Opportunity.id != new_opportunity_id)
+        .order_by(Opportunity.received_datetime.asc(), Opportunity.id.asc())
+    )
+    if conv is not None:
+        # Candidates carry their conversation alongside, so the same-conversation
+        # filter can run in SQL rather than loading the tenant's whole open
+        # pipeline into Python.
+        rows = (
+            await session.execute(base.where(email.conversation_id == conv))
+        ).all()
+        candidates = [row[0] for row in rows]
+    else:
+        candidates = []
+    used_fallback = False
+    if not candidates and client_id is not None:
+        # No match in the thread — try the same client's other open rows.
+        rows = (
+            await session.execute(base.where(Opportunity.client_id == client_id))
+        ).all()
+        candidates = [row[0] for row in rows]
+        used_fallback = True
+    if not candidates:
+        return
+
+    # Pick the predecessor(s) this new job is a revision of. Identity is
+    # required even for a single open row in the conversation: a follow-up in
+    # the same thread can be about a *different* vacancy — the client adds a
+    # second role in the same email chain — and without the check that new
+    # role would supersede a live job order it has nothing to do with. The
+    # user's scenario (same role, requirements changed) matches because
+    # `_same_vacancy` compares company/title/location only.
+    predecessors = [c for c in candidates if _same_vacancy(job, c)]
+    if not predecessors:
+        return
+
+    # The cross-conversation fallback (matched on client rather than thread) is
+    # only safe when the identity match is unique: a client with two open
+    # roles that share company/title/location must not have the second email
+    # supersede the first. Within one conversation the threading already
+    # disambiguates. The guard keys on the fallback actually being used, not on
+    # whether the new email has a conversation: the thread scan can come up
+    # empty (all its rows placed or superseded) and the fallback then runs
+    # while `conv` is still set.
+    if used_fallback and len(predecessors) > 1:
+        return
+
+    changed = [c for c in predecessors if _requirements_changed(job, codes, job_count, c)]
+    if not changed:
+        return
+
+    # Every current open instance of this vacancy is superseded, not just the
+    # earliest: an identical re-forward that was never linked stays open and
+    # would otherwise become the read-time anchor and keep showing stale rows.
+    await session.execute(
+        update(Opportunity)
+        .where(Opportunity.id.in_([c.id for c in changed]))
+        .values(
+            superseded_by_opportunity_id=new_opportunity_id,
+            superseded_at=func.now(),
+        )
+    )
+
+    # Carry the human's decisions onto the revision. `_insert_opportunity` set
+    # `assigned_user_id` from the client match, which is NULL when the email
+    # resolved to no client — but the row being replaced may have been claimed
+    # by a recruiter. Without this, a revision of an *assigned* job order
+    # silently becomes unassigned: the recruiter who was working it loses it
+    # from their view and anyone in the queue can take it. The claim is a
+    # person's decision and must outlive the email that restated the vacancy.
+    claimed = next((c.assigned_user_id for c in changed if c.assigned_user_id), None)
+    if claimed is not None:
+        await session.execute(
+            update(Opportunity)
+            .where(Opportunity.id == new_opportunity_id)
+            .where(Opportunity.assigned_user_id.is_(None))
+            .values(assigned_user_id=claimed)
+        )
+
+    # Same reasoning for a genuine occupational sex requirement a recruiter
+    # recorded with a written reason. It is a human judgement about the *job*,
+    # not something a client's shorthand email can revoke — a client saying
+    # "now open to all races" lifts a preference, not a lawful requirement.
+    # Carry it forward when the successor's own extraction did not derive one.
+    occupational = next(
+        (
+            (c.sex_requirement, c.sex_requirement_reason)
+            for c in changed
+            if c.sex_requirement and c.sex_requirement_reason
+        ),
+        None,
+    )
+    if occupational is not None:
+        await session.execute(
+            update(Opportunity)
+            .where(Opportunity.id == new_opportunity_id)
+            .where(Opportunity.sex_requirement.is_(None))
+            .values(
+                sex_requirement=occupational[0],
+                sex_requirement_reason=occupational[1],
+            )
+        )
+
+    log.info(
+        "opportunity_superseded",
+        tenant_id=str(tenant_id),
+        new_opportunity_id=str(new_opportunity_id),
+        superseded_ids=[str(c.id) for c in changed],
+    )
+
+
 async def _insert_opportunity(
     session,
     tenant_id: uuid.UUID,
@@ -499,7 +770,7 @@ async def _insert_opportunity(
     job_count: int,
     client_id: uuid.UUID | None = None,
     assigned_user_id: uuid.UUID | None = None,
-) -> None:
+) -> bool:
     """Write one vacancy. `ON CONFLICT (id) DO NOTHING` — there is no update
     path, and that is what makes the assignment safe under replay.
 
@@ -540,7 +811,14 @@ async def _insert_opportunity(
         "sex_requirement_reason": sex_requirement_reason,
     }
     params.update({name: _value(getattr(job, name)) for name in _SIMPLE})
-    await session.execute(_INSERT_OPPORTUNITY, params)
+    result = await session.execute(_INSERT_OPPORTUNITY, params)
+    # `ON CONFLICT (id) DO NOTHING` rowcount: 1 when the row was newly written,
+    # 0 when this is a replay of an id that already exists. Callers gate
+    # one-shot side effects on it — in particular the supersede link below must
+    # only ever be pointed at a row that actually appeared in this run, or a
+    # retry under a different prompt would link against an id whose stored
+    # content came from the *previous* run.
+    return result.rowcount == 1
 
 
 def _skills(job: ExtractedJob) -> list[str]:

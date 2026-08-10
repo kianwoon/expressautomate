@@ -59,6 +59,7 @@ from app.services.sourcing.persist import (
 from app.services.sourcing.preference import implied_sex
 from app.services.sourcing.score import Component, score_candidate
 from app.services.storage.r2 import R2BodyStore
+from app.services.visibility import current_opportunity_id
 
 log = get_logger(__name__)
 
@@ -267,6 +268,11 @@ async def run_sourcing(
         return
 
     async with tenant_session(tenant) as session:
+        # Resolve supersede chains: the run may have been enqueued against an
+        # older revision, and a newer email may have superseded it since. A
+        # shortlist must score against the *current* revision's requirements,
+        # never the ones the client already replaced.
+        opportunity_key = await current_opportunity_id(session, opportunity_key)
         opportunity = (
             await session.execute(select(Opportunity).where(Opportunity.id == opportunity_key))
         ).scalar_one_or_none()

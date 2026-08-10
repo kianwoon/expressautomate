@@ -160,6 +160,18 @@ class Opportunity(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
     )
     sex_requirement_set_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
+    # The job order that replaced this one: a later email that *changed* an
+    # open job order's requirements (sex, race, salary, hours) is a revision,
+    # not a duplicate — the old row is kept for the audit trail and points at
+    # the new one. NULL means this is the current revision (or a job order
+    # never revised). The dedupe hides superseded rows in favour of their
+    # successor, and matching consumers follow the link so they always read
+    # the current requirements.
+    superseded_by_opportunity_id: Mapped[uuid.UUID | None] = mapped_column(
+        PgUUID(as_uuid=True), index=True
+    )
+    superseded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
     review_status: Mapped[str] = mapped_column(
         String(16), nullable=False, default="ready", index=True
     )
@@ -180,6 +192,16 @@ class Opportunity(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
             ["clients.tenant_id", "clients.id"],
             name="fk_opportunities_client_same_tenant",
             ondelete="SET NULL (client_id)",
+        ),
+        # A revision link cannot cross agencies: the row a job order points to
+        # as its replacement must belong to the same tenant. Column-qualified
+        # SET NULL — deleting the successor clears only
+        # `superseded_by_opportunity_id`, never `tenant_id`.
+        ForeignKeyConstraint(
+            ["tenant_id", "superseded_by_opportunity_id"],
+            ["opportunities.tenant_id", "opportunities.id"],
+            name="fk_opportunities_superseded_same_tenant",
+            ondelete="SET NULL (superseded_by_opportunity_id)",
         ),
         # Column-qualified SET NULL (PG15+): a plain SET NULL on a composite FK
         # nulls every referencing column, including `tenant_id`, which is

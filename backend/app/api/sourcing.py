@@ -65,6 +65,7 @@ from app.services.visibility import (
     can_edit_candidate,
     load_visible_candidate,
     load_visible_opportunity,
+    opportunity_chain_ids,
     visible_candidates,
 )
 from app.workers.queue import enqueue
@@ -188,7 +189,11 @@ async def start_sourcing(request: Request, opportunity_id: uuid.UUID) -> dict:
     user_uuid, tenant_uuid, role = await _require_session_with_role(request)
 
     async with tenant_session(tenant_uuid) as session:
-        await load_visible_opportunity(session, opportunity_id, user_uuid, role)
+        # Resolves supersede chains: if a later email revised this job order's
+        # requirements, the run must be recorded against — and later score
+        # against — the *current* revision, never the row the client replaced.
+        current = await load_visible_opportunity(session, opportunity_id, user_uuid, role)
+        opportunity_id = current.id
 
         # Counted, and refused, before anything is written. A run created and
         # then rejected would be a `pending` row no worker will ever claim.
@@ -288,11 +293,17 @@ async def latest_sourcing(request: Request, opportunity_id: uuid.UUID) -> dict:
     user_uuid, tenant_uuid, role = await _require_session_with_role(request)
 
     async with tenant_session(tenant_uuid) as session:
-        await load_visible_opportunity(session, opportunity_id, user_uuid, role)
+        # Resolves supersede chains: the runs live against the *current*
+        # revision, so a stale id reads the live job order's shortlists. The
+        # run may also predate the current revision — a shortlist started
+        # against the revision the client replaced is still that job order's
+        # history, so the query covers every id in the chain.
+        current = await load_visible_opportunity(session, opportunity_id, user_uuid, role)
+        chain = await opportunity_chain_ids(session, current.id)
         run = (
             await session.execute(
                 select(SourcingRun)
-                .where(SourcingRun.opportunity_id == opportunity_id)
+                .where(SourcingRun.opportunity_id.in_(chain))
                 # `id` breaks the tie: two runs started in the same
                 # transaction share `created_at`, and "the latest" must not
                 # depend on which one the plan returns first.
@@ -322,11 +333,12 @@ async def list_sourcing_runs(request: Request, opportunity_id: uuid.UUID) -> dic
     user_uuid, tenant_uuid, role = await _require_session_with_role(request)
 
     async with tenant_session(tenant_uuid) as session:
-        await load_visible_opportunity(session, opportunity_id, user_uuid, role)
+        current = await load_visible_opportunity(session, opportunity_id, user_uuid, role)
+        chain = await opportunity_chain_ids(session, current.id)
         runs = (
             await session.execute(
                 select(SourcingRun)
-                .where(SourcingRun.opportunity_id == opportunity_id)
+                .where(SourcingRun.opportunity_id.in_(chain))
                 # `id` breaks the tie, exactly as `latest_sourcing` does: two
                 # runs created in one transaction share `created_at`, and the
                 # order must not depend on which one the plan returns first.
@@ -349,15 +361,17 @@ async def one_sourcing_run(
     user_uuid, tenant_uuid, role = await _require_session_with_role(request)
 
     async with tenant_session(tenant_uuid) as session:
-        await load_visible_opportunity(session, opportunity_id, user_uuid, role)
+        current = await load_visible_opportunity(session, opportunity_id, user_uuid, role)
+        chain = await opportunity_chain_ids(session, current.id)
         run = (
             await session.execute(
                 select(SourcingRun).where(
                     SourcingRun.id == run_id,
                     # A real run under the wrong job order is a 404 too: the
                     # URL asserts a relationship, and answering anyway would
-                    # let the path be walked for run ids.
-                    SourcingRun.opportunity_id == opportunity_id,
+                    # let the path be walked for run ids. Runs recorded against
+                    # any revision in the chain belong to this job order.
+                    SourcingRun.opportunity_id.in_(chain),
                 )
             )
         ).scalar_one_or_none()

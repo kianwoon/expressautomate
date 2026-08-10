@@ -357,6 +357,15 @@ function Detail({
             a reason to read this row, so it has to be visible before anyone
             decides whether to. */}
         {flagged(row) && <ProtectedBadge />}
+        {/* A job order whose requirements were updated by a later email: the
+            client changed the brief (sex, race, salary, hours), and this row is
+            the current version of it. Shown as a badge, like the protected one,
+            because it changes how the fields below should be read. */}
+        {row.revision_of_opportunity_id && (
+          <span className="jo-revision-badge" title="A later email updated this job order's requirements">
+            Requirements updated
+          </span>
+        )}
       </div>
 
       <p className="jo-detail-company">

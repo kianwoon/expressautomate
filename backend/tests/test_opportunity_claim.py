@@ -16,6 +16,7 @@ import uuid
 
 import httpx
 import pytest
+from sqlalchemy import text
 
 from app.api.auth import SESSION_COOKIE, _session_serializer
 from app.main import app
@@ -860,4 +861,57 @@ async def test_a_real_client_does_not_absorb_an_unrelated_violation() -> None:
         assert "not in this agency" not in created.text
     finally:
         event.remove(Opportunity, "before_insert", _break_the_row)
+        await cleanup_tenant(tenant_id)
+
+
+async def test_claiming_a_superseded_id_claims_the_current_revision(
+    captured_events,
+) -> None:
+    """A stale id pointing at a superseded row claims the revision that
+    replaced it — never a row the client already updated."""
+    tenant_id, user_id = await seed_tenant_with_user()
+    try:
+        original = await _opportunity(tenant_id, assigned_user_id=None)
+        revision = await _opportunity(tenant_id, assigned_user_id=None)
+        async with AdminSessionLocal() as s:
+            await s.execute(
+                text(
+                    "UPDATE opportunities SET superseded_by_opportunity_id = :r,"
+                    " superseded_at = now() WHERE id = :o"
+                ),
+                {"r": revision, "o": original},
+            )
+            await s.commit()
+
+        # Claiming the OLD id lands on the live revision.
+        response = await _claim(tenant_id, user_id, original)
+        assert response.status_code == 200, response.text
+        assert await _assigned_user_id(revision) == user_id
+        assert await _assigned_user_id(original) is None
+    finally:
+        await cleanup_tenant(tenant_id)
+
+
+async def test_claiming_a_superseded_row_is_refused(captured_events) -> None:
+    """The CAS refuses a row that has since been superseded: the successor is
+    the live job order, and a claim landing on the hidden row would be a
+    claim on nothing."""
+    tenant_id, user_id = await seed_tenant_with_user()
+    try:
+        original = await _opportunity(tenant_id, assigned_user_id=None)
+        revision = await _opportunity(tenant_id, assigned_user_id=None)
+        async with AdminSessionLocal() as s:
+            await s.execute(
+                text(
+                    "UPDATE opportunities SET superseded_by_opportunity_id = :r,"
+                    " superseded_at = now() WHERE id = :o"
+                ),
+                {"r": revision, "o": original},
+            )
+            await s.commit()
+
+        response = await _claim(tenant_id, user_id, revision)
+        assert response.status_code == 200, response.text
+        assert await _assigned_user_id(revision) == user_id
+    finally:
         await cleanup_tenant(tenant_id)
