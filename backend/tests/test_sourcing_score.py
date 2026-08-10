@@ -22,6 +22,7 @@ class FakeOpportunity:
     job_title_normalized: str | None = None
     job_title_raw: str | None = None
     company_name_normalized: str | None = None
+    company_name_raw: str | None = None
     skills: list[str] | None = None
     salary_min: float | None = None
     salary_max: float | None = None
@@ -67,6 +68,7 @@ def _full_case() -> tuple[FakeOpportunity, FakeCandidate, list[FakeRole], list[F
     opportunity = FakeOpportunity(
         job_title_normalized="staff nurse",
         company_name_normalized="acme health",
+        company_name_raw="Acme Health",
         skills=["Triage", "IV Cannulation"],
         salary_min=4000.0,
         salary_max=6000.0,
@@ -229,10 +231,30 @@ async def test_employer_signal_compares_normalised_company_names() -> None:
 async def test_employer_abstains_when_the_job_order_names_no_company() -> None:
     opportunity, candidate, roles, skills = _full_case()
     opportunity.company_name_normalized = None
+    opportunity.company_name_raw = None
 
     _, components = score_candidate(opportunity, candidate, roles, skills, today=TODAY)
     employer = _by_name(components)["employer"]
     assert employer.raw is None and employer.note
+
+
+async def test_employer_falls_back_to_raw_company_name() -> None:
+    """The normalized column is never populated by ingestion, so a job order
+    that named a company must not read as nameless. The raw name is the one
+    the email actually carried (Woodlands Health, Acme Health, ...)."""
+    opportunity, candidate, roles, skills = _full_case()
+    opportunity.company_name_normalized = None
+    # Same employer the candidate has on record → full match via the raw name.
+    _, components = score_candidate(opportunity, candidate, roles, skills, today=TODAY)
+    employer = _by_name(components)["employer"]
+    assert employer.raw == Decimal(1)
+
+    # A company the candidate has never worked for → a real 0, not an abstain.
+    opportunity.company_name_raw = "Woodlands Health"
+    _, components = score_candidate(opportunity, candidate, roles, skills, today=TODAY)
+    employer = _by_name(components)["employer"]
+    assert employer.raw == Decimal(0)
+    assert "not worked" in (employer.note or "")
 
 
 async def test_title_uses_containment_on_the_job_side() -> None:

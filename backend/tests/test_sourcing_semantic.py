@@ -44,6 +44,7 @@ class FakeOpportunity:
     job_description: str | None = None
     requirements: str | None = None
     company_name_normalized: str | None = None
+    company_name_raw: str | None = None
     skills: list[str] | None = None
     salary_min: float | None = None
     salary_max: float | None = None

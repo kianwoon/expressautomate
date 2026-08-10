@@ -214,7 +214,14 @@ def _skills_component(opportunity, skills: list, weight: Decimal):
 
 
 def _employer_component(opportunity, roles: list, weight: Decimal):
-    hiring = normalize_company_name(opportunity.company_name_normalized or "")
+    # The normalized column has never been populated by ingestion — the
+    # extractor writes `company_name_raw` and nothing fills the normalized
+    # copy, so reading it alone makes every job order look nameless. Fall
+    # back to the raw name the email actually carried, exactly as the
+    # candidate side already does (`employer_normalized or employer`).
+    hiring = normalize_company_name(
+        opportunity.company_name_normalized or opportunity.company_name_raw or ""
+    )
     if not hiring:
         return _absent(EMPLOYER, weight, "The job order names no company.")
     employers = {
