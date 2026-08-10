@@ -463,12 +463,12 @@ function Detail({
             {/* Find Job is a different kind of action from the analysis: it
                 scores the job orders this recruiter can see against the
                 candidate's profile, on demand — no run to poll, no stored
-                record. Secondary, so it does not compete with the two primary
-                buttons beside it. */}
+                record. Styled as the other action buttons in the row so it
+                reads as one of them, not as a secondary control. */}
             {row.record_status !== "merged" && (
               <button
                 type="button"
-                className="btn btn-secondary"
+                className="btn btn-primary"
                 onClick={() => void findJobs()}
                 disabled={jobsLoading}
                 title="Shortlist the job orders that best fit this candidate"
