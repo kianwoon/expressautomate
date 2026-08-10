@@ -592,13 +592,13 @@
   display: flex;
   justify-content: flex-end;
 }
-/* The WhatsApp tile inside a shortlist row. The candidate panel's tile is
-   42px — sized for a header full of text buttons — which would tower over a
-   0.75rem text action here. Shrunk to the same visual weight; the mark keeps
-   its green because recognition is the point of the tile. */
+/* The WhatsApp tile inside a shortlist row. Roughly the candidate panel's
+   header tile (42px) — the tile is the card's primary call to action now,
+   so it is sized to be noticed, not to whisper. The mark keeps its green
+   because recognition is the point of the tile. */
 .src-row .wa-btn {
-  width: 20px;
-  height: 20px;
+  width: 40px;
+  height: 40px;
 }
 .src-row .wa-btn:disabled { opacity: 0.4; cursor: default; }
 .src-row .wa-btn:focus-visible { outline: 2px solid var(--blue-500); outline-offset: 2px; }
