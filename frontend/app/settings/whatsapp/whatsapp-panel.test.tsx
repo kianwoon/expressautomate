@@ -61,4 +61,22 @@ describe("WhatsappPanel", () => {
 
     expect(await screen.findByText(/WhatsApp accepted the link for \+6590034419/)).toBeTruthy();
   });
+
+  it("tells a connected recruiter to disconnect before linking a different number", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => connectedSessionBody("+6590034419"),
+      } as Response),
+    );
+
+    render(<WhatsappPanel />);
+
+    expect(
+      await screen.findByText(/To link a different WhatsApp number, disconnect this one first/),
+    ).toBeTruthy();
+    expect(screen.getByText(/check your connection/)).toBeTruthy();
+  });
 });

@@ -13,6 +13,7 @@ import pytest
 from sqlalchemy import text
 
 from app.core.config import settings
+from app.db.rls import tenant_session
 from app.services.wa_gateway import GatewayUnreachableError, SessionSnapshot
 
 
@@ -192,6 +193,54 @@ async def test_disconnect_answers_disconnected_even_if_the_gateway_is_unreachabl
     response = await client.post("/api/wa/session/disconnect")
     assert response.status_code == 200
     assert response.json() == {"status": "disconnected"}
+
+
+async def test_disconnect_persists_disconnected_even_if_the_gateway_callback_is_lost(
+    client, signed_in, monkeypatch, admin_session
+) -> None:
+    """The regression this guards: a disconnect used to rely entirely on the
+    gateway's fire-and-forget `POST /api/wa/internal/status` callback to write
+    `wa_sessions.status`, and a lost push left the row claiming `connected`
+    forever (the stale row this investigation found on a live tenant). The
+    route now writes `disconnected` itself, synchronously, so the recruiter's
+    explicit disconnect is durable regardless of what the gateway callback
+    does. A gateway that answers `connected` (as if nothing happened) must not
+    be able to undo the write this route just made."""
+    tenant_id, user_id = signed_in
+
+    async def fake_disconnect(self, tenant_id: str, user_id: str) -> SessionSnapshot:
+        # The gateway side acknowledges the disconnect but the async callback
+        # that would normally persist it never fires — the exact lost-push
+        # failure mode from gateway/src/callback.ts.
+        return SessionSnapshot(status="connected", phone_number="6591234567")
+
+    monkeypatch.setattr("app.services.wa_gateway.WaGatewayClient.disconnect", fake_disconnect)
+
+    # A session that claims to be connected, exactly the stale state that
+    # previously survived a disconnect.
+    await admin_session.execute(
+        text(
+            "INSERT INTO wa_sessions (id, tenant_id, user_id, status, phone_e164) "
+            "VALUES (:uid, :tid, :uid, 'connected', '+6591234567')"
+        ),
+        {"uid": user_id, "tid": tenant_id},
+    )
+    await admin_session.commit()
+
+    response = await client.post("/api/wa/session/disconnect")
+    assert response.status_code == 200
+
+    async with tenant_session(tenant_id) as s:
+        row = (
+            await s.execute(
+                text("SELECT status, phone_e164 FROM wa_sessions WHERE user_id = :uid"),
+                {"uid": user_id},
+            )
+        ).first()
+    assert row is not None
+    assert row[0] == "disconnected"
+    # A disconnect clears the paired number — it is no longer linked.
+    assert row[1] is None
 
 
 async def test_shared_secret_never_appears_in_a_response_body(

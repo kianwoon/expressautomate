@@ -445,6 +445,10 @@ export function WhatsappPanel() {
               This code expires at {new Date(panel.expiresAt).toLocaleTimeString()}.
             </p>
           ) : null}
+          <p className="nt-note">
+            If scanning keeps saying &ldquo;check your connection&rdquo;, the number may already be linked
+            to this device. Disconnect it first, then link again.
+          </p>
           <div className="nt-card-foot">
             <button className="btn btn-secondary" onClick={cancel}>
               Cancel
@@ -489,6 +493,11 @@ export function WhatsappPanel() {
           {panel.connectedAt ? (
             <p className="nt-note">Connected {new Date(panel.connectedAt).toLocaleString()}.</p>
           ) : null}
+          <p className="nt-note">
+            To link a different WhatsApp number, disconnect this one first. Linking a second device to
+            the same number while this link is active can make the phone show a &ldquo;check your
+            connection&rdquo; error instead of pairing.
+          </p>
           {confirmingDisconnect ? (
             <>
               <p className="nt-note">

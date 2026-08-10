@@ -290,6 +290,7 @@ async def disconnect_session(request: Request) -> dict[str, str]:
     browser's perspective there is exactly one outcome worth naming.
     """
     user_id, tenant_id = _require_session(request)
+    disconnected_gateway = True
     if settings.wa_gateway_configured():
         try:
             await _client().disconnect(str(tenant_id), str(user_id))
@@ -301,6 +302,46 @@ async def disconnect_session(request: Request) -> dict[str, str]:
             # liveness check corrects it (plan §6). Never a 500 for a dead
             # gateway (CLAUDE.md).
             log.warning("wa_disconnect_gateway_unreachable", tenant_id=str(tenant_id))
+            disconnected_gateway = False
+
+    # Persist the disconnect ourselves, rather than trusting the gateway's
+    # fire-and-forget callback alone. `PostgresAuthStore` clears the stored
+    # auth state on the gateway side, so a lost `POST /api/wa/internal/status`
+    # push (gateway/src/callback.ts is fire-and-forget — a lost push is logged
+    # and dropped, never retried) would otherwise leave `wa_sessions.status`
+    # claiming `connected` forever; the liveness sweep only repairs sessions it
+    # bothers to claim, and a row the gateway no longer recognises is exactly
+    # the stale case this write exists to prevent. Writing `disconnected` here
+    # is the same single writer that owns the column (`apply_internal_status`),
+    # reached synchronously at the moment the recruiter asked to stop — §15:
+    # "disconnected" is the honest word for "they asked to stop", whether or
+    # not the gateway answered. Even when the gateway was unreachable, the
+    # local answer is still "disconnected"; the gateway will reconcile its own
+    # socket when it comes back (plan §6).
+    async with tenant_session(tenant_id) as session:
+        await session.execute(
+            text(
+                """
+                UPDATE wa_sessions
+                   SET status = :status,
+                       status_detail = :status_detail,
+                       phone_e164 = NULL,
+                       last_connected_at = NULL,
+                       qr_expires_at = NULL,
+                       updated_at = now()
+                 WHERE user_id = :user_id
+                """
+            ),
+            {
+                "status": STATUS_DISCONNECTED,
+                "status_detail": (
+                    "Disconnected by recruiter."
+                    if disconnected_gateway
+                    else "Disconnected by recruiter (gateway unreachable)."
+                ),
+                "user_id": user_id,
+            },
+        )
     return {"status": "disconnected"}
 
 
