@@ -105,6 +105,7 @@ beforeEach(() => {
     considered: 0,
     scored: 0,
     limit: 5,
+    candidate_salary: null,
   });
   vi.stubGlobal(
     "fetch",
@@ -196,6 +197,13 @@ describe("Find Job on the candidate panel", () => {
               note: null,
             },
             {
+              name: "semantic",
+              weight: "2.0",
+              raw: null,
+              contribution: null,
+              note: "No CV embedding on file.",
+            },
+            {
               name: "salary",
               weight: "2.0",
               raw: null,
@@ -208,6 +216,9 @@ describe("Find Job on the candidate panel", () => {
       considered: 6,
       scored: 6,
       limit: 5,
+      // The candidate has no salary expectation on record, so the salary
+      // absence is a candidate-level fact stated once — not on the card.
+      candidate_salary: null,
     });
 
     render(panel(candidate()));
@@ -219,11 +230,70 @@ describe("Find Job on the candidate panel", () => {
     // of the component's weight the job order earned.
     expect(screen.getByText("95%")).toBeTruthy();
     expect(screen.getByText("100%")).toBeTruthy();
-    // An absent component says what was missing rather than drawing an empty bar.
+    // Absent components are stated once below the list, not on every card —
+    // and the CV-match component is never shown (it never scores in this
+    // direction, and its generic note would mislead).
+    expect(screen.queryByText("No CV embedding on file.")).toBeNull();
     expect(
-      screen.getByText("No comparable salary: one side is missing, or the currencies differ."),
+      screen.getByText(/no salary expectation on file.*on every job order/),
     ).toBeTruthy();
     expect(findCandidateJobs).toHaveBeenCalledWith("cand-1");
+  });
+
+  it("keeps the generic salary note when the candidate has a salary but a job order lacks one", async () => {
+    vi.mocked(findCandidateJobs).mockResolvedValue({
+      items: [
+        {
+          id: "jo-1",
+          company_name_raw: "Acme Health",
+          job_title_raw: "Staff Nurse",
+          location_raw: null,
+          salary_raw: null,
+          salary_min: null,
+          salary_max: null,
+          salary_currency: null,
+          salary_period: null,
+          working_hours_raw: null,
+          duration_raw: null,
+          requirements: null,
+          employment_type: null,
+          assigned_user_id: null,
+          received_datetime: null,
+          score: "0.6823",
+          review_status: "new",
+          quality_state: "likely",
+          reasons: [
+            {
+              name: "title",
+              weight: "3.0",
+              raw: "0.6667",
+              contribution: "2.0001",
+              note: null,
+            },
+            {
+              name: "salary",
+              weight: "2.0",
+              raw: null,
+              contribution: null,
+              note: "No comparable salary: one side is missing, or the currencies differ.",
+            },
+          ],
+        },
+      ],
+      considered: 1,
+      scored: 1,
+      limit: 5,
+      // The candidate's own salary expectation IS on record — so this job
+      // order's salary absence is job-specific, and the generic note stands.
+      candidate_salary: { amount: 3000, currency: "SGD", period: "month" },
+    });
+
+    render(panel(candidate()));
+    fireEvent.click(screen.getByRole("button", { name: "Find Job" }));
+
+    expect(
+      await screen.findByText(/No comparable salary: one side is missing, or the currencies differ/),
+    ).toBeTruthy();
   });
 
   it("says so when nothing scored high enough", async () => {
@@ -232,6 +302,7 @@ describe("Find Job on the candidate panel", () => {
       considered: 2,
       scored: 0,
       limit: 5,
+      candidate_salary: null,
     });
 
     render(panel(candidate()));

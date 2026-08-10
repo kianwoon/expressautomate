@@ -1144,6 +1144,7 @@ function JobsStage({
       </p>
     );
   }
+  const unscored = collectUnscored(jobs.items, jobs.candidate_salary !== null);
   return (
     <div className="cand-jobs">
       <p className="body cand-jobs-note">
@@ -1182,8 +1183,60 @@ function JobsStage({
           </li>
         ))}
       </ol>
+      {/* The absent components, stated once instead of once per card. A
+          component that never scored for any of these job orders is a shared
+          fact about the candidate or the shortlist, not five separate
+          verdicts — repeating "no comparable salary" inside every row is what
+          made the first version read as broken. */}
+      {unscored.length > 0 && (
+        <p className="body cand-jobs-note cand-jobs-unscored">
+          What wasn&rsquo;t scored:{" "}
+          {unscored
+            .map((u) => {
+              const scope =
+                u.count === jobs.items.length
+                  ? "on every job order"
+                  : `on ${u.count} of ${jobs.items.length}`;
+              return `${u.label} — ${u.note} (${scope})`;
+            })
+            .join(" · ")}
+        </p>
+      )}
     </div>
   );
+}
+
+/** The reasons that never scored, deduplicated across the shortlist.
+ *
+ * `contribution === null` means nothing was recorded to compare, which is not
+ * the same as scoring zero — saying "0%" would put "a poor fit on salary" in
+ * front of a recruiter when the truth is that nobody stated one. The CV-match
+ * component is skipped entirely: it never scores in this direction (there are
+ * no stored job-order embeddings to compare against), and its note text ("No
+ * CV embedding on file") would mislead — that fact is documented with the
+ * feature, not repeated on a card. When the candidate has no salary on
+ * record, the salary absence is candidate-level, so the note says so instead
+ * of the scorer's generic "one side is missing" wording. */
+function collectUnscored(
+  items: CandidateJobMatch[],
+  candidateSalaryKnown: boolean,
+): { label: string; note: string; count: number }[] {
+  const seen = new Map<string, { label: string; note: string; count: number }>();
+  for (const item of items) {
+    for (const reason of item.reasons ?? []) {
+      if (reason.contribution !== null) continue;
+      if (reason.name === "semantic") continue;
+      let note = reason.note ?? "Nothing to compare";
+      if (reason.name === "salary" && !candidateSalaryKnown) {
+        note = "this candidate has no salary expectation on file";
+      }
+      const key = `${reason.name}::${note}`;
+      const existing = seen.get(key);
+      if (existing) existing.count += 1;
+      else seen.set(key, { label: JOB_COMPONENT_LABELS[reason.name] ?? reason.name, note, count: 1 });
+    }
+  }
+  return [...seen.values()];
 }
 
 /** The raw facts a recruiter scans before the score: what the vacancy is, in
@@ -1202,37 +1255,34 @@ function JobFacts({ match }: { match: CandidateJobMatch }) {
 }
 
 /** Why this job order is where it is. The arithmetic behind the score, so
- *  "why is it third?" has an answer on the page rather than in a log. */
+ *  "why is it third?" has an answer on the page rather than in a log.
+ *
+ *  Scored components only. An absent one is a shared fact already stated in
+ *  the shortlist's "what wasn't scored" line — repeating "no comparable
+ *  salary" inside every card is what made the first version read as broken. */
 function JobBreakdown({ reasons }: { reasons: CandidateJobReason[] | null }) {
-  if (!reasons || reasons.length === 0) return null;
+  const scored = (reasons ?? []).filter(
+    (reason) => reason.contribution !== null && reason.name !== "semantic",
+  );
+  if (scored.length === 0) return null;
 
   return (
     <ul className="cand-jobs-reasons">
-      {reasons.map((reason) => (
+      {scored.map((reason) => (
         <li key={reason.name} className="cand-jobs-reason">
           <span className="cand-jobs-reason-k">
             {JOB_COMPONENT_LABELS[reason.name] ?? reason.name}
           </span>
-          {/* Null means nothing was recorded to compare, which is not the same
-              as scoring zero — saying "0%" here would put "a poor fit on
-              salary" in front of a recruiter when the truth is that nobody
-              stated one. A scored component reads as the percentage of its
-              weight the job order earned. */}
           <span
-            className={reason.contribution === null ? "cand-jobs-reason-v muted" : "cand-jobs-reason-v"}
-            title={
-              reason.contribution === null
-                ? undefined
-                : "The share of this criterion's possible weight the job order earned."
-            }
+            className="cand-jobs-reason-v"
+            title="The share of this criterion's possible weight the job order earned."
           >
-            {reason.contribution === null
-              ? (reason.note ?? "Nothing to compare")
-              : percent(
-                  Number(reason.contribution) / Number(reason.weight),
-                  `${reason.contribution} of ${reason.weight}`,
-                )}
+            {percent(
+              Number(reason.contribution) / Number(reason.weight),
+              `${reason.contribution} of ${reason.weight}`,
+            )}
           </span>
+          {reason.note && <span className="cand-jobs-reason-note">{reason.note}</span>}
         </li>
       ))}
     </ul>

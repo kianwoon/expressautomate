@@ -226,6 +226,10 @@ async def test_shortlists_top_five_best_first(agency) -> None:
     assert by_name["employer"]["raw"] == "1.0000"
     assert body["considered"] == 6
     assert body["scored"] == 6
+    # The fixture candidate has a full salary expectation on record, so the
+    # candidate-side absence flag carries it — and salary really did score.
+    assert body["candidate_salary"] == {"amount": 3000.0, "currency": "SGD", "period": "month"}
+    assert by_name["salary"]["raw"] == "1.0000"
 
 
 async def test_a_job_order_with_nothing_comparable_is_not_scored(agency) -> None:
@@ -253,6 +257,9 @@ async def test_a_job_order_with_nothing_comparable_is_not_scored(agency) -> None
     assert body["items"] == []
     assert body["considered"] == 2
     assert body["scored"] == 0
+    # No salary anywhere on the candidate's record — the flag says so, and the
+    # screen states the salary absence once instead of on every card.
+    assert body["candidate_salary"] is None
 
 
 async def test_superseded_revisions_are_excluded(agency) -> None:

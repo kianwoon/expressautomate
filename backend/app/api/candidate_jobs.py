@@ -169,6 +169,23 @@ async def find_candidate_jobs(request: Request, candidate_id: uuid.UUID) -> dict
         scored.sort(key=lambda item: (-item[1], str(item[0].id)))
         shortlist = scored[:limit]
 
+    # Whether the salary component can ever score for THIS candidate. The
+    # scorer abstains when either side lacks a full record (amount, currency
+    # and period), so when the candidate's expectation is incomplete the
+    # absence is a candidate-level fact — every job order abstains for the
+    # same reason, and the screen states it once rather than on every card.
+    candidate_salary = None
+    if (
+        candidate.expected_salary is not None
+        and candidate.salary_currency is not None
+        and candidate.salary_period is not None
+    ):
+        candidate_salary = {
+            "amount": float(candidate.expected_salary),
+            "currency": candidate.salary_currency,
+            "period": candidate.salary_period,
+        }
+
     return {
         "items": [
             _serialize_job(
@@ -185,4 +202,5 @@ async def find_candidate_jobs(request: Request, candidate_id: uuid.UUID) -> dict
         "considered": considered,
         "scored": len(scored),
         "limit": limit,
+        "candidate_salary": candidate_salary,
     }

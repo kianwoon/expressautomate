@@ -1304,8 +1304,7 @@ select.gl-input:focus-visible { outline: 2px solid var(--blue-500); outline-offs
    keeps its own compact card vocabulary. */
 .cand-jobs { margin-top: 4px; }
 .cand-jobs-note { margin-top: 8px; font-size: 0.8125rem; color: var(--ink-500); max-width: 72ch; }
-.cand-jobs-error { margin-top: 8px; font-size: 0.8125rem; color: var(--amber-700); max-width: 72ch; }
-.cand-jobs-list {
+.cand-jobs-error { margin-top: 8px; font-size: 0.8125rem; color: var(--amber-700); max-width: 72ch; }.cand-jobs-list {
   margin: 12px 0 0;
   padding: 0;
   list-style: none;
@@ -1376,6 +1375,11 @@ select.gl-input:focus-visible { outline: 2px solid var(--blue-500); outline-offs
 .cand-jobs-reason { display: flex; align-items: baseline; gap: 6px; font-size: 0.8125rem; }
 .cand-jobs-reason-k { color: var(--ink-500); }
 .cand-jobs-reason-v { font-weight: 600; color: var(--ink-800); }
+.cand-jobs-reason-note { color: var(--ink-500); }
+/* The "what wasn't scored" line below the list: absent components, stated
+   once instead of once per card, so the same note is not repeated five
+   times. */
+.cand-jobs-unscored { margin-top: 10px; }
 
 /* ---- Analysis in progress (Job + Candidate Intelligence) ----
    The prominent "the model is working" state shown while an analysis runs.

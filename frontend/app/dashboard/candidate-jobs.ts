@@ -70,6 +70,15 @@ export type CandidateJobs = {
    *  `scored` is the vacancies with nothing comparable on record. */
   scored: number;
   limit: number;
+  /** The candidate's salary expectation, when fully recorded (amount,
+   *  currency and period all present). Null means the salary component
+   *  abstains on the candidate's side for every job order — a
+   *  candidate-level fact the screen should state once, not per card. */
+  candidate_salary: {
+    amount: number;
+    currency: string;
+    period: string;
+  } | null;
 };
 
 /** The best-fitting visible job orders for one candidate, best first. */
