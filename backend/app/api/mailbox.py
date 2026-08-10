@@ -139,6 +139,14 @@ async def mailbox_preview(request: Request) -> dict:
         # letting a 500 read as an outage.
         log.info("mailbox_preview_unauthorised", user_id=str(user_id), error=str(exc))
         raise HTTPException(status_code=403, detail="Reconnect your mailbox.") from exc
+    except ms_auth.TokenRefreshTransientError as exc:
+        # Entra throttled or was slow — the grant is fine. This is "try again
+        # in a moment", not "reconnect": a 403 here would tell the user their
+        # mailbox died when it is perfectly healthy.
+        log.warning("mailbox_preview_transient", user_id=str(user_id), error=str(exc))
+        raise HTTPException(
+            status_code=502, detail="Microsoft could not be reached just now."
+        ) from exc
 
     async with GraphClient(token) as client:
         try:
@@ -412,6 +420,15 @@ async def resume_intake(request: Request) -> dict:
     except ms_auth.MailboxNotAuthorised as exc:
         log.info("mailbox_resume_unauthorised", user_id=str(user_uuid), error=str(exc))
         raise HTTPException(status_code=403, detail="Reconnect your mailbox.") from exc
+    except ms_auth.TokenRefreshTransientError as exc:
+        # Entra throttled or was slow — the grant is fine, so the honest
+        # answer is "try again", not "reconnect" (and not a resume the pause
+        # does not back: the mailbox stays visibly paused).
+        log.warning("mailbox_resume_transient", user_id=str(user_uuid), error=str(exc))
+        raise HTTPException(
+            status_code=502,
+            detail="Microsoft could not be reached just now — intake is still paused.",
+        ) from exc
 
     async with GraphClient(token) as graph:
         try:

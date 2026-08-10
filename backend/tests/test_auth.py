@@ -270,12 +270,15 @@ async def test_a_stalled_token_refresh_fails_fast_instead_of_blocking_the_job(
     to Entra's `/token` endpoint had no socket timeout — a single stalled TLS
     read blocked the worker thread, and `_token_for_user` had no bound of its
     own, so arq's global timeout was the only thing that cancelled it. The fix
-    bounds the call to GRAPH_TIMEOUT_SECONDS and raises MailboxNotAuthorised,
-    which the caller already handles by marking `needs_reauth` and stopping.
+    bounds the call to GRAPH_TIMEOUT_SECONDS (plus a grace window for the
+    still-running thread) and raises TokenRefreshTransientError, which the
+    callers handle by retrying — a slow Entra must not flip the mailbox
+    `needs_reauth` and force a reconnect for a grant that is fine.
 
     This test reproduces the symptom directly: a blocking token call that would
-    never return on its own. It must fail fast (under the timeout window), not
-    hang — and it must raise MailboxNotAuthorised, not a raw TimeoutError.
+    never return on its own. It must fail fast (under the timeout windows), not
+    hang — and it must raise TokenRefreshTransientError, not a raw TimeoutError
+    or a MailboxNotAuthorised.
     """
     tid, oid = str(uuid.uuid4()), uuid.uuid4().hex
     cleanup.append(uuid.UUID(tid))
@@ -286,6 +289,9 @@ async def test_a_stalled_token_refresh_fails_fast_instead_of_blocking_the_job(
 
     # Shrink the timeout so the test is fast — the guard reads this setting.
     monkeypatch.setattr(settings, "GRAPH_TIMEOUT_SECONDS", 0.2)
+    # The grace window too: a refresh that never answers must fail fast after
+    # it, not wait for the thread to hang some more.
+    monkeypatch.setattr(settings, "TOKEN_REFRESH_GRACE_SECONDS", 0.2)
 
     class _BlockingMsal:
         def acquire_token_by_refresh_token(self, *args, **kwargs):
@@ -296,7 +302,7 @@ async def test_a_stalled_token_refresh_fails_fast_instead_of_blocking_the_job(
     monkeypatch.setattr(ms_auth, "client", lambda: _BlockingMsal())
 
     started = time.monotonic()
-    with pytest.raises(ms_auth.MailboxNotAuthorised, match="timed out"):
+    with pytest.raises(ms_auth.TokenRefreshTransientError, match="timed out"):
         await ms_auth.access_token_for_user(uuid.UUID(tid), user_id)
     # Failed in well under the 5s the blocking call would have taken — proves
     # the wait_for guard fired, not that sleep finished.

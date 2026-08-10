@@ -14,6 +14,7 @@ worker read Outlook mail.
 """
 
 import asyncio
+import re
 import uuid
 from datetime import UTC, datetime
 from functools import lru_cache
@@ -116,6 +117,65 @@ class MailboxNotAuthorised(Exception):
     """
 
 
+class TokenRefreshTransientError(Exception):
+    """Entra is throttling or having a bad moment — the grant itself is fine.
+
+    Distinct from `MailboxNotAuthorised`: the fix is a retry, not a reconnect.
+    This is the classification that keeps a mailbox from disconnecting by
+    itself: the delta sweep refreshes every ten minutes, so any transient
+    blip at the token endpoint would otherwise permanently flip the mailbox
+    to `needs_reauth` and force the user through a reconnect they do not need.
+
+    Callers that can defer (arq `Retry`) should; callers on a sweep clock
+    should log and skip, because the sweep retries on its own schedule. A
+    genuinely dead grant that lands here by misclassification is merely
+    retried — visible in sync events — rather than blocking on a reconnect.
+    """
+
+
+# AADSTS codes that mean "the stored grant itself is dead" — re-consent is the
+# only fix. Everything else is transient. The default leans transient on
+# purpose: wrongly retrying a dead grant costs noise in the sync events, while
+# wrongly forcing a reconnect costs the user a full consent round trip.
+_PERMANENT_GRANT_CODES = frozenset(
+    {
+        "700082",  # refresh token expired (work/school, 90-day inactivity)
+        "70008",  # refresh token expired (personal account, 90-day)
+        "50173",  # refresh token expired (inactivity)
+        "54005",  # refresh token revoked
+        "50076",  # user must re-authenticate (MFA / conditional access change)
+        "50079",  # user must re-authenticate (registration required)
+        "65001",  # consent between app and resource revoked
+        "70000",  # generic invalid_grant — includes an already-redeemed token
+    }
+)
+
+_AADSTS_CODE = re.compile(r"AADSTS(\d{5})")
+
+
+def _classify_refresh_failure(result: dict) -> Exception:
+    """A token-endpoint failure, as the exception a caller can act on.
+
+    The split is what keeps the mailbox connected through a blip. Entra's
+    transient answers — 429 throttling, `temporarily_unavailable`, and any
+    code we do not recognise — mean "try again", and a mailbox must not be
+    flipped to `needs_reauth` for them. Only the known-permanent `invalid_grant`
+    codes mean the grant itself is dead and the user has to reconnect.
+
+    Keyed on the AADSTS code, not the OAuth2 `error` field: the code is the
+    stable, authoritative signal, and it is what survives across MSAL builds
+    and error shapes.
+    """
+    description = result.get("error_description") or ""
+    error = result.get("error") or ""
+    match = _AADSTS_CODE.search(description)
+    code = match.group(1) if match else None
+
+    if code in _PERMANENT_GRANT_CODES:
+        return MailboxNotAuthorised(description or "refresh token rejected")
+    return TokenRefreshTransientError(description or error or "token refresh failed")
+
+
 # allow-hardcode: SQL statements, not a phrase list — no behaviour is keyed on
 # matching these strings against anything.
 #
@@ -195,24 +255,15 @@ async def _token_for_user(session, tenant_id: uuid.UUID, owner: uuid.UUID, *, ab
     # Defence-in-depth on top of the client() socket timeout: if a future
     # MSAL build changes the wiring or an `http_client=` is ever passed,
     # this wait_for still bounds the blocking call to GRAPH_TIMEOUT_SECONDS.
-    # Raising MailboxNotAuthorised lets the caller stop cleanly (mark
-    # `needs_reauth`) instead of burning the whole 300s arq job budget.
+    # Raising TokenRefreshTransientError lets the caller retry (arq `Retry`,
+    # or the sweep's own clock) instead of flipping the mailbox `needs_reauth`
+    # for what is usually a slow or throttled Entra.
     try:
-        result = await asyncio.wait_for(
-            asyncio.to_thread(
-                client().acquire_token_by_refresh_token,
-                decrypt(encrypted),
-                # The full mailbox set — identity scopes included. Asking for
-                # only the new permission returns a token narrower than the grant
-                # already held, which is why `mailbox_scopes()` unions them.
-                scopes=mailbox_scopes(),
-            ),
-            timeout=settings.GRAPH_TIMEOUT_SECONDS,
-        )
+        result = await _acquire_refresh_token(decrypt(encrypted))
     except TimeoutError as exc:
-        raise MailboxNotAuthorised("token refresh timed out") from exc
+        raise TokenRefreshTransientError("token refresh timed out") from exc
     if "access_token" not in result:
-        raise MailboxNotAuthorised(result.get("error_description", "refresh token rejected"))
+        raise _classify_refresh_failure(result)
 
     if result.get("refresh_token"):
         await store_refresh_token(
@@ -224,6 +275,51 @@ async def _token_for_user(session, tenant_id: uuid.UUID, owner: uuid.UUID, *, ab
             now=datetime.now(UTC),
         )
     return result["access_token"]
+
+
+async def _acquire_refresh_token(refresh_token: str) -> dict:
+    """One token refresh, with a grace period instead of abandoning the thread.
+
+    `asyncio.wait_for` does not cancel `asyncio.to_thread`'s executor thread.
+    A refresh that answers just after the primary timeout has already redeemed
+    the stored token at Entra (rotation), so walking away leaves the database
+    holding a token Entra has replaced — the next refresh answers
+    `invalid_grant` and the mailbox is genuinely dead until a human reconnects,
+    for a grant that was perfectly healthy. That is the "disconnected by
+    itself" bug this function exists to close.
+
+    So the primary timeout is a soft signal — it decides what counts as
+    "slow" — and then a grace window waits for the still-running thread.
+    `asyncio.shield` matters: `wait_for` cancels whatever it awaits on timeout,
+    and re-awaiting a cancelled `run_in_executor` future raises
+    `CancelledError` even though the thread kept running and produced the
+    answer. Shield isolates the future from that cancellation so a second
+    `wait_for` can still collect the result. If Entra answers in the grace
+    window the rotation is persisted normally; only a refresh that outlives
+    both windows is reported as transient.
+    """
+    loop = asyncio.get_running_loop()
+    future = loop.run_in_executor(
+        None,
+        lambda: client().acquire_token_by_refresh_token(
+            refresh_token, scopes=mailbox_scopes()
+        ),
+    )
+    try:
+        return await asyncio.wait_for(
+            asyncio.shield(future), timeout=settings.GRAPH_TIMEOUT_SECONDS
+        )
+    except TimeoutError:
+        try:
+            return await asyncio.wait_for(
+                asyncio.shield(future), timeout=settings.TOKEN_REFRESH_GRACE_SECONDS
+            )
+        except TimeoutError:
+            # Re-raised for the caller's existing handler; the still-running
+            # thread may yet burn the stored token, but a refresh hung beyond
+            # both windows is rare enough that the reconnect it may force is
+            # acceptable, and nothing here can cancel a thread anyway.
+            raise
 
 
 async def store_refresh_token(

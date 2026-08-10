@@ -10,15 +10,21 @@ allow-hardcode: the SQL below is test fixture data.
 """
 
 import asyncio
+import time
 import uuid
 
 import pytest
 from sqlalchemy import text
 
+from app.core.config import settings
 from app.core.crypto import decrypt, encrypt
 from app.db.rls import tenant_session
 from app.services import ms_auth
-from app.services.ms_auth import MailboxNotAuthorised, access_token_for_mailbox
+from app.services.ms_auth import (
+    MailboxNotAuthorised,
+    TokenRefreshTransientError,
+    access_token_for_mailbox,
+)
 
 
 @pytest.fixture
@@ -171,6 +177,148 @@ async def test_a_rejected_refresh_token_is_reported_as_unauthorised(
 
     with pytest.raises(MailboxNotAuthorised):
         await access_token_for_mailbox(tenant_id, mailbox_id)
+
+
+async def test_a_transient_entra_error_is_transient_not_a_dead_grant(
+    monkeypatch, admin_session, mailbox_with_grant
+):
+    """A 429/throttle must not read as a dead grant.
+
+    Entra returns 429 with a JSON body when it is throttling; MSAL does not
+    raise on 429 (only >=500), it hands the body back as an error dict. Before
+    the transient/permanent split this answered `MailboxNotAuthorised` — the
+    caller flipped the mailbox to `needs_reauth` and the user had to reconnect
+    manually for a grant that was perfectly healthy. That is the failure mode
+    behind "the mailbox disconnects by itself": the delta sweep refreshes
+    every 10 minutes, so any transient Entra hiccup permanently flagged the
+    mailbox until a human re-consented.
+    """
+    tenant_id, user_id, mailbox_id = mailbox_with_grant
+
+    class _ThrottledMsal:
+        def acquire_token_by_refresh_token(self, refresh_token, scopes):
+            # The exact body Entra returns when throttling the token endpoint.
+            return {
+                "error": "temporarily_unavailable",
+                "error_description": "AADSTS900429: The service is experiencing "
+                "a temporary issue. Please retry.",
+            }
+
+    monkeypatch.setattr(ms_auth, "client", lambda: _ThrottledMsal())
+
+    with pytest.raises(TokenRefreshTransientError):
+        await access_token_for_mailbox(tenant_id, mailbox_id)
+
+    # The grant is untouched — Entra never saw a *successful* refresh, so no
+    # rotation happened and the stored token is still perfectly valid.
+    assert await _stored_token(tenant_id, user_id) == "refresh-v1"
+
+
+async def test_a_slow_refresh_that_answers_in_the_grace_period_still_succeeds(
+    monkeypatch, admin_session, mailbox_with_grant
+):
+    """A refresh slower than the primary timeout must not burn the token.
+
+    Before the grace period, `asyncio.wait_for` abandoned the executor thread
+    at GRAPH_TIMEOUT_SECONDS. The thread kept running, Entra answered and
+    rotated the refresh token (old one redeemed), but the new token was never
+    persisted — the next refresh answered `invalid_grant` and the mailbox was
+    genuinely dead until a human reconnected, for a grant that was healthy.
+    Now the primary timeout is a soft signal and the grace window collects the
+    still-running refresh.
+    """
+    tenant_id, user_id, mailbox_id = mailbox_with_grant
+    monkeypatch.setattr(settings, "GRAPH_TIMEOUT_SECONDS", 0.1)
+
+    class _SlowMsal:
+        def acquire_token_by_refresh_token(self, refresh_token, scopes):
+            time.sleep(0.3)  # outlive the primary timeout, fit in the grace
+            return {
+                "access_token": "access-slow",
+                "refresh_token": "refresh-v2",
+                "scope": "Mail.Read",
+            }
+
+    monkeypatch.setattr(ms_auth, "client", lambda: _SlowMsal())
+
+    token = await access_token_for_mailbox(tenant_id, mailbox_id)
+
+    assert token == "access-slow"
+    assert await _stored_token(tenant_id, user_id) == "refresh-v2", (
+        "the rotation from the grace-period refresh must be persisted"
+    )
+
+
+async def test_a_refresh_that_exceeds_both_windows_is_transient(
+    monkeypatch, admin_session, mailbox_with_grant
+):
+    """A refresh hung beyond the grace window is transient, never permanent."""
+    tenant_id, user_id, mailbox_id = mailbox_with_grant
+    monkeypatch.setattr(settings, "GRAPH_TIMEOUT_SECONDS", 0.05)
+    monkeypatch.setattr(settings, "TOKEN_REFRESH_GRACE_SECONDS", 0.05)
+
+    class _HungMsal:
+        def acquire_token_by_refresh_token(self, refresh_token, scopes):
+            time.sleep(0.4)
+            return {"access_token": "never-seen", "refresh_token": "refresh-v2"}
+
+    monkeypatch.setattr(ms_auth, "client", lambda: _HungMsal())
+
+    with pytest.raises(TokenRefreshTransientError, match="timed out"):
+        await access_token_for_mailbox(tenant_id, mailbox_id)
+
+    # Not a `MailboxNotAuthorised`, so no caller flips the mailbox; the grant
+    # row is exactly as it was.
+    assert await _stored_token(tenant_id, user_id) == "refresh-v1"
+
+
+async def test_a_genuinely_revoked_grant_is_still_permanent(
+    monkeypatch, admin_session, mailbox_with_grant
+):
+    """The known permanent `invalid_grant` codes still force a reconnect."""
+    tenant_id, user_id, mailbox_id = mailbox_with_grant
+
+    class _RevokedMsal:
+        def acquire_token_by_refresh_token(self, refresh_token, scopes):
+            return {
+                "error": "invalid_grant",
+                "error_description": (
+                    "AADSTS700082: The refresh token has expired. Tokens are "
+                    "valid for 90 days and then must be renewed."
+                ),
+            }
+
+    monkeypatch.setattr(ms_auth, "client", lambda: _RevokedMsal())
+
+    with pytest.raises(MailboxNotAuthorised, match="AADSTS700082"):
+        await access_token_for_mailbox(tenant_id, mailbox_id)
+
+
+async def test_an_unknown_invalid_grant_code_defaults_to_transient(
+    monkeypatch, admin_session, mailbox_with_grant
+):
+    """An unrecognised failure leans transient: retry, not forced reconnect.
+
+    The default matters because the cost of a wrong answer is asymmetric —
+    wrongly retrying a dead grant costs noise in the sync events, while
+    wrongly forcing a reconnect costs the user a full consent round trip.
+    """
+    tenant_id, user_id, mailbox_id = mailbox_with_grant
+
+    class _MysteryMsal:
+        def acquire_token_by_refresh_token(self, refresh_token, scopes):
+            return {
+                "error": "invalid_grant",
+                "error_description": "AADSTS99999: Some future failure we "
+                "do not yet classify.",
+            }
+
+    monkeypatch.setattr(ms_auth, "client", lambda: _MysteryMsal())
+
+    with pytest.raises(TokenRefreshTransientError):
+        await access_token_for_mailbox(tenant_id, mailbox_id)
+
+    assert await _stored_token(tenant_id, user_id) == "refresh-v1"
 
 
 async def test_the_full_mailbox_scope_set_is_requested(

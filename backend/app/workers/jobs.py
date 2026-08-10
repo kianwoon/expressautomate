@@ -43,7 +43,11 @@ from app.services.graph.client import (
     GraphThrottled,
 )
 from app.services.graph.subscriptions import create_subscription, renew_subscription
-from app.services.ms_auth import MailboxNotAuthorised, access_token_for_mailbox
+from app.services.ms_auth import (
+    MailboxNotAuthorised,
+    TokenRefreshTransientError,
+    access_token_for_mailbox,
+)
 from app.services.storage.r2 import BodyStoreMisconfigured, R2BodyStore, body_key
 from app.workers.queue import enqueue
 
@@ -319,6 +323,12 @@ async def fetch_email(
     except MailboxNotAuthorised as exc:
         await mark_needs_reauth(tenant, mailbox, str(exc))
         return
+    except TokenRefreshTransientError as exc:
+        # Entra throttled or was slow — the grant is fine, so this is not a
+        # reconnect. Retry on the same clock Graph itself names when
+        # throttling; the row stays `pending`, and `rescan_stuck` re-enqueues
+        # it if arq's retries are exhausted.
+        raise Retry(defer=settings.GRAPH_DEFAULT_RETRY_AFTER_SECONDS) from exc
 
     try:
         message = await client.get(
@@ -724,6 +734,10 @@ async def recreate_subscription(ctx, *, tenant_id: str, mailbox_id: str) -> None
         # Recreating needs the grant that just failed. Nothing to retry.
         await mark_needs_reauth(tenant, mailbox, str(exc))
         return
+    except TokenRefreshTransientError as exc:
+        # A throttled or slow Entra, not a dead grant: deferring is the whole
+        # fix, and the mailbox keeps its current subscription until the retry.
+        raise Retry(defer=settings.GRAPH_DEFAULT_RETRY_AFTER_SECONDS) from exc
 
     try:
         async with tenant_session(tenant) as session:
@@ -780,6 +794,10 @@ async def reauthorize_subscription(
     except MailboxNotAuthorised as exc:
         await mark_needs_reauth(tenant, mailbox, str(exc))
         return
+    except TokenRefreshTransientError as exc:
+        # Graph asked us to prove the grant, and Entra is throttling the
+        # proof. Not a dead grant: defer and prove it again.
+        raise Retry(defer=settings.GRAPH_DEFAULT_RETRY_AFTER_SECONDS) from exc
 
     try:
         await renew_subscription(tenant, subscription_id, client)
@@ -831,6 +849,10 @@ async def backfill_mailbox_job(ctx, *, tenant_id: str, mailbox_id: str) -> None:
     except MailboxNotAuthorised as exc:
         await mark_needs_reauth(tenant, mailbox, str(exc))
         return
+    except TokenRefreshTransientError as exc:
+        # A throttled or slow Entra, not a dead grant. Defer; the backfill is
+        # still due and the mailbox is not flagged for a reconnect.
+        raise Retry(defer=settings.GRAPH_DEFAULT_RETRY_AFTER_SECONDS) from exc
 
     # Recorded unconditionally, unlike the delta sweep: a backfill happens once
     # per mailbox (twice if the user widens the window), and it is the event
@@ -893,6 +915,14 @@ async def delta_sync_mailbox(ctx, *, tenant_id: str, mailbox_id: str) -> None:
     except MailboxNotAuthorised as exc:
         await mark_needs_reauth(tenant, mailbox, str(exc))
         return
+    except TokenRefreshTransientError as exc:
+        # Entra throttled or was slow — the grant is fine, so this is not a
+        # reconnect and it is not a failure worth a row on the panel. The
+        # scheduled sweep re-enqueues this job on its own clock anyway, and
+        # arq's own retry covers the gap; a transient blip must not read as
+        # "checking your mailbox failed".
+        log.info("delta_sync_refresh_transient", mailbox_id=mailbox_id)
+        raise Retry(defer=settings.GRAPH_DEFAULT_RETRY_AFTER_SECONDS) from exc
 
     try:
         result = await sync_mailbox(tenant, mailbox, client)

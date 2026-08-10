@@ -290,6 +290,40 @@ async def test_a_revoked_grant_marks_the_mailbox_for_reconnection(monkeypatch, p
     assert (await _row(tenant_id, row_id)).processing_status == "pending"
 
 
+async def test_a_transient_refresh_failure_defers_instead_of_disconnecting(
+    monkeypatch, pending
+):
+    """Entra throttling must defer the job, not flag the mailbox.
+
+    Before the transient/permanent split a throttled token refresh raised
+    `MailboxNotAuthorised`, the job marked the mailbox `needs_reauth`, and the
+    user had to reconnect manually for a grant that was perfectly healthy.
+    A transient failure now raises arq's `Retry` and leaves the mailbox alone.
+    """
+    from app.services.ms_auth import TokenRefreshTransientError
+
+    tenant_id, mailbox_id, row_id = pending
+
+    async def _throttled(tenant_id, mailbox_id):
+        raise TokenRefreshTransientError("AADSTS900429: temporarily unavailable")
+
+    monkeypatch.setattr(jobs, "graph_client_for_mailbox", _throttled)
+    monkeypatch.setattr(jobs, "body_store", lambda: InMemoryBodyStore())
+    monkeypatch.setattr(jobs, "enqueue", lambda name, **kwargs: True)
+
+    with pytest.raises(Retry):
+        await _run(pending)
+
+    async with tenant_session(tenant_id) as session:
+        status = (
+            await session.execute(
+                text("SELECT status FROM mailboxes WHERE id = :id"), {"id": mailbox_id}
+            )
+        ).scalar_one()
+    assert status == "active", "a transient blip must not force a reconnect"
+    assert (await _row(tenant_id, row_id)).processing_status == "pending"
+
+
 # --- idempotence ------------------------------------------------------------
 
 

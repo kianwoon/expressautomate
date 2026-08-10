@@ -95,6 +95,13 @@ class Settings(BaseSettings):
     # absence answerable at the edge instead of a 500 in a traceback.
     GRAPH_BASE_URL: str = ""
     GRAPH_TIMEOUT_SECONDS: float = 30.0
+    # How long to keep waiting for an in-flight token refresh after the
+    # primary timeout. Entra can answer a moment later with a rotated token,
+    # and abandoning the thread then burns the stored token — the next refresh
+    # answers `invalid_grant` and the mailbox is dead until a manual reconnect
+    # (see `ms_auth._acquire_refresh_token`). The grace window is what keeps a
+    # merely slow Entra from becoming a forced reconnect.
+    TOKEN_REFRESH_GRACE_SECONDS: float = Field(default=15.0, gt=0)
     # Used only when Graph throttles without a parseable Retry-After. It sends
     # one nearly always; this keeps the absence from becoming an exception.
     GRAPH_DEFAULT_RETRY_AFTER_SECONDS: float = 10.0

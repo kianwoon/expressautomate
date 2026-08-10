@@ -486,6 +486,41 @@ async def test_a_dead_grant_does_not_abort_the_rest_of_the_sweep(
     assert queued == [], "recreating needs the same dead grant, so it is not queued"
 
 
+async def test_a_transient_refresh_failure_does_not_flag_the_mailbox(
+    monkeypatch, admin_session, tenant, queued
+):
+    """Entra throttling during renewal is a skip, not a disconnect.
+
+    Before the transient/permanent split a throttled token refresh raised
+    `MailboxNotAuthorised`, the sweep marked the mailbox `needs_reauth`, and
+    the user had to reconnect manually for a grant that was perfectly healthy.
+    A transient failure now logs and skips: the sweep retries on its own clock
+    and the subscription carries a half-life of slack.
+    """
+    from app.services.ms_auth import TokenRefreshTransientError
+
+    mailbox_id = await _add_mailbox(admin_session, tenant)
+    await _add_subscription(
+        admin_session, tenant, mailbox_id, expires_in=10, created_ago=90
+    )
+    await admin_session.commit()
+
+    async def _throttled(tenant_id, mailbox_id):
+        raise TokenRefreshTransientError("AADSTS900429: temporarily unavailable")
+
+    monkeypatch.setattr(tasks, "graph_client_for_mailbox", _throttled)
+
+    assert await tasks.renew_subscriptions() == 0
+
+    status = (
+        await admin_session.execute(
+            text("SELECT status FROM mailboxes WHERE id = :id"), {"id": mailbox_id}
+        )
+    ).scalar_one()
+    assert status == "active", "a transient blip must not force a reconnect"
+    assert queued == [], "nothing to recreate — the grant and subscription are fine"
+
+
 # --- ensure_subscriptions ---------------------------------------------------
 #
 # The backstop for "active mailbox, no subscription". Nothing else detects it:

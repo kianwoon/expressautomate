@@ -128,6 +128,13 @@ async def run_client_discovery(ctx, *, tenant_id: str, run_id: str) -> None:
         log.info("client_discovery_unauthorised", run_id=run_id, error=str(exc))
         await _fail(tenant, record, _RECONNECT)
         return
+    except ms_auth.TokenRefreshTransientError as exc:
+        # Entra throttled or was slow — the grant is fine, so this is not the
+        # "reconnect" failure above and not the unreachable failure below.
+        # Defer like a Graph throttle; the claim accepts `running`, so the
+        # retry resumes cleanly.
+        log.info("client_discovery_refresh_transient", run_id=run_id, error=str(exc))
+        raise Retry(defer=settings.GRAPH_DEFAULT_RETRY_AFTER_SECONDS) from exc
 
     since = datetime.now(UTC) - timedelta(days=lookback_days)
     client = graph_client(token)

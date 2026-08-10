@@ -187,6 +187,42 @@ async def test_a_dead_grant_stops_recreation_and_flags_the_mailbox(
     assert await _subscriptions(tenant_id) == []
 
 
+async def test_a_transient_refresh_failure_defers_recreation(
+    monkeypatch, admin_session, mailbox
+):
+    """Entra throttling must defer recreation, not flag the mailbox.
+
+    Before the transient/permanent split a throttled token refresh raised
+    `MailboxNotAuthorised`, so `recreate_subscription` (enqueued after a
+    `subscriptionRemoved` lifecycle event, or by the renewal sweep) marked the
+    mailbox `needs_reauth` and forced a manual reconnect for a grant that was
+    perfectly healthy.
+    """
+    from arq import Retry
+
+    from app.services.ms_auth import TokenRefreshTransientError
+
+    tenant_id, mailbox_id = mailbox
+
+    async def _throttled(tenant, mbox):
+        raise TokenRefreshTransientError("AADSTS900429: temporarily unavailable")
+
+    monkeypatch.setattr(jobs, "graph_client_for_mailbox", _throttled)
+
+    with pytest.raises(Retry):
+        await jobs.recreate_subscription(
+            {}, tenant_id=str(tenant_id), mailbox_id=str(mailbox_id)
+        )
+
+    async with tenant_session(tenant_id) as session:
+        status = (
+            await session.execute(
+                text("SELECT status FROM mailboxes WHERE id = :id"), {"id": mailbox_id}
+            )
+        ).scalar_one()
+    assert status == "active", "a transient blip must not force a reconnect"
+
+
 # --- reauthorize_subscription -----------------------------------------------
 
 
@@ -308,6 +344,41 @@ async def test_the_sync_job_stops_quietly_when_the_grant_is_dead(
             )
         ).scalar_one()
     assert status == "needs_reauth"
+
+
+async def test_the_sync_job_defers_when_entra_throttles(
+    monkeypatch, admin_session, mailbox
+):
+    """A throttled refresh must defer, not flag the mailbox for reconnect.
+
+    The delta sweep is the highest-frequency refresh in the system (every ten
+    minutes per active mailbox), which made it the most common source of the
+    false disconnect: any transient token-endpoint blip used to raise
+    `MailboxNotAuthorised` and permanently flip the mailbox `needs_reauth`.
+    """
+    from arq import Retry
+
+    from app.services.ms_auth import TokenRefreshTransientError
+
+    tenant_id, mailbox_id = mailbox
+
+    async def _throttled(tenant, mbox):
+        raise TokenRefreshTransientError("AADSTS900429: temporarily unavailable")
+
+    monkeypatch.setattr(jobs, "graph_client_for_mailbox", _throttled)
+
+    with pytest.raises(Retry):
+        await jobs.delta_sync_mailbox(
+            {}, tenant_id=str(tenant_id), mailbox_id=str(mailbox_id)
+        )
+
+    async with tenant_session(tenant_id) as session:
+        status = (
+            await session.execute(
+                text("SELECT status FROM mailboxes WHERE id = :id"), {"id": mailbox_id}
+            )
+        ).scalar_one()
+    assert status == "active", "a transient blip must not force a reconnect"
 
 
 # --- the registry ------------------------------------------------------------

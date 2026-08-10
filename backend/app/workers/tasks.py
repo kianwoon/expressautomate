@@ -22,7 +22,7 @@ from app.models.sync_event import (
     OUTCOME_SUCCEEDED,
 )
 from app.services.graph.subscriptions import renew_subscription
-from app.services.ms_auth import MailboxNotAuthorised
+from app.services.ms_auth import MailboxNotAuthorised, TokenRefreshTransientError
 from app.workers.jobs import (
     graph_client_for_mailbox,
     mark_needs_reauth,
@@ -386,6 +386,17 @@ async def renew_subscriptions() -> int:
         except MailboxNotAuthorised as exc:
             # Recreating would need the same dead grant. Stop and tell the user.
             await mark_needs_reauth(row.tenant_id, row.mailbox_id, str(exc))
+        except TokenRefreshTransientError:
+            # Entra throttled or was slow — the grant is fine, so this is not
+            # a reconnect. The sweep retries on its own clock
+            # (RENEW_INTERVAL_SECONDS) and the subscription carries a full
+            # half-life of slack (renewal falls at the midpoint), so skipping
+            # is the whole of the fix. Flipping `needs_reauth` here is exactly
+            # the false disconnect this classification exists to prevent.
+            log.info(
+                "subscription_renewal_transient",
+                subscription_id=row.subscription_id,
+            )
         except Exception:
             log.exception(
                 "subscription_renewal_failed", subscription_id=row.subscription_id
