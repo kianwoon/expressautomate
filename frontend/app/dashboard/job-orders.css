@@ -651,21 +651,18 @@
 .src-batch-row[data-status="failed"] .src-batch-status,
 .src-batch-row[data-status="not_attempted"] .src-batch-status { color: var(--amber-700); }
 
-/* The WhatsApp tile below the score. Right-aligned so it sits under the
-   percentage it follows, and permanent — a hover-revealed tile is one nobody
-   knows is there, which defeats the point of putting WhatsApp on the card. */
-.src-row-wa {
-  margin-top: 4px;
-  display: flex;
-  justify-content: flex-end;
-}
-/* The WhatsApp tile inside a shortlist row. Roughly the candidate panel's
-   header tile (42px) — the tile is the card's primary call to action now,
-   so it is sized to be noticed, not to whisper. The mark keeps its green
-   because recognition is the point of the tile. */
+/* The WhatsApp tile inside a shortlist row. It sits on the same line as the
+   name and score (`src-row-main`), sized to be noticed rather than to
+   whisper — roughly the candidate panel's header tile. The mark keeps its
+   green because recognition is the point of the tile. The row's flex is
+   baseline-aligned for text; the tile overrides to center so its square does
+   not ride up or down against the text it sits beside. The score's
+   `margin-left: auto` already pushes the pair right, so the tile needs no
+   margin of its own. */
 .src-row .wa-btn {
   width: 40px;
   height: 40px;
+  align-self: center;
 }
 .src-row .wa-btn:disabled { opacity: 0.4; cursor: default; }
 .src-row .wa-btn:focus-visible { outline: 2px solid var(--blue-500); outline-offset: 2px; }

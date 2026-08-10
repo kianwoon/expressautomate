@@ -765,26 +765,24 @@ function Match({
         >
           {percent(Number(match.score), match.score)}
         </span>
-      </div>
-
-      {/* WhatsApp, below the score and always visible. Redacted rows have no
-          record to read — only a masked name — so there is no number to reach
-          and no button. A known candidate with no number gets the button
-          anyway, disabled with its reason on the tooltip, so a recruiter can
-          see the affordance exists and why it is off (the same honesty the
-          candidate panel uses). Sitting under the score rather than in the
-          actions row keeps it permanent: a hover-revealed tile is one nobody
-          knows is there. */}
-      {!redacted && contact && (
-        <div className="src-row-wa">
+        {/* WhatsApp, always visible, on the same line as the name and score
+            rather than on a row of its own — a tile row between the name and
+            the card's detail would push that detail down by the tile's height
+            and leave a gap. Redacted rows have no record to read — only a
+            masked name — so there is no number to reach and no button. A
+            known candidate with no number gets the button anyway, disabled
+            with its reason on the tooltip, so a recruiter can see the
+            affordance exists and why it is off (the same honesty the
+            candidate panel uses). */}
+        {!redacted && contact && (
           <WhatsappButton
             row={{ id: match.candidate_id, full_name: contact.full_name, phone_e164: contact.phone_e164 }}
             // No activity timeline in the shortlist; the server logs the
             // event regardless, so there is nothing to refresh here.
             onLogged={() => {}}
           />
-        </div>
-      )}
+        )}
+      </div>
 
       {redacted ? (
         // Everything below this point — eligibility, the score breakdown,
