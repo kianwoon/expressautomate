@@ -626,6 +626,25 @@ function Match({
         </span>
       </div>
 
+      {/* WhatsApp, below the score and always visible. Redacted rows have no
+          record to read — only a masked name — so there is no number to reach
+          and no button. A known candidate with no number gets the button
+          anyway, disabled with its reason on the tooltip, so a recruiter can
+          see the affordance exists and why it is off (the same honesty the
+          candidate panel uses). Sitting under the score rather than in the
+          actions row keeps it permanent: a hover-revealed tile is one nobody
+          knows is there. */}
+      {!redacted && contact && (
+        <div className="src-row-wa">
+          <WhatsappButton
+            row={{ id: match.candidate_id, full_name: contact.full_name, phone_e164: contact.phone_e164 }}
+            // No activity timeline in the shortlist; the server logs the
+            // event regardless, so there is nothing to refresh here.
+            onLogged={() => {}}
+          />
+        </div>
+      )}
+
       {redacted ? (
         // Everything below this point — eligibility, the score breakdown,
         // the model's explanation — is exactly what the API withheld for a
@@ -668,20 +687,6 @@ function Match({
       )}
 
       <div className="src-row-acts">
-        {/* WhatsApp, offered wherever the candidate is known. Redacted rows
-            have no record to read — only a masked name — so there is no
-            number to reach and no button. A known candidate with no number
-            gets the button anyway, disabled with its reason on the tooltip,
-            so a recruiter can see the affordance exists and why it is off
-            (the same honesty the candidate panel uses). */}
-        {!redacted && contact && (
-          <WhatsappButton
-            row={{ id: match.candidate_id, full_name: contact.full_name, phone_e164: contact.phone_e164 }}
-            // No activity timeline in the shortlist; the server logs the
-            // event regardless, so there is nothing to refresh here.
-            onLogged={() => {}}
-          />
-        )}
         {redacted ? null : submitted ? (
           <span className="src-done">Submitted</span>
         ) : clientId ? (
