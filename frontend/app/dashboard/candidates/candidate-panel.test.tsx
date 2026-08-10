@@ -205,54 +205,53 @@ describe("who holds a candidate, on the panel", () => {
 
 describe("Find Job on the candidate panel", () => {
   // The fixture the run answers with: one strong match and an absent salary,
-  // the same reasons shape the earlier fixes pinned.
-  function runView(overrides: Partial<CandidateJobs> = {}): CandidateJobs {
+  // the same reasons shape the earlier fixes pinned. `count` repeats the same
+  // vacancy so the Jobs-tab count can be exercised without N bespoke fixtures.
+  function runView(overrides: Partial<CandidateJobs> = {}, count = 1): CandidateJobs {
     return jobsView(
-      [
-        {
-          id: "jo-1",
-          company_name_raw: "Acme Health",
-          job_title_raw: "Staff Nurse",
-          location_raw: "Singapore",
-          salary_raw: "SGD 3,000/month",
-          salary_min: 2800,
-          salary_max: 3500,
-          salary_currency: "SGD",
-          salary_period: "month",
-          working_hours_raw: null,
-          duration_raw: null,
-          requirements: null,
-          employment_type: null,
-          assigned_user_id: null,
-          received_datetime: "2026-08-01T09:00:00Z",
-          score: "0.9508",
-          review_status: "new",
-          quality_state: "likely",
-          reasons: [
-            {
-              name: "title",
-              weight: "3.0",
-              raw: "1.0000",
-              contribution: "3.0000",
-              note: null,
-            },
-            {
-              name: "semantic",
-              weight: "2.0",
-              raw: null,
-              contribution: null,
-              note: "No CV embedding on file.",
-            },
-            {
-              name: "salary",
-              weight: "2.0",
-              raw: null,
-              contribution: null,
-              note: "No comparable salary: one side is missing, or the currencies differ.",
-            },
-          ],
-        },
-      ],
+      Array.from({ length: count }, (_, i) => ({
+        id: `jo-${i + 1}`,
+        company_name_raw: "Acme Health",
+        job_title_raw: "Staff Nurse",
+        location_raw: "Singapore",
+        salary_raw: "SGD 3,000/month",
+        salary_min: 2800,
+        salary_max: 3500,
+        salary_currency: "SGD",
+        salary_period: "month",
+        working_hours_raw: null,
+        duration_raw: null,
+        requirements: null,
+        employment_type: null,
+        assigned_user_id: null,
+        received_datetime: "2026-08-01T09:00:00Z",
+        score: "0.9508",
+        review_status: "new",
+        quality_state: "likely",
+        reasons: [
+          {
+            name: "title",
+            weight: "3.0",
+            raw: "1.0000",
+            contribution: "3.0000",
+            note: null,
+          },
+          {
+            name: "semantic",
+            weight: "2.0",
+            raw: null,
+            contribution: null,
+            note: "No CV embedding on file.",
+          },
+          {
+            name: "salary",
+            weight: "2.0",
+            raw: null,
+            contribution: null,
+            note: "No comparable salary: one side is missing, or the currencies differ.",
+          },
+        ],
+      })),
       {
         considered: 6,
         scored: 6,
@@ -428,6 +427,29 @@ describe("Find Job on the candidate panel", () => {
     fireEvent.click(screen.getByRole("button", { name: "Find Job" }));
 
     expect(await screen.findByText("We could not reach the server.")).toBeTruthy();
+  });
+
+  it("shows the shortlist count on the Jobs tab once a run exists", async () => {
+    jobsRun = runView({}, 5);
+    render(panel(candidate()));
+    // Before the run: plain "Jobs", nothing to count.
+    expect(screen.getByRole("tab", { name: "Jobs" })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Find Job" }));
+
+    // After the run: the count tells the recruiter the saved shortlist is
+    // worth opening — the awareness the label exists to give.
+    expect(await screen.findByRole("tab", { name: "Jobs (5)" })).toBeTruthy();
+  });
+
+  it("keeps the plain Jobs label when the last run found nothing", async () => {
+    jobsRun = jobsView([], { considered: 2, scored: 0 });
+    render(panel(candidate()));
+    fireEvent.click(screen.getByRole("button", { name: "Find Job" }));
+
+    expect(await screen.findByText(/last run found nothing/)).toBeTruthy();
+    // A "(0)" would promise an empty tab the recruiter is already looking at.
+    expect(screen.getByRole("tab", { name: "Jobs" })).toBeTruthy();
   });
 
   it("lands on the Jobs tab when it runs", async () => {

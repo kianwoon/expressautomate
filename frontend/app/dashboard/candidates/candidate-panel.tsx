@@ -581,7 +581,7 @@ function Detail({
                 className={activeTab === t.key ? "cand-tab cand-tab-on" : "cand-tab"}
                 onClick={() => setActiveTab(t.key)}
               >
-                {t.label}
+                {t.key === "jobs" ? jobsTabLabel(jobs) : t.label}
               </button>
             ))}
           </div>
@@ -1083,6 +1083,18 @@ const JOB_COMPONENT_LABELS: Record<string, string> = {
   tenure: "Experience",
   recency: "Recent activity",
 };
+
+/** The Jobs tab's label: "Jobs (5)" once a saved shortlist with matches
+ *  exists, plain "Jobs" before the first run and when the last run found
+ *  nothing — a count of zero would promise an empty tab the recruiter is
+ *  already looking at. The count is the shortlist shown, so it never exceeds
+ *  the server's cap. */
+function jobsTabLabel(jobs: { phase: CandidateJobsPhase }): string {
+  if (jobs.phase.status !== "idle") return "Jobs";
+  const view = jobs.phase.view;
+  if (view.saved_at === null || view.items.length === 0) return "Jobs";
+  return `Jobs (${view.items.length})`;
+}
 
 function JobsStage({
   phase,
