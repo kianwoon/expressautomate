@@ -122,24 +122,36 @@ async def complete_json(
     # Transport errors — a connection reset or a stream interruption — are
     # transient. An HTTP status error is not: a 429 or 503 is the provider's
     # answer, and retrying it is the job layer's call, not this module's.
+    #
+    # asyncio.TimeoutError is included because httpx's internal timeout can be
+    # bypassed by a TLS-layer hang in anyio (the SSL read blocks on a bare
+    # asyncio.Event that neither httpcore's nor anyio's cancel scopes reach).
+    # The wait_for wrapper below catches those hangs and turns them into a
+    # retryable exception instead of letting arq's 300 s job timeout kill the
+    # task from the outside.
     _RETRYABLE = (
         httpx.ConnectError,
         httpx.ReadError,
         httpx.ReadTimeout,
         httpx.RemoteProtocolError,
         httpx.PoolTimeout,
+        asyncio.TimeoutError,
     )
     last_exc: Exception | None = None
+    _timeout = settings.LLM_TIMEOUT_SECONDS
 
     for attempt in range(3):
         try:
             async with httpx.AsyncClient(
                 base_url=base_url or settings.LLM_BASE_URL,
-                timeout=settings.LLM_TIMEOUT_SECONDS,
+                timeout=_timeout,
                 transport=transport,
                 headers={"Authorization": f"Bearer {api_key or settings.OPENROUTER_API_KEY}"},
             ) as client:
-                response = await client.post("/chat/completions", json=payload)
+                response = await asyncio.wait_for(
+                    client.post("/chat/completions", json=payload),
+                    timeout=_timeout,
+                )
                 response.raise_for_status()
                 body = response.json()
         except _RETRYABLE as exc:
