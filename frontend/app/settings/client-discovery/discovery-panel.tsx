@@ -207,8 +207,7 @@ export function DiscoveryPanel() {
   return (
     <section className="alt" style={{ padding: "56px 0" }}>
       <div className="wrap" aria-live="polite">
-        <span className="eyebrow">Find your clients</span>
-        <p className="body" style={{ marginTop: 12, maxWidth: "62ch" }}>
+        <p className="body" style={{ marginTop: 0 }}>
           Reads who you have emailed with — sender names and addresses only, never
           message bodies — fills in contacts on the clients you already have, and
           lists the companies that are not clients yet so you can add them in one
@@ -216,13 +215,13 @@ export function DiscoveryPanel() {
         </p>
 
         {panel.status === "loading" && (
-          <p className="lede" style={{ marginTop: 24 }}>
+          <p className="lede" style={{ marginTop: 24, maxWidth: "none" }}>
             Checking for a scan.
           </p>
         )}
 
         {panel.status === "unreadable" && (
-          <p className="body gl-error" style={{ marginTop: 24 }} role="alert">
+          <p className="body gl-error" style={{ marginTop: 24, maxWidth: "none" }} role="alert">
             {panel.message}
           </p>
         )}
@@ -230,7 +229,7 @@ export function DiscoveryPanel() {
         {panel.status === "ready" && (
           <>
             {isActive(panel.run) ? (
-              <p className="lede" style={{ marginTop: 24 }}>
+              <p className="lede" style={{ marginTop: 24, maxWidth: "none" }}>
                 Scanning your mailbox — this reads only message headers and takes a
                 minute or two on a busy mailbox. You can leave this page; the scan
                 keeps going.
@@ -249,13 +248,13 @@ export function DiscoveryPanel() {
             )}
 
             {actionError && (
-              <p className="body gl-error" style={{ marginTop: 16 }} role="alert">
+              <p className="body gl-error" style={{ marginTop: 16, maxWidth: "none" }} role="alert">
                 {actionError}
               </p>
             )}
 
             {panel.run?.status === "failed" && (
-              <p className="body gl-error" style={{ marginTop: 16 }} role="alert">
+              <p className="body gl-error" style={{ marginTop: 16, maxWidth: "none" }} role="alert">
                 {panel.run.error ?? "The last scan failed. Scan again to retry."}
               </p>
             )}
@@ -297,7 +296,7 @@ function DoneRun({
 
   return (
     <div style={{ marginTop: 24 }}>
-      <p className="body muted" style={{ maxWidth: "62ch" }}>
+      <p className="body muted">
         Read {run.inbox_scanned + run.sent_scanned} message header
         {run.inbox_scanned + run.sent_scanned === 1 ? "" : "s"} from the last{" "}
         {run.lookback_days} days
@@ -318,14 +317,14 @@ function DoneRun({
       )}
 
       {results.length === 0 ? (
-        <p className="body muted" style={{ marginTop: 16, maxWidth: "62ch" }}>
+        <p className="body muted" style={{ marginTop: 16 }}>
           No new companies found — every business domain in this window is already
           a client.
         </p>
       ) : (
         <>
           {run.domains_truncated && (
-            <p className="body muted" style={{ marginTop: 12, maxWidth: "62ch" }}>
+            <p className="body muted" style={{ marginTop: 12 }}>
               Showing the highest-ranked companies; the scan found more than this
               list holds.
             </p>
