@@ -39,7 +39,13 @@ FIELDS = (
 
 
 class ExtractedField(BaseModel):
-    value: str
+    # `value` accepts numbers too, not just strings, and coerces them: the
+    # extraction prompt asks for salary bounds as "plain numbers" and the model
+    # emits `2500` as an integer about as often as it emits "2500". Rejecting
+    # the int form failed the whole response (`extraction_unusable`), which
+    # escalated and retried — the 2026-08-11 cost loop. The downstream columns
+    # are text; a coerced str is exactly what they would have stored anyway.
+    value: str | int | float
     evidence: str | None = None
     start_char: int | None = None
     end_char: int | None = None
@@ -47,7 +53,21 @@ class ExtractedField(BaseModel):
 
     @property
     def is_missing(self) -> bool:
-        return self.value.strip().lower() == NOT_MENTIONED.lower()
+        return str(self.value).strip().lower() == NOT_MENTIONED.lower()
+
+    @model_validator(mode="after")
+    def _coerce_numeric_value(self) -> "ExtractedField":
+        """Normalise a numeric `value` to its string form.
+
+        The model answers "2500" or 2500 for the same salary; both mean the
+        same thing and both should store the same text. Coercing here — rather
+        than in `value: str` — keeps the type honest at parse time (a float
+        like 2500.0 is also a legitimate model answer) while the stored row
+        stays a plain string.
+        """
+        if isinstance(self.value, (int, float)):
+            self.value = str(self.value)
+        return self
 
     @model_validator(mode="after")
     def _present_values_must_quote_something(self) -> "ExtractedField":

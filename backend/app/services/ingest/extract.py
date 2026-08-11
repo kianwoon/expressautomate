@@ -19,6 +19,7 @@ plain retry of something that already worked.
 """
 
 import asyncio
+from typing import NoReturn
 
 from app.core.config import settings
 from app.core.logging import get_logger
@@ -157,10 +158,15 @@ async def extract(source: str, *, llm=None) -> tuple[ExtractionResponse, LLMResu
                 "extraction_unusable", model=model, effort=effort, error=repr(exc)
             )
             # LLMNoContent means the model spent its whole token budget on
-            # reasoning (§32 — documented in llm.client). The retry is a
-            # different request in practice because the reasoning trace may
-            # land differently, unlike a plain JSON parse error which is
-            # deterministic at temperature zero.
+            # reasoning and returned no content at all. Re-asking the same
+            # model with the same budget is the waste that produced the
+            # 2026-08-11 retry storm (11 emails failed, each burning up to 10
+            # billed calls). The only lever that helps is a LARGER budget —
+            # the model needs room to emit its answer after reasoning, not a
+            # second chance to think with the same ceiling. So on no-content
+            # we retry once with the doubled budget; if that also fails, the
+            # email is done — re-escalating effort would only reason harder
+            # into the same wall.
             if isinstance(exc, LLMNoContent):
                 await asyncio.sleep(2)
                 try:
@@ -171,27 +177,33 @@ async def extract(source: str, *, llm=None) -> tuple[ExtractionResponse, LLMResu
                         base_url=settings.DEEPSEEK_BASE_URL,
                         api_key=settings.DEEPSEEK_API_KEY,
                         extra_body={
-                            "max_tokens": settings.EXTRACTION_MAX_TOKENS,
+                            "max_tokens": settings.EXTRACTION_MAX_TOKENS * 2,
                             "reasoning_effort": effort,
                         },
                     )
                     response = ExtractionResponse.model_validate(result.data)
                 except (TimeoutError, LLMInvalidJSON, ValueError) as retry_exc:
                     log.warning(
-                        "extraction_retry_unusable",
+                        "extraction_no_content_budget_failed",
                         model=model, effort=effort, error=repr(retry_exc),
                     )
                     failure = retry_exc
-                    continue
+                    # Do NOT fall through to the strong (high-effort) pass: a
+                    # high-effort reasoning trace would exhaust the same budget
+                    # even faster. The email is marked failed and left for a
+                    # human, exactly as the non-LLMNoContent failure path does.
+                    return _no_content_failure()
                 else:
+                    # The doubled-budget retry answered. It is a real answer,
+                    # subject to the same quality checks as any other — but
+                    # only against the SAME model. A `needs_review` here does
+                    # not escalate to the strong pass: the model already had
+                    # double the room to answer, and re-asking with high effort
+                    # would reason into the same wall. Return what it gave, so
+                    # persist records `needs_review` for a human instead of
+                    # burning another call.
                     last = (response, result)
-                    if not _needs_a_better_model(response, source):
-                        return last
-                    log.info(
-                        "extraction_escalating",
-                        model=model, effort=effort, jobs=len(response.jobs),
-                    )
-                    continue
+                    return last
             continue
 
         last = (response, result)
@@ -223,3 +235,19 @@ def _needs_a_better_model(response: ExtractionResponse, source: str) -> bool:
     the same thing again.
     """
     return any(quality_state(job, source) == _ESCALATE_FROM for job in response.jobs)
+
+
+def _no_content_failure() -> "NoReturn":
+    """Raise the same failure the non-no-content path produces at the end.
+
+    `LLMNoContent` (budget exhausted on reasoning) is not worth a second,
+    higher-effort attempt — that would reason harder into the same wall — so
+    the no-content path ends the job here. The caller (`extract_email` /
+    `replay_email`) catches `LLMInvalidJSON` and marks the row failed for a
+    human, which is exactly the right terminal state for an email the model
+    cannot answer within budget.
+    """
+    raise LLMInvalidJSON(
+        "extraction produced no content within budget (reasoning exhausted "
+        "the token ceiling twice)"
+    )

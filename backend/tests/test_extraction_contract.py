@@ -36,6 +36,37 @@ def test_a_real_value_needs_a_quote_but_not_offsets():
     assert field.evidence == "$6k"
 
 
+def test_a_numeric_value_is_coerced_to_string():
+    """The extraction prompt asks for salary bounds as "plain numbers", and the
+    model emits `2500` as an integer about as often as "2500". Rejecting the
+    int form failed the whole response (`extraction_unusable`), which escalated
+    and retried — the 2026-08-11 cost loop. A numeric `value` must be accepted
+    and normalised to its string form, so the stored row is the same either
+    way."""
+    field = ExtractedField(
+        value=2500, evidence="$2,500", start_char=10, end_char=15, confidence=0.9
+    )
+
+    assert field.value == "2500"
+    assert isinstance(field.value, str)
+    assert field.is_missing is False
+
+
+def test_a_float_numeric_value_is_coerced_to_string():
+    field = ExtractedField(
+        value=2800.0, evidence="$2,800", start_char=10, end_char=15, confidence=0.9
+    )
+
+    assert field.value == "2800.0"
+    assert isinstance(field.value, str)
+
+
+def test_numeric_not_mentioned_is_still_missing():
+    field = ExtractedField(value="Not mentioned")
+
+    assert field.is_missing is True
+
+
 def test_multiple_jobs_parse():
     response = ExtractionResponse.model_validate(
         {

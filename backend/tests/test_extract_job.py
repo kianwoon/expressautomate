@@ -30,7 +30,7 @@ from app.services.ingest import extract as extract_module
 from app.services.ingest.extract import extract
 from app.services.ingest.persist import persist
 from app.services.ingest.schema import ExtractionResponse
-from app.services.llm.client import LLMInvalidJSON, LLMResult
+from app.services.llm.client import LLMInvalidJSON, LLMNoContent, LLMResult
 from app.services.storage.r2 import InMemoryBodyStore, body_key
 from app.workers import jobs
 
@@ -889,6 +889,50 @@ async def test_an_unusable_fast_answer_escalates():
     ]
     assert result.model == settings.EXTRACTION_MODEL_STRONG
     assert len(response.jobs) == 1
+
+
+async def test_no_content_is_retried_with_a_larger_budget_not_a_new_model():
+    """A model that spent its whole budget on reasoning needs MORE room, not
+    a second chance to think with the same ceiling — and certainly not the
+    high-effort strong pass, which reasons even harder into the same wall.
+
+    This pins the 2026-08-11 cost loop: no-content emails were escalated to
+    the strong (high-effort) model, which also returned nothing, and arq
+    retried the whole storm up to 5 times. Now the retry doubles the token
+    budget on the same model, and a second no-content answer ends the job
+    rather than escalating.
+    """
+    llm = _Spy(LLMNoContent("no content"), _payload())
+
+    response, result = await extract(SOURCE, llm=llm)
+
+    # One model, two calls (fast + the doubled-budget retry).
+    assert llm.models == [
+        settings.EXTRACTION_MODEL_FAST,
+        settings.EXTRACTION_MODEL_FAST,
+    ]
+    # The retry asked for double the budget.
+    assert llm.calls[1]["extra_body"]["max_tokens"] == (
+        settings.EXTRACTION_MAX_TOKENS * 2
+    )
+    assert len(response.jobs) == 1
+
+
+async def test_double_no_content_raises_instead_of_escalating_to_strong():
+    """Two no-content answers mean the model cannot answer within budget; the
+    strong pass would only reason harder into the same wall. The job must end
+    (raise) rather than burn a high-effort call for nothing."""
+    llm = _Spy(LLMNoContent("no content"), LLMNoContent("still no content"))
+
+    with pytest.raises(LLMInvalidJSON):
+        await extract(SOURCE, llm=llm)
+
+    # Only the fast model was ever asked — twice (initial + doubled-budget
+    # retry). The strong model was never reached.
+    assert llm.models == [
+        settings.EXTRACTION_MODEL_FAST,
+        settings.EXTRACTION_MODEL_FAST,
+    ]
 
 
 async def test_a_fabricated_span_escalates_however_confident_the_model_sounded():
