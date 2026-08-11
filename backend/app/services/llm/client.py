@@ -10,6 +10,7 @@ already is. The job layer is the only place that knows whether re-asking a model
 is worth the tokens, so it owns retry and escalation to the strong model.
 """
 
+import asyncio
 import json
 import re
 import time
@@ -118,15 +119,39 @@ async def complete_json(
     }
     payload.update(extra_body or {})
 
-    async with httpx.AsyncClient(
-        base_url=base_url or settings.LLM_BASE_URL,
-        timeout=settings.LLM_TIMEOUT_SECONDS,
-        transport=transport,
-        headers={"Authorization": f"Bearer {api_key or settings.OPENROUTER_API_KEY}"},
-    ) as client:
-        response = await client.post("/chat/completions", json=payload)
-        response.raise_for_status()
-        body = response.json()
+    # Transport errors — a connection reset or a stream interruption — are
+    # transient. An HTTP status error is not: a 429 or 503 is the provider's
+    # answer, and retrying it is the job layer's call, not this module's.
+    _RETRYABLE = (
+        httpx.ConnectError,
+        httpx.ReadError,
+        httpx.ReadTimeout,
+        httpx.RemoteProtocolError,
+        httpx.PoolTimeout,
+    )
+    last_exc: Exception | None = None
+
+    for attempt in range(3):
+        try:
+            async with httpx.AsyncClient(
+                base_url=base_url or settings.LLM_BASE_URL,
+                timeout=settings.LLM_TIMEOUT_SECONDS,
+                transport=transport,
+                headers={"Authorization": f"Bearer {api_key or settings.OPENROUTER_API_KEY}"},
+            ) as client:
+                response = await client.post("/chat/completions", json=payload)
+                response.raise_for_status()
+                body = response.json()
+        except _RETRYABLE as exc:
+            last_exc = exc
+            if attempt < 2:
+                await asyncio.sleep(2**attempt)
+                continue
+            raise
+        else:
+            break
+    else:
+        raise last_exc  # type: ignore[misc]
 
     # Every hop is optional, because every one of them has been absent from a
     # real response: a reasoning model that spent its budget thinking returns

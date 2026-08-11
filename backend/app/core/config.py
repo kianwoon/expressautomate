@@ -486,7 +486,11 @@ class Settings(BaseSettings):
     # for each, so its completions are an order of magnitude longer than the
     # gate's one-word verdicts. Too low and the response is truncated mid-JSON,
     # which arrives as `LLMInvalidJSON` and looks like a model problem.
-    EXTRACTION_MAX_TOKENS: int = Field(default=16000, gt=0)
+    # Doubled from 16000 after production issue: DeepSeek v4 Flash counts
+    # reasoning tokens against max_tokens, and the extraction prompt + email body
+    # was large enough to exhaust the budget on reasoning alone, leaving zero
+    # tokens for the JSON response — logged as LLMNoContent (arq logs 2026-08-11).
+    EXTRACTION_MAX_TOKENS: int = Field(default=32000, gt=0)
     # Escalation (§32) is a change of effort, not a change of provider. The
     # obvious escalation — a bigger model behind a router — is what broke
     # extraction in production, and a second model is only safe once someone

@@ -18,13 +18,14 @@ answer fails a check we can make ourselves — never on a hunch, and never as a
 plain retry of something that already worked.
 """
 
+import asyncio
 import json
 
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.services.ingest.evidence import quality_state
 from app.services.ingest.schema import NOT_MENTIONED, ExtractionResponse, json_schema
-from app.services.llm.client import LLMInvalidJSON, LLMResult, complete_json
+from app.services.llm.client import LLMInvalidJSON, LLMNoContent, LLMResult, complete_json
 
 log = get_logger(__name__)
 
@@ -148,6 +149,42 @@ async def extract(source: str, *, llm=None) -> tuple[ExtractionResponse, LLMResu
             log.warning(
                 "extraction_unusable", model=model, effort=effort, error=repr(exc)
             )
+            # LLMNoContent means the model spent its whole token budget on
+            # reasoning (§32 — documented in llm.client). The retry is a
+            # different request in practice because the reasoning trace may
+            # land differently, unlike a plain JSON parse error which is
+            # deterministic at temperature zero.
+            if isinstance(exc, LLMNoContent):
+                await asyncio.sleep(2)
+                try:
+                    result = await resolve(
+                        prompt,
+                        model=model,
+                        schema=None,
+                        base_url=settings.DEEPSEEK_BASE_URL,
+                        api_key=settings.DEEPSEEK_API_KEY,
+                        extra_body={
+                            "max_tokens": settings.EXTRACTION_MAX_TOKENS,
+                            "reasoning_effort": effort,
+                        },
+                    )
+                    response = ExtractionResponse.model_validate(result.data)
+                except (LLMInvalidJSON, ValueError) as retry_exc:
+                    log.warning(
+                        "extraction_retry_unusable",
+                        model=model, effort=effort, error=repr(retry_exc),
+                    )
+                    failure = retry_exc
+                    continue
+                else:
+                    last = (response, result)
+                    if not _needs_a_better_model(response, source):
+                        return last
+                    log.info(
+                        "extraction_escalating",
+                        model=model, effort=effort, jobs=len(response.jobs),
+                    )
+                    continue
             continue
 
         last = (response, result)
