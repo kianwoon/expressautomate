@@ -718,6 +718,22 @@ class Settings(BaseSettings):
             if part.strip()
         )
 
+    # Deterministic noise markers for the pre-gate rule filter (plan Task 4;
+    # `gate_rules`). Comma-separated, case-insensitive substrings. A subject
+    # matching any marker, or a sender local-part matching any marker, is
+    # answered `non_recruitment` without an LLM call. The defaults are the
+    # well-known shapes of inbox noise; a tenant whose recruiters see a
+    # particular newsletter or portal name can add it here. Empty means "use
+    # the built-in defaults", so a deployment never has to enumerate them.
+    NOISE_SUBJECT_MARKERS: str = Field(
+        default="",
+        description="Comma-separated subject substrings that mark a non-job-order",
+    )
+    NOISE_LOCALPART_MARKERS: str = Field(
+        default="",
+        description="Comma-separated sender local-part substrings that mark noise",
+    )
+
     # --- Client shorthand glossary ---
     # Whether a tenant reading its glossary for the first time is offered the
     # shipped starter codes. On by default, because an empty glossary on day

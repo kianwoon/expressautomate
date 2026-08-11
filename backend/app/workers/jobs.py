@@ -62,6 +62,11 @@ log = get_logger(__name__)
 # already trusted).
 TRUSTED_SENDER_MODEL = "trusted-sender"
 
+# The pseudo-model recorded on a classification the deterministic noise rules
+# answered (`gate_rules`). Same purpose as TRUSTED_SENDER_MODEL, for the rule
+# half of the free answers.
+GATE_RULE_MODEL = "gate-rule"
+
 
 # Only what is stored. Pulling the whole message would cost bandwidth on every
 # fetch for fields nothing reads.
@@ -497,29 +502,40 @@ async def classify_email(
     # The trusted-sender skip is checked in the same transaction that starts
     # classifying, so a verdict written as `trusted-sender` and the trust row
     # that justified it cannot disagree.
-    async with tenant_session(tenant) as session:
-        trusted = await _is_trusted(session, tenant, row.sender_email)
-    if trusted:
-        verdict = _trusted_verdict()
+    # Order of filters, cheapest first, mirroring classify_batch:
+    #   1. deterministic noise rules (in-memory, zero cost)
+    #   2. trusted sender domain (one indexed SELECT)
+    #   3. identical body already classified (one query)
+    #   4. the LLM gate (the only paid step)
+    from app.services.ingest import gate_rules
+
+    rule = gate_rules.gate_rule(subject=row.subject, sender_email=row.sender_email)
+    if rule is not None:
+        verdict = _rule_verdict(rule)
     else:
-        # An identical body elsewhere in this tenant already has a verdict:
-        # reusing it costs zero tokens (same reasoning as the batch path).
-        prior = None
-        if row.body_hash:
-            async with tenant_session(tenant) as session:
-                prior = (
-                    await session.execute(
-                        _FIND_PRIOR_VERDICT,
-                        {
-                            "hashes": [row.body_hash],
-                            "ids": [uuid.UUID(email_message_id)],
-                        },
-                    )
-                ).first()
-        if prior is not None:
-            verdict = _reused_verdict(prior)
+        async with tenant_session(tenant) as session:
+            trusted = await _is_trusted(session, tenant, row.sender_email)
+        if trusted:
+            verdict = _trusted_verdict()
         else:
-            verdict = await classify(body)
+            # An identical body elsewhere in this tenant already has a verdict:
+            # reusing it costs zero tokens (same reasoning as the batch path).
+            prior = None
+            if row.body_hash:
+                async with tenant_session(tenant) as session:
+                    prior = (
+                        await session.execute(
+                            _FIND_PRIOR_VERDICT,
+                            {
+                                "hashes": [row.body_hash],
+                                "ids": [uuid.UUID(email_message_id)],
+                            },
+                        )
+                    ).first()
+            if prior is not None:
+                verdict = _reused_verdict(prior)
+            else:
+                verdict = await classify(body)
 
     async with tenant_session(tenant) as session:
         await session.execute(
@@ -573,6 +589,7 @@ async def classify_batch(ctx, *, tenant_id: str, email_message_ids: list[str]) -
     stay at `classifying` and the sweep is the recovery path, the same
     discipline `classify_email` follows.
     """
+    from app.services.ingest import gate_rules
     from app.services.ingest.classify import classify_many, should_extract
     from app.services.ingest.preprocess import to_text
 
@@ -617,14 +634,30 @@ async def classify_batch(ctx, *, tenant_id: str, email_message_ids: list[str]) -
         return
 
     store = body_store()
-    # Split out emails whose sender domain the gate already trusts: they skip
-    # the model call entirely, and the remaining untrusted emails are the only
-    # ones that share a batch. The trust check reads under the tenant policy
-    # and fails open — a missing row just means the email joins the batch.
+    # Order of filters, cheapest first. Every filter is fail-open — a miss
+    # just sends the email to the next filter:
+    #   1. deterministic noise rules (in-memory, zero cost)  → non_recruitment
+    #   2. trusted sender domain (one indexed SELECT)        → recruitment
+    #   3. identical body already classified (one query)     → reuse verdict
+    #   4. the LLM gate (the only paid step)                 → decides the rest
+    rule_rows: list = []
     trusted_rows: list = []
-    untrusted_rows: list = []
+    remaining_rows: list = []
+    for row in rows:
+        rule = gate_rules.gate_rule(subject=row.subject, sender_email=row.sender_email)
+        if rule is not None:
+            rule_rows.append((row, rule))
+        else:
+            remaining_rows.append(row)
+
+    # Among the remaining, split out emails whose sender domain the gate
+    # already trusts: they skip the model call entirely, and the emails that
+    # reach the model are the only ones that share a batch. The trust check
+    # reads under the tenant policy and fails open.
+    trusted_rows = []
+    untrusted_rows = []
     async with tenant_session(tenant) as session:
-        for row in rows:
+        for row in remaining_rows:
             if await _is_trusted(session, tenant, row.sender_email):
                 trusted_rows.append(row)
             else:
@@ -670,11 +703,13 @@ async def classify_batch(ctx, *, tenant_id: str, email_message_ids: list[str]) -
         # document the extractor will later quote from.
         texts.append(to_text(html, subject=row.subject, sender=row.sender_email))
 
-    # Fresh emails are classified by the model, one batch. Trusted and
+    # Fresh emails are classified by the model, one batch. Rule, trusted and
     # duplicate emails are answered without spending a token.
     model_verdicts = await classify_many(texts)
 
     by_id = {row.id: verdict for row, verdict in zip(fresh_rows, model_verdicts, strict=True)}
+    for row, rule in rule_rows:
+        by_id[row.id] = _rule_verdict(rule)
     for row in trusted_rows:
         by_id[row.id] = _trusted_verdict()
     for row in duplicate_rows:
@@ -995,6 +1030,28 @@ def _trusted_verdict():
         status="recruitment",
         reason="sender domain trusted by earlier verdicts",
         model=TRUSTED_SENDER_MODEL,
+        prompt_tokens=0,
+        completion_tokens=0,
+        latency_ms=0,
+    )
+
+
+def _rule_verdict(rule: tuple[str, str]):
+    """The verdict a deterministic noise rule earns without a model call.
+
+    `rule` is `(status, reason)` from `gate_rules.gate_rule`. Only
+    `non_recruitment` ever reaches here (the rules never answer
+    `recruitment`), so a rule verdict can only skip extraction — it can never
+    skip a job order. `model` is `gate-rule` so the cost report can count the
+    free answers.
+    """
+    from app.services.ingest.classify import Classification
+
+    status, reason = rule
+    return Classification(
+        status=status,
+        reason=reason,
+        model=GATE_RULE_MODEL,
         prompt_tokens=0,
         completion_tokens=0,
         latency_ms=0,
