@@ -110,13 +110,16 @@ async def test_post_returns_202_and_enqueues(queued):
             assert body["intelligence"] is None
             assert body["failure_reason"] is None
 
-            # The right job was enqueued with the row id and tenant.
+            # The right job was enqueued with the row id and tenant — and on
+            # the interactive queue, so a background replay backlog can never
+            # starve a recruiter's click.
             assert len(queued) == 1
             name, kwargs = queued[0]
             assert name == "run_job_intelligence"
             assert kwargs["opportunity_id"] == str(oid)
             assert kwargs["tenant_id"] == str(tid)
             assert "row_id" in kwargs
+            assert kwargs["queue_name"] == "arq:interactive"
     finally:
         await _drop_agency(tid)
 

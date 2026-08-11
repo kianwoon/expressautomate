@@ -47,6 +47,37 @@ async def test_a_queued_job_reaches_redis_with_its_arguments(monkeypatch):
     assert pool.jobs == [("fetch_email", {"email_message_id": "abc"})]
 
 
+async def test_an_interactive_job_is_routed_to_its_own_queue(monkeypatch):
+    """User-initiated analyses enqueue to the interactive queue, not the
+    default one — that is what lets a dedicated worker with its own slot
+    budget pick them up regardless of a background replay backlog."""
+
+    pool = _FakePool()
+    monkeypatch.setattr(queue, "_create_pool", _returns(pool))
+
+    assert (
+        await queue.enqueue(
+            "run_job_intelligence",
+            queue_name=settings.ARQ_INTERACTIVE_QUEUE,
+            tenant_id="t",
+            opportunity_id="o",
+            row_id="r",
+        )
+        is True
+    )
+    assert pool.jobs == [
+        (
+            "run_job_intelligence",
+            {
+                "tenant_id": "t",
+                "opportunity_id": "o",
+                "row_id": "r",
+                "_queue_name": settings.ARQ_INTERACTIVE_QUEUE,
+            },
+        )
+    ]
+
+
 async def test_enqueue_reports_failure_instead_of_raising(monkeypatch):
     """The webhook must still answer 202. Its durable work is already done, and
     `rescan_stuck` is what closes the gap."""

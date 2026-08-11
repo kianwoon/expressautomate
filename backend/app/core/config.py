@@ -778,6 +778,17 @@ class Settings(BaseSettings):
     ARQ_POLL_DELAY_SECONDS: float = 2.0
     ARQ_MAX_JOBS: int = 10
     ARQ_MAX_TRIES: int = 5
+    # The interactive analysis queue. User-initiated analyses — Job
+    # Intelligence (`run_job_intelligence`) and Candidate Intelligence
+    # (`run_candidate_intelligence`) — land on their own queue, consumed by a
+    # dedicated arq worker with its own `max_jobs` budget. A background replay
+    # or extraction backlog on the default queue can therefore never starve a
+    # recruiter's click: the interactive worker always has free slots for it.
+    # Queue names are the full Redis zset keys arq uses.
+    ARQ_INTERACTIVE_QUEUE: str = "arq:interactive"
+    # The interactive worker's own concurrency ceiling, separate from
+    # `ARQ_MAX_JOBS` so analysis capacity never has to compete with ingestion.
+    ARQ_INTERACTIVE_MAX_JOBS: int = Field(default=5, gt=0)
 
     # --- Dashboard live updates (SSE over Redis pub/sub) ---
     # Channel names are namespaced so one Redis can serve more than one

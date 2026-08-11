@@ -828,6 +828,12 @@ jobs:
       # nothing ever runs — every email stops at `pending`, Redis grows, and
       # both producers report success. Backend-only like `worker`, but scoped
       # against its own current image rather than the worker's.
+      #
+      # Runs `app.workers.run_arq`, not `arq app.workers.settings.WorkerSettings`:
+      # the custom entrypoint launches two workers in one process — the default
+      # queue and the interactive queue (job/candidate intelligence), which has
+      # its own slot budget so a background replay backlog can never starve a
+      # recruiter's click.
       - name: Deploy arq
         if: steps.freshness.outputs.stale == 'false' && steps.scope.outputs.arq == 'true'
         env:
@@ -838,8 +844,8 @@ jobs:
           koyeb service update expressautomate/arq \
             --docker "${IMAGE}:${TAG}" \
             --docker-private-registry-secret "$KOYEB_REGISTRY_SECRET" \
-            --docker-command arq \
-            --docker-args app.workers.settings.WorkerSettings \
+            --docker-command python \
+            --docker-args -u --docker-args -m --docker-args app.workers.run_arq \
             --token "$KOYEB_TOKEN"
 
       # The WA gateway (plan §1). Its own image, its own tag, no public route,

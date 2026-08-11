@@ -35,7 +35,9 @@ SERVICES = {
     # ensure_subscriptions.
     "expressautomate/worker": "app.workers.main",
     # Drains the queue. Without it nothing the other two enqueue ever runs.
-    "expressautomate/arq": "app.workers.settings.WorkerSettings",
+    # Runs both arq workers in one process: the default queue and the
+    # interactive queue (job/candidate intelligence).
+    "expressautomate/arq": "app.workers.run_arq",
 }
 
 
@@ -114,12 +116,37 @@ def test_settings_without_a_default_are_marked_required_in_the_example():
 
 
 def test_the_queue_worker_configures_its_own_logging():
-    """arq is launched against WorkerSettings directly, so no entrypoint of
-    ours runs first. Without this its output falls back to structlog's console
-    defaults while every other process emits JSON — the kind of difference that
-    gets a real error skimmed past in a log pipeline.
-    """
-    from app.workers.settings import WorkerSettings
+    """Both arq workers configure logging on startup.
 
-    assert WorkerSettings.on_startup is not None
-    assert "configure_logging" in WorkerSettings.on_startup.__code__.co_names
+    arq is launched against our settings classes, so no entrypoint of ours runs
+    first for the default worker — `run_arq` runs first, but each worker's
+    `on_startup` still configures logging so a worker started by the arq CLI
+    directly (or one that outlives the entrypoint's own setup) never falls back
+    to structlog's console defaults while every other process emits JSON — the
+    kind of difference that gets a real error skimmed past in a log pipeline.
+    """
+    from app.workers.settings import (
+        InteractiveWorkerSettings,
+        WorkerSettings,
+    )
+
+    for settings_cls in (WorkerSettings, InteractiveWorkerSettings):
+        assert settings_cls.on_startup is not None
+        assert "configure_logging" in settings_cls.on_startup.__code__.co_names
+
+
+def test_the_interactive_worker_consumes_only_the_interactive_queue():
+    """The interactive worker exists so a user's click is never starved behind
+    a background backlog. It must run only the two analysis jobs, on the
+    interactive queue, with its own slot budget — the three properties that
+    make the isolation real rather than nominal.
+    """
+    from app.core.config import settings
+    from app.workers.settings import InteractiveWorkerSettings
+
+    names = {
+        getattr(fn, "name", None) or fn.__name__ for fn in InteractiveWorkerSettings.functions
+    }
+    assert names == {"run_job_intelligence", "run_candidate_intelligence"}
+    assert InteractiveWorkerSettings.queue_name == settings.ARQ_INTERACTIVE_QUEUE
+    assert InteractiveWorkerSettings.max_jobs == settings.ARQ_INTERACTIVE_MAX_JOBS

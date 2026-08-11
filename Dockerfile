@@ -55,10 +55,13 @@ EXPOSE 8000
 #               Periodic recovery — rescan_stuck, renew_subscriptions,
 #               delta_sync_all, ensure_subscriptions. No port, no health check.
 #
-#   arq         arq app.workers.settings.WorkerSettings
-#               Drains the queue. Without it the other two enqueue work that
-#               nothing ever runs: rows sit at `pending`, Redis grows, and
-#               every producer reports success.
+#   arq         python -u -m app.workers.run_arq
+#               Drains the queue — both the default queue and the interactive
+#               queue (job/candidate intelligence, which has its own worker and
+#               slot budget so a background backlog can never starve a click).
+#               Without it the other two enqueue work that nothing ever runs:
+#               rows sit at `pending`, Redis grows, and every producer reports
+#               success.
 #
 # PORT is injected by Koyeb; 8000 is the local default.
 CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]

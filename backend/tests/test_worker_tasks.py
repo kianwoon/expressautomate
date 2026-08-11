@@ -271,8 +271,61 @@ async def test_the_sweep_covers_every_tenant(admin_session, queued):
         await admin_session.commit()
 
 
-# --- renew_subscriptions ----------------------------------------------------
+async def test_a_stalled_intelligence_analysis_is_recovered_on_the_interactive_queue(
+    admin_session, tenant, queued
+):
+    """A killed worker mid-analysis is re-enqueued — and the recovery lands on
+    the interactive queue, exactly as the original click did. If recovery went
+    back to the default queue, a backlog there would starve the recovered
+    analysis the same way it starved the first attempt."""
 
+    # A tenant, a job order, and an analysis stalled at `running` (a worker
+    # died mid-analysis, so it is past `pending`).
+    mailbox_id = await _add_mailbox(admin_session, tenant)
+    message_id = await _add_email(
+        admin_session, tenant, mailbox_id, "extracted", age_minutes=120
+    )
+    oid = uuid.uuid4()
+    await admin_session.execute(
+        text(
+            "INSERT INTO opportunities (id, tenant_id, email_message_id,"
+            " job_title_raw, job_description, review_status, quality_state)"
+            " VALUES (:i, :t, :e, 'Logistics Manager', 'Run the warehouse.',"
+            " 'ready', 'likely')"
+        ),
+        {"i": oid, "t": tenant, "e": message_id},
+    )
+    await admin_session.execute(
+        text(
+            "INSERT INTO job_intelligence (id, tenant_id, opportunity_id, state,"
+            " attempts) VALUES (:i, :t, :o, 'running', 0)"
+        ),
+        {"i": uuid.uuid4(), "t": tenant, "o": oid},
+    )
+    await admin_session.commit()
+
+    try:
+        assert await tasks.rescan_stuck() == 1
+        assert len(queued) == 1
+        name, kwargs = queued[0]
+        assert name == "run_job_intelligence"
+        assert kwargs["opportunity_id"] == str(oid)
+        assert kwargs["queue_name"] == settings.ARQ_INTERACTIVE_QUEUE
+    finally:
+        await admin_session.execute(
+            text(
+                "DELETE FROM job_intelligence WHERE tenant_id = :t"
+            ),
+            {"t": tenant},
+        )
+        await admin_session.execute(
+            text("DELETE FROM opportunities WHERE tenant_id = :t"),
+            {"t": tenant},
+        )
+        await admin_session.commit()
+
+
+# --- renew_subscriptions ----------------------------------------------------
 
 async def _add_subscription(
     session, tenant_id, mailbox_id, *, expires_in, created_ago, renewed_ago=None

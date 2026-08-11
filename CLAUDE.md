@@ -170,7 +170,7 @@ them:
 |---|---|---|---|---|
 | `api` | `4a352e28` | web (FastAPI + static export) | HTTP routes under `/api` | **yes** — QR pairing (`app/api/wa_gateway.py`, `app/api/candidate_whatsapp.py`) |
 | `worker` | `e1423408` | `python -u -m app.workers.main` | the CRON/scheduler loop: `rescan_stuck`, `classify_fetched`, `renew_subscriptions`, `delta_sync`, `ensure_subscriptions`, `flush_notifications`, `sweep_stale_wa_sends`, `sweep_wa_liveness` | **yes** — `sweep_wa_liveness` |
-| `arq` | `0822002c` | `arq app.workers.settings.WorkerSettings` | the queue worker: `fetch_email`, `classify_batch`/`classify_email`, `extract_email`, `deliver_notification`, CV parsing, candidate import, sourcing, client discovery | **yes** — `deliver_notification` |
+| `arq` | `0822002c` | `python -u -m app.workers.run_arq` — runs **two** arq workers in one process: the default queue (everything below) plus the interactive queue (job/candidate intelligence, own slot budget so a background backlog can never starve a click) | the queue worker: `fetch_email`, `classify_batch`/`classify_email`, `extract_email`, `replay_email`, `deliver_notification`, CV parsing, candidate import, sourcing, client discovery, job/candidate intelligence | **yes** — `deliver_notification` |
 
 This is why "which service calls the gateway" cannot be answered from the
 feature being shipped: it depends on whether the code path is a cron task

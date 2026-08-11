@@ -281,8 +281,13 @@ async def rescan_stuck() -> int:
         # picked up rather than stranded. The conditional claim in the job is
         # what prevents two workers proceeding, and `attempts` is what bounds
         # the loop for a job that crashes every time.
+        # `queue_name` matters here too: recovery must land on the same
+        # interactive queue the original click used, or a backlog on the
+        # default queue would starve the recovered analysis exactly as it
+        # starved the first attempt.
         if await enqueue(
             "run_job_intelligence",
+            queue_name=settings.ARQ_INTERACTIVE_QUEUE,
             tenant_id=str(row.tenant_id),
             opportunity_id=str(row.opportunity_id),
             row_id=str(row.id),
@@ -297,6 +302,7 @@ async def rescan_stuck() -> int:
         # what bounds the loop for a job that crashes every time.
         if await enqueue(
             "run_candidate_intelligence",
+            queue_name=settings.ARQ_INTERACTIVE_QUEUE,
             tenant_id=str(row.tenant_id),
             candidate_id=str(row.candidate_id),
             row_id=str(row.id),

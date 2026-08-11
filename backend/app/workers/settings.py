@@ -53,6 +53,46 @@ async def _announce(ctx: dict) -> None:
     warn_if_unconfigured("arq")
 
 
+# The two user-initiated analysis jobs, wrapped once and shared between the
+# default worker registry (which keeps them for the historical single-queue
+# shape) and the interactive worker registry (which runs only these two on the
+# interactive queue). Defining them here rather than inline in each list means
+# the timeout a job runs under cannot drift between the two registries.
+_JOB_INTELLIGENCE_FUNC = func(
+    run_job_intelligence,
+    name="run_job_intelligence",
+    timeout=settings.JOB_INTEL_JOB_TIMEOUT_SECONDS,
+)
+_CANDIDATE_INTELLIGENCE_FUNC = func(
+    run_candidate_intelligence,
+    name="run_candidate_intelligence",
+    timeout=settings.CANDIDATE_INTELLIGENCE_JOB_TIMEOUT_SECONDS,
+)
+
+
+class InteractiveWorkerSettings:
+    """The dedicated worker for the interactive analysis queue.
+
+    Consumes only `ARQ_INTERACTIVE_QUEUE`, and only the two analysis jobs land
+    there. Its own `max_jobs` budget is the point: a replay/extraction backlog
+    on the default queue occupies the default worker's slots, and this worker
+    keeps free slots for a recruiter's click no matter how deep that backlog
+    gets. `app.workers.run_arq` runs both workers in one process.
+
+    `redis_settings()` runs when this class body is evaluated, exactly as it
+    does for `WorkerSettings` — both workers in the same process share one
+    Redis and one event loop, but each still needs its own pool connection.
+    """
+
+    functions = [_JOB_INTELLIGENCE_FUNC, _CANDIDATE_INTELLIGENCE_FUNC]
+    queue_name = settings.ARQ_INTERACTIVE_QUEUE
+    redis_settings = redis_settings()
+    poll_delay = settings.ARQ_POLL_DELAY_SECONDS
+    max_jobs = settings.ARQ_INTERACTIVE_MAX_JOBS
+    max_tries = settings.ARQ_MAX_TRIES
+    on_startup = staticmethod(_announce)
+
+
 class WorkerSettings:
     # Note: `redis_settings()` runs when this class body is evaluated, so
     # importing this module needs a valid REDIS_URL. That is right for the
@@ -167,22 +207,15 @@ class WorkerSettings:
         # fell back to OpenRouter and 400'd. `name` is explicit for the same
         # reason as its siblings: producers enqueue the string
         # "run_job_intelligence", and a wrapper under any other name fails on
-        # the far side of the queue.
-        func(
-            run_job_intelligence,
-            name="run_job_intelligence",
-            timeout=settings.JOB_INTEL_JOB_TIMEOUT_SECONDS,
-        ),
+        # the far side of the queue. Shared with the interactive worker
+        # registry above, so the timeout cannot drift between the two.
+        _JOB_INTELLIGENCE_FUNC,
         # The Candidate Intelligence analysis: three DeepSeek calls (career →
         # capability → profile) in the worker, the same shape Job Intelligence
         # takes. `name` is explicit for the same reason as its siblings:
         # producers enqueue the string "run_candidate_intelligence", and a
         # wrapper under any other name fails on the far side of the queue.
-        func(
-            run_candidate_intelligence,
-            name="run_candidate_intelligence",
-            timeout=settings.CANDIDATE_INTELLIGENCE_JOB_TIMEOUT_SECONDS,
-        ),
+        _CANDIDATE_INTELLIGENCE_FUNC,
     ]
     # Every function above but the two classification jobs ends in a Graph call. Said once
     # here rather than discovered one failed job at a time.

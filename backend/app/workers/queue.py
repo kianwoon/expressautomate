@@ -81,8 +81,15 @@ async def close_pool() -> None:
         _pool = None
 
 
-async def enqueue(name: str, **kwargs) -> bool:
+async def enqueue(name: str, *, queue_name: str | None = None, **kwargs) -> bool:
     """Enqueue a job. Returns whether it was accepted.
+
+    `queue_name` routes the job to a specific arq queue. The interactive
+    analysis jobs (job/candidate intelligence) use it so a user's click is
+    consumed by the dedicated interactive worker with its own slot budget —
+    never starved behind a background replay/extraction backlog on the default
+    queue. `None` (the default) enqueues to arq's default queue, so every
+    existing caller is unchanged.
 
     Never raises. The caller has already committed something durable, and the
     recovery sweep is what turns a lost job back into a queued one. Failing
@@ -91,7 +98,12 @@ async def enqueue(name: str, **kwargs) -> bool:
     """
     try:
         pool = await redis_pool()
-        job = await pool.enqueue_job(name, **kwargs)
+        # `_queue_name` only travels when set, so the default path's wire call
+        # is byte-identical to the pre-queue_name era.
+        job_kwargs = dict(kwargs)
+        if queue_name is not None:
+            job_kwargs["_queue_name"] = queue_name
+        job = await pool.enqueue_job(name, **job_kwargs)
     except Exception:
         log.exception("enqueue_failed", job=name)
         return False

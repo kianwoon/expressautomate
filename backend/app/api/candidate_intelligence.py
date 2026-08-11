@@ -31,6 +31,7 @@ from fastapi import APIRouter, Request
 from sqlalchemy import select
 
 from app.api.auth import _require_session_with_role
+from app.core.config import settings
 from app.core.logging import get_logger
 from app.db.rls import tenant_session
 from app.models.candidate_intelligence import CandidateIntelligence
@@ -96,8 +97,12 @@ async def run_candidate_intelligence_route(
         await session.commit()
 
     # Enqueued after the commit, because the job reads the row it is named for.
+    # `queue_name` sends the analysis to the interactive queue so the dedicated
+    # interactive worker picks it up regardless of how deep the background
+    # replay/extraction backlog on the default queue is.
     if not await enqueue(
         JOB_RUN_CANDIDATE_INTELLIGENCE,
+        queue_name=settings.ARQ_INTERACTIVE_QUEUE,
         tenant_id=str(tenant_uuid),
         candidate_id=str(candidate_id),
         row_id=str(row_id),
