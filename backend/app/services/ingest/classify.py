@@ -75,6 +75,12 @@ class Classification:
     status: str
     reason: str
     model: str
+    # Cost provenance, carried from the LLMResult so the jobs can persist it.
+    # None for a fail-open `uncertain` where the model never answered, and for
+    # a caller that does not need it — the dataclass stays backward compatible.
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    latency_ms: int | None = None
 
 
 def should_extract(status: str) -> bool:
@@ -118,6 +124,9 @@ async def classify(text: str, llm=None) -> Classification:
             status="recruitment" if verdict else "non_recruitment",
             reason=str(result.data.get("reason", ""))[:_REASON_LIMIT],
             model=result.model,
+            prompt_tokens=result.prompt_tokens,
+            completion_tokens=result.completion_tokens,
+            latency_ms=result.latency_ms,
         )
     except Exception as exc:
         # Deliberately bare. Transport errors, invalid JSON and malformed
@@ -128,8 +137,22 @@ async def classify(text: str, llm=None) -> Classification:
         return _uncertain(f"gate failed: {exc}", model)
 
 
-def _uncertain(reason: str, model: str) -> Classification:
-    return Classification(status="uncertain", reason=reason[:_REASON_LIMIT], model=model)
+def _uncertain(
+    reason: str,
+    model: str,
+    *,
+    prompt_tokens: int | None = None,
+    completion_tokens: int | None = None,
+    latency_ms: int | None = None,
+) -> Classification:
+    return Classification(
+        status="uncertain",
+        reason=reason[:_REASON_LIMIT],
+        model=model,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        latency_ms=latency_ms,
+    )
 
 
 async def classify_many(texts: list[str], llm=None) -> list[Classification]:
@@ -187,13 +210,24 @@ async def classify_many(texts: list[str], llm=None) -> list[Classification]:
         # Not `bool(...)`: a missing key would read as False, which is the one
         # wrong answer that discards the email.
         if not isinstance(is_job_order, bool):
-            out.append(_uncertain(f"no usable verdict for index {i}", result.model))
+            out.append(
+                _uncertain(
+                    f"no usable verdict for index {i}",
+                    result.model,
+                    prompt_tokens=result.prompt_tokens,
+                    completion_tokens=result.completion_tokens,
+                    latency_ms=result.latency_ms,
+                )
+            )
             continue
         out.append(
             Classification(
                 status="recruitment" if is_job_order else "non_recruitment",
                 reason=str(entry.get("reason", ""))[:_REASON_LIMIT],
                 model=result.model,
+                prompt_tokens=result.prompt_tokens,
+                completion_tokens=result.completion_tokens,
+                latency_ms=result.latency_ms,
             )
         )
 

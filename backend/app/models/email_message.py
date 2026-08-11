@@ -101,6 +101,11 @@ class EmailMessage(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
     body_r2_key: Mapped[str | None] = mapped_column(Text)
     body_html_r2_key: Mapped[str | None] = mapped_column(Text)
 
+    # sha256 of the exact text the gate and extractor read (see
+    # `app.services.ingest.preprocess.to_text`). Computed once at fetch time;
+    # the classify jobs group by it so a duplicate body pays the gate once.
+    body_hash: Mapped[str | None] = mapped_column(String(64), index=True)
+
     # server_default, not just default: the whole pipeline inserts and updates
     # these rows with raw SQL (the webhook must be fast and the jobs run without
     # the ORM), and a Python-side default never fires there — it fails the

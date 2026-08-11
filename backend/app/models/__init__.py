@@ -4,6 +4,7 @@ from app.models.candidate_access_request import CandidateAccessRequest
 from app.models.candidate_intelligence import CandidateIntelligence
 from app.models.candidate_jobs import CandidateJobShortlist
 from app.models.candidate_share import CandidateShare
+from app.models.classification_usage import ClassificationUsage
 from app.models.client import Client, ClientMention
 from app.models.client_discovery import ClientDiscoveryRun
 from app.models.email_message import EmailMessage
@@ -32,6 +33,7 @@ from app.models.signup import EarlyAccessSignup
 from app.models.sourcing import CandidateSubmission, SourcingMatch, SourcingRun
 from app.models.sync_event import SyncEvent
 from app.models.tenant import Tenant, User
+from app.models.trusted_sender import TrustedSender
 from app.models.wa_session import WaSession, WaSessionKey
 
 __all__ = [
@@ -44,6 +46,7 @@ __all__ = [
     "CandidateJobShortlist",
     "CandidateShare",
     "CandidateSkill",
+    "ClassificationUsage",
     "Client",
     "ClientDiscoveryRun",
     "ClientMention",
@@ -71,6 +74,7 @@ __all__ = [
     "SourcingRun",
     "SyncEvent",
     "Tenant",
+    "TrustedSender",
     "User",
     "UserEmail",
     "WaSession",

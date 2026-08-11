@@ -16,12 +16,14 @@ that imports both lives in `app.workers.settings` — importing either of those
 from here would make the two modules mutually dependent.
 """
 
+import hashlib
 import uuid
 from datetime import datetime
 from urllib.parse import quote
 
 from arq import Retry
-from sqlalchemy import bindparam, text
+from sqlalchemy import ARRAY, String, bindparam, text
+from sqlalchemy.dialects.postgresql import UUID as PgUUID
 
 from app.core.config import settings
 from app.core.logging import get_logger
@@ -52,6 +54,13 @@ from app.services.storage.r2 import BodyStoreMisconfigured, R2BodyStore, body_ke
 from app.workers.queue import enqueue
 
 log = get_logger(__name__)
+
+# The pseudo-model recorded on a classification the trusted-sender skip
+# answered without calling the LLM. It is what lets a report tell the free
+# answers from the paid ones, and what stops the seed logic from re-trusting
+# a domain it already trusted (a `trusted-sender` verdict is, by definition,
+# already trusted).
+TRUSTED_SENDER_MODEL = "trusted-sender"
 
 
 # Only what is stored. Pulling the whole message would cost bandwidth on every
@@ -88,6 +97,7 @@ _RECORD_FETCH = text(
         has_attachments = :has_attachments,
         body_html_r2_key = :html_key,
         body_r2_key = :text_key,
+        body_hash = :body_hash,
         processing_status = 'fetched',
         attempt_count = attempt_count + 1,
         retention_until = now() + make_interval(
@@ -116,7 +126,7 @@ _MAILBOX_TARGET = text(
 
 _CLASSIFY_CLAIM = text(
     "SELECT processing_status, classification_status, body_html_r2_key, subject,"
-    " sender_email"
+    " sender_email, body_hash"
     " FROM email_messages WHERE id = :id AND mailbox_id = :mailbox_id"
 )
 
@@ -145,13 +155,32 @@ _RECORD_CLASSIFICATION = text(
 # allow-hardcode: a SQL statement, not a phrase list.
 _BATCH_CLAIM = text(
     "SELECT id, mailbox_id, processing_status, classification_status,"
-    " body_html_r2_key, subject, sender_email"
+    " body_html_r2_key, subject, sender_email, body_hash"
     " FROM email_messages"
     " WHERE id IN :ids AND processing_status IN ('fetched', 'classifying')"
     # Deterministic, so a batch replayed after a crash sends its emails to the
     # model in the same order and the prompt is comparable across runs.
     " ORDER BY id"
 ).bindparams(bindparam("ids", expanding=True))
+
+# The hash-dedupe half of classification. An identical body is the same job
+# order to the models that read it, so a verdict already recorded for that
+# hash is the verdict this email would get — reusing it costs zero tokens.
+# The query runs under the tenant policy, so a hash can only be answered by
+# another email of the same agency. Rows the current batch holds are excluded,
+# and the newest answer wins per hash.
+# allow-hardcode: a SQL statement, not a phrase list.
+_FIND_PRIOR_VERDICT = text(
+    """
+    SELECT body_hash, classification_status, classification_reason,
+           classification_model
+    FROM email_messages
+    WHERE body_hash = ANY(:hashes)
+      AND classification_status != 'unknown'
+      AND NOT (id = ANY(:ids))
+    ORDER BY updated_at DESC, id DESC
+    """
+).bindparams(bindparam("hashes", type_=ARRAY(String)), bindparam("ids", type_=ARRAY(PgUUID)))
 
 _EXTRACT_CLAIM = text(
     "SELECT processing_status, body_html_r2_key, subject, sender_email"
@@ -464,7 +493,33 @@ async def classify_email(
     # text extraction offsets index into, so the gate must judge the same
     # document the extractor will later quote from.
     body = to_text(html, subject=row.subject, sender=row.sender_email)
-    verdict = await classify(body)
+
+    # The trusted-sender skip is checked in the same transaction that starts
+    # classifying, so a verdict written as `trusted-sender` and the trust row
+    # that justified it cannot disagree.
+    async with tenant_session(tenant) as session:
+        trusted = await _is_trusted(session, tenant, row.sender_email)
+    if trusted:
+        verdict = _trusted_verdict()
+    else:
+        # An identical body elsewhere in this tenant already has a verdict:
+        # reusing it costs zero tokens (same reasoning as the batch path).
+        prior = None
+        if row.body_hash:
+            async with tenant_session(tenant) as session:
+                prior = (
+                    await session.execute(
+                        _FIND_PRIOR_VERDICT,
+                        {
+                            "hashes": [row.body_hash],
+                            "ids": [uuid.UUID(email_message_id)],
+                        },
+                    )
+                ).first()
+        if prior is not None:
+            verdict = _reused_verdict(prior)
+        else:
+            verdict = await classify(body)
 
     async with tenant_session(tenant) as session:
         await session.execute(
@@ -479,6 +534,18 @@ async def classify_email(
                 "id": email_message_id,
             },
         )
+        await _record_gate_usage(
+            session,
+            tenant=tenant,
+            email_message_id=uuid.UUID(email_message_id),
+            verdict=verdict,
+        )
+        # Seed trust only after a verdict the gate actually answered — a
+        # trusted-sender verdict is already trusted, and an `uncertain` one is
+        # the gate failing open (trusting it would trust a domain the gate
+        # could not read). `mark_trusted_domain` is idempotent.
+        if verdict.status == "recruitment" and verdict.model != TRUSTED_SENDER_MODEL:
+            await _mark_trusted(session, tenant, row.sender_email)
 
     if should_extract(verdict.status):
         await enqueue(
@@ -550,18 +617,72 @@ async def classify_batch(ctx, *, tenant_id: str, email_message_ids: list[str]) -
         return
 
     store = body_store()
+    # Split out emails whose sender domain the gate already trusts: they skip
+    # the model call entirely, and the remaining untrusted emails are the only
+    # ones that share a batch. The trust check reads under the tenant policy
+    # and fails open — a missing row just means the email joins the batch.
+    trusted_rows: list = []
+    untrusted_rows: list = []
+    async with tenant_session(tenant) as session:
+        for row in rows:
+            if await _is_trusted(session, tenant, row.sender_email):
+                trusted_rows.append(row)
+            else:
+                untrusted_rows.append(row)
+
+    # Among the untrusted, split out emails whose body hash already has a
+    # verdict elsewhere in this tenant: an identical body is the same job
+    # order, so the recorded verdict is the one this email would get — reusing
+    # it costs zero tokens. The check fails open: a missing hash, a broken
+    # query, a hash with no prior verdict — all send the email to the model.
+    hashed_rows = [r for r in untrusted_rows if r.body_hash]
+    duplicate_rows: list = []
+    fresh_rows: list = []
+    hash_verdicts: dict[str, dict] = {}
+    if hashed_rows:
+        async with tenant_session(tenant) as session:
+            prior = (
+                await session.execute(
+                    _FIND_PRIOR_VERDICT,
+                    {
+                        "hashes": [r.body_hash for r in hashed_rows],
+                        "ids": [r.id for r in rows],
+                    },
+                )
+            ).all()
+        # Newest verdict wins per hash (the query is ordered by updated_at).
+        for pr in prior:
+            if pr.body_hash not in hash_verdicts:
+                hash_verdicts[pr.body_hash] = pr
+        for row in untrusted_rows:
+            if row.body_hash and row.body_hash in hash_verdicts:
+                duplicate_rows.append(row)
+            else:
+                fresh_rows.append(row)
+    else:
+        fresh_rows = untrusted_rows
+
     texts: list[str] = []
-    for row in rows:
+    for row in fresh_rows:
         html = await store.get(row.body_html_r2_key) or ""
         # `to_text`, not the raw HTML: it is the single source of truth for the
         # text extraction offsets index into, so the gate must judge the same
         # document the extractor will later quote from.
         texts.append(to_text(html, subject=row.subject, sender=row.sender_email))
 
-    verdicts = await classify_many(texts)
+    # Fresh emails are classified by the model, one batch. Trusted and
+    # duplicate emails are answered without spending a token.
+    model_verdicts = await classify_many(texts)
+
+    by_id = {row.id: verdict for row, verdict in zip(fresh_rows, model_verdicts, strict=True)}
+    for row in trusted_rows:
+        by_id[row.id] = _trusted_verdict()
+    for row in duplicate_rows:
+        by_id[row.id] = _reused_verdict(hash_verdicts[row.body_hash])
 
     async with tenant_session(tenant) as session:
-        for row, verdict in zip(rows, verdicts, strict=True):
+        for row in rows:
+            verdict = by_id[row.id]
             await session.execute(
                 _RECORD_CLASSIFICATION,
                 {
@@ -574,11 +695,22 @@ async def classify_batch(ctx, *, tenant_id: str, email_message_ids: list[str]) -
                     "id": row.id,
                 },
             )
+            await _record_gate_usage(
+                session,
+                tenant=tenant,
+                email_message_id=row.id,
+                verdict=verdict,
+            )
+            # Seed trust only after a verdict the gate actually answered (see
+            # the single-email path for why `uncertain` is excluded).
+            if verdict.status == "recruitment" and verdict.model != TRUSTED_SENDER_MODEL:
+                await _mark_trusted(session, tenant, row.sender_email)
 
     # Enqueued after the writes commit, and only then: a job that started
     # before the status moved could read the row mid-flight, and one enqueued
     # for a row whose write failed would extract from an unclassified email.
-    for row, verdict in zip(rows, verdicts, strict=True):
+    for row in rows:
+        verdict = by_id[row.id]
         if should_extract(verdict.status):
             await enqueue(
                 "extract_email",
@@ -815,6 +947,111 @@ async def _fail_extraction(
     async with tenant_session(tenant_id) as session:
         await session.execute(
             _FAIL_EXTRACTION, {"error": error[:2000], "id": email_message_id}
+        )
+
+
+async def _record_gate_usage(
+    session, *, tenant: uuid.UUID, email_message_id: uuid.UUID, verdict
+) -> None:
+    """Persist one gate-usage row inside the caller's transaction.
+
+    The gate is the only LLM call in the system with no cost provenance, and
+    cost planning is guesswork without it. A verdict that billed tokens but
+    answered nothing (`uncertain` from a transport error) still records its
+    token counts — the money was spent even though the email proceeds to
+    extraction. A failure to record is logged and swallowed rather than
+    propagated: losing the verdict over a telemetry row would be worse than
+    losing the telemetry.
+    """
+    try:
+        from app.services.ingest.usage import record_classification_usage
+
+        await record_classification_usage(
+            session,
+            tenant_id=tenant,
+            email_message_id=email_message_id,
+            model_name=verdict.model,
+            prompt_tokens=verdict.prompt_tokens,
+            completion_tokens=verdict.completion_tokens,
+            latency_ms=verdict.latency_ms,
+        )
+    except Exception as exc:
+        log.warning(
+            "gate_usage_record_failed",
+            email_message_id=str(email_message_id),
+            error=repr(exc),
+        )
+
+
+def _trusted_verdict():
+    """The verdict a trusted sender earns without a model call.
+
+    Zero tokens, zero latency — the whole point. `model` is
+    `TRUSTED_SENDER_MODEL` so reports and the seed logic can distinguish it.
+    """
+    from app.services.ingest.classify import Classification
+
+    return Classification(
+        status="recruitment",
+        reason="sender domain trusted by earlier verdicts",
+        model=TRUSTED_SENDER_MODEL,
+        prompt_tokens=0,
+        completion_tokens=0,
+        latency_ms=0,
+    )
+
+
+def _reused_verdict(prior) -> "Classification":  # noqa: F821 — type only, imported lazily
+    """The verdict an identical body earns from an earlier email's gate run.
+
+    `prior` is one row of `_FIND_PRIOR_VERDICT`. The verdict is reused
+    verbatim — including its `classification_model`, which is why a reused
+    verdict never re-seeds trust (the seed check requires a model other than
+    `TRUSTED_SENDER_MODEL`, and a reused verdict carries the model of whoever
+    answered first). Zero tokens: the money was spent on the first copy.
+    """
+    from app.services.ingest.classify import Classification
+
+    return Classification(
+        status=prior.classification_status,
+        reason=(
+            "body identical to an earlier email: "
+            + (prior.classification_reason or "")
+        ),
+        model=prior.classification_model,
+        prompt_tokens=0,
+        completion_tokens=0,
+        latency_ms=0,
+    )
+
+
+async def _is_trusted(session, tenant: uuid.UUID, sender_email: str | None) -> bool:
+    """Fail-open trust check: any error reads as not trusted (gate runs)."""
+    try:
+        from app.services.ingest.sender_trust import is_trusted_domain
+
+        return await is_trusted_domain(session, tenant_id=tenant, sender_email=sender_email)
+    except Exception as exc:
+        log.warning(
+            "trusted_sender_check_failed",
+            tenant_id=str(tenant),
+            error=repr(exc),
+        )
+        return False
+
+
+async def _mark_trusted(session, tenant: uuid.UUID, sender_email: str | None) -> None:
+    """Idempotent trust seed. Failures are logged and swallowed: a lost trust
+    row costs a future gate call, never a dropped job order."""
+    try:
+        from app.services.ingest.sender_trust import mark_trusted_domain
+
+        await mark_trusted_domain(session, tenant_id=tenant, sender_email=sender_email)
+    except Exception as exc:
+        log.warning(
+            "trusted_sender_seed_failed",
+            tenant_id=str(tenant),
+            error=repr(exc),
         )
 
 
@@ -1109,6 +1346,16 @@ async def _store(
     await store.put(text_key, plain)
 
     sender = ((message.get("from") or {}).get("emailAddress")) or {}
+    # The hash is of the exact text the gate and extractor will read — the
+    # same `to_text` call they make, so two emails that flatten to the same
+    # text get the same hash and the classify dedupe fires. Computing it here
+    # (once, at fetch) rather than in each classify/extract job is what keeps
+    # every later reader from re-doing the HTML parse.
+    from app.services.ingest.preprocess import to_text
+
+    body_text = to_text(html, subject=message.get("subject"), sender=sender.get("address"))
+    body_hash = hashlib.sha256(body_text.encode("utf-8")).hexdigest()
+
     async with tenant_session(tenant_id) as session:
         await session.execute(
             _RECORD_FETCH,
@@ -1124,6 +1371,7 @@ async def _store(
                 "text_key": text_key,
                 "mailbox_id": mailbox_id,
                 "id": email_message_id,
+                "body_hash": body_hash,
             },
         )
 
