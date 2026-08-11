@@ -1019,6 +1019,48 @@ def test_the_prompt_tells_the_model_a_headcount_is_not_a_second_vacancy():
     assert "one entry" in PROMPT.lower()
 
 
+async def test_a_long_email_is_truncated_before_extraction(monkeypatch, email_row):
+    """A long reply chain is mostly quoted history; the tail is cut before the
+    model call so input tokens stay proportional to the signal. The truncation
+    must happen after `to_text` so the source the model sees is the exact
+    string its evidence offsets are checked against."""
+    from app.services.ingest.preprocess import to_text
+
+    tid, mid, eid = email_row
+    long_html = f"<p>{'x' * (settings.EXTRACTION_MAX_CHARS + 2000)}</p>"
+
+    seen = {}
+
+    async def _capture(source, **_):
+        seen["source"] = source
+        return (
+            ExtractionResponse(jobs=[]),
+            LLMResult(
+                data={"jobs": []},
+                model=settings.EXTRACTION_MODEL_FAST,
+                prompt_tokens=1,
+                completion_tokens=1,
+                latency_ms=1,
+            ),
+        )
+
+    monkeypatch.setattr(extract_module, "extract", _capture)
+    # Wire the store so the job finds the long body.
+    store = InMemoryBodyStore()
+    key = body_key(tid, mid, "MSG-1", "html")
+    store.objects[key] = long_html
+    monkeypatch.setattr(jobs, "body_store", lambda: store)
+
+    await jobs.extract_email(
+        {}, email_message_id=str(eid), tenant_id=str(tid), mailbox_id=str(mid)
+    )
+
+    source = to_text(long_html, subject=None, sender=None)
+    assert seen["source"] is not None
+    assert len(seen["source"]) <= settings.EXTRACTION_MAX_CHARS
+    assert len(seen["source"]) < len(source)
+
+
 # --- the job ----------------------------------------------------------------
 
 

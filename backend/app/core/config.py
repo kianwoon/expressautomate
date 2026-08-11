@@ -491,6 +491,13 @@ class Settings(BaseSettings):
     # was large enough to exhaust the budget on reasoning alone, leaving zero
     # tokens for the JSON response — logged as LLMNoContent (arq logs 2026-08-11).
     EXTRACTION_MAX_TOKENS: int = Field(default=32000, gt=0)
+    # Cap on the email source text sent to extraction, in characters of the
+    # `to_text` output. A job order states everything in its first screen —
+    # the Etiqa sample is ~800 chars — and a long reply chain can be 10K+
+    # tokens of quoted history the model does not need. Truncating the tail
+    # keeps the input proportional to the signal; the gate already truncates
+    # with CLASSIFIER_CHARS_PER_EMAIL for the same reason.
+    EXTRACTION_MAX_CHARS: int = Field(default=4000, gt=0)
     # Escalation (§32) is a change of effort, not a change of provider. The
     # obvious escalation — a bigger model behind a router — is what broke
     # extraction in production, and a second model is only safe once someone

@@ -1,3 +1,5 @@
+import json
+
 import pytest
 from pydantic import ValidationError
 
@@ -6,6 +8,7 @@ from app.services.ingest.schema import (
     ExtractedField,
     ExtractionResponse,
     json_schema,
+    prompt_schema,
 )
 
 
@@ -132,3 +135,46 @@ def test_the_model_is_asked_for_everything_the_parser_requires():
     # only the ones the parser insists on. The four the validator enforces are
     # what matters here; all five are what the provider demands.
     assert {"value", "evidence", "start_char", "end_char"} <= set(field["required"])
+
+
+def test_prompt_schema_is_compact_and_names_every_field():
+    """The compact prompt schema must be much smaller than the full JSON schema
+    while still telling the model every field and the per-field object shape.
+
+    The full `json_schema()` is 5,022 chars — 90% of it the per-field object
+    repeated for all fourteen fields. Sending that to the model every email is
+    the largest single line item in the fixed prompt cost. `prompt_schema()`
+    says the same contract in ~540 chars. The parser still enforces the full
+    schema; this is a prompt optimization, not a contract change.
+    """
+    compact = prompt_schema()
+    full = json.dumps(json_schema())
+
+    # Much smaller, or the optimisation is pointless.
+    assert len(compact) < len(full) / 3
+
+    # Every field is named, so the model cannot silently skip one.
+    for name in (
+        "company",
+        "job_title",
+        "job_description",
+        "requirements",
+        "salary",
+        "salary_min",
+        "salary_max",
+        "salary_period",
+        "working_hours",
+        "work_arrangement",
+        "employment_type",
+        "duration",
+        "location",
+        "skills",
+    ):
+        assert name in compact, f"{name} missing from the prompt schema"
+
+    # The per-field object shape and the no-fabrication rule are explicit.
+    assert '"evidence": "<verbatim quote from the email>"' in compact
+    assert "Not mentioned" in compact
+    # The anti-fabrication contract must survive compaction: every field is the
+    # full object, never a bare string (the failure mode the docs record).
+    assert "field object" in compact

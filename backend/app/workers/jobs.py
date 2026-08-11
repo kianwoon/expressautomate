@@ -840,6 +840,15 @@ async def extract_email(
     # would make every span the model returns fail verification.
     source = to_text(html, subject=row.subject, sender=row.sender_email)
 
+    # Truncate the tail before extraction. A job order states everything in
+    # its first screen (the Etiqa sample is ~800 chars); a long reply chain
+    # is mostly quoted history the model does not need. Truncation happens
+    # AFTER `to_text` so the evidence spans the model returns are checked
+    # against the same string it saw — cutting earlier (raw HTML) would make
+    # offsets drift from what was actually sent.
+    if len(source) > settings.EXTRACTION_MAX_CHARS:
+        source = source[: settings.EXTRACTION_MAX_CHARS]
+
     try:
         response, result = await extract(source)
     except LLMInvalidJSON as exc:
@@ -941,6 +950,8 @@ async def replay_email(
 
     html = await body_store().get(row.body_html_r2_key) or ""
     source = to_text(html, subject=row.subject, sender=row.sender_email)
+    if len(source) > settings.EXTRACTION_MAX_CHARS:
+        source = source[: settings.EXTRACTION_MAX_CHARS]
 
     try:
         response, result = await extract(source)

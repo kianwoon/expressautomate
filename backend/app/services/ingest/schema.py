@@ -161,3 +161,36 @@ def json_schema() -> dict:
         "required": ["jobs"],
         "additionalProperties": False,
     }
+
+
+def prompt_schema() -> str:
+    """The schema as prompt text — compact, so the fixed prompt stays cheap.
+
+    `json_schema()` above is what the parser enforces and what the contract
+    tests check, but sending all 5,022 chars of it to the model every
+    extraction is 90% boilerplate: the per-field object (`value`, `evidence`,
+    `start_char`, `end_char`, `confidence` with all five required) is repeated
+    identically for all fourteen fields. The model does not need to see that
+    repetition — it needs the shape once, the field names, and the
+    "not mentioned" convention.
+
+    This is a *prompt* optimization, not a contract change. The parser still
+    validates against `json_schema()`; this string only tells the model what
+    to aim for, exactly as the schema text always did. The one thing that
+    must stay explicit is that every field is the full object — the docs
+    record the failure mode where the model returned bare strings when the
+    shape was under-specified.
+    """
+    return (
+        "Each field is an object with exactly: "
+        '{"value": "<text>", "evidence": "<verbatim quote from the email>", '
+        '"start_char": <int>, "end_char": <int>, "confidence": <0..1>}\n'
+        "Return JSON of this shape:\n"
+        '{"jobs": [{"<field_name>": {field object}, ...}]}\n'
+        "Every job has all fields: "
+        + ", ".join(FIELDS)
+        + "\n"
+        "A field the email does not mention has value \""
+        + NOT_MENTIONED
+        + '" with no evidence and no offsets.\n'
+    )

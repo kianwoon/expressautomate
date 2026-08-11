@@ -19,12 +19,11 @@ plain retry of something that already worked.
 """
 
 import asyncio
-import json
 
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.services.ingest.evidence import quality_state
-from app.services.ingest.schema import NOT_MENTIONED, ExtractionResponse, json_schema
+from app.services.ingest.schema import NOT_MENTIONED, ExtractionResponse, prompt_schema
 from app.services.llm.client import LLMInvalidJSON, LLMNoContent, LLMResult, complete_json
 
 log = get_logger(__name__)
@@ -78,7 +77,11 @@ def build_prompt(source: str) -> str:
     """Separate from `extract` so a prompt change is testable without a model."""
     return PROMPT.format(
         not_mentioned=NOT_MENTIONED,
-        schema=json.dumps(json_schema()),
+        # `prompt_schema`, not the full `json_schema()`: the parser enforces
+        # the real contract, and sending 5,022 chars of 14x-repeated field
+        # boilerplate to the model every email is 90% of the fixed prompt
+        # cost for no accuracy gain.
+        schema=prompt_schema(),
         email=source,
     )
 
