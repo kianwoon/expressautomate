@@ -141,10 +141,14 @@ async def extract(source: str, *, llm=None) -> tuple[ExtractionResponse, LLMResu
                 },
             )
             response = ExtractionResponse.model_validate(result.data)
-        except (LLMInvalidJSON, ValueError) as exc:
+        except (TimeoutError, LLMInvalidJSON, ValueError) as exc:
             # A ValueError here is the schema refusing a value that quotes
             # nothing — indistinguishable, for routing purposes, from JSON we
             # could not parse: this model did not answer in the required shape.
+            # asyncio.TimeoutError means complete_json exhausted its transport
+            # retries — the provider is hanging, not rejecting, and a different
+            # attempt (model or effort) may hit a different server or reasoning
+            # trace. Failures here escalate rather than killing the job.
             failure = exc
             log.warning(
                 "extraction_unusable", model=model, effort=effort, error=repr(exc)
@@ -169,7 +173,7 @@ async def extract(source: str, *, llm=None) -> tuple[ExtractionResponse, LLMResu
                         },
                     )
                     response = ExtractionResponse.model_validate(result.data)
-                except (LLMInvalidJSON, ValueError) as retry_exc:
+                except (TimeoutError, LLMInvalidJSON, ValueError) as retry_exc:
                     log.warning(
                         "extraction_retry_unusable",
                         model=model, effort=effort, error=repr(retry_exc),
