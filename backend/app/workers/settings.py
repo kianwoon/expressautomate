@@ -181,9 +181,9 @@ class WorkerSettings:
         # A discovery scan is header pages, but as many of them as the
         # recruiter's mailbox holds for the window — the timeout keeps one
         # enormous mailbox from holding a worker slot indefinitely. A run it
-        # cuts short is left `running`, goes stale, and the next scan
-        # supersedes it (nothing sweeps discovery runs — the retry is a
-        # click). `name` is explicit for the same reason as its siblings.
+        # cuts short is left `running`; the supervisor sweep parks it in
+        # `failed`, and the next scan supersedes it either way (the retry is
+        # a click). `name` is explicit for the same reason as its siblings.
         func(
             run_client_discovery,
             name="run_client_discovery",

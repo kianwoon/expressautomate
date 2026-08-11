@@ -167,6 +167,68 @@ _STALE_WA_SENDS = text("SELECT * FROM sweep_stale_wa_sends(:stale_minutes, :limi
 # NOTIFY_FLUSH_LIMIT — the function itself also caps at 500.
 _WA_SWEEP_LIMIT = 200
 
+# A `pending` discovery run past this window never was claimed: the enqueue
+# was lost after the row committed, or the queue consumer died before taking
+# the job — either way no worker will ever pick it up (arq's retry only
+# resumes rows a job actually claimed). A `running` run past the window was
+# abandoned by a worker killed outright. `sweep_stale_client_discovery_runs`
+# (`20260812_1000_sweep_stale_client_discovery.py`) is a SECURITY DEFINER
+# function for the same reason every RLS-protected sweep here is: this process
+# sets no `app.tenant_id`, so an unscoped UPDATE would match zero rows,
+# silently. `_STALE_DISCOVERY_LIMIT` bounds one call, same as `_WA_SWEEP_LIMIT`.
+_STALE_DISCOVERY_RUNS = text(
+    "SELECT * FROM sweep_stale_client_discovery_runs(:stale_minutes, :limit)"
+)
+_DISCOVERY_SWEEP_LIMIT = 200
+
+
+async def sweep_stale_client_discovery_runs() -> int:
+    """Park every client-discovery run no worker is ever going to finish.
+
+    A discovery run is a user-facing button, but that does not mean it can
+    sit unclaimed forever: a `pending` row whose enqueue was lost (the row
+    committed, the job never did) and a `running` row whose worker died
+    (SIGKILL, OOM, eviction) before any exception handler could run both have
+    no other owner. arq's own retry covers only rows a job actually claimed
+    and only while arq still holds the job; a row whose enqueue never landed,
+    or whose job arq has already given up on, would otherwise stay
+    `pending`/`running` until the recruiter happened to scan again.
+
+    Both become `failed` — never `unknown`, which is the WA send sweep's
+    terminal state: a discovery run has no externally-observable half, so "we
+    do not know" would be a lie. The run simply did not finish, and "scan
+    again" is the truthful, actionable answer.
+
+    The function's `WHERE status = ... AND clock < bound` is the
+    compare-and-set that makes this safe to race the scan POST and the job
+    itself: it can only touch a row still in the swept state and still old
+    enough — never one a worker just claimed (the claim writes `updated_at`),
+    never one that just started, never one already settled.
+
+    `pending` gates on `created_at`, `running` on `updated_at`, exactly as
+    `flush_notification_deliveries` splits its branches: a row can sit
+    `pending` for most of the window before a worker claims it, and gating
+    that branch on the claim write would be measuring the wrong clock.
+    """
+    async with SessionLocal() as session:
+        rows = (
+            await session.execute(
+                _STALE_DISCOVERY_RUNS,
+                {
+                    "stale_minutes": settings.CLIENT_DISCOVERY_STALE_PENDING_MINUTES,
+                    "limit": _DISCOVERY_SWEEP_LIMIT,
+                },
+            )
+        ).all()
+        await session.commit()
+
+    if rows:
+        # Every one of these is a run the normal path should have carried and
+        # did not — worth seeing in logs even though the run row's own `failed`
+        # state is the user-visible half of this.
+        log.warning("client_discovery_runs_swept", count=len(rows))
+    return len(rows)
+
 
 async def rescan_stuck() -> int:
     """Re-enqueue rows no worker is going to pick up on its own.

@@ -88,7 +88,13 @@ def _system_localpart(address: str) -> bool:
     for entry in settings.CLIENT_DISCOVERY_SYSTEM_LOCALPARTS:
         if local == entry:
             return True
-        if local.startswith(entry) and not local[len(entry)].isalpha():
+        # `local.startswith(entry)` guarantees the index below is in range —
+        # the guard stays so the invariant is visible rather than implied.
+        if (
+            local.startswith(entry)
+            and len(local) > len(entry)
+            and not local[len(entry)].isalpha()
+        ):
             return True
     return False
 

@@ -678,9 +678,22 @@ class Settings(BaseSettings):
     # The recent-activity bonus and the window that earns it.
     CLIENT_DISCOVERY_RECENCY_BONUS: float = Field(default=10.0, ge=0)
     CLIENT_DISCOVERY_RECENCY_DAYS: int = Field(default=14, gt=0)
-    # A run left `running` longer than this was abandoned by a dead worker —
-    # nothing sweeps discovery runs, so the next scan supersedes it instead.
+    # A run left `running` longer than this was abandoned by a dead worker.
+    # The supervisor sweep (`sweep_stale_client_discovery_runs` in
+    # `app/workers/tasks.py`) parks such rows in `failed`; the scan POST keeps
+    # its own stale check so a sweep-free deployment (or a sweep that has not
+    # ticked yet) still never blocks a recruiter's scan forever.
     CLIENT_DISCOVERY_STALE_RUNNING_MINUTES: int = Field(default=15, gt=0)
+    # A run left `pending` longer than this never was claimed: the enqueue was
+    # lost after the row committed, or the queue consumer died before taking
+    # the job. The sweep fails it — arq's retry only resumes rows a job
+    # actually claimed, so nothing else would ever move it.
+    CLIENT_DISCOVERY_STALE_PENDING_MINUTES: int = Field(default=10, gt=0)
+    # How often the supervisor checks for stale discovery runs. Independent of
+    # the run's own staleness bounds: a stale row can sit for up to this long
+    # before the sweep notices it, and the scan POST's own stale check covers
+    # the gap for a recruiter who clicks during it.
+    CLIENT_DISCOVERY_SWEEP_INTERVAL_SECONDS: float = Field(default=300.0, gt=0)
     # The wall clock one scan may occupy an arq worker for. Headers are cheap
     # but a large mailbox is many pages, and a job this cuts short is simply a
     # failed run the user re-starts with one click.

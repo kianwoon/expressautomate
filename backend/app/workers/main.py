@@ -52,6 +52,7 @@ def build_tasks() -> list[PeriodicTask]:
         renew_subscriptions,
         replay_stale_extractions,
         rescan_stuck,
+        sweep_stale_client_discovery_runs,
         sweep_stale_wa_sends,
         sweep_wa_liveness,
     )
@@ -90,6 +91,14 @@ def build_tasks() -> list[PeriodicTask]:
         # `sweep_stale_wa_sends` in `app/workers/tasks.py`.
         await sweep_stale_wa_sends()
 
+    async def _sweep_discovery_runs() -> None:
+        # A client-discovery run is a user-facing button, not pipeline state,
+        # but a run whose enqueue was lost or whose worker died would otherwise
+        # sit `pending`/`running` until the recruiter happened to scan again —
+        # the sweep parks it in `failed` with words to act on. See
+        # `sweep_stale_client_discovery_runs` in `app/workers/tasks.py`.
+        await sweep_stale_client_discovery_runs()
+
     async def _sweep_wa_liveness() -> None:
         # Plan §6's liveness sweep, background-check half: asks the gateway
         # about every `connected`/`reconnecting` session so a dead socket is
@@ -122,6 +131,11 @@ def build_tasks() -> list[PeriodicTask]:
             "sweep_stale_wa_sends",
             settings.WA_SWEEP_INTERVAL_SECONDS,
             _sweep_wa_sends,
+        ),
+        PeriodicTask(
+            "sweep_stale_client_discovery_runs",
+            settings.CLIENT_DISCOVERY_SWEEP_INTERVAL_SECONDS,
+            _sweep_discovery_runs,
         ),
         PeriodicTask(
             "sweep_wa_liveness",

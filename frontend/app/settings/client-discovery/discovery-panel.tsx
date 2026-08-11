@@ -384,9 +384,9 @@ function DoneRun({
             >
               {creating
                 ? "Adding…"
-                : `Add ${selected.size || ""} selected as client${
-                    selected.size === 1 ? "" : "s"
-                  }`.replace("  ", " ")}
+                : selected.size === 1
+                  ? "Add 1 selected as client"
+                  : `Add ${selected.size} selected as clients`}
             </button>
           )}
         </>

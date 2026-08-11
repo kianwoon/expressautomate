@@ -75,12 +75,18 @@ Made here:
   a domain whose only client rows are merged is *not* "new" — its contacts
   enrich the surviving client, because that is where ingestion sends that
   domain's mail.
-- **No sweep integration.** Nothing re-enqueues a discovery run; a run left
-  `running` by a dead worker goes stale after
-  `CLIENT_DISCOVERY_STALE_RUNNING_MINUTES` and the next scan supersedes it.
-  arq's own in-flight retry covers a worker killed mid-job (the claim
-  accepts `running` again), and a throttle re-queues itself via
-  `Retry(defer=retry_after)`.
+- **Sweep for abandoned runs.** A run left `pending` (its enqueue was lost —
+  the row committed, the job never did) or `running` (a worker died before
+  any exception handler could run) would otherwise sit unclaimed until the
+  recruiter happened to scan again. The supervisor's
+  `sweep_stale_client_discovery_runs` (a SECURITY DEFINER function, migration
+  `20260812_1000_sweep_stale_client_discovery.py`) parks both in `failed`
+  with words the recruiter can act on — the run is a user-facing button, not
+  pipeline state, so the retry stays a click. The scan endpoint's own stale
+  check (`CLIENT_DISCOVERY_STALE_RUNNING_MINUTES`) remains as the second line
+  of defense and covers the gap before the sweep ticks. arq's own in-flight
+  retry covers a worker killed mid-job (the claim accepts `running` again),
+  and a throttle re-queues itself via `Retry(defer=retry_after)`.
 
 ## Exclusions (all configurable, nothing hardcoded)
 

@@ -9,13 +9,15 @@ has no request and therefore no session tenant, and a job naming a mismatched
 (tenant, run) pair reads no row under the tenant policy and quietly does
 nothing.
 
-**Failure discipline** is simpler than sourcing's on purpose. Nothing sweeps
-discovery runs — the run is a user-facing button, not pipeline state — so a
-failure is written onto the row in words the recruiter can act on, and the
-retry is their click. The two exceptions: a Graph throttle re-queues itself
-via `Retry` for the delay Graph named, and a worker killed outright leaves
-the row `running`, which the scan endpoint supersedes once it has been stale
-for `CLIENT_DISCOVERY_STALE_RUNNING_MINUTES`.
+**Failure discipline** is simpler than sourcing's on purpose. A failure is
+written onto the row in words the recruiter can act on, and the retry is
+their click. The two exceptions: a Graph throttle re-queues itself via `Retry`
+for the delay Graph named, and a worker killed outright leaves the row
+`running` — the supervisor sweep (`sweep_stale_client_discovery_runs` in
+`app/workers/tasks.py`) parks a `running` row this stale in `failed`, and the
+scan endpoint supersedes a stale `running` row too, whichever happens first.
+A `pending` row whose enqueue was lost after commit (the job never existed)
+is likewise swept to `failed` rather than left unclaimed forever.
 """
 
 import uuid
