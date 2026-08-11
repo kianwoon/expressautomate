@@ -298,7 +298,8 @@ async def test_a_stalled_intelligence_analysis_is_recovered_on_the_interactive_q
     await admin_session.execute(
         text(
             "INSERT INTO job_intelligence (id, tenant_id, opportunity_id, state,"
-            " attempts) VALUES (:i, :t, :o, 'running', 0)"
+            " attempts, updated_at) VALUES (:i, :t, :o, 'running', 0,"
+            " now() - make_interval(mins => 999))"
         ),
         {"i": uuid.uuid4(), "t": tenant, "o": oid},
     )
