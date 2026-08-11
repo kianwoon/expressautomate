@@ -279,9 +279,53 @@ def test_gate_rule_catches_common_noise():
     )
     assert gate_rules.gate_rule(subject=None, sender_email="no-reply@alerts.io") is not None
     assert gate_rules.gate_rule(subject=None, sender_email="bounce@example.com") is not None
+    # Combined tier: a context subject marker + a context-noise sender.
+    assert (
+        gate_rules.gate_rule(
+            subject="You're invited to our webinar", sender_email="events@recruiter-conf.com"
+        )
+        is not None
+    )
+    assert (
+        gate_rules.gate_rule(subject="Invoice 4432 attached", sender_email="billing@acme.com")
+        is not None
+    )
+    # The same subject from a real client domain must NOT fire — the LLM judges.
     assert (
         gate_rules.gate_rule(
             subject="You're invited to a meeting", sender_email="calendar@acme.com"
         )
-        is not None
+        is None
     )
+    assert (
+        gate_rules.gate_rule(
+            subject="Invoice Automation Developer", sender_email="it@invoicetech.com"
+        )
+        is None
+    )
+
+
+def test_job_orders_survive_ambiguous_markers():
+    """Regression: the markers must never catch a real job order.
+
+    These all previously matched a marker (`account`, `support`, `help`,
+    `info`, `billing`, `invoice`, `security alert`) and would have silently
+    dropped a vacancy. The safety contract is that a rule can only subtract
+    noise, never a job order — if it cannot be sure, the LLM judges.
+    """
+    survive = [
+        ("Senior Accountant needed immediately", "accounts@clientco.com"),
+        ("Role: Security Alert Analyst (SOC)", "hr@bank.com"),
+        ("Technical Support Engineer opening", "support@deviceco.com"),
+        ("Help Desk Engineer (2 years exp)", "help@helpco.com"),
+        ("Billing System Engineer (Python)", "hr@fintech.sg"),
+        ("Invoice Automation Developer", "it@invoicetech.com"),
+        ("Info Security Officer (ISO 27001)", "info@isocorp.com"),
+        ("Account Manager (recruitment firm)", "jane@agency.sg"),
+        ("Customer Support Lead, up to $5k", "hr@saas.sg"),
+        ("Events Coordinator needed, 3-month contract", "events@clientco.com"),
+    ]
+    for subject, sender in survive:
+        assert gate_rules.gate_rule(subject=subject, sender_email=sender) is None, (
+            f"job order caught as noise: {subject!r} from {sender}"
+        )
