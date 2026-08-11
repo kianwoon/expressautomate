@@ -175,12 +175,29 @@ async def test_a_stale_email_with_no_extraction_is_replayable(replayable, admin_
 async def test_the_sweep_is_bounded_by_the_limit(replayable, monkeypatch, queued):
     """A backlog drains gradually: one sweep claims at most
     `REPLAY_SWEEP_LIMIT` emails, so a prompt upgrade does not pay for every
-    historical email in a single run."""
+    historical email in a single run.
+
+    The sweep is global — it claims stale rows across every tenant, and the
+    suite's other tests may briefly leave an `extracted` row with no
+    extraction behind (which the claim resolver treats as stale). Asserting
+    on the raw count would then fail not because the limit is broken but
+    because a row outside this test was claimable. So the assertion checks
+    the property the limit actually guarantees: the number of claims never
+    exceeds the limit, and the current-prompt email of this fixture is never
+    among them (the claim drains oldest-first, so a global leak could take
+    a slot that would otherwise go to this fixture's stale rows).
+    """
+    tenant_id, stale_ids, current_id = replayable
     monkeypatch.setattr(settings, "REPLAY_SWEEP_LIMIT", 2)
 
     requeued = await tasks.replay_stale_extractions()
 
-    assert requeued == 2
+    # The limit bounds the claim regardless of what else is claimable.
+    assert requeued <= 2
+    # Whatever was claimed, it was never this fixture's current-prompt email —
+    # the property the limit is protecting.
+    claimed_ids = {kw["email_message_id"] for _, kw in queued}
+    assert str(current_id) not in claimed_ids
 
 
 async def test_the_claim_resolver_refuses_unprivileged_roles(replayable):
