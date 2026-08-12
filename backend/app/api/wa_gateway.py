@@ -46,8 +46,9 @@ from app.api.auth import _require_session
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.db.rls import tenant_session
-from app.models.wa_session import STATUS_DISCONNECTED
+from app.models.wa_session import STATUS_CONNECTED, STATUS_DISCONNECTED
 from app.services import events as events_service
+from app.services.notify.linking import reconcile_linked_destination
 from app.services.wa_gateway import GatewayUnreachableError, WaGatewayClient
 from app.services.wa_risk_notice import NOTICE_TEXT, NOTICE_VERSION
 
@@ -430,6 +431,19 @@ async def apply_internal_status(body: InternalStatusIn) -> None:
                 "qr_expires_at": body.qr_expires_at,
             },
         )
+
+        # A connected session with a phone number is the moment the recruiter's
+        # device *is* that number, so the `whatsapp_linked` notification
+        # destination must follow it. Without this, a recruiter who re-pairs
+        # with a second number keeps a destination pointing at the first — and
+        # the next notification goes to the old number, which is exactly the
+        # bug of "the first WhatsApp still receives messages". Runs inside this
+        # same tenant_session so it commits (or rolls back) with the status
+        # write; see `reconcile_linked_destination`.
+        if body.status == STATUS_CONNECTED and body.phone_e164:
+            await reconcile_linked_destination(
+                session, body.tenant_id, body.user_id, body.phone_e164
+            )
 
     # After commit (the `async with` block above has already committed), per
     # `events_service.publish`'s own docstring: a nudge that overtakes its own

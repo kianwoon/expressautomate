@@ -304,3 +304,219 @@ async def test_internal_status_writes_the_row_and_is_readable_back_via_get_sessi
     monkeypatch.setattr("app.services.wa_gateway.WaGatewayClient.status", fake_status)
     again = await client.get("/api/wa/session")
     assert again.json()["status"] == "connected"
+
+
+async def test_connect_reconciles_the_linked_destination_to_the_new_number(
+    client, signed_in, admin_session
+) -> None:
+    """The re-pair bug: a recruiter whose `whatsapp_linked` destination points
+    at an old number must have it rebound to the number the gateway now says is
+    connected. The gateway's connect callback is the single moment the session
+    reports a new device, so the reconciliation runs there, preserving the
+    destination's subscriptions (the events the recruiter ticked follow the
+    device, not the number)."""
+    from app.core.crypto import encrypt
+    from app.models.notification import (
+        CHANNEL_WHATSAPP_LINKED,
+        address_digest,
+    )
+    from app.services.notify.events import EVENT_OPPORTUNITY_NEW
+
+    tenant_id, user_id = signed_in
+    dest_id = uuid.uuid4()
+    await admin_session.execute(
+        text(
+            "INSERT INTO notification_destinations "
+            "(id, tenant_id, user_id, channel, address_encrypted, address_hash, verified_at) "
+            "VALUES (:id, :tid, :uid, :ch, :enc, :hash, now())"
+        ),
+        {
+            "id": dest_id,
+            "tid": tenant_id,
+            "uid": user_id,
+            "ch": CHANNEL_WHATSAPP_LINKED,
+            "enc": encrypt("+6591234567"),
+            "hash": address_digest("+6591234567"),
+        },
+    )
+    await admin_session.execute(
+        text(
+            "INSERT INTO notification_subscriptions "
+            "(id, tenant_id, destination_id, event_kind, active) "
+            "VALUES (:id, :tid, :did, :kind, true)"
+        ),
+        {
+            "id": uuid.uuid4(),
+            "tid": tenant_id,
+            "did": dest_id,
+            "kind": EVENT_OPPORTUNITY_NEW,
+        },
+    )
+    await admin_session.commit()
+
+    response = await client.post(
+        "/api/wa/internal/status",
+        headers={"Authorization": f"Bearer {settings.WA_GATEWAY_SHARED_SECRET}"},
+        json={
+            "tenant_id": str(tenant_id),
+            "user_id": str(user_id),
+            "status": "connected",
+            "phone_e164": "+6598765432",
+        },
+    )
+    assert response.status_code == 200
+
+    async with tenant_session(tenant_id) as session:
+        row = (
+            await session.execute(
+                text(
+                    "SELECT address_hash, user_id, disabled_at, verified_at "
+                    "FROM notification_destinations WHERE id = :id"
+                ),
+                {"id": dest_id},
+            )
+        ).one()
+        subs = (
+            await session.execute(
+                text(
+                    "SELECT count(*) FROM notification_subscriptions "
+                    "WHERE destination_id = :id"
+                ),
+                {"id": dest_id},
+            )
+        ).scalar_one()
+
+    # Same row, same owner, but now pointing at the new number.
+    assert row.address_hash == address_digest("+6598765432")
+    assert row.user_id == user_id
+    assert row.disabled_at is None
+    assert row.verified_at is not None
+    # The subscription the recruiter chose survived the rebind.
+    assert subs == 1
+
+
+async def test_connect_keeps_one_linked_destination_and_moves_subscriptions(
+    client, signed_in, admin_session
+) -> None:
+    """A recruiter who linked an old number, re-paired, and linked again has
+    two `whatsapp_linked` rows (the unique index is on the address, so a second
+    number is a second row). The connect callback collapses them into one —
+    the current number's row survives, and a stale sibling's subscriptions move
+    onto it rather than being cascaded away by the delete."""
+    from app.core.crypto import encrypt
+    from app.models.notification import (
+        CHANNEL_WHATSAPP_LINKED,
+        address_digest,
+    )
+    from app.services.notify.events import EVENT_OPPORTUNITY_NEW
+
+    tenant_id, user_id = signed_in
+    old_dest_id = uuid.uuid4()
+    new_dest_id = uuid.uuid4()
+    for dest_id, phone in ((old_dest_id, "+6591234567"), (new_dest_id, "+6598765432")):
+        await admin_session.execute(
+            text(
+                "INSERT INTO notification_destinations "
+                "(id, tenant_id, user_id, channel, address_encrypted, address_hash, verified_at) "
+                "VALUES (:id, :tid, :uid, :ch, :enc, :hash, now())"
+            ),
+            {
+                "id": dest_id,
+                "tid": tenant_id,
+                "uid": user_id,
+                "ch": CHANNEL_WHATSAPP_LINKED,
+                "enc": encrypt(phone),
+                "hash": address_digest(phone),
+            },
+        )
+    # The old row carries the subscriptions (the recruiter's original choices).
+    await admin_session.execute(
+        text(
+            "INSERT INTO notification_subscriptions "
+            "(id, tenant_id, destination_id, event_kind, active) "
+            "VALUES (:id, :tid, :did, :kind, true)"
+        ),
+        {
+            "id": uuid.uuid4(),
+            "tid": tenant_id,
+            "did": old_dest_id,
+            "kind": EVENT_OPPORTUNITY_NEW,
+        },
+    )
+    await admin_session.commit()
+
+    response = await client.post(
+        "/api/wa/internal/status",
+        headers={"Authorization": f"Bearer {settings.WA_GATEWAY_SHARED_SECRET}"},
+        json={
+            "tenant_id": str(tenant_id),
+            "user_id": str(user_id),
+            "status": "connected",
+            "phone_e164": "+6598765432",
+        },
+    )
+    assert response.status_code == 200
+
+    async with tenant_session(tenant_id) as session:
+        rows = (
+            await session.execute(
+                text(
+                    "SELECT id, address_hash FROM notification_destinations "
+                    "WHERE user_id = :uid AND channel = :ch "
+                    "ORDER BY created_at"
+                ),
+                {"uid": user_id, "ch": CHANNEL_WHATSAPP_LINKED},
+            )
+        ).all()
+        moved = (
+            await session.execute(
+                text(
+                    "SELECT count(*) FROM notification_subscriptions "
+                    "WHERE destination_id = :did"
+                ),
+                {"did": new_dest_id},
+            )
+        ).scalar_one()
+
+    # Exactly one destination remains, pointing at the current number, and the
+    # subscription moved onto it.
+    assert len(rows) == 1
+    assert rows[0].id == new_dest_id
+    assert rows[0].address_hash == address_digest("+6598765432")
+    assert moved == 1
+
+
+async def test_connect_reconcile_is_a_noop_when_there_is_no_linked_destination(
+    client, signed_in, admin_session
+) -> None:
+    """A recruiter who has never linked a notification destination must not get
+    one created for them by a connect callback — reconciliation updates, it
+    does not invent."""
+    tenant_id, user_id = signed_in
+
+    response = await client.post(
+        "/api/wa/internal/status",
+        headers={"Authorization": f"Bearer {settings.WA_GATEWAY_SHARED_SECRET}"},
+        json={
+            "tenant_id": str(tenant_id),
+            "user_id": str(user_id),
+            "status": "connected",
+            "phone_e164": "+6598765432",
+        },
+    )
+    assert response.status_code == 200
+
+    async with tenant_session(tenant_id) as session:
+        count = (
+            await session.execute(
+                text(
+                    "SELECT count(*) FROM notification_destinations "
+                    "WHERE user_id = :uid AND channel = :ch"
+                ),
+                {
+                    "uid": user_id,
+                    "ch": "whatsapp_linked",
+                },
+            )
+        ).scalar_one()
+    assert count == 0

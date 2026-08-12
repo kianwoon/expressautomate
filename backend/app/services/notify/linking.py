@@ -17,7 +17,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.crypto import decrypt, encrypt
 from app.core.logging import get_logger
-from app.models.notification import address_digest
+from app.models.notification import (
+    CHANNEL_WHATSAPP_LINKED,
+    address_digest,
+)
 from app.workers.queue import redis_pool
 
 log = get_logger(__name__)
@@ -261,6 +264,171 @@ async def create_destination(
             },
         )
     ).scalar_one()
+
+
+# A `whatsapp_linked` destination is a projection of the recruiter's own
+# paired device, so when the device moves to a new number the destination must
+# follow it — see `reconcile_linked_destination` below. Two statements share
+# the same "which row is canonical" rule, stated in one ordering expression:
+#
+#  1. The row whose `address_hash` already equals the live number wins — it is
+#     already the correct projection, and updating it would collide with the
+#     `uq_destination_address` unique index if another row somehow held the
+#     same hash. Preferring it makes re-pairing back to a previously-used
+#     number a no-op instead of a constraint violation.
+#  2. Otherwise the most recently *touched* row wins (`updated_at DESC NULLS
+#     LAST`), so a row a recruiter just subscribed/unsubscribed through the
+#     settings screen beats a dormant sibling; a tie on updated_at (all rows
+#     touched in the same transaction) falls back to the newest created, so a
+#     row created by a later link attempt wins over the earlier one.
+_CANONICAL_LINKED_ORDER = (
+    "(address_hash = :hash) DESC, updated_at DESC NULLS LAST, created_at DESC"
+)
+
+# Rebind the canonical `whatsapp_linked` row to the live number. The WHERE
+# clause mirrors `_CANONICAL_LINKED_ORDER`, so this updates exactly the same
+# row that `_CANONICAL_LINKED` would name, and the `address_hash <> :hash`
+# guard makes it a no-op when the canonical row already carries the live
+# number (including the re-pair-back case, where updating would violate
+# `uq_destination_address`). Preserving the row (rather than delete+recreate)
+# is what keeps its `notification_subscriptions` rows: a re-paired recruiter
+# keeps the events they ticked, now delivered to the new number.
+_REBIND_LINKED = text(
+    f"""
+    UPDATE notification_destinations
+    SET address_encrypted = :address_encrypted,
+        address_hash = :hash,
+        verified_at = now(),
+        disabled_at = NULL,
+        failure_count = 0,
+        updated_at = now()
+    WHERE id = (
+        SELECT id FROM notification_destinations
+        WHERE tenant_id = :tenant_id
+          AND user_id = :user_id
+          AND channel = :linked_channel
+        ORDER BY {_CANONICAL_LINKED_ORDER}
+        LIMIT 1
+    )
+      AND address_hash <> :hash
+    """
+)
+
+# The canonical row, named by the same rule the UPDATE above used — the UPDATE
+# has run by the time this reads, so a freshly-rebound row sorts first under
+# the `address_hash = :hash` branch even though its `updated_at` is also the
+# newest; the two ordering keys agree.
+_CANONICAL_LINKED = text(
+    f"""
+    SELECT id FROM notification_destinations
+    WHERE tenant_id = :tenant_id
+      AND user_id = :user_id
+      AND channel = :linked_channel
+    ORDER BY {_CANONICAL_LINKED_ORDER}
+    LIMIT 1
+    """
+)
+
+# A re-pair never deletes a destination outright: the subscriptions a
+# recruiter chose belong to their device, not to one phone number, so a stale
+# sibling's subscriptions are moved onto the canonical row before the sibling
+# is removed. Without the move, the delete would cascade them away and the
+# recruiter would silently stop being told about new job orders after
+# switching numbers. `ON CONFLICT DO NOTHING` against `uq_subscription_event`
+# keeps an event already subscribed on the canonical row from being duplicated
+# by a sibling's move. `active` is copied so an unsubscribed event stays
+# unsubscribed; only the destination it hangs off changes.
+_MOVE_LINKED_SUBSCRIPTIONS = text(
+    """
+    INSERT INTO notification_subscriptions
+        (id, tenant_id, destination_id, event_kind, active)
+    SELECT gen_random_uuid(), s.tenant_id, :canonical_id, s.event_kind, s.active
+    FROM notification_subscriptions s
+    JOIN notification_destinations d ON d.id = s.destination_id
+    WHERE d.tenant_id = :tenant_id
+      AND d.user_id = :user_id
+      AND d.channel = :linked_channel
+      AND d.id <> :canonical_id
+    ON CONFLICT (destination_id, event_kind) DO NOTHING
+    """
+)
+
+_DELETE_STALE_LINKED = text(
+    """
+    DELETE FROM notification_destinations
+    WHERE tenant_id = :tenant_id
+      AND user_id = :user_id
+      AND channel = :linked_channel
+      AND id <> :canonical_id
+    """
+)
+
+
+async def reconcile_linked_destination(
+    session: AsyncSession, tenant_id: uuid.UUID, user_id: uuid.UUID, phone_e164: str
+) -> None:
+    """Point the recruiter's `whatsapp_linked` destination at their current
+    number, and collapse any duplicates created by earlier link attempts.
+
+    Called by the WA session's single status writer (`apply_internal_status` in
+    `app/api/wa_gateway.py`) whenever the gateway reports a `connected` session
+    with a phone number. A paired device is the source of truth for "what
+    number does this recruiter get notifications on"; the destination row is a
+    projection of it. Leaving the projection stale is exactly the bug where a
+    recruiter who re-pairs with a second number keeps getting notifications on
+    the first: the row still pointed at number one, so the send went there.
+
+    Deliberately idempotent and a no-op when there is nothing to do: no row,
+    or a row already pointing at `phone_e164`, changes nothing. Runs inside
+    the caller's `tenant_session`, so it commits (or rolls back) with the
+    status write that triggered it.
+
+    Only ever called with a *connected* status carrying a real phone (the
+    `apply_internal_status` guard), so `phone_e164` is non-empty here; the
+    signature stays a plain `str` and trusts that invariant rather than
+    re-checking it.
+    """
+    await session.execute(
+        _REBIND_LINKED,
+        {
+            "tenant_id": tenant_id,
+            "user_id": user_id,
+            "linked_channel": CHANNEL_WHATSAPP_LINKED,
+            "address_encrypted": encrypt(phone_e164),
+            "hash": address_digest(phone_e164),
+        },
+    )
+    canonical_id = (
+        await session.execute(
+            _CANONICAL_LINKED,
+            {
+                "tenant_id": tenant_id,
+                "user_id": user_id,
+                "linked_channel": CHANNEL_WHATSAPP_LINKED,
+                "hash": address_digest(phone_e164),
+            },
+        )
+    ).scalar_one_or_none()
+    if canonical_id is None:
+        return
+    await session.execute(
+        _MOVE_LINKED_SUBSCRIPTIONS,
+        {
+            "tenant_id": tenant_id,
+            "user_id": user_id,
+            "linked_channel": CHANNEL_WHATSAPP_LINKED,
+            "canonical_id": canonical_id,
+        },
+    )
+    await session.execute(
+        _DELETE_STALE_LINKED,
+        {
+            "tenant_id": tenant_id,
+            "user_id": user_id,
+            "linked_channel": CHANNEL_WHATSAPP_LINKED,
+            "canonical_id": canonical_id,
+        },
+    )
 
 
 async def opt_in_attempts_this_hour(

@@ -5,13 +5,19 @@ tests the two HTTP-transport channels (Telegram, WhatsApp Cloud API) against a
 stubbed `httpx.MockTransport`; this channel has no HTTP transport of its own —
 it wraps `WaGatewayClient.send`, which is faked directly here — so the fixture
 shape is different enough to earn its own module.
+
+The send-target tests at the bottom need a real `wa_sessions` row (the channel
+resolves the self-chat number from the database), so they use the database
+fixtures rather than the pure fake.
 """
 
 import uuid
 
 import pytest
+from sqlalchemy import text
 
 from app.models.wa_session import (
+    STATUS_CONNECTED,
     STATUS_DISCONNECTED,
     STATUS_LOGGED_OUT,
     STATUS_PAIRING,
@@ -150,3 +156,123 @@ async def test_no_user_attached_is_permanent_without_calling_the_gateway() -> No
     result = await channel.send("+6591234567", TelegramContent(text="hi"))
     assert result.outcome is SendOutcome.PERMANENT
     assert client.calls == []
+
+
+# --- Send-target resolution (the re-pair bug) -----------------------------
+#
+# The channel must send to the recruiter's *current* paired number
+# (`wa_sessions.phone_e164`), never to the destination's stored address: a
+# recruiter who re-pairs with a second number keeps a `whatsapp_linked`
+# destination pointing at the first, and messaging the stored address is how
+# the old device keeps receiving notifications after the switch. These tests
+# seed a real `wa_sessions` row and assert the fake gateway is asked for the
+# live number.
+
+
+async def _seed_session(
+    admin_session, tenant_id: uuid.UUID, user_id: uuid.UUID, phone_e164: str | None, status: str
+) -> None:
+    await admin_session.execute(
+        text(
+            "INSERT INTO wa_sessions (id, tenant_id, user_id, status, phone_e164) "
+            "VALUES (:id, :tid, :uid, :status, :phone)"
+        ),
+        {
+            "id": user_id,
+            "tid": tenant_id,
+            "uid": user_id,
+            "status": status,
+            "phone": phone_e164,
+        },
+    )
+    await admin_session.commit()
+
+
+async def test_send_uses_the_live_session_number_when_the_stored_address_is_stale(
+    admin_session,
+) -> None:
+    """The regression test for "the first WhatsApp number still receives
+    notifications". The destination row still carries the old number; the
+    session says the recruiter's device is now a different one. The send must
+    go to the live number — the recruiter's own current device — not to the
+    stale stored address that would reach the previous device."""
+    tenant_id = uuid.uuid4()
+    user_id = uuid.uuid4()
+    await admin_session.execute(
+        text(
+            "INSERT INTO tenants (id, name, slug) VALUES (:id, 'agency', :slug)"
+        ),
+        {"id": tenant_id, "slug": f"agency-{tenant_id.hex[:8]}"},
+    )
+    await admin_session.execute(
+        text(
+            "INSERT INTO users (id, tenant_id, email, role) "
+            "VALUES (:id, :tid, 'r@a.sg', 'recruiter')"
+        ),
+        {"id": user_id, "tid": tenant_id},
+    )
+    await admin_session.commit()
+    await _seed_session(
+        admin_session,
+        tenant_id,
+        user_id,
+        phone_e164="+6598765432",  # the NEW number, after re-pair
+        status=STATUS_CONNECTED,
+    )
+
+    client = _FakeGatewayClient(
+        outcome=GatewaySendOutcome(
+            ok=True, session_status="connected", provider_message_id="wamid.1"
+        )
+    )
+    channel = WhatsAppLinkedChannel(tenant_id, user_id, client=client)
+    # The stored address (the old number) is what the delivery job would pass;
+    # the channel must override it with the live session number.
+    result = await channel.send("+6591234567", TelegramContent(text="hi"))
+
+    assert result.outcome is SendOutcome.SENT
+    assert client.calls == [(str(tenant_id), str(user_id), "+6598765432", "hi")]
+
+    await admin_session.execute(
+        text("DELETE FROM tenants WHERE id = :id"), {"id": tenant_id}
+    )
+    await admin_session.commit()
+
+
+async def test_send_falls_back_to_the_stored_address_when_the_session_has_no_number(
+    admin_session,
+) -> None:
+    """A connected session with a NULL phone is a state the gateway should
+    never report, but if it happens the send must not crash — the stored
+    address is the only number available and the gateway's own liveness check
+    is what decides the outcome."""
+    tenant_id = uuid.uuid4()
+    user_id = uuid.uuid4()
+    await admin_session.execute(
+        text("INSERT INTO tenants (id, name, slug) VALUES (:id, 'agency', :slug)"),
+        {"id": tenant_id, "slug": f"agency-{tenant_id.hex[:8]}"},
+    )
+    await admin_session.execute(
+        text(
+            "INSERT INTO users (id, tenant_id, email, role) "
+            "VALUES (:id, :tid, 'r@a.sg', 'recruiter')"
+        ),
+        {"id": user_id, "tid": tenant_id},
+    )
+    await admin_session.commit()
+    await _seed_session(admin_session, tenant_id, user_id, phone_e164=None, status=STATUS_CONNECTED)
+
+    client = _FakeGatewayClient(
+        outcome=GatewaySendOutcome(ok=False, session_status=STATUS_RECONNECTING)
+    )
+    channel = WhatsAppLinkedChannel(tenant_id, user_id, client=client)
+    result = await channel.send("+6591234567", TelegramContent(text="hi"))
+
+    assert result.outcome is SendOutcome.TRANSIENT
+    # The stored address was used because there was no live number to prefer.
+    assert client.calls == [(str(tenant_id), str(user_id), "+6591234567", "hi")]
+
+    await admin_session.execute(
+        text("DELETE FROM tenants WHERE id = :id"), {"id": tenant_id}
+    )
+    await admin_session.commit()

@@ -11,12 +11,30 @@ construction: `channel_for` accepts `tenant_id`/`user_id`, and the worker
 passes the destination's own. The alternative — widening the protocol — would
 put a session identity into the signature of two channels that have no
 sessions.
+
+**The destination's stored address is deliberately NOT the send target.** A
+self-chat always goes to the recruiter's *current* paired number
+(`wa_sessions.phone_e164`), not to whatever number the destination recorded
+when it was linked. The two diverge the moment a recruiter re-pairs with a
+different device: the destination row keeps the old number (that is the
+"first number still receives notifications" bug), so sending to the stored
+address would message the old device — or, if that number has since been
+reassigned, a stranger — while the recruiter watches a notification go
+nowhere they own. The live session number is the only honest target, which is
+why `apply_internal_status` also reconciles the destination's stored address
+on every connect (see `app/api/wa_gateway.py`); this read is the belt-and-
+braces that makes the send correct even for a destination whose row predates
+that reconciliation.
 """
 
 import uuid
 
+from sqlalchemy import text
+
 from app.core.logging import get_logger
+from app.db.rls import tenant_session
 from app.models.wa_session import (
+    STATUS_CONNECTED,
     STATUS_DISCONNECTED,
     STATUS_LOGGED_OUT,
 )
@@ -35,6 +53,12 @@ from app.services.wa_gateway import (
 )
 
 log = get_logger(__name__)
+
+# The self-chat target: the recruiter's own number as the gateway last
+# reported it. NULL until a pairing has ever succeeded.
+_LIVE_SESSION_PHONE = text(
+    "SELECT phone_e164 FROM wa_sessions WHERE user_id = :user_id AND status = :connected"
+)
 
 # The session states a send will never recover from on its own: the device is
 # gone and the recruiter has to re-pair. `pairing` and `reconnecting` are
@@ -70,6 +94,35 @@ class WhatsAppLinkedChannel:
                 outcome=SendOutcome.PERMANENT,
                 error="This WhatsApp destination is not attached to a recruiter.",
             )
+
+        # The live number is the send target, not the stored `address` (see the
+        # module docstring): after a re-pair the destination row may still carry
+        # the old number, and messaging it would reach the previous device — or
+        # whoever holds that number now. The gateway's own `send()` refuses a
+        # not-connected session, so if there is no current number the session is
+        # effectively dead; the refusal below is the honest outcome.
+        try:
+            async with tenant_session(self._tenant_id) as session:
+                live = (
+                    await session.execute(
+                        _LIVE_SESSION_PHONE,
+                        {"user_id": self._user_id, "connected": STATUS_CONNECTED},
+                    )
+                ).scalar_one_or_none()
+        except Exception:  # noqa: BLE001 — see below
+            # A database error here must not strand the caller's claimed row in
+            # `sending` (the same never-raise invariant this method protects for
+            # the gateway client). An unknown current number is not a fact we
+            # can act on: fall back to the stored address, which at least keeps
+            # the send attempt going and lets the gateway's own liveness check
+            # decide. The stored address is stale only after a re-pair, and in
+            # that state the session row is `connected` with a phone, so the
+            # failure to read it is the exceptional case, not the stale one.
+            log.exception("wa_linked_session_phone_unreadable")
+            live = None
+
+        if live is not None:
+            address = live
 
         try:
             outcome = await self._client.send(
