@@ -401,6 +401,35 @@ section { padding: 60px 0; }
 .hero { padding: 64px 0 48px; background: linear-gradient(180deg, #f7fbff 0%, #ffffff 100%); }
 .alt { background: var(--surface-alt); border-block: 1px solid var(--line); }
 
+/* The "Two beliefs" section carries the recruitment illustration as a subtle,
+   full-bleed backdrop: the artwork is very pale, so the cards above it stay
+   readable while the section reads as one framed piece. The image is
+   short-side covered so any viewport width keeps it edge-to-edge. */
+.beliefs {
+  position: relative;
+  background-image: url("/why-beliefs-bg.png");
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+}
+.beliefs::before {
+  /* A faint scrim keeps contrast even where the illustration's pale washes
+     get lightest, without dimming the artwork itself. */
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: rgba(255, 255, 255, 0.55);
+}
+.beliefs > .wrap {
+  position: relative;
+  z-index: 1;
+}
+.beliefs .card {
+  background: rgba(255, 255, 255, 0.92);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+
 .grid-2 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 28px; }
 .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 28px; }
 .grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 22px; }

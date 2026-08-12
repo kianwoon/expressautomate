@@ -278,7 +278,7 @@ export default function Home() {
           </div>
         </section>
 
-        <section id="why" className="alt">
+        <section id="why" className="alt beliefs">
           <div className="wrap">
             <div className="head-center">
               <h2>Two beliefs, in plain words</h2>
