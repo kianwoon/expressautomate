@@ -89,6 +89,22 @@ export type DecodedCode = {
   end_char: number;
 };
 
+/** A job-description file attached to this job order — uploaded in the New
+ *  job order dialog and read for the prefill. Always an array, empty for the
+ *  ordinary row with no attachment. */
+export type OpportunityDocument = {
+  id: string;
+  filename: string;
+  content_type: string;
+  byte_size: number;
+  extract_state: "pending" | "extracting" | "extracted" | "unreadable" | "failed";
+  extract_error: string | null;
+  /** The extracted values, keyed by the form's own field names. Present on
+   *  the upload row; a field the document never mentioned is null. */
+  prefill: Record<string, string | null> | null;
+  created_at: string | null;
+};
+
 export type Opportunity = {
   id: string;
   received_datetime: string | null;
@@ -155,6 +171,10 @@ export type Opportunity = {
    *  every ordinary job order — lets the UI say "requirements updated" rather
    *  than showing the new row as if it were a fresh vacancy. */
   revision_of_opportunity_id?: string | null;
+  /** Job-description files attached to this vacancy. Optional: the endpoint
+   *  gained these after the table shipped, so every reader treats absent as
+   *  "none attached" rather than assuming the key is there. */
+  documents?: OpportunityDocument[];
 };
 
 /**

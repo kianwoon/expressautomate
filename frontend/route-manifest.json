@@ -282,6 +282,16 @@
       "GET",
       "POST"
     ],
+    "/api/opportunities/documents": [
+      "POST"
+    ],
+    "/api/opportunities/documents/{document_id}": [
+      "DELETE",
+      "GET"
+    ],
+    "/api/opportunities/documents/{document_id}/download": [
+      "GET"
+    ],
     "/api/opportunities/{opportunity_id}": [
       "GET"
     ],

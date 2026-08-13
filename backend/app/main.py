@@ -37,6 +37,7 @@ from app.api import (
     members,
     notifications,
     opportunities,
+    opportunity_documents,
     opportunity_shares,
     sourcing,
     telegram_webhook,
@@ -150,6 +151,12 @@ api.include_router(sourcing.router)
 # FastAPI hands `intelligence` to the generic route as a path parameter and
 # answers 422 "not a valid UUID".
 api.include_router(job_intelligence.router)
+# Before `opportunities`, for the same shadowing reason as `sourcing` above:
+# this router owns the LITERAL path `/opportunities/documents` (and the
+# no-opportunity-yet upload that makes the New job order dialog work).
+# Declared after `/opportunities/{opportunity_id}`, FastAPI would hand
+# `documents` to the generic route as a path parameter and answer 422.
+api.include_router(opportunity_documents.router)
 api.include_router(opportunities.router)
 api.include_router(opportunity_shares.router)
 api.include_router(activity.router)

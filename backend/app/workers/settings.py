@@ -35,6 +35,7 @@ from app.workers.jobs import (
     recreate_subscription,
     replay_email,
 )
+from app.workers.opportunity_document_jobs import extract_opportunity_document
 from app.workers.queue import redis_settings
 from app.workers.sourcing_jobs import run_sourcing
 
@@ -154,7 +155,17 @@ class WorkerSettings:
             name="ingest_candidate_cv",
             timeout=settings.CV_INGEST_TIMEOUT_SECONDS,
         ),
-        # An import is database work rather than a model call, but it is
+        # A job-description extraction reads bytes a stranger uploaded, runs a
+        # document parser with the same FlateDecode risk as a CV parse, then
+        # spends a model call — so it gets the same kind of explicit name and
+        # wall-clock ceiling as its siblings. Producers enqueue the string
+        # "extract_opportunity_document"; a wrapper registered under any other
+        # name would fail on the far side of the queue.
+        func(
+            extract_opportunity_document,
+            name="extract_opportunity_document",
+            timeout=settings.OPPORTUNITY_DOCUMENT_EXTRACT_TIMEOUT_SECONDS,
+        ),        # An import is database work rather than a model call, but it is
         # database work whose size the uploader chooses: five hundred rows,
         # each one a match query and a write. The timeout is what keeps one
         # oversized file from holding a worker slot indefinitely, and a run it

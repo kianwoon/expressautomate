@@ -123,6 +123,25 @@ def document_text_key(
     return f"{tenant_id}/candidates/{candidate_id}/documents/{document_id}.txt"
 
 
+def opportunity_document_key(
+    tenant_id: uuid.UUID, opportunity_id: uuid.UUID, document_id: uuid.UUID, kind: str
+) -> str:
+    """Where one job-description file is kept, exactly as it arrived.
+
+    Computed from the authenticated tenant and a freshly minted document id,
+    never from anything the client sent — same rule as `document_key`, and the
+    same `{tenant_id}/` prefix a tenant erasure purges by. `kind` is what
+    `sniff` decided the bytes are, not what the upload claimed to be. The
+    opportunity id is included even while the row's `opportunity_id` is still
+    NULL: the vacancy does not exist yet at upload time in the create-dialog
+    flow, so the key cannot hang off a row that has not been created.
+    """
+    return (
+        f"{tenant_id}/opportunities/{opportunity_id}/documents/"
+        f"{document_id}.{kind}"
+    )
+
+
 def import_key(tenant_id: uuid.UUID, import_id: uuid.UUID, stem: str, kind: str) -> str:
     """Where one uploaded spreadsheet is kept, exactly as it arrived.
 

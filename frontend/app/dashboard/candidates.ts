@@ -578,7 +578,17 @@ export async function readError(res: Response): Promise<string> {
   return "We could not save that just now. Nothing has changed.";
 }
 
-export class ApiError extends Error {}
+export class ApiError extends Error {
+  /** The HTTP status, when the failure came from a response rather than the
+   *  network. Callers that need to distinguish "the thing is gone" (404) from
+   *  "the server did not answer" (no status) read this instead of parsing copy. */
+  status?: number;
+
+  constructor(message: string, status?: number) {
+    super(message);
+    this.status = status;
+  }
+}
 
 /**
  * A candidate a colleague already holds.

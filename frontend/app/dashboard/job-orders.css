@@ -186,6 +186,53 @@
 .jo-detail-source { margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--line); }
 .jo-detail-source p { margin-top: 6px; }
 
+/* One attached job-description file in the provenance block: name, size, and
+   a download minted on click. Reads like the CV document rails — same name
+   and size rhythm, same left rail the other source facts use. */
+.jo-source-files { margin-top: 10px; display: grid; gap: 6px; }
+.jo-source-file {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 8px 0 8px 12px;
+  border-left: 2px solid var(--line);
+  flex-wrap: wrap;
+}
+.jo-source-file-name {
+  font-size: 0.875rem;
+  font-weight: 650;
+  color: var(--ink-900);
+  overflow-wrap: anywhere;
+}
+.jo-source-file-dl {
+  margin-left: auto;
+  background: none;
+  border: none;
+  padding: 2px 6px;
+  font-size: 0.8125rem;
+  color: var(--blue-600);
+  cursor: pointer;
+  border-radius: 4px;
+}
+.jo-source-file-dl:hover { background: var(--surface-alt); }
+.jo-source-file-dl:disabled { opacity: 0.6; cursor: default; }
+.jo-source-file-rm {
+  background: none;
+  border: none;
+  padding: 2px 6px;
+  font-size: 0.8125rem;
+  color: var(--ink-500);
+  cursor: pointer;
+  border-radius: 4px;
+}
+.jo-source-file-rm:hover { color: #c74f4f; background: var(--surface-alt); }
+.jo-source-file-rm:disabled { opacity: 0.6; cursor: default; }
+.jo-source-file-error {
+  width: 100%;
+  font-size: 0.8125rem;
+  color: #c74f4f;
+}
+
 .jo-placement { margin-top: 18px; padding: 14px; display: grid; gap: 10px; }
 .jo-placement-field { display: grid; gap: 4px; }
 .jo-placement-field select,
@@ -803,6 +850,80 @@
   border-radius: var(--radius);
   padding: 8px 12px;
 }
+
+/* The job-description drop zone at the top of the New job order dialog.
+   Same bargain as the CV panel's: the panel is the control, it holds a real
+   focusable file input, and the whole of it is operable from a keyboard.
+   `jo-doc-meta` sits inside the zone (unlike the CV panel's separate list)
+   because there is exactly one file per vacancy. */
+.jo-doc-drop {
+  margin: 14px 0 4px;
+  border: 1px dashed var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-alt);
+  transition: border-color 150ms ease, background-color 150ms ease;
+  position: relative;
+}
+.jo-doc-trigger {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  align-items: center;
+  padding: 16px 12px;
+  cursor: pointer;
+  text-align: center;
+}
+.jo-doc-drop:hover { border-color: var(--blue-500); }
+.jo-doc-drop:focus-within {
+  outline: 2px solid var(--blue-500);
+  outline-offset: 2px;
+  border-color: var(--blue-500);
+}
+.jo-doc-drop[data-drop="yes"] {
+  border-color: var(--blue-500);
+  border-style: solid;
+}
+.jo-doc-drop[data-busy="yes"] .jo-doc-trigger { cursor: default; opacity: 0.65; }
+/* A file is present: shrink the trigger to a single line so the meta rail
+   fits on the same row. */
+.jo-doc-drop[data-has="yes"] .jo-doc-trigger {
+  flex-direction: row;
+  justify-content: center;
+  gap: 8px;
+  padding: 12px;
+}
+.jo-doc-drop[data-has="yes"] .cv-kinds { display: none; }
+.jo-doc-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px 10px;
+  font-size: 0.8125rem;
+  color: var(--ink-500);
+}
+.jo-doc-size { white-space: nowrap; }
+.jo-doc-ok { color: #2f7d54; }
+.jo-doc-error {
+  margin: 0 12px 10px;
+  font-size: 13px;
+  color: #c74f4f;
+}
+.jo-doc-note {
+  margin: 10px 0 0;
+  font-size: 13px;
+  color: var(--amber-700);
+}
+.jo-doc-remove {
+  margin-left: auto;
+  background: none;
+  border: none;
+  padding: 2px 6px;
+  font-size: 0.8125rem;
+  color: var(--ink-500);
+  cursor: pointer;
+  border-radius: 4px;
+}
+.jo-doc-remove:hover { color: #c74f4f; background: var(--surface-alt); }
 .jo-form-actions {
   display: flex;
   justify-content: flex-end;

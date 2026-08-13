@@ -194,6 +194,10 @@ export type ManualOpportunity = {
   employment_type: string | null;
   job_description: string | null;
   requirements: string | null;
+  /** A job-description file uploaded in this same dialog and read by the
+   *  worker; when present, the new vacancy is linked to it so the file
+   *  travels with the row. */
+  document_id?: string | null;
 };
 
 /** What the create endpoint echoes back: enough to identify the new row, not

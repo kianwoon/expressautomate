@@ -181,6 +181,25 @@ export const opportunitySharesPath = (id: string) =>
 export const opportunitySharePath = (id: string, shareId: string) =>
   `${OPPORTUNITIES_PATH}/${encodeURIComponent(id)}/shares/${encodeURIComponent(shareId)}`;
 
+/** The New job order dialog's document upload. POST (multipart) a
+ *  job-description file here with NO job order yet — the file is stored, read
+ *  in the background, and its extracted values prefill the form for review.
+ *  A literal sibling of `/api/opportunities/{id}/documents`, not nested under
+ *  an opportunity; declared in `main.py` before the `{id}` routes so FastAPI
+ *  never hands `documents` to a path parameter. */
+export const OPPORTUNITIES_DOCUMENTS_PATH = `${OPPORTUNITIES_PATH}/documents`;
+
+/** One uploaded job-description file: GET polls the extraction state and
+ *  reads the prefill once `extracted`; DELETE removes it. */
+export const opportunityDocumentPath = (documentId: string) =>
+  `${OPPORTUNITIES_DOCUMENTS_PATH}/${encodeURIComponent(documentId)}`;
+
+/** A short-lived presigned URL for the original file — the bytes the recruiter
+ *  uploaded, not the values we read from them. Fetched at the moment it is
+ *  needed and never stored, exactly as the CV download's is. */
+export const opportunityDocumentDownloadPath = (documentId: string) =>
+  `${opportunityDocumentPath(documentId)}/download`;
+
 /**
  * Whether one candidate meets the placement requirements for one job order —
  * MOM Work Permit eligibility, never a hiring verdict. Both ids are path

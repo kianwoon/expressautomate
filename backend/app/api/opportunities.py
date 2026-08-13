@@ -59,6 +59,7 @@ from app.models import (
     EmailMessage,
     Opportunity,
     OpportunityCode,
+    OpportunityDocument,
     User,
 )
 from app.models.extraction import ExtractionEvidence
@@ -496,6 +497,7 @@ async def list_opportunities(
         page_ids = [row[0].id for row in rows]
         evidence = await _evidence_counts(session, page_ids)
         codes = await _decoded_codes(session, page_ids)
+        documents = await _documents_for(session, page_ids)
 
     return {
         "items": [
@@ -509,6 +511,7 @@ async def list_opportunities(
                 client_name,
                 shared_with_me,
                 buddy_name,
+                documents=documents.get(opportunity.id, []),
                 revision_of_opportunity_id=revision_of,
             )
             for (
@@ -665,6 +668,48 @@ async def _decoded_codes(session, opportunity_ids: list[uuid.UUID]) -> dict:
     return grouped
 
 
+async def _documents_for(
+    session, opportunity_ids: list[uuid.UUID]
+) -> dict[uuid.UUID, list[dict]]:
+    """The job-description files attached to each of the page's rows, in one query.
+
+    Same shape and same reason as `_evidence_counts`: keyed on the ids already
+    fetched, never one query per row. A page of 50 vacancies with one document
+    each must not become 50 queries.
+
+    Serialized here (rather than joining and serializing in the payload loop)
+    because the loop has the rows, not the documents; the shape mirrors
+    `opportunity_documents.serialize` minus `prefill`, which the list and the
+    detail panel never render — the create-dialog's own poll reads the full row
+    from the dedicated route. Keeping the extraction JSON out of every list
+    payload is the difference between a lean page and a page carrying an
+    unseen copy of every attached document's model output.
+    """
+    if not opportunity_ids:
+        return {}
+    result = await session.execute(
+        select(OpportunityDocument)
+        .where(OpportunityDocument.opportunity_id.in_(opportunity_ids))
+        .order_by(OpportunityDocument.created_at.asc(), OpportunityDocument.id.asc())
+    )
+    grouped: dict[uuid.UUID, list[dict]] = {}
+    for document in result.scalars():
+        grouped.setdefault(document.opportunity_id, []).append(
+            {
+                "id": str(document.id),
+                "filename": document.filename,
+                "content_type": document.content_type,
+                "byte_size": document.byte_size,
+                "extract_state": document.extract_state,
+                "extract_error": document.extract_error,
+                "created_at": (
+                    document.created_at.isoformat() if document.created_at else None
+                ),
+            }
+        )
+    return grouped
+
+
 @router.get("/opportunities/{opportunity_id}")
 async def get_opportunity(opportunity_id: uuid.UUID, request: Request) -> dict:
     """One job order, in exactly the shape the list gives one.
@@ -695,6 +740,7 @@ async def get_opportunity(opportunity_id: uuid.UUID, request: Request) -> dict:
             raise HTTPException(status_code=404, detail="No such job order.")
         evidence = await _evidence_counts(session, [current.id])
         codes = await _decoded_codes(session, [current.id])
+        documents = await _documents_for(session, [current.id])
 
     (
         opportunity,
@@ -716,6 +762,7 @@ async def get_opportunity(opportunity_id: uuid.UUID, request: Request) -> dict:
         client_name,
         shared,
         buddy_name,
+        documents=documents.get(opportunity.id, []),
         revision_of_opportunity_id=revision_of,
     )
 
@@ -951,6 +998,7 @@ def _payload(
     client_name: str | None,
     shared_with_me: bool,
     buddy_name: str | None = None,
+    documents: list[dict] | None = None,
     revision_of_opportunity_id: uuid.UUID | None = None,
 ) -> dict:
     """One row, with absences preserved as absences."""
@@ -1064,6 +1112,10 @@ def _payload(
         # pipeline invents later passes through unrenamed rather than being
         # forced into a bucket it does not belong in.
         "review_status": _STORED_TO_FILTER.get(row.review_status, row.review_status),
+        # The job-description files this vacancy came with. Always an array —
+        # empty for the ordinary row with no attachment — so the browser never
+        # has to treat "absent" differently from "none".
+        "documents": documents or [],
     }
 
 
@@ -1090,6 +1142,10 @@ class ManualOpportunityRequest(BaseModel):
     recruiter is transcribing what they were told, and forcing a structured
     salary out of "6k neg." would be the fabrication §15 forbids. Normalisation
     is the extraction pipeline's job and is simply absent here.
+
+    `document_id` is the optional id of a job-description file uploaded in the
+    same dialog and read by the worker; when present, the new vacancy is linked
+    to it so the file travels with the row.
     """
 
     client_id: uuid.UUID | None = None
@@ -1102,6 +1158,7 @@ class ManualOpportunityRequest(BaseModel):
     employment_type: str | None = None
     job_description: str | None = None
     requirements: str | None = None
+    document_id: uuid.UUID | None = None
 
 
 @router.post("/opportunities/{opportunity_id}/claim")
@@ -1576,6 +1633,24 @@ async def create_opportunity(body: ManualOpportunityRequest, request: Request) -
             resolved_client_id = await resolve_or_create_client_by_name(
                 session, tenant_uuid, body.company_name_raw
             )
+        # A job-description file uploaded in this same dialog must belong to
+        # this tenant AND not already be linked to a vacancy, or linking it
+        # below would be a cross-tenant write or a silent re-bind. Document ids
+        # travel in every opportunity payload, so a tenant member could name a
+        # colleague's already-linked file — re-attaching it to their own row and
+        # silently detaching it from the original. 422 rather than 404: the
+        # document was named by the request, and the sentence tells the
+        # recruiter what is wrong with the file rather than pretending their
+        # vacancy is not theirs.
+        if body.document_id is not None:
+            document = await session.get(
+                OpportunityDocument, body.document_id
+            )
+            if document is None or document.opportunity_id is not None:
+                raise HTTPException(
+                    status_code=422,
+                    detail="The attached file is no longer available. Remove it and try again.",
+                )
         session.add(
             Opportunity(
                 id=opportunity_id,
@@ -1622,6 +1697,20 @@ async def create_opportunity(body: ManualOpportunityRequest, request: Request) -
             # says something unexpected happened rather than asserting a
             # falsehood about data the request never sent.
             await session.flush()
+
+        # Link the uploaded job-description file now that the vacancy exists.
+        # The document row was validated above as belonging to this tenant;
+        # RLS confines the update to it regardless. Its object key already
+        # carries the provisional opportunity id minted at upload, so a
+        # re-upload after deleting this vacancy would compute a fresh key —
+        # the old bytes are removed by the document's delete route.
+        if body.document_id is not None:
+            document = await session.get(
+                OpportunityDocument, body.document_id
+            )
+            if document is not None:
+                document.opportunity_id = opportunity_id
+                await session.flush()
 
     # No notification: it is already assigned to whoever created it, and they
     # are the only person it concerns.

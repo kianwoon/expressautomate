@@ -313,6 +313,20 @@ class Settings(BaseSettings):
     # file holding a worker slot indefinitely.
     CV_CONVERT_TIMEOUT_SECONDS: float = Field(default=60.0, gt=0)
 
+    # --- Job-order documents (New job order upload) ---
+    # The largest job-description file the API will accept, counted as the
+    # bytes arrive rather than trusted from `Content-Length`. Same shape as a
+    # CV: a real job description is a handful of pages.
+    OPPORTUNITY_DOCUMENT_MAX_UPLOAD_BYTES: int = Field(default=10 * 1024 * 1024, gt=0)
+    # How long a download link stays valid. Same reasoning as the CV's: a
+    # signed URL is a capability, and one that outlives the session it was
+    # minted under is a capability nobody revoked.
+    OPPORTUNITY_DOCUMENT_PRESIGNED_URL_TTL_SECONDS: int = Field(default=300, gt=0)
+    # The wall clock a single job-description extraction may occupy an arq
+    # worker for, model call included. Bounded by the same FlateDecode risk as
+    # the CV parse, so it shares that ceiling's reasoning.
+    OPPORTUNITY_DOCUMENT_EXTRACT_TIMEOUT_SECONDS: float = Field(default=300.0, gt=0)
+
     # --- Candidate spreadsheet imports ---
     # The largest spreadsheet the API will accept, counted as the bytes
     # arrive rather than trusted from `Content-Length`. Larger than a CV

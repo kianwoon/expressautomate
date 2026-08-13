@@ -14,6 +14,7 @@ import { useJobIntelligence } from "./job-intelligence";
 import { PlacementForm, placementFields, same } from "./job-order-placement";
 import { Shortlist } from "./job-orders-sourcing";
 import { MemberSelect } from "./member-picker";
+import { getOpportunityDocumentUrl, deleteOpportunityDocument } from "./opportunity-documents";
 import { type MutationResult, type Opportunity } from "./opportunities";
 import { Initials } from "./person";
 import { QualityNote, ReviewBadge } from "./quality";
@@ -623,14 +624,35 @@ function Detail({
           disputed row can be traced back to the email it came from. */}
       <div className="jo-detail-source">
         <span className="row-k">Source</span>
-        <p className="body jo-sub">
-          Read from one email in the connected mailbox. Every value above is the sender&rsquo;s,
-          not ours.
-        </p>
+        {row.source === "manual" ? (
+          <p className="body jo-sub">
+            Typed in by a recruiter, {row.documents && row.documents.length > 0
+              ? <>with the file below as the source of truth.</>
+              : "from what the client said over the phone or WhatsApp."}
+          </p>
+        ) : (
+          <p className="body jo-sub">
+            Read from one email in the connected mailbox. Every value above is the sender&rsquo;s,
+            not ours.
+          </p>
+        )}
         <div className="rows">
           <Row k="Message id" v={row.internet_message_id} empty="Not recorded" />
           <Row k="Graph id" v={row.graph_message_id} empty="Not recorded" />
         </div>
+        {row.documents && row.documents.length > 0 && (
+          <div className="jo-source-files">
+            {row.documents.map((doc) => (
+              <SourceFile
+                key={doc.id}
+                id={doc.id}
+                filename={doc.filename}
+                byte_size={doc.byte_size}
+                canRemove={canAssign}
+              />
+            ))}
+          </div>
+        )}
       </div>
       </>
       )}
@@ -687,6 +709,87 @@ function Prose({ k, text }: { k: string; text: string | null }) {
       <p className={text ? "body" : "body muted"}>
         {text ? <Breakable text={text} /> : "Not mentioned"}
       </p>
+    </div>
+  );
+}
+
+/** Bytes as a person would say them — the same sentence the upload dialog
+ *  uses, so the file's size reads the same in both places. */
+function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} bytes`;
+  const kb = bytes / 1024;
+  if (kb < 1024) return `${Math.round(kb)} KB`;
+  return `${(kb / 1024).toFixed(1)} MB`;
+}
+
+/** One job-description file attached to the job order: its name, size, and a
+ *  download link minted at the moment of the click and never held longer. A
+ *  manual job order with a document is the reason this block exists — the
+ *  document is the vacancy's source of truth, and the recruiter who wants to
+ *  re-read it should not have to ask. The assignee (or an owner) may also
+ *  remove the file, the same right as the create-dialog's Remove control. */
+function SourceFile({
+  id,
+  filename,
+  byte_size,
+  canRemove,
+}: {
+  id: string;
+  filename: string;
+  byte_size: number;
+  canRemove: boolean;
+}) {
+  const [downloading, setDownloading] = useState(false);
+  const [removing, setRemoving] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const [removed, setRemoved] = useState(false);
+
+  async function download() {
+    if (downloading) return;
+    setDownloading(true);
+    setFailed(false);
+    try {
+      const { url } = await getOpportunityDocumentUrl(id);
+      // The browser follows the presigned URL straight to R2; the page never
+      // proxies the bytes.
+      window.location.assign(url);
+    } catch {
+      setFailed(true);
+    } finally {
+      setDownloading(false);
+    }
+  }
+
+  async function remove() {
+    if (removing) return;
+    setRemoving(true);
+    setFailed(false);
+    try {
+      await deleteOpportunityDocument(id);
+      setRemoved(true);
+    } catch {
+      setFailed(true);
+    } finally {
+      setRemoving(false);
+    }
+  }
+
+  if (removed) return null;
+
+  return (
+    <div className="jo-source-file">
+      <span className="row-k">Source file</span>
+      <span className="jo-source-file-name">{filename}</span>
+      <span className="cv-doc-size">{formatSize(byte_size)}</span>
+      <button type="button" className="jo-source-file-dl" onClick={() => void download()} disabled={downloading || removing}>
+        {downloading ? "Opening…" : "Download"}
+      </button>
+      {canRemove && (
+        <button type="button" className="jo-source-file-rm" onClick={() => void remove()} disabled={removing}>
+          {removing ? "Removing…" : "Remove"}
+        </button>
+      )}
+      {failed && <span className="jo-source-file-error">Could not do that with the file just now.</span>}
     </div>
   );
 }

@@ -85,6 +85,13 @@ _STALLED_DOCUMENTS = text(
 _STALLED_IMPORTS = text(
     "SELECT * FROM stalled_candidate_imports(:pending_minutes, :working_minutes)"
 )
+# The job-description documents quarter of `rescan_stuck`, for the same reason
+# `_STALLED_DOCUMENTS` is: `opportunity_documents` carries FORCE ROW LEVEL
+# SECURITY and this sweep sets no `app.tenant_id`, so a direct read matches
+# nothing.
+_STALLED_OPPORTUNITY_DOCUMENTS = text(
+    "SELECT * FROM stalled_opportunity_documents(:pending_minutes, :working_minutes)"
+)
 # The sourcing quarter of `rescan_stuck`, and a resolver for exactly the
 # reason `_STALLED_IMPORTS` is: `sourcing_runs` carries FORCE ROW LEVEL
 # SECURITY and this process sets no `app.tenant_id`, so a direct read would
@@ -255,6 +262,9 @@ async def rescan_stuck() -> int:
         rows = (await session.execute(_STALLED, ages)).all()
         documents = (await session.execute(_STALLED_DOCUMENTS, ages)).all()
         imports = (await session.execute(_STALLED_IMPORTS, ages)).all()
+        opportunity_documents = (
+            await session.execute(_STALLED_OPPORTUNITY_DOCUMENTS, ages)
+        ).all()
         runs = (await session.execute(_STALLED_RUNS, ages)).all()
         intelligence = (await session.execute(_STALLED_INTELLIGENCE, ages)).all()
         candidate_intel = (
@@ -304,6 +314,19 @@ async def rescan_stuck() -> int:
             "parse_candidate_cv",
             tenant_id=str(row.tenant_id),
             candidate_id=str(row.candidate_id),
+            document_id=str(row.id),
+        ):
+            requeued += 1
+
+    for row in opportunity_documents:
+        # Same shape as the documents block: `extract_opportunity_document`
+        # accepts `extracting` as well as `pending`, so a file a killed worker
+        # left mid-extraction is picked up rather than skipped as already
+        # answered. Re-running is safe by construction — the conditional claim
+        # inside the job is what decides who proceeds.
+        if await enqueue(
+            "extract_opportunity_document",
+            tenant_id=str(row.tenant_id),
             document_id=str(row.id),
         ):
             requeued += 1

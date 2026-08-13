@@ -118,9 +118,30 @@ const CREATED = opportunity({
 
 type Call = { url: string; init?: RequestInit };
 
+const EXTRACTED_DOC = {
+  id: "doc-1",
+  filename: "job-description.pdf",
+  content_type: "application/pdf",
+  byte_size: 2048,
+  extract_state: "extracted",
+  extract_error: null,
+  prefill: {
+    job_title_raw: "Warehouse assistant",
+    company_name_raw: "Sunrise Logistics",
+    location_raw: "Tuas",
+    salary_raw: "$2,800/month",
+    working_hours_raw: "Mon–Fri, 9am–6pm",
+    duration_raw: "6-month contract",
+    employment_type: "Full-time",
+    job_description: "Picking and packing orders at a Jurong East warehouse.",
+    requirements: "At least 1 year warehouse experience.",
+  },
+  created_at: "2026-08-12T00:00:00Z",
+};
+
 /** Routes by URL and method: the list, the client search, the create, and the
  *  read-back of the row that was just created. */
-function mockFetch() {
+function mockFetch(options: { extractedAfter?: number } = {}) {
   const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
     const method = init?.method ?? "GET";
     if (url.includes("/api/clients")) {
@@ -130,6 +151,33 @@ function mockFetch() {
         limit: 8,
         offset: 0,
         counts: { all: 1 },
+      });
+    }
+    if (url.includes("/api/opportunities/documents") && method === "POST") {
+      return jsonResponse(
+        {
+          id: "doc-1",
+          filename: "job-description.pdf",
+          content_type: "application/pdf",
+          byte_size: 2048,
+          extract_state: "pending",
+          extract_error: null,
+          prefill: null,
+          created_at: "2026-08-12T00:00:00Z",
+        },
+        201,
+      );
+    }
+    if (url.includes("/api/opportunities/documents/doc-1")) {
+      // Poll: stay pending for a beat, then extracted.
+      const pollCount = fetchMock.mock.calls.filter(([u]) =>
+        String(u).includes("/api/opportunities/documents/doc-1"),
+      ).length;
+      if (pollCount >= (options.extractedAfter ?? 2)) return jsonResponse(EXTRACTED_DOC);
+      return jsonResponse({
+        ...EXTRACTED_DOC,
+        extract_state: "extracting",
+        prefill: null,
       });
     }
     if (url.includes("/api/opportunities") && method === "POST") {
@@ -311,5 +359,153 @@ describe("typing in a job order", () => {
     for (const [label, placeholder] of expectations) {
       expect(form.getByLabelText(label).getAttribute("placeholder")).toBe(placeholder);
     }
+  });
+
+  describe("uploading a job-description file", () => {
+    let fetchMock: ReturnType<typeof mockFetch>;
+
+    beforeEach(() => {
+      // Extraction lands on the first poll (which fires immediately after
+      // upload), so the tests do not need to wait out the 2s poll interval.
+      fetchMock = mockFetch({ extractedAfter: 1 });
+    });
+
+    afterEach(() => {
+      cleanup();
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    });
+
+    async function openFormWithUpload() {
+      render(<JobOrders me={me()} />);
+      await screen.findAllByText("Accountant");
+      fireEvent.click(screen.getByRole("button", { name: "New job order" }));
+      await screen.findByRole("dialog");
+      const form = within(screen.getByRole("dialog"));
+      fireEvent.change(form.getByLabelText("Upload a job description file"), {
+        target: { files: [new File(["pdf"], "job-description.pdf", { type: "application/pdf" })] },
+      });
+      return form;
+    }
+
+    it("uploads the file, polls, and prefills the fields", async () => {
+      await openFormWithUpload();
+      // The upload POST and the polling GETs happen; then the fields fill in.
+      await waitFor(() => {
+        const form = within(screen.getByRole("dialog"));
+        expect((form.getByLabelText("Job title") as HTMLInputElement).value).toBe(
+          "Warehouse assistant",
+        );
+      });
+      const form = within(screen.getByRole("dialog"));
+      expect((form.getByLabelText("Location") as HTMLInputElement).value).toBe("Tuas");
+      expect((form.getByLabelText("Pay") as HTMLInputElement).value).toBe("$2,800/month");
+      // The file row shows its name and the read state.
+      expect(screen.getByText("job-description.pdf")).toBeTruthy();
+    });
+
+    it("sends the document id with the saved job order", async () => {
+      await openFormWithUpload();
+      await waitFor(() => {
+        const form = within(screen.getByRole("dialog"));
+        expect((form.getByLabelText("Job title") as HTMLInputElement).value).toBe(
+          "Warehouse assistant",
+        );
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Save job order" }));
+      await waitFor(() => expect(lastBody(fetchMock)).toMatchObject({ document_id: "doc-1" }));
+    });
+
+    it("a recruiter's own typing is never clobbered by the extraction", async () => {
+      const form = await openFormWithUpload();
+      // Type a different title before the poll delivers the extraction.
+      fireEvent.change(form.getByLabelText("Job title"), {
+        target: { value: "My own title" },
+      });
+      await waitFor(() => {
+        const scoped = within(screen.getByRole("dialog"));
+        expect((scoped.getByLabelText("Location") as HTMLInputElement).value).toBe("Tuas");
+      });
+      // The typed title stays; the untouched fields were prefilled.
+      expect((form.getByLabelText("Job title") as HTMLInputElement).value).toBe("My own title");
+    });
+
+    it("an unreadable document still lets the recruiter type and save", async () => {
+      // Open the dialog first (its render uses the default mock), then swap in
+      // an `unreadable`-landing mock for the upload and poll.
+      render(<JobOrders me={me()} />);
+      await screen.findAllByText("Accountant");
+      fireEvent.click(screen.getByRole("button", { name: "New job order" }));
+      await screen.findByRole("dialog");
+      fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+        const method = init?.method ?? "GET";
+        if (url.includes("/api/clients")) {
+          return jsonResponse({ items: [], total: 0, limit: 8, offset: 0, counts: { all: 0 } });
+        }
+        if (url.includes("/api/opportunities/documents") && method === "POST") {
+          return jsonResponse(
+            {
+              id: "doc-1",
+              filename: "scan.pdf",
+              content_type: "application/pdf",
+              byte_size: 1024,
+              extract_state: "pending",
+              extract_error: null,
+              prefill: null,
+              created_at: "2026-08-12T00:00:00Z",
+            },
+            201,
+          );
+        }
+        if (url.includes("/api/opportunities/documents/doc-1")) {
+          return jsonResponse({
+            id: "doc-1",
+            filename: "scan.pdf",
+            content_type: "application/pdf",
+            byte_size: 1024,
+            extract_state: "unreadable",
+            extract_error: "No text could be read from this file.",
+            prefill: null,
+            created_at: "2026-08-12T00:00:00Z",
+          });
+        }
+        if (url.includes("/api/opportunities") && method === "POST") {
+          return jsonResponse({ id: "op-new" }, 201);
+        }
+        return jsonResponse({
+          items: [opportunity()],
+          total: 1,
+          limit: 25,
+          offset: 0,
+          counts: { all: 1, new: 1, needs_review: 0, reviewed: 0 },
+        });
+      });
+      const form = within(screen.getByRole("dialog"));
+      fireEvent.change(form.getByLabelText("Upload a job description file"), {
+        target: { files: [new File(["pdf"], "scan.pdf", { type: "application/pdf" })] },
+      });
+      // The note appears and the recruiter can still type a title and save.
+      await screen.findByText(/could not read text/i);
+      fireEvent.change(within(screen.getByRole("dialog")).getByLabelText("Job title"), {
+        target: { value: "Typed after scan failure" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Save job order" }));
+      await waitFor(() =>
+        expect(lastBody(fetchMock)).toMatchObject({ job_title_raw: "Typed after scan failure" }),
+      );
+    });
+
+    it("removing the file clears the attachment", async () => {
+      const form = await openFormWithUpload();
+      await waitFor(() => {
+        const scoped = within(screen.getByRole("dialog"));
+        expect((scoped.getByLabelText("Job title") as HTMLInputElement).value).toBe(
+          "Warehouse assistant",
+        );
+      });
+      fireEvent.click(form.getByRole("button", { name: "Remove" }));
+      fireEvent.click(screen.getByRole("button", { name: "Save job order" }));
+      await waitFor(() => expect(lastBody(fetchMock)).toMatchObject({ document_id: null }));
+    });
   });
 });
