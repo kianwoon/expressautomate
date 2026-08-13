@@ -270,6 +270,17 @@ async def test_a_doc_is_converted_before_extraction(agency, store, monkeypatch):
 
     called: dict = {}
 
+    # The gate is `CV_CONVERT_ENABLED AND converter_available()` — a binary
+    # probe for LibreOffice. The probe is False on a CI runner (LibreOffice
+    # lives only in the deployment image), so without pinning it this test
+    # silently takes the `unreadable` branch on CI and the conversion stub is
+    # never called. Pin it so the conversion path is exercised everywhere —
+    # the same `_conversion_on` pattern as `test_cv_convert`.
+    from app.services.cv import convert as _convert_module
+
+    monkeypatch.setattr(settings, "CV_CONVERT_ENABLED", True)
+    monkeypatch.setattr(_convert_module, "converter_available", lambda: True)
+
     async def _convert(data, *, kind):
         called["kind"] = kind
         return _pdf_with_text_pages(1, LINE), "pdf"
