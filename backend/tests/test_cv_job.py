@@ -287,3 +287,42 @@ async def test_a_document_the_store_has_lost_is_unreadable(agency, store):  # no
 
     assert (await _document(document_id)).parse_state == CandidateDocument.UNREADABLE
     await _cleanup(tenant_id)
+
+
+@pytest.mark.asyncio
+async def test_document_past_attempt_ceiling_is_failed_not_retried(
+    agency, store, monkeypatch  # noqa: F811
+):
+    """The cost guardrail: a CV that keeps timing out is re-enqueued by
+    `rescan_stuck` forever — one billed parse per sweep — unless the job
+    itself refuses past a ceiling. This test makes the ceiling bind and
+    asserts the model is never called again."""
+    tenant_id, user_id = agency
+    candidate_id = await _a_candidate_row(tenant_id, user_id)
+    document_id = await _seed(tenant_id, candidate_id, store, b"%PDF-1.4 ")
+
+    # The sweep has already picked this document up past the ceiling.
+    async with AdminSessionLocal() as s:
+        await s.execute(
+            text(
+                "UPDATE candidate_documents SET attempts = :a WHERE id = :i"
+            ),
+            {"a": settings.CV_PARSE_MAX_ATTEMPTS, "i": document_id},
+        )
+        await s.commit()
+
+    async def _never(source, **kwargs):
+        raise AssertionError("a document past the attempt ceiling must not be parsed again")
+
+    monkeypatch.setattr(cv_jobs, "extract_cv", _never)
+    await cv_jobs.parse_candidate_cv(
+        None,
+        tenant_id=str(tenant_id),
+        candidate_id=str(candidate_id),
+        document_id=str(document_id),
+    )
+
+    row = await _document(document_id)
+    assert row.parse_state == CandidateDocument.FAILED
+    assert row.parse_error
+    await _cleanup(tenant_id)

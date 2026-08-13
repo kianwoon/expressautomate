@@ -431,3 +431,39 @@ async def test_replaying_the_job_on_a_resolved_document_does_nothing(
     # The job returned without raising and without enqueuing.
     assert enqueued == []
     await _cleanup(tenant_id)
+
+
+@pytest.mark.asyncio
+async def test_an_ingest_past_the_attempt_ceiling_is_failed_not_retried(
+    agency, store, enqueued, monkeypatch  # noqa: F811
+):
+    """The cost guardrail, ingest half: a document the sweep keeps re-enqueuing
+    past `CV_PARSE_MAX_ATTEMPTS` is parked in `failed`, and the identity model
+    is never called again."""
+    tenant_id, user_id = agency
+    placeholder_id, document_id = await _placeholder_and_document(
+        tenant_id, user_id, store, _pdf_with_text_pages(1, CV_TEXT)
+    )
+
+    async with AdminSessionLocal() as s:
+        await s.execute(
+            text(
+                "UPDATE candidate_documents SET attempts = :a WHERE id = :i"
+            ),
+            {"a": settings.CV_PARSE_MAX_ATTEMPTS, "i": document_id},
+        )
+        await s.commit()
+
+    async def _never(text: str, **kwargs):
+        raise AssertionError("a document past the attempt ceiling must not be read again")
+
+    monkeypatch.setattr(ingest_jobs, "extract_identity", _never)
+    await ingest_jobs.ingest_candidate_cv(
+        None, tenant_id=str(tenant_id), document_id=str(document_id)
+    )
+
+    row = await _document(document_id)
+    assert row.parse_state == CandidateDocument.FAILED
+    assert row.parse_error
+    assert enqueued == []
+    await _cleanup(tenant_id)

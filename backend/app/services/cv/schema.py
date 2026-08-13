@@ -140,7 +140,13 @@ class ExtractedSalary(BaseModel):
     currency: str | None = None
     period: str | None = None
     evidence: str | None = None
-    confidence: float = 0.0
+    # Nullable because the model sometimes answers `confidence: null` when the
+    # CV states no salary (all other fields null too). The schema demands the
+    # key be present — the model omitting it entirely is a broken answer — but
+    # a literal `null` is a valid "no salary" and must not fail the whole
+    # extraction (2026-08-13: `cv_salary_extraction_failed` on
+    # `confidence: None`).
+    confidence: float | None = 0.0
 
     @property
     def is_missing(self) -> bool:
@@ -236,7 +242,11 @@ def cv_json_schema() -> dict:
             "currency": {"type": ["string", "null"]},
             "period": {"type": ["string", "null"], "enum": [*SALARY_PERIODS, None]},
             "evidence": {"type": ["string", "null"]},
-            "confidence": {"type": "number"},
+            # Nullable for the same reason `ExtractedSalary.confidence` is:
+            # the model answers `null` for a salary it did not find, and the
+            # schema must accept the model's literal answer rather than fail
+            # the extraction for a value that means "nothing here".
+            "confidence": {"type": ["number", "null"]},
         },
         "required": ["amount", "currency", "period", "evidence", "confidence"],
         "additionalProperties": False,

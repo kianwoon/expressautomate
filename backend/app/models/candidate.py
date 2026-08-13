@@ -745,6 +745,18 @@ class CandidateDocument(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
     parse_state: Mapped[str] = mapped_column(String(16), nullable=False, default=PENDING)
     parse_error: Mapped[str | None] = mapped_column(Text)
 
+    # How many times a worker has picked this document up. Counted at pickup
+    # rather than at completion, for the reason `CandidateImport.attempts`
+    # gives: the run this bounds is the one that never completes — a CV whose
+    # parse times out or crashes leaves the row non-terminal, `rescan_stuck`
+    # re-enqueues it, and without a count that survives the crash the pair
+    # loops forever, one `parse_candidate_cv` job per sweep, each up to
+    # several billed model calls. Past `CV_PARSE_MAX_ATTEMPTS` the job parks
+    # the row in `failed` instead, so the sweep stops seeing it.
+    attempts: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+
     # What the extractor read but would not publish. A role or skill whose
     # quotation is not on the page is discarded (`cv.extract`), and without a
     # count beside the document a recruiter has no way to tell "the CV listed

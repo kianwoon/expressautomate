@@ -326,3 +326,43 @@ def test_the_prompt_instructs_salary_extraction():
     prompt = build_salary_prompt(CV)
     assert "last_drawn_salary" in prompt
     assert "expected_salary" in prompt
+
+
+def test_a_salary_with_null_confidence_does_not_fail_the_extraction():
+    """The model answers `confidence: null` when the CV states no salary. The
+    key must be present — the model omitting it entirely is a broken answer —
+    but a literal null is a valid "nothing here" and must not fail the whole
+    extraction (2026-08-13: `cv_salary_extraction_failed`)."""
+    # Must not raise: before the fix this failed Pydantic validation on
+    # `confidence: None` and the whole salary extraction was discarded.
+    response = CVResponse.model_validate(
+        {
+            "roles": [],
+            "skills": [],
+            "last_drawn_salary": {
+                "amount": None, "currency": None, "period": None,
+                "evidence": None, "confidence": None,
+            },
+            "expected_salary": {
+                "amount": None, "currency": None, "period": None,
+                "evidence": None, "confidence": None,
+            },
+        }
+    )
+    assert response.last_drawn_salary.is_missing
+    assert response.expected_salary.is_missing
+
+
+def test_a_salary_with_a_null_confidence_value_still_validates():
+    """Same tolerance at the `ExtractedSalary` level: null confidence parses
+    without raising — the whole point of the 2026-08-13 fix. The value is
+    kept as the model sent it (None, not coerced to the default)."""
+    from app.services.cv.schema import ExtractedSalary
+
+    field = ExtractedSalary.model_validate(
+        {"amount": 5000, "currency": "SGD", "period": "month",
+         "evidence": "Expected: $5000", "confidence": None}
+    )
+    assert field.amount == 5000
+    # Accepted, not coerced — the model's literal answer survives intact.
+    assert field.confidence is None

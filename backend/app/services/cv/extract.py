@@ -80,6 +80,8 @@ Rules:
   - `period`: one of "hour", "day", "week", "month", or "year".
   - `evidence`: the EXACT text from the CV stating this salary, copied VERBATIM.
     This is checked — a salary whose quote is not on the page is discarded.
+  - `confidence`: your confidence the salary was stated as read, 0.0 to 1.0.
+    If the CV states no salary, set `confidence` to null along with the others.
   - If the CV states no salary, set `amount` to null and all other fields to null.
 - A "current" figure is not an "expected" one — never move one into the other.
 
@@ -209,7 +211,13 @@ async def _extract_salary(
             ),
         )
         return response
-    except (LLMInvalidJSON, ValueError, TypeError) as exc:
+    except (LLMInvalidJSON, ValueError, TypeError, TimeoutError) as exc:
+        # `TimeoutError` (the client's exhausted retries, or an outer
+        # `asyncio.wait_for` firing on a TLS hang) must not escape either:
+        # the docstring's "never raises" is what lets the career extraction
+        # proceed even when the salary window is unreadable, and a hard raise
+        # here would kill the whole parse over a field the career pass could
+        # still fill in.
         log.warning("cv_salary_extraction_failed", error=repr(exc))
         return CVResponse()
 
@@ -244,11 +252,23 @@ async def _extract_career(text: str, resolve) -> tuple[CVResponse, LLMResult]:
             )
             response = CVResponse.model_validate(result.data)
             response = _drop_unstated(response)
+        except TimeoutError as exc:
+            # A timeout is the provider being slow or unreachable, not evidence
+            # a stronger model would answer better — and the strong pass is the
+            # expensive one. Stop rather than escalating into a second, pricier
+            # attempt at a provider that is already hanging (2026-08-13: slow
+            # DeepSeek responses made the career pass burn its whole budget and
+            # get killed by the arq timeout, re-enqueued every sweep).
+            failure = exc
+            log.warning("cv_extraction_timed_out", model=model, error=repr(exc))
+            break
         except (LLMInvalidJSON, ValueError) as exc:
             # A ValueError here is the schema refusing a value that quotes
             # nothing, or a date claiming more precision than the page carries.
             # For routing purposes both are the same fact as unparseable JSON:
-            # this model did not answer in the required shape.
+            # this model did not answer in the required shape — and the second
+            # attempt is a materially different request (higher effort, maybe a
+            # different server) rather than a re-ask of the same thing.
             failure = exc
             log.warning("cv_extraction_unusable", model=model, error=repr(exc))
             continue

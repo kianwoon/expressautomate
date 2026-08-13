@@ -21,7 +21,7 @@ picks up — the cost of a genuinely slow CV is a retry, not a lost one.
 
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import update
 
 from app.core.config import settings
 from app.core.logging import get_logger
@@ -122,29 +122,61 @@ async def parse_candidate_cv(
     document = uuid.UUID(document_id)
 
     async with tenant_session(tenant) as session:
-        row = (
+        # The claim is a conditional UPDATE, not the read above followed by a
+        # write. The read is only good enough to log with: between it and the
+        # write, another worker can move the row, and a blind write would put
+        # `parsing` straight over a terminal decision. Restating the state in
+        # the WHERE clause makes the check and the write one indivisible
+        # statement — whoever loses simply matches no row.
+        #
+        # The attempt is spent in that same statement, exactly as
+        # `run_candidate_import` spends its own: a worker killed mid-call
+        # never reaches an end, so a count spent at completion would count
+        # nothing on precisely the runs this bounds — a CV that determinis-
+        # tically times out would be re-enqueued by `rescan_stuck` for ever,
+        # one `parse_candidate_cv` job per sweep, each billing several model
+        # calls (2026-08-13).
+        claimed = (
             await session.execute(
-                select(CandidateDocument).where(
+                update(CandidateDocument)
+                .where(
                     CandidateDocument.id == document,
                     CandidateDocument.candidate_id == candidate,
+                    CandidateDocument.parse_state.in_(_RESUMABLE),
                 )
+                .values(
+                    parse_state=CandidateDocument.PARSING,
+                    parse_error=None,
+                    attempts=CandidateDocument.attempts + 1,
+                )
+                .returning(CandidateDocument.object_key, CandidateDocument.attempts)
+                .execution_options(synchronize_session=False)
             )
-        ).scalar_one_or_none()
-        if row is None:
-            # Unknown row, or a job whose tenant does not own it. RLS already
-            # decided; there is nothing to do and nothing to report.
-            log.info("cv_parse_skipped_unknown_row", candidate_document_id=document_id)
+        ).first()
+        if claimed is None:
+            log.info("cv_parse_skipped_claimed_elsewhere", candidate_document_id=document_id)
             return
-        if row.parse_state not in _RESUMABLE:
-            log.info(
-                "cv_parse_skipped_already_answered",
-                candidate_document_id=document_id,
-                parse_state=row.parse_state,
-            )
-            return
-        object_key = row.object_key
-        row.parse_state = CandidateDocument.PARSING
-        row.parse_error = None
+        object_key, attempts = claimed
+        await session.commit()
+
+    if attempts > settings.CV_PARSE_MAX_ATTEMPTS:
+        # Terminal, so `rescan_stuck` stops seeing it. The row is claimed
+        # first and refused second on purpose: leaving it at `pending` while
+        # refusing would let the sweep pick it up again on the next pass and
+        # discover the same thing, which is the loop rather than the end of it.
+        log.warning(
+            "cv_parse_attempts_exhausted",
+            candidate_document_id=document_id,
+            attempts=attempts,
+        )
+        await _terminal(
+            tenant,
+            document,
+            CandidateDocument.FAILED,
+            "This CV could not be read after multiple attempts, so it was not "
+            "retried further. Upload it again to try once more.",
+        )
+        return
 
     store = body_store()
     data = await store.get_bytes(object_key)

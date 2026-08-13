@@ -31,7 +31,7 @@ dispute, so nothing the CV said reaches the wrong record first.
 
 import uuid
 
-from sqlalchemy import delete, func, insert, select
+from sqlalchemy import delete, func, insert, select, update
 
 from app.core.config import settings
 from app.core.logging import get_logger
@@ -243,10 +243,49 @@ async def ingest_candidate_cv(
                 parse_state=row.parse_state,
             )
             return
-        object_key = row.object_key
         user_id = row.uploaded_by
-        row.parse_state = CandidateDocument.INGESTING
-        row.parse_error = None
+
+        # The claim is a conditional UPDATE, not the read above followed by a
+        # write, for the reason `parse_candidate_cv` gives: the check and the
+        # write are one indivisible statement, and whoever loses simply
+        # matches no row. The attempt is spent in the same statement — a
+        # worker killed mid-call never reaches an end, so a count spent at
+        # completion would count nothing on the runs this bounds, and the
+        # document would be re-enqueued by `rescan_stuck` for ever.
+        claimed = (
+            await session.execute(
+                update(CandidateDocument)
+                .where(
+                    CandidateDocument.id == document,
+                    CandidateDocument.parse_state.in_(_RESUMABLE),
+                )
+                .values(
+                    parse_state=CandidateDocument.INGESTING,
+                    parse_error=None,
+                    attempts=CandidateDocument.attempts + 1,
+                )
+                .returning(CandidateDocument.object_key, CandidateDocument.attempts)
+                .execution_options(synchronize_session=False)
+            )
+        ).first()
+        if claimed is None:
+            log.info("cv_ingest_skipped_claimed_elsewhere", candidate_document_id=document_id)
+            return
+        object_key, attempts = claimed
+        await session.commit()
+
+    if attempts > settings.CV_PARSE_MAX_ATTEMPTS:
+        log.warning(
+            "cv_ingest_attempts_exhausted",
+            candidate_document_id=document_id,
+            attempts=attempts,
+        )
+        await _terminal(
+            tenant, document, CandidateDocument.FAILED,
+            "This CV could not be read after multiple attempts, so it was not "
+            "retried further. Upload it again to try once more.",
+        )
+        return
 
     if user_id is None:
         # The route always sets `uploaded_by`; reaching here means a row was

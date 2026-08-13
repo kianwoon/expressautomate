@@ -251,6 +251,15 @@ class Settings(BaseSettings):
     # inflates inside `pypdf` where nothing is watching. This is the only
     # thing standing between one hostile page and a worker slot held forever.
     CV_PARSE_TIMEOUT_SECONDS: float = Field(default=300.0, gt=0)
+    # How many times a worker may pick up one CV document. `CandidateDocument.
+    # attempts` is spent at claim time, mirroring the import and sourcing runs,
+    # so a document whose parse times out or crashes is re-enqueued by
+    # `rescan_stuck` a bounded number of times and then parked in `failed`
+    # instead. Without a ceiling the pair loops forever — each loop a fresh
+    # `parse_candidate_cv` job, each job up to several billed model calls — as
+    # happened 2026-08-13 when slow DeepSeek responses made every CV in a batch
+    # time out at the 300s arq budget and get re-enqueued every sweep.
+    CV_PARSE_MAX_ATTEMPTS: int = Field(default=3, gt=0)
     # The ingest front half: read text, one identity model call, a match query.
     # Bounded by the same FlateDecode risk as the parse, plus a single model
     # call, so it shares the parse's ceiling rather than carrying one of its
