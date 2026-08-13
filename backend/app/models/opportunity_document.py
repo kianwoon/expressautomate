@@ -55,6 +55,19 @@ class OpportunityDocument(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
     )
     extract_error: Mapped[str | None] = mapped_column(Text)
 
+    # How many times a worker has picked this document up. Counted at pickup
+    # rather than at completion, for the reason `CandidateDocument.attempts`
+    # gives: the run this bounds is the one that never completes — a document
+    # whose extraction times out or crashes leaves the row non-terminal,
+    # `rescan_stuck` re-enqueues it, and without a count that survives the
+    # crash the pair loops forever, one `extract_opportunity_document` job per
+    # sweep, each billing up to several model calls. Past
+    # `OPPORTUNITY_DOCUMENT_MAX_ATTEMPTS` the job parks the row in `failed`
+    # instead, so the sweep stops seeing it.
+    attempts: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+
     # The extracted values handed to the create-dialog form for review, keyed
     # by the form's own field names (`job_title_raw`, `salary_raw`, …). Null
     # until the worker maps the extraction; a field the document never mentions

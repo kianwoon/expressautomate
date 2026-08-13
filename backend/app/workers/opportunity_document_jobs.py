@@ -24,7 +24,7 @@ timeout, and `rescan_stuck` recovers a timed-out row from `extracting`.
 
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from app.core.config import settings
 from app.core.logging import get_logger
@@ -38,7 +38,7 @@ from app.services.cv.convert import (
 from app.services.cv.text import UnsupportedDocument, extract_text, sniff
 from app.services.ingest.extract import extract
 from app.services.ingest.schema import ExtractedField, ExtractedJob
-from app.services.llm.client import LLMInvalidJSON
+from app.services.llm.client import LLMInvalidJSON, LLMNoContent
 from app.services.storage.r2 import R2BodyStore
 
 log = get_logger(__name__)
@@ -161,9 +161,67 @@ async def extract_opportunity_document(
                 extract_state=row.extract_state,
             )
             return
-        object_key = row.object_key
-        row.extract_state = OpportunityDocument.EXTRACTING
-        row.extract_error = None
+
+        # The claim is a conditional UPDATE, not the read above followed by a
+        # write. The read is only good enough to log with: between it and the
+        # write, another worker can move the row, and a blind write would put
+        # `extracting` straight over a terminal decision. Restating the state
+        # in the WHERE clause makes the check and the write one indivisible
+        # statement — whoever loses simply matches no row.
+        #
+        # The attempt is spent in that same statement, exactly as
+        # `parse_candidate_cv` spends its own: a worker killed mid-call never
+        # reaches an end, so a count spent at completion would count nothing on
+        # precisely the runs this bounds — a document that deterministically
+        # times out would be re-enqueued by `rescan_stuck` for ever, one
+        # `extract_opportunity_document` job per sweep, each billing several
+        # model calls.
+        claimed = (
+            await session.execute(
+                update(OpportunityDocument)
+                .where(
+                    OpportunityDocument.id == document_uuid,
+                    OpportunityDocument.extract_state.in_(_RESUMABLE),
+                )
+                .values(
+                    extract_state=OpportunityDocument.EXTRACTING,
+                    extract_error=None,
+                    attempts=OpportunityDocument.attempts + 1,
+                )
+                .returning(
+                    OpportunityDocument.object_key, OpportunityDocument.attempts
+                )
+                .execution_options(synchronize_session=False)
+            )
+        ).first()
+        if claimed is None:
+            log.info(
+                "opportunity_document_extract_skipped_claimed_elsewhere",
+                document_id=document_id,
+            )
+            return
+        object_key, attempts = claimed
+        await session.commit()
+
+    if attempts > settings.OPPORTUNITY_DOCUMENT_MAX_ATTEMPTS:
+        # Terminal, so `rescan_stuck` stops seeing it. The row is claimed
+        # first and refused second on purpose: leaving it at `pending` while
+        # refusing would let the sweep pick it up again on the next pass and
+        # discover the same thing, which is the loop rather than the end of it.
+        log.warning(
+            "opportunity_document_extract_attempts_exhausted",
+            document_id=document_id,
+            attempts=attempts,
+        )
+        await _terminal(
+            tenant,
+            document_uuid,
+            OpportunityDocument.FAILED,
+            "This file could not be read after multiple attempts, so it was "
+            "not retried further. Remove it and upload it again, or type the "
+            "job order in by hand.",
+        )
+        return
 
     store = body_store()
     data = await store.get_bytes(object_key)
@@ -251,15 +309,18 @@ async def extract_opportunity_document(
 
     try:
         response, _result = await extract(source)
-    except LLMInvalidJSON as exc:
-        # Both models were asked and neither answered in the required shape.
-        # Retrying would spend the same tokens on the same document for the
-        # same result, so the row is marked and the recruiter can either
-        # re-upload or type by hand.
+    except (LLMInvalidJSON, LLMNoContent, TimeoutError) as exc:
+        # Both models were asked and neither answered in the required shape —
+        # or the provider was slow/hung (`TimeoutError`) or spent its whole
+        # budget reasoning (`LLMNoContent`). All three are the same terminal
+        # fact: retrying here would spend the same tokens on the same document
+        # for the same result, and the attempt ceiling (`attempts`) is what
+        # bounds a genuinely transient provider outage across sweeps. The row
+        # is marked and the recruiter can either re-upload or type by hand.
         log.warning(
             "opportunity_document_extraction_failed",
             document_id=document_id,
-            error=str(exc),
+            error=repr(exc),
         )
         await _terminal(
             tenant,

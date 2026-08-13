@@ -326,6 +326,14 @@ class Settings(BaseSettings):
     # worker for, model call included. Bounded by the same FlateDecode risk as
     # the CV parse, so it shares that ceiling's reasoning.
     OPPORTUNITY_DOCUMENT_EXTRACT_TIMEOUT_SECONDS: float = Field(default=300.0, gt=0)
+    # How many times a worker may pick up one job-description document.
+    # `OpportunityDocument.attempts` is spent at claim time, mirroring the CV
+    # parse and the import runs, so a document whose extraction times out or
+    # crashes is re-enqueued by `rescan_stuck` a bounded number of times and
+    # then parked in `failed` instead. Without a ceiling the pair loops
+    # forever — each loop a fresh `extract_opportunity_document` job, each job
+    # up to several billed model calls.
+    OPPORTUNITY_DOCUMENT_MAX_ATTEMPTS: int = Field(default=3, gt=0)
 
     # --- Candidate spreadsheet imports ---
     # The largest spreadsheet the API will accept, counted as the bytes

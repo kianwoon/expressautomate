@@ -350,3 +350,64 @@ async def test_a_docx_is_read_without_conversion(agency, store, monkeypatch):
 
     state, _, _ = await _document(document_id)
     assert state == OpportunityDocument.EXTRACTED
+
+
+@pytest.mark.asyncio
+async def test_a_document_past_the_attempt_ceiling_is_failed_not_retried(
+    agency, store, monkeypatch
+):
+    """The cost guardrail: a job-description document that keeps timing out is
+    re-enqueued by `rescan_stuck` forever — one billed extraction per sweep —
+    unless the job itself refuses past a ceiling. This test makes the ceiling
+    bind and asserts the model is never called again."""
+    tenant_id = agency
+    document_id = await _seed(
+        tenant_id, store, _pdf_with_text_pages(1, LINE)
+    )
+    async with AdminSessionLocal() as s:
+        await s.execute(
+            text(
+                "UPDATE opportunity_documents SET attempts = :a WHERE id = :i"
+            ),
+            {"a": settings.OPPORTUNITY_DOCUMENT_MAX_ATTEMPTS, "i": document_id},
+        )
+        await s.commit()
+
+    async def _never(source, **kwargs):
+        raise AssertionError(
+            "a document past the attempt ceiling must not be extracted again"
+        )
+
+    monkeypatch.setattr(opportunity_document_jobs, "extract", _never)
+    await opportunity_document_jobs.extract_opportunity_document(
+        ctx=None, tenant_id=str(tenant_id), document_id=str(document_id)
+    )
+
+    state, error, _ = await _document(document_id)
+    assert state == OpportunityDocument.FAILED
+    assert error
+
+
+@pytest.mark.asyncio
+async def test_a_provider_timeout_is_failed_not_escaped(
+    agency, store, monkeypatch
+):
+    """A `TimeoutError` from the extraction client must park the row in
+    `failed`, never escape to kill the job mid-flight and leave the row at
+    `extracting` for `rescan_stuck` to re-enqueue (and re-bill) forever."""
+    tenant_id = agency
+    document_id = await _seed(
+        tenant_id, store, _pdf_with_text_pages(1, LINE)
+    )
+
+    async def _timeout(source, **kwargs):
+        raise TimeoutError("provider hung")
+
+    monkeypatch.setattr(opportunity_document_jobs, "extract", _timeout)
+    await opportunity_document_jobs.extract_opportunity_document(
+        ctx=None, tenant_id=str(tenant_id), document_id=str(document_id)
+    )
+
+    state, error, _ = await _document(document_id)
+    assert state == OpportunityDocument.FAILED
+    assert error
