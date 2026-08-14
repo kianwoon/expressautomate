@@ -930,6 +930,26 @@
   gap: 8px;
 }
 
+/* ---- job order detail edit mode ----
+   The same field grid the create dialog uses, embedded in the left column of
+   the detail panel. The grid's `auto-fit` floor makes the four narrow fields
+   wrap onto two rows inside the column without breaking the modal's layout. */
+.jo-edit-form {
+  display: grid;
+  gap: 10px 0;
+  margin-top: 12px;
+}
+.jo-edit-form .jo-form-field > .jo-search {
+  max-width: none;
+  width: 100%;
+}
+.jo-edit-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
+
 /* The matches, over the field rather than pushing it down. A list that
    reflows the form on every keystroke moves the field being typed into. */
 .jo-client-matches {

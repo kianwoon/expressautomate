@@ -88,6 +88,7 @@ function panel(row: Opportunity) {
       onClaim={async () => ({ ok: true }) as never}
       onAssign={async () => ({ ok: true }) as never}
       onClientSet={async () => ({ ok: true }) as never}
+      onEdited={() => {}}
       onVanished={() => {}}
     />
   );
@@ -135,6 +136,7 @@ describe("the modal's close ×", () => {
         onClaim={async () => ({ ok: true }) as never}
         onAssign={async () => ({ ok: true }) as never}
         onClientSet={async () => ({ ok: true }) as never}
+        onEdited={() => {}}
         onVanished={() => {}}
       />,
     );

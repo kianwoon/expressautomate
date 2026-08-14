@@ -293,7 +293,8 @@
       "GET"
     ],
     "/api/opportunities/{opportunity_id}": [
-      "GET"
+      "GET",
+      "PATCH"
     ],
     "/api/opportunities/{opportunity_id}/assign": [
       "POST"

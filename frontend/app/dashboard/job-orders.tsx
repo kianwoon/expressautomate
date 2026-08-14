@@ -401,6 +401,13 @@ export function JobOrders({ me, heading = "h2" }: { me: Me; heading?: "h1" | "h2
                       return result;
                     })
                   }
+                  // A field edit answers with the full row, so the row is
+                  // swapped into the list and the panel the same way the
+                  // read-back after an ownership move does — no second fetch.
+                  onEdited={(fresh) => {
+                    patchRow(fresh);
+                    setSelected(fresh);
+                  }}
                   // The row went out from under the modal. Dropping the selection
                   // unmounts it, rather than leaving it open on what is gone.
                   onVanished={() => setSelected(null)}

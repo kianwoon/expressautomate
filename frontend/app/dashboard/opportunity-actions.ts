@@ -5,7 +5,9 @@ import {
   opportunityAssignPath,
   opportunityClaimPath,
   opportunityClientPath,
+  opportunityPath,
 } from "../api";
+import { ApiError, readError } from "./candidates";
 
 /**
  * The writes: claiming, assigning, and typing a job order in by hand.
@@ -170,6 +172,52 @@ export async function setOpportunityClient(
     ? { ...result, clientName: named.client_name as string | null }
     : result;
 }
+/**
+ * What the field-edit PATCH may change.
+ *
+ * The job order's own facts — everything the detail panel shows as a read
+ * value. Every field optional, so the form sends only what the recruiter
+ * actually changed (the backend records an override only for a field whose
+ * stored value moved, so echoing everything back would freeze the row from
+ * later replays). `null` means "cleared back to not-stated".
+ *
+ * Deliberately excludes ownership, placement type, client, review state and
+ * sharing — each has its own write with its own audit columns.
+ */
+export type OpportunityUpdate = {
+  company_name_raw?: string | null;
+  job_title_raw?: string | null;
+  location_raw?: string | null;
+  salary_raw?: string | null;
+  salary_period?: string | null;
+  working_hours_raw?: string | null;
+  duration_raw?: string | null;
+  employment_type?: string | null;
+  job_description?: string | null;
+  requirements?: string | null;
+};
+
+/**
+ * Edits a job order's own fields and answers with the full row, exactly as
+ * `GET` renders it, so the caller can swap it straight into the list.
+ *
+ * Throws `ApiError` carrying the server's sentence — a 403 means the row is
+ * shared, not assigned; a 404 means it is gone.
+ */
+export async function updateOpportunity(
+  id: string,
+  body: OpportunityUpdate,
+): Promise<unknown> {
+  const res = await fetch(opportunityPath(id), {
+    method: "PATCH",
+    credentials: "include",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new ApiError(await readError(res), res.status);
+  return res.json();
+}
+
 /**
  * A job order that never arrived as an email.
  *

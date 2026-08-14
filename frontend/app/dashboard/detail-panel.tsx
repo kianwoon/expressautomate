@@ -11,6 +11,7 @@ import { type TabKey, TabBar } from "./detail-panel-tabs";
 import { Salary, Value, day } from "./format";
 import { PersonStage, SearchStage, WorkStage, type StageState } from "./job-intelligence-panel";
 import { useJobIntelligence } from "./job-intelligence";
+import { JobOrderEdit } from "./job-order-edit";
 import { PlacementForm, placementFields, same } from "./job-order-placement";
 import { Shortlist } from "./job-orders-sourcing";
 import { MemberSelect } from "./member-picker";
@@ -49,6 +50,10 @@ type Ownership = {
     clientId: string | null,
     adopt: boolean,
   ) => Promise<MutationResult>;
+  /** A field edit saved. The server answered with the full row, so the caller
+   *  swaps it into the list and the panel — the same read-back discipline as
+   *  an ownership move. */
+  onEdited: (row: Opportunity) => void;
   /** The row went out from under the open modal — a share withdrawn, or an
    *  owner reassigning. The list is told so it can drop the selection; closing
    *  the modal is the parent's job, since it owns the `selected` state. */
@@ -79,6 +84,7 @@ export function DetailPanel({
   onClaim,
   onAssign,
   onClientSet,
+  onEdited,
   onVanished,
 }: {
   row: Opportunity;
@@ -98,6 +104,7 @@ export function DetailPanel({
       onClaim={onClaim}
       onAssign={onAssign}
       onClientSet={onClientSet}
+      onEdited={onEdited}
       onVanished={onVanished}
     />
   );
@@ -110,6 +117,7 @@ function Detail({
   onClaim,
   onAssign,
   onClientSet,
+  onEdited,
   onVanished,
 }: {
   row: Opportunity;
@@ -120,6 +128,10 @@ function Detail({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const reviewed = row.review_status === "reviewed";
+  // Edit mode replaces the read-only facts with the edit form. Owned by the
+  // panel, not by the form: the form is mounted only while it is set, and
+  // switching tabs keeps the choice the same way the tab choice is kept.
+  const [editing, setEditing] = useState(false);
 
   // Ownership keeps its own pending flag and its own message. Sharing them
   // with the review toggle would grey out a button whose action is unrelated,
@@ -273,6 +285,18 @@ function Detail({
   const signedIn = auth.status === "signed-in" ? auth.me.user : null;
   const canAssign =
     signedIn != null && (signedIn.role === "owner" || signedIn.id === row.assigned_user_id);
+
+  // The same right as handing it on: the assignee or the owner may correct
+  // the fields. An unassigned row is claimable but not editable — claiming is
+  // the act that creates the right to fix it — and a shared row is readable
+  // but not editable. The server enforces this too; the button is hidden here
+  // so an offer that always 403s is not made.
+  const canEdit = canAssign;
+
+  // Editing and acting are different modes. While the fields are being edited
+  // the ownership controls stay on screen (claim/assign are unrelated to a
+  // typo in the salary). The edit form manages its own saving state and error,
+  // so `busy` below stays about the review and ownership moves only.
 
   // Close is suppressed while a save or an ownership move is in flight, so
   // Escape or a backdrop click cannot discard a review toggle or a claim that
@@ -481,18 +505,31 @@ function Detail({
 
           <QualityNote row={row} />
 
-          <div className="rows jo-detail-rows">
-            <Row k="Received" v={day(row.received_datetime)} />
-            <Row k="Location" v={row.location_raw} />
-            <Row k="Hours" v={row.working_hours_raw} />
-            <Row k="Duration" v={row.duration_raw} />
-            <div className="row">
-              <span className="row-k">Salary</span>
-              <span>
-                <Salary row={row} />
-              </span>
+          {editing ? (
+            <JobOrderEdit
+              row={row}
+              onSaved={(fresh) => {
+                setEditing(false);
+                // The server answered with the full row; the caller swaps it
+                // into the list and the panel so what was typed appears now.
+                onEdited(fresh);
+              }}
+              onCancel={() => setEditing(false)}
+            />
+          ) : (
+            <div className="rows jo-detail-rows">
+              <Row k="Received" v={day(row.received_datetime)} />
+              <Row k="Location" v={row.location_raw} />
+              <Row k="Hours" v={row.working_hours_raw} />
+              <Row k="Duration" v={row.duration_raw} />
+              <div className="row">
+                <span className="row-k">Salary</span>
+                <span>
+                  <Salary row={row} />
+                </span>
+              </div>
             </div>
-          </div>
+          )}
 
           <DecodedCodes row={row} />
         </div>
@@ -573,6 +610,27 @@ function Detail({
             </p>
           </div>
 
+          {/* The facts a recruiter corrects — company, title, salary, the
+              requirements. Only the assignee (or the owner) gets the control:
+              a shared row is readable but not editable, and an unassigned one
+              is claimable first. */}
+          {canEdit && (
+            <div className="jo-detail-actions">
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => setEditing(true)}
+                disabled={busy}
+              >
+                Edit details
+              </button>
+              <p className="body jo-sub jo-detail-hint">
+                Correct what the email said. Changes are saved to the job order and marked so a
+                later re-read of the same email does not undo them.
+              </p>
+            </div>
+          )}
+
           {sharing && <ShareDialog row={row} onClose={() => setSharing(false)} />}
 
           <div className="jo-detail-actions">
@@ -594,8 +652,15 @@ function Detail({
         </div>
 
         {/* ---- Full-width: the long reading + the answer to it ---- */}
-        <Prose k="Requirements" text={row.requirements} />
-        <Prose k="Description" text={row.job_description} />
+        {/* While the fields are being edited the requirements and description
+            are part of the edit form above, not repeated here — one source of
+            truth on screen, and a form that cannot drift from the prose. */}
+        {!editing && (
+          <>
+            <Prose k="Requirements" text={row.requirements} />
+            <Prose k="Description" text={row.job_description} />
+          </>
+        )}
 
         {/* Below the job order itself, above the provenance: the shortlist is
             an answer to what the email asked for, so it only makes sense once

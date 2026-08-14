@@ -31,6 +31,8 @@ export {
   type MutationFailure,
   type MutationResult,
   setOpportunityClient,
+  type OpportunityUpdate,
+  updateOpportunity,
 } from "./opportunity-actions";
 
 /**
@@ -120,6 +122,7 @@ export type Opportunity = {
   job_description: string | null;
   duration_raw: string | null;
   location_raw: string | null;
+  employment_type: string | null;
   quality_state: QualityState;
   review_status: ReviewStatus;
   /** The message this was read out of. Shown as provenance, never as a link. */

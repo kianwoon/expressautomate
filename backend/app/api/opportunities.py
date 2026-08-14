@@ -60,10 +60,13 @@ from app.models import (
     Opportunity,
     OpportunityCode,
     OpportunityDocument,
+    OpportunityFieldOverride,
     User,
 )
 from app.models.extraction import ExtractionEvidence
 from app.services.client_matching import resolve_or_create_client_by_name
+from app.services.client_naming import normalize_company_name
+from app.services.ingest.evidence import parse_salary, parse_salary_period, salary_currency
 from app.services.notify.dispatch import emit_and_enqueue
 from app.services.notify.events import (
     EVENT_OPPORTUNITY_ASSIGNED,
@@ -731,16 +734,32 @@ async def get_opportunity(opportunity_id: uuid.UUID, request: Request) -> dict:
         # resolved id, or the loader and the read would disagree about which
         # job order this is.
         current = await load_visible_opportunity(session, opportunity_id, user_uuid, role)
-        row = (
-            await session.execute(
-                _row_select(user_uuid).where(Opportunity.id == current.id)
-            )
-        ).one_or_none()
-        if row is None:
-            raise HTTPException(status_code=404, detail="No such job order.")
-        evidence = await _evidence_counts(session, [current.id])
-        codes = await _decoded_codes(session, [current.id])
-        documents = await _documents_for(session, [current.id])
+        # Read inside the same session: the RLS predicate reads
+        # `app.tenant_id`, which is transaction-local and discarded when the
+        # session closes. An outside read would see zero rows and 404 a row
+        # that just loaded fine.
+        return await _read_payload(session, current.id, user_uuid)
+
+
+async def _read_payload(
+    session, opportunity_id: uuid.UUID, user_uuid: uuid.UUID
+) -> dict:
+    """One rendered job order, from a session that is still open.
+
+    Shared by `get_opportunity` and by the field-edit route, which must return
+    the *same* shape as the single-row read so the panel can swap the response
+    straight into the list without a second round trip.
+    """
+    row = (
+        await session.execute(
+            _row_select(user_uuid).where(Opportunity.id == opportunity_id)
+        )
+    ).one_or_none()
+    if row is None:
+        raise HTTPException(status_code=404, detail="No such job order.")
+    evidence = await _evidence_counts(session, [opportunity_id])
+    codes = await _decoded_codes(session, [opportunity_id])
+    documents = await _documents_for(session, [opportunity_id])
 
     (
         opportunity,
@@ -1095,6 +1114,7 @@ def _payload(
         "job_description": row.job_description,
         "duration_raw": row.duration_raw,
         "location_raw": row.location_raw,
+        "employment_type": row.employment_type,
         "quality_state": row.quality_state,
         # The two human decisions on the row, returned wherever the row is.
         # The panel's placement form reads its initial values straight off
@@ -1593,6 +1613,172 @@ async def set_opportunity_client(
         "assigned_user_id": str(assignee) if assignee else None,
         "assignee_name": name,
     }
+
+
+class OpportunityUpdate(BaseModel):
+    """The job order's own fields, as a PATCH.
+
+    Every field optional, so the form can send only what the recruiter
+    actually changed — sending the whole row back on every save would record
+    an override for every field and freeze the row from later replays. `None`
+    means "cleared back to not-stated", which is a real edit; `exclude_unset`
+    keeps "not sent" distinct from "set to null", the same rule
+    `CandidateUpdate` documents.
+
+    Deliberately only the fields the detail panel shows as facts. Ownership,
+    placement type, client, review state and sharing each own their write
+    (and their audit columns); a field edit must not blur who decided what.
+    """
+
+    company_name_raw: str | None = None
+    job_title_raw: str | None = None
+    location_raw: str | None = None
+    salary_raw: str | None = None
+    salary_period: str | None = None
+    working_hours_raw: str | None = None
+    duration_raw: str | None = None
+    employment_type: str | None = None
+    job_description: str | None = None
+    requirements: str | None = None
+
+
+@router.patch("/opportunities/{opportunity_id}")
+async def update_opportunity(
+    opportunity_id: uuid.UUID, body: OpportunityUpdate, request: Request
+) -> dict:
+    """A recruiter correcting the job order itself.
+
+    Everything the detail panel shows is editable — the company, title, the
+    location, salary, hours, duration, employment type, the requirements and
+    the description — and nothing else is. Ownership, placement type, client,
+    review state and sharing each have their own write, their own audit
+    columns, and (for the regulated two) their own guards; folding them into a
+    field edit would blur who decided what.
+
+    The guard is the *edit* guard, not the visibility one: a shared row is
+    readable but not editable, and a queue row is claimable but not editable —
+    claiming is the act that creates the right to fix its fields. An unassigned
+    job order would otherwise be the row most likely to hold a stale value,
+    edited by the colleague least likely to be noticed.
+
+    A human correction is recorded in `opportunity_field_overrides` so a later
+    replay of the source email never clobbers it — the same table the ingest
+    pipeline reads before refreshing a row. Only fields whose value actually
+    changed are recorded: echoing the row back unchanged is not an edit and
+    must not freeze the field from every later refresh.
+
+    The response is the full row, exactly as `GET` renders it, so the panel
+    can swap it straight into the list.
+    """
+    user_uuid, tenant_uuid, role = await _require_session_with_role(request)
+    changes = body.model_dump(exclude_unset=True)
+
+    async with tenant_session(tenant_uuid) as session:
+        # Resolves supersede chains: an edit aimed at a stale id is an edit of
+        # the job order, not of its history — the same rule every other write
+        # here applies.
+        opportunity = await load_editable_opportunity(
+            session, opportunity_id, user_uuid, role
+        )
+        current_id = opportunity.id
+
+        values: dict[str, Any] = {}
+        for field, raw in changes.items():
+            if raw is None:
+                values[field] = None
+                continue
+            value = raw.strip() if isinstance(raw, str) else raw
+            values[field] = value or None
+
+        # A raw salary string is the source a recruiter typed, and the
+        # structured columns are derived from it the same way the email
+        # pipeline derives them — the deterministic parser, which fails closed
+        # rather than inventing a figure (§15). Clearing the raw string clears
+        # the range too.
+        if "salary_raw" in values:
+            raw_salary = values["salary_raw"]
+            if raw_salary is None:
+                values.update(salary_min=None, salary_max=None, salary_currency=None)
+                # A raw string with no period is a figure with nothing to
+                # compare it against; the period is derived from the words, so
+                # clearing the raw clears it with the rest.
+                if "salary_period" not in values:
+                    values["salary_period"] = None
+            else:
+                low, high, currency = parse_salary(raw_salary)
+                values.update(
+                    salary_min=low,
+                    salary_max=high,
+                    salary_currency=currency or salary_currency(raw_salary),
+                )
+                # The period the recruiter typed in the raw string ("$5,000/
+                # month") is the same fact the separate period field records.
+                # Derived here so the row sorts by the salary it now claims,
+                # even when the form did not send the period field separately.
+                if "salary_period" not in values:
+                    values["salary_period"] = parse_salary_period(raw_salary)
+        if "salary_period" in values:
+            values["salary_period"] = parse_salary_period(values["salary_period"])
+
+        # A changed company name is re-normalised the same way the pipeline
+        # normalises one, so dedupe, matching and sourcing see the corrected
+        # spelling — and a client-picker that types "Sunrise Logistics Pte Ltd"
+        # still matches the client that was resolved from "Sunrise Logistics".
+        if "company_name_raw" in values:
+            values["company_name_normalized"] = (
+                normalize_company_name(values["company_name_raw"])
+                if values["company_name_raw"]
+                else None
+            )
+
+        # The pre-write values are captured BEFORE the UPDATE runs: the write
+        # itself expires the loaded `opportunity` in the identity map (a fresh
+        # SELECT would then return the NEW values), and the override
+        # comparison below must run against what the row held before this
+        # request, not against what it just wrote.
+        before = {field: getattr(opportunity, field, None) for field in values}
+
+        if values:
+            await session.execute(
+                update(Opportunity)
+                .where(Opportunity.id == current_id)
+                .values(**values)
+            )
+
+        # A human correction is recorded for every field whose stored value
+        # actually changed — the fields the recruiter sent, and the structured
+        # columns derived from them (a changed raw salary that moves the
+        # period is a correction of the period too, and replay must not undo
+        # it). Comparing against `before` rather than the loaded object, which
+        # the UPDATE above has now expired — a `getattr` on it would lazily
+        # re-read the new value and every field would look unchanged.
+        for field in values:
+            stored_before = before.get(field)
+            incoming = values.get(field)
+            if incoming == stored_before:
+                continue
+            session.add(
+                OpportunityFieldOverride(
+                    id=uuid.uuid4(),
+                    tenant_id=tenant_uuid,
+                    opportunity_id=current_id,
+                    field_name=field,
+                    ai_value=str(stored_before) if stored_before is not None else None,
+                    human_value=str(incoming) if incoming is not None else None,
+                    corrected_by=user_uuid,
+                )
+            )
+        # The overrides are part of this write; flush before the read so a
+        # failure surfaces here as an HTTP error rather than at commit time
+        # after the payload has already been computed.
+        await session.flush()
+
+        # `_read_payload` needs the same session (the row select runs under
+        # the tenant policy); the session closes when the block exits, so the
+        # read happens inside it.
+        payload = await _read_payload(session, current_id, user_uuid)
+
+    return payload
 
 
 @router.post("/opportunities", status_code=201)

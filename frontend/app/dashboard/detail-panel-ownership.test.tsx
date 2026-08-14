@@ -147,6 +147,7 @@ function panel(
       onClaim={handlers.onClaim ?? (async () => ok)}
       onAssign={handlers.onAssign ?? (async () => ok)}
       onClientSet={async () => ok}
+      onEdited={() => {}}
       onVanished={handlers.onVanished ?? (() => {})}
     />
   );
