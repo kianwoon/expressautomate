@@ -212,8 +212,8 @@ class WorkerSettings:
             name="compute_candidate_embedding",
             timeout=settings.EMBEDDING_TIMEOUT_SECONDS,
         ),
-        # The Job Intelligence analysis: three DeepSeek calls (understand →
-        # persona → search) in the worker, where DeepSeek is configured — the
+        # The Job Intelligence analysis: three LLM calls (understand →
+        # persona → search) in the worker, where the LLM provider is configured — the
         # api process has no LLM credentials, so the first (synchronous) cut
         # fell back to OpenRouter and 400'd. `name` is explicit for the same
         # reason as its siblings: producers enqueue the string
@@ -221,7 +221,7 @@ class WorkerSettings:
         # the far side of the queue. Shared with the interactive worker
         # registry above, so the timeout cannot drift between the two.
         _JOB_INTELLIGENCE_FUNC,
-        # The Candidate Intelligence analysis: three DeepSeek calls (career →
+        # The Candidate Intelligence analysis: three LLM calls (career →
         # capability → profile) in the worker, the same shape Job Intelligence
         # takes. `name` is explicit for the same reason as its siblings:
         # producers enqueue the string "run_candidate_intelligence", and a

@@ -21,8 +21,8 @@ _CONTEXT = "Job title: Logistics Manager\nJob description: Run the warehouse day
 
 @pytest.fixture(autouse=True)
 def _configured(monkeypatch):
-    monkeypatch.setattr(settings, "DEEPSEEK_BASE_URL", "https://deepseek.test/v1")
-    monkeypatch.setattr(settings, "DEEPSEEK_API_KEY", "test-key")
+    monkeypatch.setattr(settings, "LLM_PROVIDER_BASE_URL", "https://deepseek.test/v1")
+    monkeypatch.setattr(settings, "LLM_PROVIDER_API_KEY", "test-key")
     monkeypatch.setattr(settings, "EXTRACTION_MODEL_FAST", "test/fast")
 
 

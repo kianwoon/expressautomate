@@ -418,22 +418,34 @@ class Settings(BaseSettings):
         default=2.0, ge=0
     )
 
-    # --- DeepSeek (the classifier and extraction) ---
-    # The gate is the highest-volume call in the system — one per email, on
-    # every email, forever — so it runs on its own provider rather than through
-    # the router the extraction calls use. DeepSeek replaced DeepSeek as that
-    # provider (the gate used to measure ~36ms round trip against
-    # deepseek-v4-flash), because the gate sits between a fetched email and
-    # everything else.
+    # --- The LLM provider (the classifier and extraction) ---
+    # Provider-neutral names because this is the third provider on this path
+    # (OpenRouter → DeepSeek → DeepInfra, 2026-08-14): renaming per swap made
+    # the last migration a rename of ~20 call sites, and the next one would do
+    # it again. A deployment changing providers now changes two env values —
+    # LLM_PROVIDER_BASE_URL and LLM_PROVIDER_API_KEY — and nothing else. The
+    # wire format is the OpenAI-compatible one every router and direct API in
+    # this list implements, so the client in app/services/llm/client.py needs
+    # no provider-specific code.
     #
-    # Extraction joined it after the router path failed in production, not on
-    # principle. The escalation model (§32) rejected our fourteen-field schema
-    # outright — "the compiled grammar is too large" — and every real email sat
-    # at `extracting` with nothing to show for it. The same document, sent as
-    # prompt text with a plain `json_object` response format, is answered
-    # correctly here in ~1.5s and at a fraction of the price.
-    DEEPSEEK_BASE_URL: str = ""
-    DEEPSEEK_API_KEY: str = ""
+    # The gate is the highest-volume call in the system — one per email, on
+    # every email, forever — so it runs on its own provider rather than
+    # sharing the legacy router settings below. Extraction joined it after
+    # the router path failed in production, not on principle. The escalation
+    # model (§32) rejected our fourteen-field schema outright — "the compiled
+    # grammar is too large" — and every real email sat at `extracting` with
+    # nothing to show for it. The same document, sent as prompt text with a
+    # plain `json_object` response format, is answered correctly here in
+    # ~1.5s and at a fraction of the price.
+    #
+    # DeepInfra (https://api.deepinfra.com/v1/openai) serves the DeepSeek
+    # models under their full ids (`deepseek-ai/DeepSeek-V4-Flash-0731`), so
+    # the same models answer as before — extraction quality and prompts are
+    # unchanged — at a lower price, and its automatic prefix caching rewards
+    # the prompt layout every call here already uses: stable instructions
+    # and schema first, variable document text last.
+    LLM_PROVIDER_BASE_URL: str = ""
+    LLM_PROVIDER_API_KEY: str = ""
 
     # --- Embeddings (semantic candidate matching) ---
     # Routed through OpenRouter — the same provider the extraction and
@@ -450,7 +462,7 @@ class Settings(BaseSettings):
     # key.
     #
     # Privacy parity: CV text already leaves the system for LLM explanations
-    # (DeepSeek). Embeddings send the same text through the same router the
+    # (the LLM provider). Embeddings send the same text through the same router the
     # extraction calls already use, so no new data boundary is crossed.
     EMBEDDING_BASE_URL: str = "https://openrouter.ai/api/v1"
     EMBEDDING_API_KEY: str = ""
@@ -1097,7 +1109,7 @@ class Settings(BaseSettings):
     CANDIDATE_JOBS_TOP_N: int = Field(default=5, gt=0)
 
     # --- Job Intelligence ---
-    # The wall clock one analysis may take: three DeepSeek calls (understand →
+    # The wall clock one analysis may take: three LLM calls (understand →
     # persona → search) in sequence. Generous because a reasoning-heavy JD can
     # make each call slow, and a job this cuts short is left at `running` for
     # `rescan_stuck` to re-enqueue. Three calls × the per-call LLM timeout is
@@ -1108,7 +1120,7 @@ class Settings(BaseSettings):
     # Same reasoning as `SOURCING_MAX_ATTEMPTS`: a crashed worker deserves a
     # retry, a job order that crashes the pipeline every time does not.
     JOB_INTELLIGENCE_MAX_ATTEMPTS: int = Field(default=3, gt=0)
-    # The Candidate Intelligence analysis: three DeepSeek calls (career →
+    # The Candidate Intelligence analysis: three LLM calls (career →
     # capability → profile) in the worker, the same shape Job Intelligence
     # takes. Same timeout ceiling (LLM work bounded by model latency) and the
     # same attempt cap (a candidate that crashes the pipeline every time
@@ -1220,7 +1232,7 @@ class Settings(BaseSettings):
             return False
         return all(models)
 
-    def deepseek_configured(self, *models: str) -> bool:
+    def llm_provider_configured(self, *models: str) -> bool:
         """The same question as `llm_configured`, asked of the gate's provider.
 
         Kept separate rather than adding a flag to `llm_configured`: the two
@@ -1228,7 +1240,7 @@ class Settings(BaseSettings):
         because the *other* provider was configured is exactly how the gate
         would end up classifying real mail against a hostless URL.
         """
-        if not (self.DEEPSEEK_BASE_URL and self.DEEPSEEK_API_KEY):
+        if not (self.LLM_PROVIDER_BASE_URL and self.LLM_PROVIDER_API_KEY):
             return False
         return all(models)
 

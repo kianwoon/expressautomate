@@ -2,10 +2,10 @@
 
 Mirrors `job_intelligence_jobs.py` for the same reasons that module exists:
 
-1. **The worker has DeepSeek; the api does not.** The five LLM calls (history →
+1. **The worker has the LLM provider; the api does not.** The five LLM calls (history →
    automation → benchmark → gaps → residual) belong in the worker process, where
-   the DeepSeek credentials live. A request-handler call would pass an empty
-   `DEEPSEEK_BASE_URL`, fall back to OpenRouter, and 400.
+   the LLM provider credentials live. A request-handler call would pass an empty
+   `LLM_PROVIDER_BASE_URL`, fall back to OpenRouter, and 400.
 
 2. **Five model calls have no business inside an HTTP request** — the row
    exists but the answer does not, exactly as `run_job_intelligence` and
@@ -164,7 +164,7 @@ async def run_candidate_intelligence(
     try:
         outcome = await _analyze_with_no_content_retry(candidate, roles, skills, cv_text)
     except (LLMInvalidJSON, Exception) as exc:
-        # A bad model answer, or a transport failure reaching DeepSeek. Either
+        # A bad model answer, or a transport failure reaching the LLM provider. Either
         # is a failed run the recruiter can retry; neither is retried here,
         # because temperature zero makes a plain retry the same answer twice.
         # `LLMNoContent` is the one exception to that rule and is handled
@@ -224,7 +224,7 @@ async def _analyze_with_no_content_retry(candidate, roles, skills, cv_text: str)
 
     `LLMNoContent` means the model spent its budget thinking and never emitted
     an answer — re-asking is a different request, not "the same answer twice",
-    so it gets a bounded retry (DeepSeek's reasoning trace is sampled even at
+    so it gets a bounded retry (the model's reasoning trace is sampled even at
     temperature zero, which thinking mode ignores anyway). Any other failure —
     a real answer that failed to parse, a transport error — propagates
     immediately to the caller's single fail path.

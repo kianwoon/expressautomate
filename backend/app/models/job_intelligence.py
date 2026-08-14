@@ -23,7 +23,7 @@ than free text so a future view can render each code distinctly.
 `state` is a state machine like `SourcingRun.state`, for the same reason: the
 analysis runs as an arq job (the three LLM calls have no business inside an HTTP
 request, and every other LLM call in the system runs in the worker process where
-DeepSeek is configured — not the api process). A row sits at `pending` from the
+the LLM provider is configured — not the api process). A row sits at `pending` from the
 POST until the worker claims it, moves to `running`, then `done` or `failed`.
 `rescan_stuck` re-enqueues rows stranded at `pending` or `running`, mirroring
 sourcing. `attempts` is spent at the claim so a job order that crashes the

@@ -31,8 +31,8 @@ LINE = (
 def _configured(monkeypatch):
     """The job refuses to touch a row before a model is configured, so every
     test supplies one. Nothing here ever calls it."""
-    monkeypatch.setattr(settings, "DEEPSEEK_BASE_URL", "https://deepseek.test/v1")
-    monkeypatch.setattr(settings, "DEEPSEEK_API_KEY", "test-key")
+    monkeypatch.setattr(settings, "LLM_PROVIDER_BASE_URL", "https://deepseek.test/v1")
+    monkeypatch.setattr(settings, "LLM_PROVIDER_API_KEY", "test-key")
     monkeypatch.setattr(settings, "EXTRACTION_MODEL_FAST", "test/fast")
 
 

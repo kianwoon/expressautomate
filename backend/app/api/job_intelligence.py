@@ -10,10 +10,10 @@ POST starts the analysis by creating a `pending` row and enqueuing the arq job,
 then returns 202 — the row exists but the answer does not. The three LLM calls
 run in the worker, not here, for two reasons that are both load-bearing:
 
-1. **The worker has DeepSeek; the api does not.** Extraction, classification
-   and explanation all run in the worker because the DeepSeek credentials live
-   on the worker service. The api process has only OpenRouter, so a call here
-   passes an empty `DEEPSEEK_BASE_URL`, falls back to OpenRouter, and 400s.
+1. **The worker has the LLM provider; the api does not.** Extraction, classification
+   and explanation all run in the worker because the LLM provider credentials live
+   on the worker service. The api process has no provider configured, so a call here
+   passes an empty `LLM_PROVIDER_BASE_URL` and fails the configured-check.
 2. **Three model calls have no business inside an HTTP request** — the same
    argument `start_sourcing` makes.
 
@@ -54,7 +54,7 @@ async def run_intelligence(request: Request, opportunity_id: uuid.UUID) -> dict:
     """Queue a Job Intelligence analysis for this job order.
 
     202, not 200: the row exists but the answer does not, exactly as
-    `start_sourcing` answers. The worker does the three DeepSeek calls.
+    `start_sourcing` answers. The worker does the three model calls.
     """
     user_uuid, tenant_uuid, role = await _require_session_with_role(request)
 

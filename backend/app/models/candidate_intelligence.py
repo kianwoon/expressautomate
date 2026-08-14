@@ -21,7 +21,7 @@ settled for a plain FK).
 `state` is a state machine like `JobIntelligence.state`, for the same reason:
 the analysis runs as an arq job (the five LLM calls have no business inside an
 HTTP request, and every other LLM call in the system runs in the worker process
-where DeepSeek is configured — not the api process). A row sits at `pending`
+where the LLM provider is configured — not the api process). A row sits at `pending`
 from the POST until the worker claims it, moves to `running`, then `done` or
 `failed`. `rescan_stuck` re-enqueues rows stranded at `pending` or `running`.
 `attempts` is spent at the claim so a candidate that crashes the pipeline every

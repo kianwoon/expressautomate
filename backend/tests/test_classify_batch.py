@@ -37,8 +37,8 @@ def _configured_gate(monkeypatch):
     configuration. No model is ever called — the LLM is faked throughout.
     """
     monkeypatch.setattr(settings, "CLASSIFIER_MODEL", "test/classifier")
-    monkeypatch.setattr(settings, "DEEPSEEK_BASE_URL", "https://gate.test/v1")
-    monkeypatch.setattr(settings, "DEEPSEEK_API_KEY", "test-key")
+    monkeypatch.setattr(settings, "LLM_PROVIDER_BASE_URL", "https://gate.test/v1")
+    monkeypatch.setattr(settings, "LLM_PROVIDER_API_KEY", "test-key")
     monkeypatch.setattr(settings, "CLASSIFIER_BATCH_SIZE", 2)
     monkeypatch.setattr(settings, "CLASSIFIER_CHARS_PER_EMAIL", 50)
     monkeypatch.setattr(settings, "CLASSIFY_SWEEP_LIMIT", 100)
@@ -102,8 +102,8 @@ async def test_the_gate_calls_its_own_provider_not_the_router():
     await classify_many(["anything"], llm=spy)
 
     assert seen["model"] == settings.CLASSIFIER_MODEL
-    assert seen["base_url"] == settings.DEEPSEEK_BASE_URL
-    assert seen["api_key"] == settings.DEEPSEEK_API_KEY
+    assert seen["base_url"] == settings.LLM_PROVIDER_BASE_URL
+    assert seen["api_key"] == settings.LLM_PROVIDER_API_KEY
     assert seen["schema"] is None, "this provider is asked for a bare JSON object"
     assert seen["extra_body"]["reasoning_effort"] == settings.CLASSIFIER_REASONING_EFFORT
     assert seen["extra_body"]["max_tokens"] == settings.CLASSIFIER_MAX_TOKENS
@@ -383,7 +383,7 @@ async def test_an_unconfigured_gate_refuses_rather_than_guessing(monkeypatch):
     """The gate fails open, which is right — and dangerous when unconfigured:
     every email would be `uncertain`, all of them would be extracted, and the
     system would look like it worked with an indecisive model."""
-    monkeypatch.setattr(settings, "DEEPSEEK_API_KEY", "")
+    monkeypatch.setattr(settings, "LLM_PROVIDER_API_KEY", "")
 
     with pytest.raises(RuntimeError, match="no model configured"):
         await jobs.classify_batch(

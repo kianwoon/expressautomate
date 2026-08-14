@@ -52,8 +52,8 @@ class _Code:
 @pytest.fixture(autouse=True)
 def _configured(monkeypatch):
     """Every test gets its own models and its own N. Nothing here calls one."""
-    monkeypatch.setattr(settings, "DEEPSEEK_BASE_URL", "https://deepseek.test/v1")
-    monkeypatch.setattr(settings, "DEEPSEEK_API_KEY", "test-key")
+    monkeypatch.setattr(settings, "LLM_PROVIDER_BASE_URL", "https://deepseek.test/v1")
+    monkeypatch.setattr(settings, "LLM_PROVIDER_API_KEY", "test-key")
     monkeypatch.setattr(settings, "EXTRACTION_MODEL_FAST", "test/fast")
     monkeypatch.setattr(settings, "EXTRACTION_MODEL_STRONG", "test/strong")
     monkeypatch.setattr(settings, "EXTRACTION_REASONING_EFFORT_FAST", "low")

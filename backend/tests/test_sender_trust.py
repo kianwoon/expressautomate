@@ -35,8 +35,8 @@ from tests.test_classify_batch import _bodies, _row, _verdicts
 def _configured_gate(monkeypatch):
     """Configuration of this test's own, never the repo `.env`."""
     monkeypatch.setattr(settings, "CLASSIFIER_MODEL", "test/classifier")
-    monkeypatch.setattr(settings, "DEEPSEEK_BASE_URL", "https://gate.test/v1")
-    monkeypatch.setattr(settings, "DEEPSEEK_API_KEY", "test-key")
+    monkeypatch.setattr(settings, "LLM_PROVIDER_BASE_URL", "https://gate.test/v1")
+    monkeypatch.setattr(settings, "LLM_PROVIDER_API_KEY", "test-key")
     monkeypatch.setattr(settings, "CLASSIFIER_BATCH_SIZE", 2)
     monkeypatch.setattr(settings, "CLASSIFIER_CHARS_PER_EMAIL", 50)
     monkeypatch.setattr(settings, "CLASSIFY_SWEEP_LIMIT", 100)

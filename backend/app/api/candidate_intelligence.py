@@ -11,10 +11,10 @@ then returns 202 — the row exists but the answer does not. The five LLM calls
 run in the worker, not here, for the same two load-bearing reasons as Job
 Intelligence:
 
-1. **The worker has DeepSeek; the api does not.** Every extraction, classification
-   and intelligence call runs in the worker because the DeepSeek credentials
-   live on the worker service. The api process has only OpenRouter, so a call
-   here passes an empty `DEEPSEEK_BASE_URL`, falls back to OpenRouter, and 400s.
+1. **The worker has the LLM provider; the api does not.** Every extraction, classification
+   and intelligence call runs in the worker because the LLM provider credentials
+   live on the worker service. The api process has no provider configured, so a call
+   here passes an empty `LLM_PROVIDER_BASE_URL` and fails the configured-check.
 2. **Five model calls have no business inside an HTTP request.**
 
 GET reads the stored row back, in whatever state it is. `pending`/`running` is
@@ -56,7 +56,7 @@ async def run_candidate_intelligence_route(
     """Queue a Candidate Intelligence analysis for this candidate.
 
     202, not 200: the row exists but the answer does not, exactly as the Job
-    Intelligence POST answers. The worker does the five DeepSeek calls.
+    Intelligence POST answers. The worker does the five model calls.
     """
     user_uuid, tenant_uuid, role = await _require_session_with_role(request)
 

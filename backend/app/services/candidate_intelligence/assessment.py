@@ -109,8 +109,8 @@ async def infer_assessment(
         prompt,
         model=model(),
         schema=None,
-        base_url=settings.DEEPSEEK_BASE_URL,
-        api_key=settings.DEEPSEEK_API_KEY,
+        base_url=settings.LLM_PROVIDER_BASE_URL,
+        api_key=settings.LLM_PROVIDER_API_KEY,
         extra_body={
             "max_tokens": settings.CANDIDATE_INTELLIGENCE_MAX_TOKENS,
             "reasoning_effort": settings.CANDIDATE_INTELLIGENCE_REASONING_EFFORT,

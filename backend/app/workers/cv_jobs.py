@@ -109,11 +109,11 @@ async def parse_candidate_cv(
     # is not required — `extract_cv` falls back to the fast model at a higher
     # reasoning effort, and demanding it would refuse a deployment that parses
     # perfectly well.
-    if not settings.deepseek_configured(settings.EXTRACTION_MODEL_FAST):
+    if not settings.llm_provider_configured(settings.EXTRACTION_MODEL_FAST):
         log.error(
             "llm_not_configured",
             job="parse_candidate_cv",
-            detail="Set DEEPSEEK_BASE_URL, DEEPSEEK_API_KEY and EXTRACTION_MODEL_FAST.",
+            detail="Set LLM_PROVIDER_BASE_URL, LLM_PROVIDER_API_KEY and EXTRACTION_MODEL_FAST.",
         )
         raise RuntimeError("CV parsing has no model configured.")
 

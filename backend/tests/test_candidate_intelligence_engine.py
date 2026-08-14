@@ -17,8 +17,8 @@ from app.services.llm.client import FakeLLM
 
 @pytest.fixture(autouse=True)
 def _configured(monkeypatch):
-    monkeypatch.setattr(settings, "DEEPSEEK_BASE_URL", "https://deepseek.test/v1")
-    monkeypatch.setattr(settings, "DEEPSEEK_API_KEY", "test-key")
+    monkeypatch.setattr(settings, "LLM_PROVIDER_BASE_URL", "https://deepseek.test/v1")
+    monkeypatch.setattr(settings, "LLM_PROVIDER_API_KEY", "test-key")
     monkeypatch.setattr(settings, "EXTRACTION_MODEL_FAST", "test/fast")
 
 
@@ -174,8 +174,8 @@ async def test_both_stages_use_the_candidate_budget_not_extractions():
     for call in seen:
         expected_model = settings.CANDIDATE_INTELLIGENCE_MODEL or settings.EXTRACTION_MODEL_FAST
         assert call["model"] == expected_model
-        assert call["base_url"] == settings.DEEPSEEK_BASE_URL
-        assert call["api_key"] == settings.DEEPSEEK_API_KEY
+        assert call["base_url"] == settings.LLM_PROVIDER_BASE_URL
+        assert call["api_key"] == settings.LLM_PROVIDER_API_KEY
         assert call["schema"] is None
         assert call["extra_body"]["max_tokens"] == settings.CANDIDATE_INTELLIGENCE_MAX_TOKENS
         assert (

@@ -1,4 +1,9 @@
-"""OpenRouter JSON completion (plan §32).
+"""OpenAI-compatible JSON completion (plan §32).
+
+Calls the configured LLM provider (settings.LLM_PROVIDER_* — DeepInfra today)
+on its /chat/completions endpoint. DeepInfra serves the DeepSeek models under
+full ids (`deepseek-ai/DeepSeek-V4-Flash-0731`), so model names carry the
+`deepseek-ai/` prefix there.
 
 Returns parsed data or raises. It never repairs a malformed response beyond
 stripping a code fence, and never falls back to a default value — a silent
@@ -75,9 +80,9 @@ async def complete_json(
     `transport` is the seam tests use; nothing in production passes it, and it
     is what keeps the suite from ever spending money on a real completion.
 
-    `base_url` and `api_key` default to OpenRouter's, so extraction is
-    unchanged. They exist because the relevance gate runs on DeepSeek — a
-    second provider, not a second client: the wire format is the same
+    `base_url` and `api_key` default to the configured LLM provider's, so
+    extraction is unchanged. They exist because callers may target a second
+    provider, not a second client: the wire format is the same
     OpenAI-compatible one, and duplicating this module to change two strings
     would mean the next fix to response handling landing in only one of them.
 
@@ -140,13 +145,19 @@ async def complete_json(
     last_exc: Exception | None = None
     _timeout = settings.LLM_TIMEOUT_SECONDS
 
+    # The provider every production call site names explicitly: DeepInfra
+    # today (see settings.LLM_PROVIDER_*). The legacy OpenRouter pair below it
+    # is the fallback so a deployment that has not migrated its env yet still
+    # answers through the router rather than against a hostless URL.
+    provider_base_url = base_url or settings.LLM_PROVIDER_BASE_URL or settings.LLM_BASE_URL
+    provider_api_key = api_key or settings.LLM_PROVIDER_API_KEY or settings.OPENROUTER_API_KEY
     for attempt in range(3):
         try:
             async with httpx.AsyncClient(
-                base_url=base_url or settings.LLM_BASE_URL,
+                base_url=provider_base_url,
                 timeout=_timeout,
                 transport=transport,
-                headers={"Authorization": f"Bearer {api_key or settings.OPENROUTER_API_KEY}"},
+                headers={"Authorization": f"Bearer {provider_api_key}"},
             ) as client:
                 response = await asyncio.wait_for(
                     client.post("/chat/completions", json=payload),

@@ -34,8 +34,8 @@ def _configured_classifier(monkeypatch):
     """
     monkeypatch.setattr(settings, "CLASSIFIER_MODEL", "test/classifier")
     # The gate runs on its own provider, not the extraction router.
-    monkeypatch.setattr(settings, "DEEPSEEK_BASE_URL", "https://gate.test/v1")
-    monkeypatch.setattr(settings, "DEEPSEEK_API_KEY", "test-key")
+    monkeypatch.setattr(settings, "LLM_PROVIDER_BASE_URL", "https://gate.test/v1")
+    monkeypatch.setattr(settings, "LLM_PROVIDER_API_KEY", "test-key")
 
 
 # --- the verdict ------------------------------------------------------------

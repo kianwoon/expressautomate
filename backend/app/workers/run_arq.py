@@ -4,7 +4,7 @@
 single queue. That one-queue shape is what let a replay/extraction backlog on
 the default queue starve a recruiter's click: the analysis jobs shared the same
 10-slot budget as the background flood, and every slot was taken by a stuck
-DeepSeek call.
+LLM call.
 
 The fix is a second queue plus a second worker, and this module is the arq
 entrypoint that runs both. `InteractiveWorkerSettings` consumes only

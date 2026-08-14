@@ -16,7 +16,7 @@ generic horizontal-SMB copy and needs rewriting against this vertical.
 | Backend | FastAPI / Python 3.12, `uv` (`backend/`) |
 | DB | Postgres 16 on Koyeb — `expressautomate` database on the `draftproof-db` instance |
 | Migrations | Alembic, async engine |
-| AI | OpenRouter (fast model default, strong model on low confidence — §32) |
+| AI | DeepInfra — `deepseek-ai/DeepSeek-V4-Flash-0731` (fast default, strong effort on low confidence — §32); provider-neutral `LLM_PROVIDER_*` settings, so a swap is two env values |
 | Hosting | Koyeb; DNS via Cloudflare |
 
 ## Commands

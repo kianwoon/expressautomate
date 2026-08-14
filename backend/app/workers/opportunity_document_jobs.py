@@ -127,11 +127,11 @@ async def extract_opportunity_document(
     # Asked once, before the row is touched, for the reason `extract_email`
     # gives: an unconfigured deployment must fail loudly here rather than mark
     # every document `failed` one httpx error at a time.
-    if not settings.deepseek_configured(settings.EXTRACTION_MODEL_FAST):
+    if not settings.llm_provider_configured(settings.EXTRACTION_MODEL_FAST):
         log.error(
             "llm_not_configured",
             job="extract_opportunity_document",
-            detail="Set DEEPSEEK_BASE_URL, DEEPSEEK_API_KEY and EXTRACTION_MODEL_FAST.",
+            detail="Set LLM_PROVIDER_BASE_URL, LLM_PROVIDER_API_KEY and EXTRACTION_MODEL_FAST.",
         )
         raise RuntimeError("Job-description extraction has no model configured.")
 

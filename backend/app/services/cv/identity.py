@@ -18,7 +18,7 @@ then locates each quotation in the CV, and a value whose quote is not on the
 page is dropped to absence rather than published as a fact the candidate never
 wrote.
 
-Runs on DeepSeek in the worker, like every other extraction: the api process
+Runs on the LLM provider in the worker, like every other extraction: the api process
 holds no LLM credentials, and an identity call made there would fall back to an
 empty base URL and 400.
 """
@@ -195,8 +195,8 @@ async def extract_identity(text: str, *, llm=None) -> tuple[IdentityResult, LLMR
         build_prompt(text),
         model=settings.EXTRACTION_MODEL_FAST,
         schema=None,
-        base_url=settings.DEEPSEEK_BASE_URL,
-        api_key=settings.DEEPSEEK_API_KEY,
+        base_url=settings.LLM_PROVIDER_BASE_URL,
+        api_key=settings.LLM_PROVIDER_API_KEY,
         extra_body={
             "max_tokens": settings.EXTRACTION_MAX_TOKENS,
         },

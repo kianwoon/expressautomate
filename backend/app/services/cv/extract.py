@@ -193,8 +193,8 @@ async def _extract_salary(
             build_salary_prompt(window),
             model=settings.EXTRACTION_MODEL_FAST,
             schema=None,
-            base_url=settings.DEEPSEEK_BASE_URL,
-            api_key=settings.DEEPSEEK_API_KEY,
+            base_url=settings.LLM_PROVIDER_BASE_URL,
+            api_key=settings.LLM_PROVIDER_API_KEY,
             extra_body={
                 "max_tokens": settings.EXTRACTION_MAX_TOKENS,
             },
@@ -243,8 +243,8 @@ async def _extract_career(text: str, resolve) -> tuple[CVResponse, LLMResult]:
                 prompt,
                 model=model,
                 schema=None,
-                base_url=settings.DEEPSEEK_BASE_URL,
-                api_key=settings.DEEPSEEK_API_KEY,
+                base_url=settings.LLM_PROVIDER_BASE_URL,
+                api_key=settings.LLM_PROVIDER_API_KEY,
                 extra_body={
                     "max_tokens": settings.EXTRACTION_MAX_TOKENS,
                     "reasoning_effort": effort,
@@ -257,7 +257,7 @@ async def _extract_career(text: str, resolve) -> tuple[CVResponse, LLMResult]:
             # a stronger model would answer better — and the strong pass is the
             # expensive one. Stop rather than escalating into a second, pricier
             # attempt at a provider that is already hanging (2026-08-13: slow
-            # DeepSeek responses made the career pass burn its whole budget and
+            # slow provider responses made the career pass burn its whole budget and
             # get killed by the arq timeout, re-enqueued every sweep).
             failure = exc
             log.warning("cv_extraction_timed_out", model=model, error=repr(exc))
