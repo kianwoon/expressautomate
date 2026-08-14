@@ -36,7 +36,7 @@ from app.db.rls import tenant_session
 from app.models.candidate import Candidate, CandidateDocument, CandidateRole, CandidateSkill
 from app.models.candidate_intelligence import CandidateIntelligence
 from app.services.candidate_intelligence.engine import analyze_candidate
-from app.services.llm.client import LLMInvalidJSON, LLMNoContent
+from app.services.llm.client import LLMNoContent
 from app.services.storage.r2 import R2BodyStore
 
 log = get_logger(__name__)
@@ -163,7 +163,7 @@ async def run_candidate_intelligence(
 
     try:
         outcome = await _analyze_with_no_content_retry(candidate, roles, skills, cv_text)
-    except (LLMInvalidJSON, Exception) as exc:
+    except Exception as exc:  # noqa: BLE001 — a terminal failure, never a retry
         # A bad model answer, or a transport failure reaching the LLM provider. Either
         # is a failed run the recruiter can retry; neither is retried here,
         # because temperature zero makes a plain retry the same answer twice.

@@ -26,9 +26,10 @@ be indistinguishable from another agency's id.
 """
 
 import uuid
+from datetime import UTC, datetime
 
-from fastapi import APIRouter, Request
-from sqlalchemy import select
+from fastapi import APIRouter, HTTPException, Request
+from sqlalchemy import select, text
 
 from app.api.auth import _require_session_with_role
 from app.core.config import settings
@@ -42,6 +43,44 @@ from app.workers.queue import enqueue
 log = get_logger(__name__)
 
 router = APIRouter(tags=["job_intelligence"])
+
+# The spend gate: one atomic statement that performs the midnight-UTC date
+# rollover AND the increment AND returns the spent count, so two concurrent
+# POSTs serialize on the tenant row lock and neither undercounts. A counter
+# on the tenant — not a COUNT(*) of the intelligence rows, because those
+# POSTs are upserts: a re-run updates the existing row, and counting rows
+# cannot count events that create no rows. A refused POST has already spent
+# its increment, which is harmless — a refusal costs no model call, and the
+# window resets at midnight.
+# allow-hardcode: SQL statement, not a phrase list.
+_SPEND_RUN = text(
+    """
+    UPDATE tenants SET
+        llm_runs_count = CASE WHEN llm_runs_date = :today THEN llm_runs_count + 1
+                              ELSE 1 END,
+        llm_runs_date = :today
+    WHERE id = :tenant_id
+    RETURNING llm_runs_count
+    """
+)
+
+
+async def _spend_analysis_run(session, tenant_id: uuid.UUID) -> None:
+    """Charge this agency's daily analysis allowance, or refuse with 429."""
+    spent = (
+        await session.execute(
+            _SPEND_RUN,
+            {"today": datetime.now(UTC).date(), "tenant_id": tenant_id},
+        )
+    ).scalar_one()
+    if spent > settings.INTELLIGENCE_DAILY_QUOTA:
+        raise HTTPException(
+            status_code=429,
+            detail=(
+                f"This agency has started its {settings.INTELLIGENCE_DAILY_QUOTA} "
+                "analyses for today. Try again tomorrow."
+            ),
+        )
 
 # allow-hardcode: a sentence shown to a recruiter, not configuration.
 _ENQUEUE_FAILED = (
@@ -67,6 +106,11 @@ async def run_intelligence(request: Request, opportunity_id: uuid.UUID) -> dict:
         # analysis runs on the *current* revision's requirements.
         current = await load_visible_opportunity(session, opportunity_id, user_uuid, role)
         opportunity_id = current.id
+
+        # The spend gate: 4-5 model calls per analysis, bounded per agency per
+        # day. Runs inside the tenant session and BEFORE the upsert, so a
+        # refused POST writes nothing.
+        await _spend_analysis_run(session, tenant_uuid)
 
         # Upsert: one row per opportunity. A re-run resets a finished row to
         # `pending` rather than accumulating a second row, matching the

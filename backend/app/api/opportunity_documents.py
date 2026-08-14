@@ -19,18 +19,20 @@ declared before `opportunities.router` in `main.py`, the same convention as
    purges by.
 2. **The bytes decide, not the filename or Content-Type.** `sniff` reads the
    bytes; a PNG named `.pdf` is 415.
-3. **An upload buys a model call.** There is deliberately no daily quota here —
-   this is a create-dialog action, one file per vacancy — but the extraction
-   job is registered with its own arq timeout, and `rescan_stuck` recovers a
-   stranded row.
+3. **An upload buys a model call.** Uploads are capped per agency per day
+   (`OPPORTUNITY_DOCUMENT_DAILY_QUOTA`, the same COUNT(*)-since-midnight
+   shape as the CV quota) — this is a create-dialog action, one file per
+   vacancy, and the extraction job is registered with its own arq timeout,
+   with `rescan_stuck` recovering a stranded row.
 """
 
 import uuid
+from datetime import UTC, datetime, time
 from pathlib import PurePosixPath
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.api.auth import _require_session_with_role
 from app.core.config import settings
@@ -167,6 +169,31 @@ async def upload_document_no_opportunity(
     swallowed by `/opportunities/{opportunity_id}`.
     """
     user_uuid, tenant_uuid, _ = await _require_session_with_role(request)
+
+    # An upload buys an extraction job (up to 3 model calls), so it is
+    # quota'd per agency per day like every other user-triggered LLM spend —
+    # the module docstring's "deliberately no daily quota" dated from when
+    # this was the only upload path; a programmatic client looping uploads
+    # had an unbounded bill. Same COUNT(*)-since-midnight shape as the CV
+    # quota, with the same accepted consequences.
+    since = datetime.combine(datetime.now(UTC).date(), time.min, tzinfo=UTC)
+    async with tenant_session(tenant_uuid) as session:
+        used = (
+            await session.execute(
+                select(func.count())
+                .select_from(OpportunityDocument)
+                .where(OpportunityDocument.created_at >= since)
+            )
+        ).scalar_one()
+    if used >= settings.OPPORTUNITY_DOCUMENT_DAILY_QUOTA:
+        raise HTTPException(
+            status_code=429,
+            detail=(
+                f"This agency has uploaded its "
+                f"{settings.OPPORTUNITY_DOCUMENT_DAILY_QUOTA} "
+                "job-description files for today. Try again tomorrow."
+            ),
+        )
 
     content = await _read_within_limit(file)
 

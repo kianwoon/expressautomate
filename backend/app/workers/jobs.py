@@ -210,6 +210,17 @@ _FINISH_EXTRACTION = text(
     " WHERE id = :id"
 )
 
+# The successful half of the replay budget: a replay that COMPLETED spent its
+# pickup legitimately (the claim resolver moves the row to `replaying` before
+# the job first sees it, so first-vs-recovery is not distinguishable there).
+# Resetting on success means `llm_attempts` counts *failed* pickups — a
+# healthy email replays once per prompt upgrade forever (the replay sweep's
+# whole purpose), and only a row whose replays keep crashing burns toward
+# `EMAIL_LLM_MAX_ATTEMPTS` and parks `failed`.
+_RESET_LLM_ATTEMPTS = text(
+    "UPDATE email_messages SET llm_attempts = 0 WHERE id = :id"
+)
+
 # The replay claim. `replay_stale_extractions` has already moved the email to
 # `replaying` (claim_replay_email_rows, a SECURITY DEFINER resolver that runs
 # with no tenant context); this job accepts exactly that state and none other,
@@ -227,6 +238,46 @@ _FAIL_EXTRACTION = text(
     "UPDATE email_messages SET processing_status = 'failed', last_error = :error"
     " WHERE id = :id"
 )
+
+# The LLM-spend bound (migration c1v2n0000001). Compare-and-set, so only one
+# worker's increment lands and a second job reading the same row sees the
+# spent count. The WHERE statuses are exactly the sweep-recovery shapes: a
+# row ALREADY in its working status is a recovery pickup (forward progress
+# never re-enters a status it holds), and every `replaying` pickup counts
+# because the replay claim resolver moves the row there before the job first
+# sees it — a replay is deliberate spend every time. The first classify
+# (fetched→classifying) and first extract (classified→extracting) do NOT
+# match and spend nothing: the healthy path keeps its whole budget.
+_CLAIM_LLM_ATTEMPT = text(
+    """
+    UPDATE email_messages SET llm_attempts = llm_attempts + 1
+    WHERE id = :id
+      AND processing_status IN ('classifying', 'extracting', 'replaying')
+    RETURNING llm_attempts
+    """
+)
+
+
+async def _llm_attempts_exhausted(tenant: uuid.UUID, email_message_id: str) -> bool:
+    """Has this email spent its recovery budget for LLM-paying jobs?
+
+    Spent at pickup, BEFORE any model call, exactly as the intelligence jobs
+    spend their `attempts`: a worker killed mid-call never reaches an end, so
+    a count spent at completion would count nothing on precisely the runs
+    this bounds. Past the ceiling the row is parked `failed` — terminal, so
+    `rescan_stuck` stops returning it and the rebill loop ends. A human
+    re-runs from the UI (a fresh pickup of a `failed` row is still refused;
+    the reset is a deliberate operator action on the row, not a sweep's).
+    """
+    async with tenant_session(tenant) as session:
+        spent = (
+            await session.execute(_CLAIM_LLM_ATTEMPT, {"id": email_message_id})
+        ).scalar_one_or_none()
+    if spent is None:
+        # Unknown row — RLS already decided; treat as exhausted rather than
+        # paying for a row this tenant does not own.
+        return True
+    return spent > settings.EMAIL_LLM_MAX_ATTEMPTS
 
 _BACKFILL_START = text(
     "SELECT initial_sync_from, backfill_completed_at"
@@ -489,6 +540,19 @@ async def classify_email(
             classification_status=row.classification_status,
         )
         return
+    # The recovery-budget gate, AFTER the verdict guard: a row the sweep hands
+    # back still `classifying` but already answered spends nothing here — an
+    # already-paid verdict is never worth budget. A row still unanswered is a
+    # crash-loop iteration by definition, so it pays — and past the ceiling
+    # the row is parked `failed` before the gate is asked anything.
+    if row.processing_status == "classifying":
+        if await _llm_attempts_exhausted(tenant, email_message_id):
+            log.warning(
+                "classify_attempts_exhausted",
+                email_message_id=email_message_id,
+            )
+            await _fail_extraction(tenant, email_message_id, "classify attempts exhausted")
+            return
 
     async with tenant_session(tenant) as session:
         await session.execute(_START_CLASSIFYING, {"id": email_message_id})
@@ -833,6 +897,20 @@ async def extract_email(
                 email_message_id=email_message_id,
             )
             return
+    else:
+        # The recovery path — the row is already `extracting`, so this pickup
+        # is a crash-loop iteration by definition (forward progress never
+        # re-enters `extracting`). Spend the budget BEFORE the model call;
+        # past the ceiling the row is parked `failed` and the sweep stops
+        # seeing it. This is the bound that ends what was an infinite
+        # rebill loop on any unexpected exception in the code below.
+        if await _llm_attempts_exhausted(tenant, email_message_id):
+            log.warning(
+                "extract_attempts_exhausted",
+                email_message_id=email_message_id,
+            )
+            await _fail_extraction(tenant, email_message_id, "extraction attempts exhausted")
+            return
 
     html = await body_store().get(row.body_html_r2_key) or ""
     # `to_text` is the single source of truth for the text the model's offsets
@@ -947,6 +1025,18 @@ async def replay_email(
             status=row.processing_status,
         )
         return
+    # Every replay pickup is deliberate spend — the claim resolver moved the
+    # row to `replaying` before this job first saw it, so first-vs-recovery is
+    # not distinguishable and both count. Three lifetime replays per email is
+    # the bound; a prompt-version sweep that finds the row again after that
+    # leaves it `failed` for a human rather than re-billing it forever.
+    if await _llm_attempts_exhausted(tenant, email_message_id):
+        log.warning(
+            "replay_attempts_exhausted",
+            email_message_id=email_message_id,
+        )
+        await _fail_extraction(tenant, email_message_id, "replay attempts exhausted")
+        return
 
     html = await body_store().get(row.body_html_r2_key) or ""
     source = to_text(html, subject=row.subject, sender=row.sender_email)
@@ -972,7 +1062,12 @@ async def replay_email(
     )
     status = "extracted" if ids else "no_opportunity"
 
+    # Success: the pickup this run spent was a legitimate one, so the budget
+    # hands it back. `llm_attempts` counts failed pickups only — a healthy
+    # email replays once per prompt upgrade forever; only a row whose replays
+    # keep crashing burns toward the ceiling and parks `failed`.
     async with tenant_session(tenant) as session:
+        await session.execute(_RESET_LLM_ATTEMPTS, {"id": email_message_id})
         await session.execute(
             _FINISH_EXTRACTION, {"status": status, "id": email_message_id}
         )

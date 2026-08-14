@@ -1,8 +1,17 @@
 """Tenant and User — the multi-tenancy root (plan §18)."""
 
-from datetime import datetime
+from datetime import date, datetime
 
-from sqlalchemy import Boolean, DateTime, Index, String, UniqueConstraint, text
+from sqlalchemy import (
+    Boolean,
+    Date,
+    DateTime,
+    Index,
+    Integer,
+    String,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, TenantScoped, Timestamps, UUIDPrimaryKey
@@ -22,6 +31,20 @@ class Tenant(Base, UUIDPrimaryKey, Timestamps):
     # colleagues share. Onboarding and invites must treat the two differently.
     is_personal_account: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=text("false"), default=False
+    )
+    # The daily LLM-run counter (migration c1v2p0000001): how many
+    # user-triggered analyses this agency has started on `llm_runs_date`.
+    # Lives on the tenant — not a counter table, and not a COUNT(*) of the
+    # intelligence rows, because those POSTs are upserts: a re-run updates
+    # the existing row, and a COUNT() cannot count events that create no
+    # rows. Incremented atomically in the POST (one UPDATE..RETURNING that
+    # also performs the date rollover), read against
+    # INTELLIGENCE_DAILY_QUOTA. Refused POSTs have already spent their
+    # increment — harmless, refusals cost no model call and the window
+    # resets at midnight UTC.
+    llm_runs_date: Mapped[date | None] = mapped_column(Date)
+    llm_runs_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0"), default=0
     )
 
     # passive_deletes defers to the FK's ON DELETE CASCADE; without it the ORM

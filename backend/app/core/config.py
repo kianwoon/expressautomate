@@ -160,6 +160,25 @@ class Settings(BaseSettings):
     RESCAN_PENDING_MINUTES: int = Field(default=5, gt=0)
     RESCAN_WORKING_MINUTES: int = Field(default=15, gt=0)
     RESCAN_INTERVAL_SECONDS: float = Field(default=300.0, gt=0)
+    # The ceiling that ends the email rebill loop. `rescan_stuck` re-enqueues
+    # a row stuck in a working status every RESCAN_INTERVAL_SECONDS, and the
+    # classify/extract/replay jobs each bill up to several model calls per
+    # pickup — without this bound, a row whose job deterministically crashes
+    # (an unexpected exception leaves the status untouched; the jobs' except
+    # clauses cover only LLMInvalidJSON) is re-billed forever. Mirrors the
+    # per-table MAX_ATTEMPTS every other LLM-paying row already carries; see
+    # migration c1v2n0000001 for why `attempt_count` could not be the column.
+    EMAIL_LLM_MAX_ATTEMPTS: int = Field(default=3, gt=0)
+    # Daily ceilings on user-triggered analyses. Each Intelligence run is
+    # 4-5 model calls and each opportunity-document upload is an extraction
+    # job (up to 3 calls); both were previously unquota'd, so a recruiter —
+    # or a buggy client looping POSTs — could bill unbounded spend. Counted
+    # as rows-created-since-midnight-UTC exactly like CV_DAILY_PARSE_QUOTA:
+    # no counter table to drift from the rows it counts. Generous next to
+    # real use (the intelligence rows are one-per-entity upserts, and one
+    # job order needs one document), tight next to a runaway client.
+    INTELLIGENCE_DAILY_QUOTA: int = Field(default=50, gt=0)
+    OPPORTUNITY_DOCUMENT_DAILY_QUOTA: int = Field(default=100, gt=0)
     RENEW_INTERVAL_SECONDS: float = Field(default=900.0, gt=0)
     DELTA_SYNC_INTERVAL_SECONDS: float = Field(default=600.0, gt=0)
     # Hourly is enough: this catches a state that should never arise, and the

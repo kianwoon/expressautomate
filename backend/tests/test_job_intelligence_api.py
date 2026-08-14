@@ -208,3 +208,52 @@ async def test_another_agencys_job_order_is_404(queued):
     finally:
         await _drop_agency(tid)
         await _drop_agency(other_tid)
+
+
+async def test_re_runs_count_against_the_daily_quota(queued, monkeypatch):
+    """The quota counts RUNS, not rows — the upsert re-run hole.
+
+    A re-run is an UPDATE (created_at never moves), so a `created_at`-based
+    count would sit at 1 while a looping client spent 4-5 model calls per
+    POST. `last_queued_at` is stamped on every POST in both upsert branches;
+    the N+1th run of the SAME opportunity is refused with 429.
+    """
+    from app.core.config import settings as cfg
+
+    monkeypatch.setattr(cfg, "INTELLIGENCE_DAILY_QUOTA", 3)
+    tid, uid = await _seed_agency()
+    oid = await _opportunity(tid, uid)
+    try:
+        async with _http(tid, uid) as c:
+            statuses = [
+                (await c.post(f"/api/opportunities/{oid}/intelligence")).status_code
+                for _ in range(5)
+            ]
+        # The first three runs pass (202), every run after the quota is 429 —
+        # same row, same opportunity, real re-spend each time.
+        assert statuses == [202, 202, 202, 429, 429]
+    finally:
+        await _drop_agency(tid)
+
+
+async def test_the_quota_is_per_agency(queued, monkeypatch):
+    """One agency hitting its ceiling does not cap another's spend."""
+    from app.core.config import settings as cfg
+
+    monkeypatch.setattr(cfg, "INTELLIGENCE_DAILY_QUOTA", 2)
+    tid, uid = await _seed_agency()
+    oid = await _opportunity(tid, uid)
+    other_tid, other_uid = await _seed_agency()
+    try:
+        async with _http(tid, uid) as c:
+            for _ in range(3):
+                await c.post(f"/api/opportunities/{oid}/intelligence")
+            refused = await c.post(f"/api/opportunities/{oid}/intelligence")
+        other_oid = await _opportunity(other_tid, other_uid)
+        async with _http(other_tid, other_uid) as c:
+            fresh = await c.post(f"/api/opportunities/{other_oid}/intelligence")
+        assert refused.status_code == 429
+        assert fresh.status_code == 202
+    finally:
+        await _drop_agency(tid)
+        await _drop_agency(other_tid)

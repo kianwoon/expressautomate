@@ -36,7 +36,6 @@ from app.models.job_intelligence import JobIntelligence
 from app.models.opportunity import Opportunity
 from app.models.opportunity_code import OpportunityCode
 from app.services.job_intelligence.engine import analyze
-from app.services.llm.client import LLMInvalidJSON
 from app.services.visibility import current_opportunity_id
 
 log = get_logger(__name__)
@@ -145,7 +144,7 @@ async def run_job_intelligence(
         # only the search, because the search runs mid-pipeline.
         async with tenant_session(tenant) as session:
             outcome = await analyze(opportunity, codes, session=session)
-    except (LLMInvalidJSON, Exception) as exc:
+    except Exception as exc:  # noqa: BLE001 — a terminal failure, never a retry
         # A bad model answer, or a transport failure reaching the LLM provider. Either
         # is a failed run the recruiter can retry; neither is retried here,
         # because temperature zero makes a plain retry the same answer twice.

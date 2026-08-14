@@ -31,6 +31,7 @@ from fastapi import APIRouter, Request
 from sqlalchemy import select
 
 from app.api.auth import _require_session_with_role
+from app.api.job_intelligence import _spend_analysis_run
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.db.rls import tenant_session
@@ -67,6 +68,11 @@ async def run_candidate_intelligence_route(
         # visibility rather than edit rights (the same rule the Job Intelligence
         # route applies via `load_visible_opportunity`).
         await load_visible_candidate(session, candidate_id, user_uuid, role)
+
+        # The spend gate, shared with the Job Intelligence POST: five model
+        # calls per analysis, bounded per agency per day by the tenant's
+        # atomic run counter (a re-run is real spend a row count never sees).
+        await _spend_analysis_run(session, tenant_uuid)
 
         # Upsert: one row per candidate. A re-run resets a finished row to
         # `pending` rather than accumulating a second row, matching the Job

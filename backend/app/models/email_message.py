@@ -129,4 +129,15 @@ class EmailMessage(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
     attempt_count: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default=text("0")
     )
+    # The LLM-paying bound, deliberately separate from `attempt_count` above:
+    # that column is fetch-scoped (incremented by `_RECORD_FETCH` once per
+    # healthy life), so a ceiling on it would fail every email that reaches
+    # extraction. This one counts sweep-recovery pickups of the gate and the
+    # extractor — a row resumed while already `classifying`/`extracting` is a
+    # crash-loop iteration by definition — plus every replay pickup. Past
+    # `EMAIL_LLM_MAX_ATTEMPTS` the job parks the row `failed` BEFORE any model
+    # call, so `rescan_stuck` stops seeing it and the rebill loop ends.
+    llm_attempts: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
     last_error: Mapped[str | None] = mapped_column(Text)
