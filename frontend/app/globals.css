@@ -62,8 +62,10 @@
   --radius: 10px;
   --maxw: 1120px;
 
-  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
-    "Helvetica Neue", Arial, sans-serif;
+  /* A deeper, lower shadow for the one element that should read as floating
+     above the page: the hero's product panel. The 0 30px 60px value it used
+     to hard-code is now named so it can be referenced in the hover rule. */
+  --shadow-lift: 0 30px 60px -40px rgba(var(--shadow-rgb), 0.55);
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -92,6 +94,39 @@ body {
 a { color: inherit; text-decoration: none; }
 
 .wrap { max-width: var(--maxw); margin: 0 auto; padding: 0 24px; }
+
+/* Marketing headlines only. The display face (Fraunces, set on <body> by
+   next/font) is scoped to the landing page's <main id="top"> so the
+   dashboard, settings and stubs keep the clean grotesk for their working UI
+   — a serif is right on a pitch page and wrong on a data table. 600 rather
+   than 700: Fraunces reads heavier than the grotesk it replaces, and the
+   headline wants character, not bulk. */
+#top h1, #top h2 {
+  font-family: var(--font-display), Georgia, serif;
+  font-weight: 600;
+  /* Display serifs want a touch more leading than the grotesk they replace,
+     or the tight 1.08/1.2 the global rule sets feels cramped at the larger
+     cut. Slightly looser, and a hair less negative tracking. */
+  letter-spacing: -0.015em;
+}
+#top h1 { line-height: 1.06; }
+#top h2 { line-height: 1.16; }
+
+/* The landing cards lift gently under the pointer. Scoped to #top so the
+   dashboard's .card (a working container, not a card to invite a click) is
+   untouched. The belief cards, which sit on the illustrated backdrop, get the
+   same lift but keep their translucent fill so the artwork still shows. */
+#top .card {
+  transition: transform 0.3s cubic-bezier(0.2, 0.7, 0.2, 1),
+    box-shadow 0.3s ease, border-color 0.3s ease;
+}
+@media (hover: hover) {
+  #top .card:hover {
+    transform: translateY(-3px);
+    border-color: #cdd9ea;
+    box-shadow: 0 18px 40px -28px rgba(var(--shadow-rgb), 0.45);
+  }
+}
 
 /* ---- type ---- */
 h1 {
@@ -397,8 +432,18 @@ h3 { font-size: 1.125rem; letter-spacing: -0.01em; font-weight: 650; }
 .hero-cta[data-resolved="no"] { visibility: hidden; }
 
 /* ---- layout ---- */
-section { padding: 60px 0; }
-.hero { padding: 64px 0 48px; background: linear-gradient(180deg, #f7fbff 0%, #ffffff 100%); }
+section { padding: 76px 0; }
+.hero {
+  /* A flat wash reads as a template; two very pale glows — blue behind the
+     product panel, teal low on the left — give the hero depth without a
+     decorative blob or a busy mesh. They fade to the same white the next
+     section starts from, so the transition is seamless. */
+  padding: 88px 0 56px;
+  background:
+    radial-gradient(52rem 30rem at 85% -12%, rgba(37, 99, 235, 0.09), transparent 62%),
+    radial-gradient(44rem 28rem at -6% 115%, rgba(20, 168, 154, 0.08), transparent 62%),
+    linear-gradient(180deg, #f7fbff 0%, #ffffff 100%);
+}
 .alt { background: var(--surface-alt); border-block: 1px solid var(--line); }
 
 /* The "Two beliefs" section carries the recruitment illustration as a subtle,
@@ -588,7 +633,17 @@ section { padding: 60px 0; }
   display: grid; grid-template-columns: 44px minmax(0, 1fr);
   border: 1px solid var(--line); border-radius: 16px; overflow: hidden;
   background: var(--surface); margin: 0;
-  box-shadow: 0 30px 60px -40px rgba(var(--shadow-rgb), 0.55);
+  box-shadow: var(--shadow-lift);
+  /* The panel is the hero's one "product" moment, so it is the one thing that
+     responds to the pointer: a quiet lift. Nothing else on the landing page
+     does this, which keeps the effect from reading as a pattern. */
+  transition: transform 0.35s cubic-bezier(0.2, 0.7, 0.2, 1), box-shadow 0.35s ease;
+}
+@media (hover: hover) {
+  .app:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 40px 80px -40px rgba(var(--shadow-rgb), 0.6);
+  }
 }
 .app-rail {
   display: grid; gap: 14px; align-content: start; justify-items: center;

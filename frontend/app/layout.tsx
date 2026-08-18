@@ -1,7 +1,30 @@
 import type { Metadata } from "next";
+import { Fraunces, Instrument_Sans } from "next/font/google";
 import "./globals.css";
 import "./app.css";
 import { ChunkErrorReload } from "./chunk-error-reload";
+
+/**
+ * The two faces of the site.
+ *
+ * Fraunces is a display serif with real personality — an "opsz" axis that
+ * renders with a large, editorial cut at headline size. It carries the
+ * marketing headlines (h1/h2) so the page reads as a considered piece rather
+ * than a template. Instrument Sans is a clean, slightly warm grotesk for
+ * everything else: body copy, buttons, and the dashboard, where a serif would
+ * be wrong. Both are self-hosted by next/font (no third-party request at
+ * runtime), and each publishes a CSS variable that globals.css consumes.
+ */
+const display = Fraunces({
+  subsets: ["latin"],
+  variable: "--font-display",
+  display: "swap",
+});
+const sans = Instrument_Sans({
+  subsets: ["latin"],
+  variable: "--font-sans",
+  display: "swap",
+});
 
 const TITLE = "expressautomate.app — find a place for each person";
 
@@ -81,7 +104,7 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
-      <body>
+      <body className={`${display.variable} ${sans.variable}`}>
         {/* Reloads when the running bundle requests a chunk a newer deploy no
             longer ships — see the component. Renders nothing. */}
         <ChunkErrorReload />
