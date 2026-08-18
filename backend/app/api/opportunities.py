@@ -226,11 +226,22 @@ def _row_select(user_uuid: uuid.UUID):
     # than a join because the link is the *reverse* of
     # `superseded_by_opportunity_id` (predecessor -> successor) and the list is
     # read row by row. NULL for every ordinary job order — the common case.
+    #
+    # More than one predecessor can point at the same successor: the write
+    # path supersedes *every* current open instance of a vacancy, not just the
+    # earliest (ingest/persist.py), so a scalar subquery without a LIMIT raises
+    # CardinalityViolationError ("more than one row returned by a subquery used
+    # as an expression") the moment such a successor lands on the list — the
+    # empty job-orders dashboard. The UI reads this as a boolean ("requirements
+    # updated" badge), so pick the earliest predecessor deterministically,
+    # exactly as `one_buddy` below picks the earliest referral.
     predecessor = aliased(Opportunity)
     revision_of = (
         select(predecessor.id)
         .where(predecessor.superseded_by_opportunity_id == Opportunity.id)
         .correlate(Opportunity)
+        .order_by(predecessor.received_datetime.asc(), predecessor.id.asc())
+        .limit(1)
         .scalar_subquery()
         .label("revision_of_opportunity_id")
     )

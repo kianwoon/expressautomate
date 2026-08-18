@@ -412,6 +412,77 @@ async def test_the_list_marks_the_revision(client, seeded) -> None:
     assert revision_row["superseded_by_opportunity_id"] is None
 
 
+async def test_the_list_marks_a_revision_with_multiple_predecessors(
+    client, seeded,
+) -> None:
+    """A successor with more than one predecessor must not 500 the list.
+
+    The write path supersedes *every* current open instance of a vacancy, not
+    just the earliest, so two stale rows can both point at the same successor.
+    `revision_of_opportunity_id` is rendered as a scalar subquery; before the
+    LIMIT it raised CardinalityViolationError ("more than one row returned by a
+    subquery used as an expression") and the whole job-orders list 500ed — the
+    empty dashboard. The UI reads the field as a boolean, so any one
+    predecessor is correct; the earliest is chosen deterministically.
+    """
+    make_tenant, make_opportunity, _ = seeded
+    tenant_id, user_id, mailbox_id = await make_tenant("supersede-multi-pred")
+    conv = "AAMkAAG-multi-pred-conv"
+    # Two stale rows, both superseded by the same successor — the exact shape
+    # `persist()` leaves behind when two open instances of one vacancy exist.
+    original_a = await make_opportunity(
+        tenant_id, mailbox_id,
+        received_datetime=_NOW,
+        job_title_raw="Finance officer",
+        company_name_raw="Acme Pte Ltd",
+        requirements="Female, Chinese only",
+    )
+    original_b = await make_opportunity(
+        tenant_id, mailbox_id,
+        received_datetime=_NOW.replace(day=5),
+        job_title_raw="Finance officer",
+        company_name_raw="Acme Pte Ltd",
+        requirements="Female, Chinese only",
+    )
+    revision = await make_opportunity(
+        tenant_id, mailbox_id,
+        received_datetime=_NOW.replace(day=12),
+        job_title_raw="Finance officer",
+        company_name_raw="Acme Pte Ltd",
+        requirements="Open to male, all races",
+    )
+    async with AdminSessionLocal() as s:
+        for oid in (original_a, original_b):
+            await s.execute(
+                text("UPDATE email_messages SET conversation_id = :c WHERE id = :m"),
+                {"c": conv, "m": (await _email_of(oid))},
+            )
+            await s.execute(
+                text(
+                    "UPDATE opportunities SET superseded_by_opportunity_id = :rev,"
+                    " superseded_at = :at WHERE id = :orig"
+                ),
+                {"rev": revision, "at": _NOW.replace(day=12), "orig": oid},
+            )
+        await s.commit()
+    sign_in(client, user_id, tenant_id)
+    # Must not raise: this is the regression — a 500 here is the empty dashboard.
+    body = (await client.get("/api/opportunities?dedupe=true")).json()
+    shown = {row["id"] for row in body["items"]}
+    assert str(revision) in shown
+    assert str(original_a) not in shown
+    assert str(original_b) not in shown
+    revision_row = next(row for row in body["items"] if row["id"] == str(revision))
+    # Any one predecessor satisfies the boolean badge; the earliest is chosen.
+    assert revision_row["revision_of_opportunity_id"] in {
+        str(original_a),
+        str(original_b),
+    }
+    # And the single-row read must not 500 either.
+    detail = (await client.get(f"/api/opportunities/{revision}")).json()
+    assert detail["id"] == str(revision)
+
+
 async def test_without_dedupe_the_superseded_row_is_still_visible(client, seeded) -> None:
     """`dedupe=false` shows history — the recruiter can always see what the
     client originally asked for."""
