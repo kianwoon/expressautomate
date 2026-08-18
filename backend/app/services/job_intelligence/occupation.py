@@ -191,8 +191,8 @@ async def extract_occupation_profile(
         base_url=settings.LLM_PROVIDER_BASE_URL,
         api_key=settings.LLM_PROVIDER_API_KEY,
         extra_body={
-            "max_tokens": settings.EXTRACTION_MAX_TOKENS,
-            "reasoning_effort": settings.EXTRACTION_REASONING_EFFORT_FAST,
+            "max_tokens": settings.JOB_INTELLIGENCE_MAX_TOKENS,
+            "reasoning_effort": settings.JOB_INTELLIGENCE_REASONING_EFFORT,
         },
     )
     return OccupationProfile.model_validate(result.data), result
@@ -301,8 +301,8 @@ async def rerank_occupation(
         base_url=settings.LLM_PROVIDER_BASE_URL,
         api_key=settings.LLM_PROVIDER_API_KEY,
         extra_body={
-            "max_tokens": settings.EXTRACTION_MAX_TOKENS,
-            "reasoning_effort": settings.EXTRACTION_REASONING_EFFORT_FAST,
+            "max_tokens": settings.JOB_INTELLIGENCE_MAX_TOKENS,
+            "reasoning_effort": settings.JOB_INTELLIGENCE_REASONING_EFFORT,
         },
     )
 
@@ -361,8 +361,23 @@ async def classify_occupation(
     folding the two LLM results so the engine can sum their cost. Returns
     `(None, None)` when the search yields no candidates — a clean degradation
     that leaves the rest of the analysis intact.
+
+    The profile extraction is wrapped the same way. It is the one step whose
+    failure used to kill the whole analysis: `deepseek-v4-flash` counts
+    reasoning tokens against `max_tokens`, and when the occupation-profile
+    prompt burns its budget thinking it returns a truncated fragment that
+    fails `OccupationProfile` validation. A benchmark is a nice-to-have — the
+    rest of the analysis is still useful without one — so a malformed profile
+    degrades to no match rather than failing the run the recruiter asked for.
     """
-    profile, r1 = await extract_occupation_profile(context, understanding, llm=llm)
+    try:
+        profile, r1 = await extract_occupation_profile(context, understanding, llm=llm)
+    except Exception as exc:  # noqa: BLE001 — a bad profile is a soft miss, not a hard failure
+        log.warning(
+            "occupation_profile_extraction_failed",
+            error=repr(exc),
+        )
+        return None, None
     candidates = await search_occupations(session, profile)
     if not candidates:
         return None, r1

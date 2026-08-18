@@ -215,6 +215,24 @@ async def test_classify_returns_none_when_search_yields_nothing():
     assert result is not None
 
 
+async def test_classify_degrades_when_profile_extraction_returns_garbage():
+    """A truncated/malformed profile must degrade to no match, not fail the run.
+
+    `deepseek-v4-flash` counts reasoning tokens against `max_tokens`; when the
+    occupation-profile prompt burns its budget thinking it returns a fragment
+    (e.g. `{': ': ', '}`) that fails `OccupationProfile` validation. A benchmark
+    is a nice-to-have, so a bad profile is a soft miss — `(None, None)` — that
+    leaves the rest of the analysis intact.
+    """
+    # FakeLLM returns this dict verbatim; it is not a valid OccupationProfile.
+    llm = FakeLLM({": ": ", "})
+    match, result = await classify_occupation(
+        "context", _understanding(), session=None, llm=llm
+    )
+    assert match is None
+    assert result is None
+
+
 # --------------------------------------------------------------------------- #
 # Integration — search_occupations against the real test database
 # --------------------------------------------------------------------------- #

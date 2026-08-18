@@ -71,8 +71,8 @@ async def infer_persona(
         base_url=settings.LLM_PROVIDER_BASE_URL,
         api_key=settings.LLM_PROVIDER_API_KEY,
         extra_body={
-            "max_tokens": settings.EXTRACTION_MAX_TOKENS,
-            "reasoning_effort": settings.EXTRACTION_REASONING_EFFORT_FAST,
+            "max_tokens": settings.JOB_INTELLIGENCE_MAX_TOKENS,
+            "reasoning_effort": settings.JOB_INTELLIGENCE_REASONING_EFFORT,
         },
     )
     return CandidatePersona.model_validate(result.data), result

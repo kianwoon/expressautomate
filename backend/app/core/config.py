@@ -403,6 +403,21 @@ class Settings(BaseSettings):
     # `EXTRACTION_MODEL_FAST` at call time (see `job_intelligence.understand.model`),
     # so a deployment that names only the one model still runs the analysis.
     JOB_INTELLIGENCE_MODEL: str = ""
+    # The output budget the Job Intelligence engine gives each call. Separate
+    # from `EXTRACTION_MAX_TOKENS` for the same reason Candidate Intelligence
+    # has its own: `deepseek-v4-flash` counts reasoning tokens against
+    # `max_tokens`, and the occupation-profile prompt is a deep reasoning prompt
+    # that burned the extraction budget on thinking alone, returning a truncated
+    # fragment (`{': ': ', '}`) the profile stage then failed on. 65536 is the
+    # budget Candidate Intelligence already verified against the live API — well
+    # under the model's 384K output ceiling, leaving room for a long trace and
+    # the large JSON answer.
+    JOB_INTELLIGENCE_MAX_TOKENS: int = Field(default=65536, gt=0)
+    # The reasoning effort the Job Intelligence engine asks for. Matches
+    # `EXTRACTION_REASONING_EFFORT_FAST`'s default; explicit because the right
+    # answer is a property of the model, and the knob must not silently track
+    # extraction's if the two ever diverge.
+    JOB_INTELLIGENCE_REASONING_EFFORT: str = "low"
     # The model the Candidate Intelligence engine asks. Same fallback idiom as
     # `JOB_INTELLIGENCE_MODEL` (see `candidate_intelligence.history.model`): an
     # empty value defaults to the fast extraction model at call time. Listed in
