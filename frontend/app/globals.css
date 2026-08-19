@@ -434,15 +434,16 @@ h3 { font-size: 1.125rem; letter-spacing: -0.01em; font-weight: 650; }
 /* ---- layout ---- */
 section { padding: 76px 0; }
 .hero {
-  /* A flat wash reads as a template; two very pale glows — blue behind the
-     product panel, teal low on the left — give the hero depth without a
+  /* A flat wash reads as a template; two glows give the hero depth without a
      decorative blob or a busy mesh. They fade to the same white the next
-     section starts from, so the transition is seamless. */
+     section starts from, so the transition is seamless. The blue one sits
+     directly behind the product panel, so the panel reads as floating in a
+     field of colour rather than on plain white. */
   padding: 88px 0 56px;
   background:
-    radial-gradient(52rem 30rem at 85% -12%, rgba(37, 99, 235, 0.09), transparent 62%),
-    radial-gradient(44rem 28rem at -6% 115%, rgba(20, 168, 154, 0.08), transparent 62%),
-    linear-gradient(180deg, #f7fbff 0%, #ffffff 100%);
+    radial-gradient(52rem 30rem at 88% 8%, rgba(37, 99, 235, 0.16), transparent 60%),
+    radial-gradient(44rem 28rem at -6% 115%, rgba(20, 168, 154, 0.12), transparent 62%),
+    linear-gradient(180deg, #f4f9ff 0%, #ffffff 100%);
 }
 .alt { background: var(--surface-alt); border-block: 1px solid var(--line); }
 
@@ -486,12 +487,37 @@ section { padding: 76px 0; }
 
 /* The headline is a full sentence rather than a phrase, so it needs a smaller
    ceiling than the global h1 or it runs to five lines and pushes the lede and
-   the buttons below the fold. */
-.hero h1 { font-size: clamp(2rem, 3.4vw, 2.9rem); line-height: 1.12; }
+   the buttons below the fold. Raised for the display serif, which needs a
+   little more size to read as the page's one big statement. */
+.hero h1 { font-size: clamp(2.4rem, 4.2vw, 3.6rem); line-height: 1.04; }
+
+/* A soft halo of brand colour behind the product panel. It is the panel's
+   "stage" — without it the panel sits on near-white and its shadow does
+   almost no work, which is why the hero reads flat. Positioned so it sits
+   under and around the panel rather than centred on it. */
+.hero-grid { position: relative; }
+.hero-grid::before {
+  content: "";
+  position: absolute;
+  top: 6%;
+  right: -4%;
+  width: 46%;
+  height: 92%;
+  background: radial-gradient(42rem 30rem at 70% 40%, rgba(37, 99, 235, 0.14), transparent 68%);
+  z-index: 0;
+  pointer-events: none;
+}
+.hero-grid > * { position: relative; z-index: 1; }
 
 /* A centred section head, for the sections that introduce a grid of equals
    rather than argue left-to-right. */
 .head-center { text-align: center; max-width: 46ch; margin: 0 auto; }
+
+/* The landing page's section eyebrows. .eyebrow is shared with the dashboard,
+   where it is an inline label inside a row; on the landing page it leads a
+   heading, so it needs to be a block of its own. A separate class rather than
+   redefining .eyebrow's display, which the dashboard's inline uses depend on. */
+.sec-eyebrow { display: block; margin-bottom: 10px; }
 
 /* The bar of plain claims under the hero: the three objections a recruitment
    agency raises before reading any further. */
@@ -707,6 +733,15 @@ section { padding: 76px 0; }
 .pillar[data-tone="teal"] { background: linear-gradient(180deg, #f3fbf9 0%, #fff 60%); }
 .pillar[data-tone="indigo"] { background: linear-gradient(180deg, #f7f8ff 0%, #fff 60%); }
 .pillar[data-tone="amber"] { background: linear-gradient(180deg, #fffaf2 0%, #fff 60%); }
+
+/* Each pillar's icon takes the hue of its card rather than the shared brand
+   gradient, so the four cards read as one family with four members instead of
+   four identical gradient tiles. Scoped to .pillar so the dashboard's .icon
+   (which also uses the gradient) is untouched. */
+.pillar[data-tone="blue"] .icon { background: #1d4ed8; }
+.pillar[data-tone="teal"] .icon { background: #14a89a; }
+.pillar[data-tone="indigo"] .icon { background: #4f46e5; }
+.pillar[data-tone="amber"] .icon { background: #b8791a; }
 
 /* The inset is a small picture of the claim above it. It sits at the bottom of
    the card whatever the body length, so the four cards line up. */

@@ -281,6 +281,7 @@ export default function Home() {
         <section id="why" className="alt beliefs">
           <div className="wrap">
             <div className="head-center">
+              <span className="eyebrow sec-eyebrow">Why we build it this way</span>
               <h2>Two beliefs, in plain words</h2>
               <p className="body" style={{ marginTop: 12 }}>
                 The product is early, and these are the beliefs shaping it. Each one names what
@@ -310,6 +311,7 @@ export default function Home() {
         <section id="what">
           <div className="wrap">
             <div className="head-center">
+              <span className="eyebrow sec-eyebrow">What it does</span>
               <h2>Built for how recruitment agencies really work</h2>
               <p className="body" style={{ marginTop: 12 }}>
                 The work is already happening. expressautomate turns it into something your agency
@@ -337,6 +339,7 @@ export default function Home() {
         <section id="how" className="alt">
           <div className="wrap split">
             <div>
+              <span className="eyebrow sec-eyebrow">How it works</span>
               <h2>Connect a source. Get a picture.</h2>
               <ol className="steps" style={{ marginTop: 28 }}>
                 {STEPS.map((s, i) => (
@@ -406,6 +409,7 @@ export default function Home() {
         <section id="candidates">
           <div className="wrap">
             <div className="head-center">
+              <span className="eyebrow sec-eyebrow">The candidate side</span>
               <h2>Beyond the job order</h2>
               <p className="body" style={{ marginTop: 12 }}>
                 The mail comes in as job orders, but recruitment is also the people who fill them.
@@ -432,6 +436,7 @@ export default function Home() {
         <section id="impact">
           <div className="wrap">
             <div className="head-center">
+              <span className="eyebrow sec-eyebrow">The payoff</span>
               <h2>The business impact you can feel</h2>
             </div>
             <ul className="impact" style={{ marginTop: 36 }}>
@@ -452,6 +457,7 @@ export default function Home() {
         <section id="customers" className="alt">
           <div className="wrap voices-grid">
             <div>
+              <span className="eyebrow sec-eyebrow">The direction</span>
               <h2>What using it should feel like</h2>
               <p className="body" style={{ marginTop: 12 }}>
                 We are building for agencies who want to find a place for each person, not just fill
@@ -482,7 +488,10 @@ export default function Home() {
 
         <section id="security">
           <div className="wrap">
-            <h2>Read-only, and provably so.</h2>
+            <div className="head-center">
+              <span className="eyebrow sec-eyebrow">Security</span>
+              <h2>Read-only, and provably so.</h2>
+            </div>
             <div className="grid-3" style={{ marginTop: 28 }}>
               <div className="card">
                 <div className="icon">
