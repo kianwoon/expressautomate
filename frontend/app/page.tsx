@@ -236,10 +236,10 @@ export default function Home() {
                 A client worth building with.
               </h1>
               <p className="lede" style={{ marginTop: 20 }}>
-                We believe every candidate has strengths worth finding — not a checkbox to filter
-                against — and that a client deserves the pre-work to assess, validate and recommend
-                the right person, not just a quick fill. expressautomate starts that work today,
-                from the recruitment mail your team already handles.
+                We believe every candidate has strengths worth finding, and a client deserves the
+                pre-work to recommend the right one. That work starts scattered — across mailboxes,
+                spreadsheets and people&rsquo;s memories. expressautomate brings it into one
+                structured record, starting with the recruitment mail you already receive.
               </p>
 
               <ul className="ticks">
@@ -273,64 +273,6 @@ export default function Home() {
                     {t.label}
                   </span>
                 </span>
-              ))}
-            </div>
-          </div>
-        </section>
-
-        <section id="why" className="alt beliefs">
-          <div className="wrap">
-            <div className="head-center">
-              <span className="eyebrow sec-eyebrow">Why we build it this way</span>
-              <h2>Two beliefs, in plain words</h2>
-              <p className="body" style={{ marginTop: 12 }}>
-                The product is early, and these are the beliefs shaping it. Each one names what
-                exists today, and what is still ahead.
-              </p>
-            </div>
-
-            <div className="grid-2" style={{ marginTop: 36 }}>
-              {MISSION.map((m) => (
-                <div className="card" key={m.title}>
-                  <div className="icon">
-                    <Icon name={m.icon} />
-                  </div>
-                  <h3>{m.title}</h3>
-                  <p className="body" style={{ marginTop: 10, fontSize: "0.9375rem" }}>
-                    {m.belief}
-                  </p>
-                  <p className="body" style={{ marginTop: 12, fontSize: "0.875rem", color: "var(--ink-500)" }}>
-                    {m.today}
-                  </p>
-                </div>
-              ))}
-            </div>
-          </div>
-        </section>
-
-        <section id="what">
-          <div className="wrap">
-            <div className="head-center">
-              <span className="eyebrow sec-eyebrow">What it does</span>
-              <h2>Built for how recruitment agencies really work</h2>
-              <p className="body" style={{ marginTop: 12 }}>
-                The work is already happening. expressautomate turns it into something your agency
-                owns and can act on.
-              </p>
-            </div>
-
-            <div className="grid-4 pillars" style={{ marginTop: 36 }}>
-              {PILLARS.map((p) => (
-                <div className="card pillar" data-tone={p.tone} key={p.title}>
-                  <div className="icon">
-                    <Icon name={p.icon} />
-                  </div>
-                  <h3>{p.title}</h3>
-                  <p className="body" style={{ marginTop: 8, fontSize: "0.9375rem" }}>
-                    {p.body}
-                  </p>
-                  <p.figure />
-                </div>
               ))}
             </div>
           </div>
@@ -406,6 +348,34 @@ export default function Home() {
           </div>
         </section>
 
+        <section id="what">
+          <div className="wrap">
+            <div className="head-center">
+              <span className="eyebrow sec-eyebrow">What it does</span>
+              <h2>Built for how recruitment agencies really work</h2>
+              <p className="body" style={{ marginTop: 12 }}>
+                The work is already happening. expressautomate turns it into something your agency
+                owns and can act on.
+              </p>
+            </div>
+
+            <div className="grid-4 pillars" style={{ marginTop: 36 }}>
+              {PILLARS.map((p) => (
+                <div className="card pillar" data-tone={p.tone} key={p.title}>
+                  <div className="icon">
+                    <Icon name={p.icon} />
+                  </div>
+                  <h3>{p.title}</h3>
+                  <p className="body" style={{ marginTop: 8, fontSize: "0.9375rem" }}>
+                    {p.body}
+                  </p>
+                  <p.figure />
+                </div>
+              ))}
+            </div>
+          </div>
+        </section>
+
         <section id="candidates">
           <div className="wrap">
             <div className="head-center">
@@ -426,6 +396,36 @@ export default function Home() {
                   <h3>{c.title}</h3>
                   <p className="body" style={{ marginTop: 8, fontSize: "0.9375rem" }}>
                     {c.body}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </div>
+        </section>
+
+        <section id="why" className="alt beliefs">
+          <div className="wrap">
+            <div className="head-center">
+              <span className="eyebrow sec-eyebrow">Why we build it this way</span>
+              <h2>Two beliefs, in plain words</h2>
+              <p className="body" style={{ marginTop: 12 }}>
+                The product is early, and these are the beliefs shaping it. Each one names what
+                exists today, and what is still ahead.
+              </p>
+            </div>
+
+            <div className="grid-2" style={{ marginTop: 36 }}>
+              {MISSION.map((m) => (
+                <div className="card" key={m.title}>
+                  <div className="icon">
+                    <Icon name={m.icon} />
+                  </div>
+                  <h3>{m.title}</h3>
+                  <p className="body" style={{ marginTop: 10, fontSize: "0.9375rem" }}>
+                    {m.belief}
+                  </p>
+                  <p className="body" style={{ marginTop: 12, fontSize: "0.875rem", color: "var(--ink-500)" }}>
+                    {m.today}
                   </p>
                 </div>
               ))}
