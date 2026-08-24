@@ -4,6 +4,8 @@ allow-hardcode: the base URL below is a test fixture, not configuration. It is
 deliberately *not* read from settings: see `_own_base_url`.
 """
 
+import asyncio
+
 import httpx
 import pytest
 
@@ -99,3 +101,56 @@ async def test_empty_content_raises_llm_no_content_not_a_generic_error():
         await complete_json(
             "prompt", model="test/fast", schema={}, transport=_transport(payload)
         )
+
+
+async def test_a_tls_hang_surfaces_as_retryable_timeout_not_cancelled():
+    """Pins the production outage (arq log 2026-08-24).
+
+    A TLS-layer hang in anyio's `receive()` surfaces as `CancelledError` — a
+    BaseException that bypasses the old `except _RETRYABLE` clause entirely.
+    It escaped `complete_json` uncaught, arq's own 300 s job timeout cancelled
+    the job from outside, and the whole 3-attempt transport retry loop never
+    fired. Now the hang is retried as if it were a timeout, and once the
+    retries are spent the job layer receives a `TimeoutError` — the shape
+    `extract()` already knows how to escalate from.
+    """
+    calls = {"n": 0}
+
+    def hang(request):
+        calls["n"] += 1
+        # A real TLS hang in anyio blocks on an asyncio.Event that never
+        # fires; when arq's outer wait_for(300 s) cancels the chain, that
+        # blocked await raises CancelledError. The mock raises the same
+        # BaseException subclass straight out of the transport handler so the
+        # retry loop sees exactly what the production hang produces.
+        raise asyncio.CancelledError
+
+    with pytest.raises(TimeoutError):
+        await complete_json(
+            "prompt",
+            model="test/fast",
+            schema={},
+            transport=httpx.MockTransport(hang),
+        )
+    # All three transport attempts were made before giving up — the loop that
+    # used to be skipped entirely by the uncaught cancellation.
+    assert calls["n"] == 3
+
+
+async def test_a_real_external_cancellation_still_propagates():
+    """The CancelledError catch is for TLS hangs, not for shutdown.
+
+    When arq (or the worker) cancels the job on purpose — shutdown, an abort,
+    its own job timeout — the cancellation must keep propagating so the job is
+    re-enqueued rather than silently converted into a permanent failure.
+    `complete_json` must only ever convert the cancellation it raised itself
+    for a hang, never one raised from outside.
+    """
+    async def never_returns():
+        await asyncio.Event().wait()
+
+    task = asyncio.create_task(never_returns())
+    await asyncio.sleep(0)  # let it start
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task

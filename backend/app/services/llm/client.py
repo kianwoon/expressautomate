@@ -132,8 +132,25 @@ async def complete_json(
     # bypassed by a TLS-layer hang in anyio (the SSL read blocks on a bare
     # asyncio.Event that neither httpcore's nor anyio's cancel scopes reach).
     # The wait_for wrapper below catches those hangs and turns them into a
-    # retryable exception instead of letting arq's 300 s job timeout kill the
-    # task from the outside.
+    # retryable exception instead of letting arq's job timeout kill the task
+    # from the outside.
+    #
+    # CancelledError must be caught here too: it is what that same TLS hang
+    # surfaces as in older anyio (the `receive()` path cancels the caller rather
+    # than raising TimeoutError). It is a subclass of BaseException, so it
+    # bypasses the `except _RETRYABLE` clause and escapes `complete_json` as an
+    # abrupt cancellation. arq's own timeout then cancels the job from outside
+    # (the `300.00s ! extract_email failed, TimeoutError` in the arq log), the
+    # whole 3-attempt retry loop never fires, and the strong-model escalation
+    # in `extract()` never gets a chance. Catching it here turns a hang into
+    # the same retryable provider-hang path the wait_for wrapper already
+    # serves — and, when the retries are spent, into a TimeoutError (see the
+    # re-raise below; a CancelledError escaping a task marks the task
+    # cancelled, which arq would report as "cancelled, will be run again" and
+    # re-enqueue even after the attempts are gone). Only the
+    # `asyncio.CancelledError` alias is caught — anything else the job layer
+    # cancelled on purpose (worker shutdown, arq's timeout) must keep
+    # propagating so shutdown is not silently absorbed.
     _RETRYABLE = (
         httpx.ConnectError,
         httpx.ReadError,
@@ -141,8 +158,11 @@ async def complete_json(
         httpx.RemoteProtocolError,
         httpx.PoolTimeout,
         asyncio.TimeoutError,
+        asyncio.CancelledError,
     )
-    last_exc: Exception | None = None
+    # CancelledError is a BaseException, not an Exception, so the variable must
+    # be typed for both: it is what a TLS hang surfaces as and it is retried.
+    last_exc: BaseException | None = None
     _timeout = settings.LLM_TIMEOUT_SECONDS
 
     # The provider every production call site names explicitly: DeepInfra
@@ -170,6 +190,19 @@ async def complete_json(
             if attempt < 2:
                 await asyncio.sleep(2**attempt)
                 continue
+            if isinstance(exc, asyncio.CancelledError):
+                # The retries are spent on a hang that surfaced as
+                # CancelledError. It must leave this function as a TimeoutError
+                # (the shape `extract()` escalates from) rather than as a raw
+                # CancelledError: a CancelledError escaping a task marks the
+                # task cancelled, so arq would report "cancelled, will be run
+                # again" and re-enqueue the job even though we already spent
+                # all three transport attempts on it — the same lost retry the
+                # uncaught hang caused, one hop later. `raise ... from` keeps
+                # the original as the chain's cause for the log.
+                raise TimeoutError(
+                    "LLM provider hang: retries exhausted"
+                ) from exc
             raise
         else:
             break
