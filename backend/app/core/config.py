@@ -418,6 +418,34 @@ class Settings(BaseSettings):
     # answer is a property of the model, and the knob must not silently track
     # extraction's if the two ever diverge.
     JOB_INTELLIGENCE_REASONING_EFFORT: str = "low"
+
+    # --- The Job Intelligence LLM provider (the "run analysis" pipeline) ---
+    # The Job Intelligence engine normally asks the same OpenAI-compatible
+    # provider as extraction (`LLM_PROVIDER_*`). When this flag is on AND an
+    # API key is set, the engine instead asks a GLM model via Z.AI's
+    # Anthropic-compatible Messages endpoint (`complete_json_anthropic` in
+    # app/services/llm/client.py). Isolated to Job Intelligence on purpose:
+    # the extraction/classification pipeline keeps its own provider, and
+    # nothing else in the app sees these settings.
+    JOB_INTELLIGENCE_LLM_ENABLED: bool = False
+    # The Z.AI Anthropic-compatible endpoint. Swap to another Anthropic-
+    # compatible provider by changing this plus the key and model name.
+    JOB_INTELLIGENCE_LLM_BASE_URL: str = "https://api.z.ai/api/anthropic/v1/messages"
+    # The Z.AI coding-plan API key. Required when JOB_INTELLIGENCE_LLM_ENABLED
+    # is true; the client no-ops to the deterministic fallback otherwise.
+    JOB_INTELLIGENCE_LLM_API_KEY: str = ""
+    # The GLM model identifier sent in the request body.
+    JOB_INTELLIGENCE_LLM_MODEL_NAME: str = "GLM-5.3"
+    # The output budget each GLM call gets. Mirrors the DeepSeek default so a
+    # long reasoning trace still leaves room for the large JSON answer.
+    JOB_INTELLIGENCE_LLM_MAX_TOKENS: int = Field(default=65536, gt=0)
+    # HTTP timeout per GLM call. The Anthropic client retries transient
+    # transport failures exactly like the OpenAI-compatible one does.
+    JOB_INTELLIGENCE_LLM_TIMEOUT_S: float = Field(default=60.0, gt=0)
+    # Session name in the coding-tool headers, so Z.AI's coding-plan quota
+    # recognises this traffic as coming from a coding tool.
+    JOB_INTELLIGENCE_LLM_SESSION_NAME: str = "expressautomate"
+
     # The model the Candidate Intelligence engine asks. Same fallback idiom as
     # `JOB_INTELLIGENCE_MODEL` (see `candidate_intelligence.history.model`): an
     # empty value defaults to the fast extraction model at call time. Listed in

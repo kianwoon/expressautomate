@@ -55,7 +55,14 @@ def model() -> str:
     An empty `JOB_INTELLIGENCE_MODEL` falls back to `EXTRACTION_MODEL_FAST`
     rather than being required, so a deployment that names only the one model
     still runs — the same fallback idiom `EXTRACTION_MODEL_STRONG` uses.
+
+    When the Job Intelligence LLM provider is enabled
+    (`JOB_INTELLIGENCE_LLM_ENABLED` + an API key), the engine asks the GLM
+    model name instead — `complete_json_anthropic` speaks the Anthropic wire
+    format, and the model id it sends lives in `JOB_INTELLIGENCE_LLM_MODEL_NAME`.
     """
+    if settings.JOB_INTELLIGENCE_LLM_ENABLED and settings.JOB_INTELLIGENCE_LLM_API_KEY:
+        return settings.JOB_INTELLIGENCE_LLM_MODEL_NAME or "GLM-5.3"
     return settings.JOB_INTELLIGENCE_MODEL or settings.EXTRACTION_MODEL_FAST
 
 

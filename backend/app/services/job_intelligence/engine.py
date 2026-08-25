@@ -21,12 +21,28 @@ from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.services.job_intelligence.input import OpportunityContext, assemble
 from app.services.job_intelligence.occupation import classify_occupation
 from app.services.job_intelligence.persona import infer_persona
 from app.services.job_intelligence.schema import JobIntelligenceResult
 from app.services.job_intelligence.search import plan_search
 from app.services.job_intelligence.understand import understand
+from app.services.llm.client import complete_json, complete_json_anthropic
+
+
+def _get_llm_for_job_intelligence():
+    """The completion function the engine calls when the caller passes none.
+
+    Normally `complete_json` (the OpenAI-compatible provider). When the GLM
+    provider is configured (`JOB_INTELLIGENCE_LLM_ENABLED` + API key), the
+    engine asks `complete_json_anthropic` instead, which speaks Z.AI's
+    Anthropic-compatible Messages API. Tests keep working: `FakeLLM` is
+    callable with the same signature, and `analyze(llm=...)` always wins.
+    """
+    if settings.JOB_INTELLIGENCE_LLM_ENABLED and settings.JOB_INTELLIGENCE_LLM_API_KEY:
+        return complete_json_anthropic
+    return complete_json
 
 
 @dataclass(frozen=True)
@@ -65,8 +81,11 @@ async def analyze(
     `session` is passed to the occupation stage for the MOM semantic search;
     None skips it. The `llm` seam is threaded through all stages so a test with
     one `FakeLLM` queued with responses runs the whole pipeline without a real
-    call.
+    call. When `llm` is None the engine resolves the configured provider itself
+    — GLM (`complete_json_anthropic`) when the Job Intelligence GLM provider is
+    enabled, otherwise `complete_json`.
     """
+    llm = llm or _get_llm_for_job_intelligence()
     context: OpportunityContext = assemble(opportunity, codes)
 
     understanding, r1 = await understand(context.text, llm=llm)

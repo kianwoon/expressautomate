@@ -19,6 +19,7 @@ import asyncio
 import json
 import re
 import time
+import uuid
 from dataclasses import dataclass, field
 
 import httpx
@@ -246,6 +247,130 @@ def _parse(content: str) -> dict:
         # on an attribute the caller assumed. Reject it where it happened.
         raise LLMInvalidJSON(f"expected an object, got {type(parsed).__name__}")
     return parsed
+
+
+async def complete_json_anthropic(
+    prompt: str,
+    *,
+    model: str,
+    schema: dict | None = None,
+    transport: httpx.AsyncBaseTransport | None = None,
+    base_url: str | None = None,
+    api_key: str | None = None,
+    extra_body: dict | None = None,
+) -> LLMResult:
+    """Ask a GLM model for one JSON object over the Anthropic Messages API.
+
+    Same signature as `complete_json`, so the two are interchangeable at a
+    call site — the Job Intelligence engine picks one or the other from
+    config (see `engine._get_llm_for_job_intelligence`). It targets Z.AI's
+    Anthropic-compatible coding-plan endpoint (`JOB_INTELLIGENCE_LLM_*`):
+
+    - The wire format is the Anthropic Messages API, not the OpenAI
+      `chat/completions` shape: `system`/`messages` blocks with `x-api-key`
+      auth and the coding-tool headers the Z.AI coding-plan quota requires.
+    - `base_url`, `api_key` and `extra_body` are accepted for signature
+      compatibility and ignored: the endpoint, key, and token budget all
+      come from the `JOB_INTELLIGENCE_LLM_*` settings, so a stage that calls
+      it does not need to know which provider it is talking to.
+    - Responses parse exactly like `complete_json`: a `content` block with
+      `type == "text"` whose text is one JSON object. Retry/failure
+      discipline mirrors the OpenAI-compatible client (transport errors are
+      retried, `LLMNoContent`/`LLMInvalidJSON` classify the unusable answer).
+    """
+    started = time.monotonic()
+    _base_url = settings.JOB_INTELLIGENCE_LLM_BASE_URL
+    _api_key = settings.JOB_INTELLIGENCE_LLM_API_KEY
+    _max_tokens = settings.JOB_INTELLIGENCE_LLM_MAX_TOKENS
+    _timeout = settings.JOB_INTELLIGENCE_LLM_TIMEOUT_S
+    _session_name = settings.JOB_INTELLIGENCE_LLM_SESSION_NAME
+
+    session_id = str(uuid.uuid4())
+    payload: dict = {
+        "model": model,
+        "max_tokens": _max_tokens,
+        "messages": [
+            {"role": "user", "content": [{"type": "text", "text": prompt}]}
+        ],
+        "stream": False,
+    }
+
+    headers = {
+        "Content-Type": "application/json",
+        "User-Agent": "Claude-Code/1.0",
+        "x-session-id": session_id,
+        "x-claude-code-session-id": session_id,
+        "x-session-name": _session_name,
+        "Accept": "application/json",
+        "x-api-key": _api_key,
+        "anthropic-version": "2023-06-01",
+        "anthropic-beta": "prompt-caching-2024-07-31,token-counting-2024-11-01",
+    }
+
+    # Same classification as the OpenAI-compatible client: transport errors are
+    # transient and worth a retry; an HTTP status error is the provider's
+    # answer and is not. See the `_RETRYABLE` comment in `complete_json`.
+    _RETRYABLE = (
+        httpx.ConnectError,
+        httpx.ReadError,
+        httpx.ReadTimeout,
+        httpx.RemoteProtocolError,
+        httpx.PoolTimeout,
+        asyncio.TimeoutError,
+        asyncio.CancelledError,
+    )
+    last_exc: BaseException | None = None
+
+    for attempt in range(3):
+        try:
+            async with httpx.AsyncClient(
+                base_url=_base_url,
+                timeout=_timeout,
+                transport=transport,
+                headers=headers,
+            ) as client:
+                # The base URL already ends in `/messages` (the Anthropic
+                # Messages endpoint), so POST the base URL itself — appending
+                # a path would double it (`.../messages/messages`).
+                response = await asyncio.wait_for(
+                    client.post("", json=payload),
+                    timeout=_timeout,
+                )
+                response.raise_for_status()
+                body = response.json()
+        except _RETRYABLE as exc:
+            last_exc = exc
+            if attempt < 2:
+                await asyncio.sleep(2**attempt)
+                continue
+            if isinstance(exc, asyncio.CancelledError):
+                raise TimeoutError("LLM provider hang: retries exhausted") from exc
+            raise
+        else:
+            break
+    else:
+        raise last_exc  # type: ignore[misc]
+
+    # Every hop is optional, matching the OpenAI-compatible path: a reasoning
+    # model that spent its budget thinking returns no text block at all.
+    text = None
+    for block in body.get("content") or []:
+        if block.get("type") == "text":
+            text = block.get("text")
+            break
+    if not text:
+        raise LLMNoContent("the model returned no content")
+    usage = body.get("usage") or {}
+    return LLMResult(
+        data=_parse(text),
+        # Record what answered, not what we asked for, per-model comparisons
+        # stay meaningful when a router serves a different model.
+        model=body.get("model", model),
+        prompt_tokens=usage.get("input_tokens"),
+        completion_tokens=usage.get("output_tokens"),
+        latency_ms=int((time.monotonic() - started) * 1000),
+        raw=body,
+    )
 
 
 class FakeLLM:

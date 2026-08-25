@@ -14,8 +14,8 @@ from dataclasses import dataclass
 import pytest
 
 from app.core.config import settings
-from app.services.job_intelligence.engine import analyze
-from app.services.llm.client import FakeLLM
+from app.services.job_intelligence.engine import _get_llm_for_job_intelligence, analyze
+from app.services.llm.client import FakeLLM, complete_json, complete_json_anthropic
 
 
 @pytest.fixture(autouse=True)
@@ -147,3 +147,43 @@ async def test_analyze_records_removed_codes():
     outcome = await analyze(_Opp(), codes=(), llm=llm)
     # No codes in this fixture, so nothing was removed.
     assert outcome.removed_codes == []
+
+
+async def test_get_llm_routes_to_glm_when_enabled(monkeypatch):
+    """With the GLM provider on, the engine resolves the Anthropic client.
+
+    The "run analysis" pipeline switches provider without the stages knowing:
+    they call whatever `llm` they are handed, and the engine hands them
+    `complete_json_anthropic` when `JOB_INTELLIGENCE_LLM_ENABLED` + API key
+    are set. With the flag off, the standard OpenAI-compatible client is used.
+    """
+    monkeypatch.setattr(settings, "JOB_INTELLIGENCE_LLM_ENABLED", False)
+    monkeypatch.setattr(settings, "JOB_INTELLIGENCE_LLM_API_KEY", "")
+    assert _get_llm_for_job_intelligence() is complete_json
+
+    monkeypatch.setattr(settings, "JOB_INTELLIGENCE_LLM_ENABLED", True)
+    monkeypatch.setattr(settings, "JOB_INTELLIGENCE_LLM_API_KEY", "test-glm-key")
+    assert _get_llm_for_job_intelligence() is complete_json_anthropic
+
+    # Enabled but no key: the gate fails closed to the deterministic path.
+    monkeypatch.setattr(settings, "JOB_INTELLIGENCE_LLM_ENABLED", True)
+    monkeypatch.setattr(settings, "JOB_INTELLIGENCE_LLM_API_KEY", "")
+    assert _get_llm_for_job_intelligence() is complete_json
+
+
+async def test_analyze_uses_glm_client_when_enabled(monkeypatch):
+    """End to end: with GLM on, `analyze` threads the Anthropic client into
+    every stage (same FakeLLM seam, so no real model is called)."""
+    monkeypatch.setattr(settings, "JOB_INTELLIGENCE_LLM_ENABLED", True)
+    monkeypatch.setattr(settings, "JOB_INTELLIGENCE_LLM_API_KEY", "test-glm-key")
+
+    llm = FakeLLM(
+        _understanding_payload(),
+        _occupation_profile_payload(),
+        _persona_payload(),
+        _search_payload(),
+    )
+    # An explicit llm always wins — FakeLLM stands in for the anthropic client.
+    outcome = await analyze(_Opp(), codes=(), llm=llm)
+    assert outcome.result.understanding.role == "Logistics Manager"
+    assert len(llm.prompts) == 4
