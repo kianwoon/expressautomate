@@ -478,7 +478,7 @@ class Settings(BaseSettings):
     # the budget that failed and well under the model's 384K output ceiling,
     # leaving room for a long trace and the large JSON answer (verified against
     # the live API, not theorised).
-    CANDIDATE_INTELLIGENCE_MAX_TOKENS: int = Field(default=65536, gt=0)
+    CANDIDATE_INTELLIGENCE_MAX_TOKENS: int = Field(default=131072, gt=0)
     # The reasoning effort the Candidate Intelligence engine asks for. Matches
     # `EXTRACTION_REASONING_EFFORT_FAST`'s default; explicit because the right
     # answer is a property of the model, and the knob must not silently track
@@ -491,7 +491,7 @@ class Settings(BaseSettings):
     # rule applies only to real answers. One retry covers provider hiccups and
     # the tail of a budget miss; the 64K ceiling makes the retry overwhelmingly
     # likely to answer.
-    CANDIDATE_INTELLIGENCE_NO_CONTENT_RETRIES: int = Field(default=1, ge=0)
+    CANDIDATE_INTELLIGENCE_NO_CONTENT_RETRIES: int = Field(default=2, ge=0)
     # Pause between no-content retries. Small: it is backoff for a transient
     # provider state, not a rate limit — the job already spends an arq slot.
     CANDIDATE_INTELLIGENCE_NO_CONTENT_RETRY_DELAY_SECONDS: float = Field(
