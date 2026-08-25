@@ -14,8 +14,12 @@ from dataclasses import dataclass
 import pytest
 
 from app.core.config import settings
-from app.services.job_intelligence.engine import _get_llm_for_job_intelligence, analyze
-from app.services.llm.client import FakeLLM, complete_json, complete_json_anthropic
+from app.services.job_intelligence.engine import (
+    _get_llm_for_job_intelligence,
+    _glm_complete_json,
+    analyze,
+)
+from app.services.llm.client import FakeLLM, complete_json
 
 
 @pytest.fixture(autouse=True)
@@ -150,12 +154,13 @@ async def test_analyze_records_removed_codes():
 
 
 async def test_get_llm_routes_to_glm_when_enabled(monkeypatch):
-    """With the GLM provider on, the engine resolves the Anthropic client.
+    """With the GLM provider on, the engine resolves to the GLM wrapper.
 
     The "run analysis" pipeline switches provider without the stages knowing:
     they call whatever `llm` they are handed, and the engine hands them
-    `complete_json_anthropic` when `JOB_INTELLIGENCE_LLM_ENABLED` + API key
-    are set. With the flag off, the standard OpenAI-compatible client is used.
+    `_glm_complete_json` (which wraps `complete_json` with the Z.AI base URL
+    and key) when `JOB_INTELLIGENCE_LLM_ENABLED` + API key are set. With the
+    flag off, the standard OpenAI-compatible client is used.
     """
     monkeypatch.setattr(settings, "JOB_INTELLIGENCE_LLM_ENABLED", False)
     monkeypatch.setattr(settings, "JOB_INTELLIGENCE_LLM_API_KEY", "")
@@ -163,7 +168,10 @@ async def test_get_llm_routes_to_glm_when_enabled(monkeypatch):
 
     monkeypatch.setattr(settings, "JOB_INTELLIGENCE_LLM_ENABLED", True)
     monkeypatch.setattr(settings, "JOB_INTELLIGENCE_LLM_API_KEY", "test-glm-key")
-    assert _get_llm_for_job_intelligence() is complete_json_anthropic
+    fn = _get_llm_for_job_intelligence()
+    # The wrapper is not the same object as complete_json itself — it wraps it.
+    assert fn is not complete_json
+    assert fn.__name__ == "_glm_complete_json"
 
     # Enabled but no key: the gate fails closed to the deterministic path.
     monkeypatch.setattr(settings, "JOB_INTELLIGENCE_LLM_ENABLED", True)
@@ -171,9 +179,38 @@ async def test_get_llm_routes_to_glm_when_enabled(monkeypatch):
     assert _get_llm_for_job_intelligence() is complete_json
 
 
+async def test_glm_wrapper_overrides_base_url_and_key(monkeypatch):
+    """The GLM wrapper must point the request at Z.AI, not the extraction
+    provider. The stages pass `base_url=settings.LLM_PROVIDER_BASE_URL` and
+    `api_key=settings.LLM_PROVIDER_API_KEY` explicitly, so routing to a
+    different function would still send the job to DeepInfra. The wrapper
+    overrides those kwargs with the Z.AI coding-plan values.
+    """
+    monkeypatch.setattr(settings, "JOB_INTELLIGENCE_LLM_ENABLED", True)
+    monkeypatch.setattr(settings, "JOB_INTELLIGENCE_LLM_API_KEY", "test-glm-key")
+    monkeypatch.setattr(
+        settings, "JOB_INTELLIGENCE_LLM_BASE_URL", "https://zai.test/v4"
+    )
+    captured = {}
+
+    async def spy(prompt, **kwargs):
+        captured.update(kwargs)
+        return await FakeLLM(_understanding_payload())(prompt, **kwargs)
+
+    # Replace complete_json inside the engine module so the wrapper's call
+    # is intercepted.
+    monkeypatch.setattr(
+        "app.services.job_intelligence.engine.complete_json", spy
+    )
+    await _glm_complete_json("prompt", model="glm-5.3", schema=None)
+
+    assert captured["base_url"] == "https://zai.test/v4"
+    assert captured["api_key"] == "test-glm-key"
+
+
 async def test_analyze_uses_glm_client_when_enabled(monkeypatch):
-    """End to end: with GLM on, `analyze` threads the Anthropic client into
-    every stage (same FakeLLM seam, so no real model is called)."""
+    """End to end: with GLM on, `analyze` threads the GLM client into every
+    stage (same FakeLLM seam, so no real model is called)."""
     monkeypatch.setattr(settings, "JOB_INTELLIGENCE_LLM_ENABLED", True)
     monkeypatch.setattr(settings, "JOB_INTELLIGENCE_LLM_API_KEY", "test-glm-key")
 
@@ -183,7 +220,7 @@ async def test_analyze_uses_glm_client_when_enabled(monkeypatch):
         _persona_payload(),
         _search_payload(),
     )
-    # An explicit llm always wins — FakeLLM stands in for the anthropic client.
+    # An explicit llm always wins — FakeLLM stands in for the GLM client.
     outcome = await analyze(_Opp(), codes=(), llm=llm)
     assert outcome.result.understanding.role == "Logistics Manager"
     assert len(llm.prompts) == 4

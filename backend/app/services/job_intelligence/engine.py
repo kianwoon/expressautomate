@@ -28,7 +28,24 @@ from app.services.job_intelligence.persona import infer_persona
 from app.services.job_intelligence.schema import JobIntelligenceResult
 from app.services.job_intelligence.search import plan_search
 from app.services.job_intelligence.understand import understand
-from app.services.llm.client import complete_json, complete_json_anthropic
+from app.services.llm.client import complete_json
+
+
+async def _glm_complete_json(prompt, **kwargs):
+    """`complete_json` pointed at Z.AI's GLM coding-plan endpoint.
+
+    The stages pass `base_url=settings.LLM_PROVIDER_BASE_URL` and
+    `api_key=settings.LLM_PROVIDER_API_KEY` explicitly, so routing to a
+    different function would still send the job to the extraction provider.
+    This wrapper overrides those two kwargs with the Z.AI coding-plan values;
+    everything else (`model`, `schema`, `extra_body`) is passed through, and
+    the wire format is the same OpenAI-compatible one `complete_json` already
+    speaks (Z.AI's OpenAI Chat endpoint, not its Anthropic one which
+    redirects to a local-only proxy).
+    """
+    kwargs["base_url"] = settings.JOB_INTELLIGENCE_LLM_BASE_URL
+    kwargs["api_key"] = settings.JOB_INTELLIGENCE_LLM_API_KEY
+    return await complete_json(prompt, **kwargs)
 
 
 def _get_llm_for_job_intelligence():
@@ -36,12 +53,12 @@ def _get_llm_for_job_intelligence():
 
     Normally `complete_json` (the OpenAI-compatible provider). When the GLM
     provider is configured (`JOB_INTELLIGENCE_LLM_ENABLED` + API key), the
-    engine asks `complete_json_anthropic` instead, which speaks Z.AI's
-    Anthropic-compatible Messages API. Tests keep working: `FakeLLM` is
-    callable with the same signature, and `analyze(llm=...)` always wins.
+    engine asks `_glm_complete_json` instead — the same client pointed at
+    Z.AI's coding-plan endpoint. Tests keep working: `FakeLLM` is callable
+    with the same signature, and `analyze(llm=...)` always wins.
     """
     if settings.JOB_INTELLIGENCE_LLM_ENABLED and settings.JOB_INTELLIGENCE_LLM_API_KEY:
-        return complete_json_anthropic
+        return _glm_complete_json
     return complete_json
 
 
@@ -82,8 +99,8 @@ async def analyze(
     None skips it. The `llm` seam is threaded through all stages so a test with
     one `FakeLLM` queued with responses runs the whole pipeline without a real
     call. When `llm` is None the engine resolves the configured provider itself
-    — GLM (`complete_json_anthropic`) when the Job Intelligence GLM provider is
-    enabled, otherwise `complete_json`.
+    — GLM (the Z.AI wrapper) when the Job Intelligence GLM provider is enabled,
+    otherwise `complete_json`.
     """
     llm = llm or _get_llm_for_job_intelligence()
     context: OpportunityContext = assemble(opportunity, codes)

@@ -422,29 +422,37 @@ class Settings(BaseSettings):
     # --- The Job Intelligence LLM provider (the "run analysis" pipeline) ---
     # The Job Intelligence engine normally asks the same OpenAI-compatible
     # provider as extraction (`LLM_PROVIDER_*`). When this flag is on AND an
-    # API key is set, the engine instead asks a GLM model via Z.AI's
-    # Anthropic-compatible Messages endpoint (`complete_json_anthropic` in
-    # app/services/llm/client.py). Isolated to Job Intelligence on purpose:
-    # the extraction/classification pipeline keeps its own provider, and
-    # nothing else in the app sees these settings.
+    # API key is set, the engine instead asks a GLM model via Z.AI's coding-
+    # plan endpoint. Isolated to Job Intelligence on purpose: the
+    # extraction/classification pipeline keeps its own provider, and nothing
+    # else in the app sees these settings.
+    #
+    # Z.AI exposes three coding-plan endpoints (docs.z.ai/devpack/tool/others):
+    #   Anthropic Messages  https://api.z.ai/api/anthropic
+    #   OpenAI Chat         https://api.z.ai/api/coding/paas/v4  ← used here
+    #   OpenAI Responses    https://api.z.ai/api/v1
+    # The Anthropic endpoint redirects to a local proxy
+    # (`claude-code-proxy.wudao:8082`) that only exists on the caller's
+    # machine — it is unusable from a server like Koyeb. The OpenAI Chat
+    # Completions endpoint serves the same GLM coding plan over the same wire
+    # format `complete_json` already speaks, so the existing client is reused
+    # unchanged: only `base_url` and `api_key` differ.
     JOB_INTELLIGENCE_LLM_ENABLED: bool = False
-    # The Z.AI Anthropic-compatible endpoint. Swap to another Anthropic-
-    # compatible provider by changing this plus the key and model name.
-    JOB_INTELLIGENCE_LLM_BASE_URL: str = "https://api.z.ai/api/anthropic/v1/messages"
+    # The Z.AI coding-plan OpenAI-compatible endpoint. Swap to another
+    # OpenAI-compatible provider by changing this plus the key and model name.
+    JOB_INTELLIGENCE_LLM_BASE_URL: str = "https://api.z.ai/api/coding/paas/v4"
     # The Z.AI coding-plan API key. Required when JOB_INTELLIGENCE_LLM_ENABLED
     # is true; the client no-ops to the deterministic fallback otherwise.
     JOB_INTELLIGENCE_LLM_API_KEY: str = ""
-    # The GLM model identifier sent in the request body.
-    JOB_INTELLIGENCE_LLM_MODEL_NAME: str = "GLM-5.3"
+    # The GLM model identifier sent in the request body. Z.AI maps any GLM
+    # coding-plan model id to the plan's current model (glm-5.3 today).
+    JOB_INTELLIGENCE_LLM_MODEL_NAME: str = "glm-5.3"
     # The output budget each GLM call gets. Mirrors the DeepSeek default so a
     # long reasoning trace still leaves room for the large JSON answer.
     JOB_INTELLIGENCE_LLM_MAX_TOKENS: int = Field(default=65536, gt=0)
-    # HTTP timeout per GLM call. The Anthropic client retries transient
-    # transport failures exactly like the OpenAI-compatible one does.
+    # HTTP timeout per GLM call. The OpenAI-compatible client retries transient
+    # transport failures exactly as it does for DeepInfra.
     JOB_INTELLIGENCE_LLM_TIMEOUT_S: float = Field(default=60.0, gt=0)
-    # Session name in the coding-tool headers, so Z.AI's coding-plan quota
-    # recognises this traffic as coming from a coding tool.
-    JOB_INTELLIGENCE_LLM_SESSION_NAME: str = "expressautomate"
 
     # The model the Candidate Intelligence engine asks. Same fallback idiom as
     # `JOB_INTELLIGENCE_MODEL` (see `candidate_intelligence.history.model`): an
