@@ -269,7 +269,14 @@ class Settings(BaseSettings):
     # accumulating between pages, but a single-page FlateDecode bomb still
     # inflates inside `pypdf` where nothing is watching. This is the only
     # thing standing between one hostile page and a worker slot held forever.
-    CV_PARSE_TIMEOUT_SECONDS: float = Field(default=300.0, gt=0)
+    #
+    # 600 rather than 300 since the provider moved to GLM: the career pass
+    # can legitimately take a few minutes on a long CV under load (the LLM
+    # client itself waits up to 180s per attempt), and the job needs room
+    # for both the fast pass and the escalation pass inside the cap — at 300s
+    # the 3-attempt client loop alone could exhaust the budget before the
+    # strong pass ever ran (production log 2026-08-25: 277s job, timeout).
+    CV_PARSE_TIMEOUT_SECONDS: float = Field(default=600.0, gt=0)
     # How many times a worker may pick up one CV document. `CandidateDocument.
     # attempts` is spent at claim time, mirroring the import and sourcing runs,
     # so a document whose parse times out or crashes is re-enqueued by
@@ -284,7 +291,7 @@ class Settings(BaseSettings):
     # call, so it shares the parse's ceiling rather than carrying one of its
     # own. A timed-out job leaves the row at `ingesting`, which `rescan_stuck`
     # routes back to `ingest_candidate_cv`.
-    CV_INGEST_TIMEOUT_SECONDS: float = Field(default=300.0, gt=0)
+    CV_INGEST_TIMEOUT_SECONDS: float = Field(default=600.0, gt=0)
     # The largest upload the API will accept, counted as the bytes arrive
     # rather than trusted from `Content-Length`. Generous next to a real CV
     # and far below `CV_TEXT_MAX_CHARS`, so the bound that actually bites a
@@ -344,7 +351,10 @@ class Settings(BaseSettings):
     # The wall clock a single job-description extraction may occupy an arq
     # worker for, model call included. Bounded by the same FlateDecode risk as
     # the CV parse, so it shares that ceiling's reasoning.
-    OPPORTUNITY_DOCUMENT_EXTRACT_TIMEOUT_SECONDS: float = Field(default=300.0, gt=0)
+    # 600 rather than 300 for the same reason the CV parse raised: GLM's
+    # variable latency needs room for the LLM client's per-attempt wait plus
+    # the escalation pass inside the job cap.
+    OPPORTUNITY_DOCUMENT_EXTRACT_TIMEOUT_SECONDS: float = Field(default=600.0, gt=0)
     # How many times a worker may pick up one job-description document.
     # `OpportunityDocument.attempts` is spent at claim time, mirroring the CV
     # parse and the import runs, so a document whose extraction times out or
@@ -594,7 +604,12 @@ class Settings(BaseSettings):
     # Generous next to GRAPH_TIMEOUT_SECONDS on purpose: a long recruitment
     # email on a strong model routinely spends a minute generating, and a
     # timeout here costs the whole extraction plus a retry's worth of tokens.
-    LLM_TIMEOUT_SECONDS: float = 90.0
+    # 180 rather than 90 since the provider moved to Z.AI's GLM coding plan:
+    # its endpoint has more variable latency under shared quota load than
+    # DeepInfra's did, and a reasoning model that is *working* can take past
+    # 90s on a long document — killing it at 90 makes the 3-attempt retry
+    # loop burn the whole job budget on a provider that would have answered.
+    LLM_TIMEOUT_SECONDS: float = 180.0
     # An extraction answers for fourteen fields per vacancy and quotes the email
     # for each, so its completions are an order of magnitude longer than the
     # gate's one-word verdicts. Too low and the response is truncated mid-JSON,
