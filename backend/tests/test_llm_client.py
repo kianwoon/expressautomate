@@ -137,6 +137,36 @@ async def test_glm_answer_envelope_as_string_is_unwrapped():
     assert "answer" not in result.data
 
 
+async def test_glm_answer_envelope_malformed_json_is_rescued():
+    """GLM sometimes returns the answer envelope as invalid JSON — the
+    inner JSON document is pretty-printed with raw newlines and unescaped
+    quotes inside the string value. The outer `json.loads` fails, but the
+    inner document can be extracted and parsed."""
+    payload = {
+        "choices": [
+            {
+                "message": {
+                    "content": (
+                        '{"answer":"\n{\n  "roles": [\n'
+                        '    {"title":{"value":"Software Engineer",'
+                        '"evidence":"Engineer","start_char":0,"end_char":8,'
+                        '"confidence":0.95}}\n  ]\n}"}'
+                    )
+                }
+            }
+        ],
+        "usage": {},
+        "model": "test/fast",
+    }
+
+    result = await complete_json(
+        "prompt", model="test/fast", schema={}, transport=_transport(payload)
+    )
+
+    assert result.data["roles"][0]["title"]["value"] == "Software Engineer"
+    assert "answer" not in result.data
+
+
 async def test_empty_content_raises_llm_no_content_not_a_generic_error():
     """An empty `content` — a reasoning model that spent its whole budget
     thinking — is the specific exception the job layer retries. It must arrive

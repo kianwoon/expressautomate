@@ -237,10 +237,18 @@ def _parse(content: str) -> dict:
         content = match.group(1)
     try:
         parsed = json.loads(content)
-    except (json.JSONDecodeError, TypeError) as exc:
+    except (json.JSONDecodeError, TypeError):
+        # GLM's coding plan sometimes returns the answer envelope as MALFORMED
+        # JSON: `{"answer": "<pretty-printed inner JSON with raw newlines and
+        # unescaped quotes>"}`. The outer `json.loads` fails on the control
+        # characters before we ever see the envelope, so recover by extracting
+        # the inner JSON document and parsing it directly.
+        rescued = _rescue_answer_envelope(content)
+        if rescued is not None:
+            return rescued
         # Truncated: the message ends up in logs, and a runaway completion would
         # otherwise put a whole email body there.
-        raise LLMInvalidJSON(content[:500]) from exc
+        raise LLMInvalidJSON(content[:500]) from None
     if not isinstance(parsed, dict):
         # A bare list or number parses fine and would then fail far downstream
         # on an attribute the caller assumed. Reject it where it happened.
@@ -271,6 +279,44 @@ def _parse(content: str) -> dict:
                 f"got {type(inner).__name__}"
             )
     return parsed
+
+
+def _rescue_answer_envelope(content: str) -> dict | None:
+    """Recover a GLM answer envelope whose outer JSON is malformed.
+
+    The model sometimes returns `{"answer":"\n{\n  \"roles\": [\n  ... \n}"}`
+    — an `answer` key holding a pretty-printed JSON document with raw
+    newlines and unescaped quotes. That is invalid JSON (control characters
+    in a string), so the normal `json.loads` path fails before the envelope
+    can be unwrapped. This finds the inner document between the `"answer":"`
+    marker and the closing `"}` and parses it directly.
+
+    Returns the parsed inner dict, or None when the content does not match
+    this pattern (so the caller raises the ordinary invalid-JSON error).
+    """
+    marker = '"answer":"'
+    start = content.find(marker)
+    if start == -1:
+        return None
+    start += len(marker)
+    # The envelope ends with `"}` — the last `"}` in the content (the inner
+    # document's own closing braces are inside, so the final `"}` is the
+    # wrapper's). If the inner document has a `"` before its end this could
+    # cut early, but the common failure is precisely a document whose closing
+    # quotes are unterminated, so the last `"}` is the reliable boundary.
+    end = content.rfind('"}')
+    if end <= start:
+        return None
+    inner_text = content[start:end]
+    if match := _FENCE.match(inner_text):
+        inner_text = match.group(1)
+    try:
+        inner = json.loads(inner_text)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if isinstance(inner, dict):
+        return inner
+    return None
 
 
 class FakeLLM:
