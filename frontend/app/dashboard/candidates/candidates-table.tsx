@@ -11,9 +11,9 @@ import type { Candidate } from "../candidates";
  * screens have nothing to share but layout idioms, which live in the shared
  * `jo-*` CSS classes both already reuse.
  *
- * Column sorting mirrors job-orders: a `Sort` type, a `Th` header with
- * `aria-sort` + a click handler, and the page threading `sort`/`setSort`
- * through. The five columns are the same five the table has always drawn.
+*  Column sorting mirrors job-orders: a `Sort` type, a `Th` header with
+ *  `aria-sort` + a click handler, and the page threading `sort`/`setSort`
+ *  through. The five columns are Name, Phone, Email, Stage, Updated.
  *
  * allow-hardcode: the strings here are user-facing copy, not a list anything
  * is matched against.
@@ -21,7 +21,7 @@ import type { Candidate } from "../candidates";
 
 /** The five list columns a recruiter may sort by. The keys are the values the
  *  backend's `CandidateSortKey` accepts — they travel in the query string. */
-export type CandidateSortKey = "name" | "title" | "employer" | "stage" | "updated";
+export type CandidateSortKey = "name" | "phone" | "email" | "stage" | "updated";
 
 /** A sort the table is currently applying. `{ key: "updated", descending: true }`
  *  is the default — the fixed order the list had before sorting landed. */
@@ -29,8 +29,8 @@ export type CandidateSort = { key: CandidateSortKey; descending: boolean };
 
 const COLUMNS: { key: CandidateSortKey; label: string }[] = [
   { key: "name", label: "Name" },
-  { key: "title", label: "Title" },
-  { key: "employer", label: "Employer" },
+  { key: "phone", label: "Phone" },
+  { key: "email", label: "Email" },
   { key: "stage", label: "Stage" },
   { key: "updated", label: "Updated" },
 ];
@@ -66,8 +66,8 @@ export function CandidatesTable({
 
             Updated is 18% because the date does not wrap: it needs 116px and
             gets 119 at the floor. Stage is 16% for the same reason at a
-            smaller size — "Contacted" is the longest of the five. Name, Title
-            and Employer wrap, so the room comes from them. */}
+            smaller size — "Contacted" is the longest of the five. Name, Phone
+            and Email wrap, so the room comes from them. */}
         <colgroup>
           <col style={{ width: "25%" }} />
           <col style={{ width: "21%" }} />
@@ -106,11 +106,11 @@ export function CandidatesTable({
                     {row.full_name}
                   </button>
                 </td>
-                <td className="jo-td">
-                  <Value text={row.current_title} />
+                <td className="jo-td" data-nowrap="yes">
+                  <Value text={row.phone_raw || row.phone_e164} />
                 </td>
                 <td className="jo-td">
-                  <Value text={row.current_employer} />
+                  <Value text={row.email} />
                 </td>
                 <td className="jo-td">
                   {row.record_status === "merged" ? (

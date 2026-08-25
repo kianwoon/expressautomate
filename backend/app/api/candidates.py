@@ -63,7 +63,7 @@ RecordStatusFilter = Literal["active", "archived", "merged"]
 # sort for the job-orders table. The default (`updated`) preserves the previous
 # fixed order — `updated_at` desc — so an unsorted list is byte-for-byte what it
 # was before the parameter existed.
-CandidateSortKey = Literal["name", "title", "employer", "stage", "updated"]
+CandidateSortKey = Literal["name", "phone", "email", "stage", "updated"]
 
 # The pipeline_stage column is text, but its natural order is the hiring
 # funnel (`new` → `placed`), not alphabetical. A recruiter clicking "Stage"
@@ -91,8 +91,8 @@ def _stage_rank():
 # uppercase-first ordering would file them pages apart.
 _CANDIDATE_SORT_COLUMN = {
     "name": func.lower(Candidate.full_name),
-    "title": func.lower(Candidate.current_title),
-    "employer": func.lower(Candidate.current_employer),
+    "phone": Candidate.phone_e164,
+    "email": func.lower(Candidate.email),
     "stage": _stage_rank,
     "updated": Candidate.updated_at,
 }
