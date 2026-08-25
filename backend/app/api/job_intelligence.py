@@ -139,6 +139,14 @@ async def run_intelligence(request: Request, opportunity_id: uuid.UUID) -> dict:
             existing.understanding = None
             existing.persona = None
             existing.search_plan = None
+            # A re-run is a fresh attempt, not a continuation of the last
+            # failed one. Without this, the attempts counter accumulates
+            # across re-runs; once it passes `JOB_INTELLIGENCE_MAX_ATTEMPTS`
+            # the job's conditional claim fails the row immediately with
+            # "attempts exhausted" before ever calling the model — which is
+            # how a user clicking Run Analysis again on a failed job order
+            # got an instant failure with no error logged.
+            existing.attempts = 0
             row_id = existing.id
         await session.commit()
 

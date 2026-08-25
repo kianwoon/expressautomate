@@ -99,6 +99,13 @@ async def run_candidate_intelligence_route(
             existing.failure_reason = None
             existing.work = None
             existing.assessment = None
+            # A re-run is a fresh attempt, not a continuation of the last
+            # failed one — same rationale as the Job Intelligence route: the
+            # job's conditional claim fails the row once attempts exceed the
+            # cap, and without a reset every re-run of a previously-failed
+            # analysis dies instantly with "attempts exhausted" before ever
+            # reaching the model.
+            existing.attempts = 0
             row_id = existing.id
         await session.commit()
 

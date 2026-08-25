@@ -195,6 +195,51 @@ async def test_rerun_resets_a_finished_row_to_pending(queued):
         await _drop_agency(tid)
 
 
+async def test_rerun_resets_attempts_so_a_failed_row_can_run_again(queued):
+    """The attempts counter must not accumulate across re-runs.
+
+    A failed analysis (attempts spent, then a re-run) would otherwise hit the
+    job's conditional claim with `attempts > JOB_INTELLIGENCE_MAX_ATTEMPTS`
+    and fail instantly with "attempts exhausted" before ever calling the
+    model. This pins the bug that made a re-run of a failed job order die
+    with no error logged: the POST must reset attempts along with state.
+    """
+    tid, uid = await _seed_agency()
+    oid = await _opportunity(tid, uid)
+    try:
+        async with _http(tid, uid) as c:
+            first = await c.post(f"/api/opportunities/{oid}/intelligence")
+            row_id = first.json()["id"]
+
+            # Simulate a failed run: attempts spent at the claim, row failed.
+            async with AdminSessionLocal() as s:
+                await s.execute(
+                    text(
+                        "UPDATE job_intelligence SET state = 'failed',"
+                        " attempts = 4, failure_reason = 'model failed'"
+                        " WHERE id = :i"
+                    ),
+                    {"i": row_id},
+                )
+                await s.commit()
+
+            # Re-run: the POST must reset attempts to 0 along with state.
+            second = await c.post(f"/api/opportunities/{oid}/intelligence")
+            assert second.json()["id"] == row_id
+            assert second.json()["state"] == "pending"
+
+            async with AdminSessionLocal() as s:
+                got = (
+                    await s.execute(
+                        text("SELECT attempts FROM job_intelligence WHERE id = :i"),
+                        {"i": row_id},
+                    )
+                ).scalar_one()
+            assert got == 0
+    finally:
+        await _drop_agency(tid)
+
+
 async def test_another_agencys_job_order_is_404(queued):
     tid, uid = await _seed_agency()
     oid = await _opportunity(tid, uid)
