@@ -210,19 +210,28 @@ def test_a_month_date_never_acquires_a_day():
     fabricated in `value` must not make `shape_precision` see a day, because
     only `evidence`, the quote off the page, may license precision.
     """
-    with pytest.raises(ValueError):
-        ExtractedDate.model_validate(
-            {
-                "value": "2019-03-01",
-                "evidence": "Mar 2019",
-                "confidence": 0.9,
-                "precision": "day",
-            }
-        )
+    # A claimed day is downgraded to the month the page supports, not stored
+    # as a fabricated day and not escalated to the slow strong pass.
+    parsed = ExtractedDate.model_validate(
+        {
+            "value": "2019-03-01",
+            "evidence": "Mar 2019",
+            "confidence": 0.9,
+            "precision": "day",
+        }
+    )
+    assert parsed.precision == "month"
 
 
-async def test_a_precision_finer_than_the_page_supports_is_refused():
-    """"Mar 2019" cannot be a day, however the model labels it."""
+async def test_a_precision_finer_than_the_page_supports_is_downgraded():
+    """"Mar 2019" cannot be a day, however the model labels it.
+
+    Since the provider moved to GLM the precision is downgraded to what the
+    page supports (month) rather than refusing and escalating to the slow
+    strong pass: GLM routinely mislabels precision, and re-asking it at high
+    effort costs minutes for a date the evidence itself resolves. The honest
+    answer to "how exactly did the page write it" is the page, not the model.
+    """
     llm = _Spy(
         _payload(start_date=_field("Mar 2019", precision="day")),
         _payload(),
@@ -230,7 +239,27 @@ async def test_a_precision_finer_than_the_page_supports_is_refused():
 
     response, result = await extract_cv(CV, llm=llm)
 
-    assert result.model == settings.EXTRACTION_MODEL_STRONG
+    # The fast pass's answer was accepted with the precision corrected to
+    # month — no escalation to the strong model.
+    assert result.model == settings.EXTRACTION_MODEL_FAST
+    assert response.roles[0].start_date.precision == "month"
+
+
+async def test_a_date_with_no_precision_is_downgraded_from_evidence():
+    """A model that omits precision entirely is corrected from the evidence.
+
+    GLM does this routinely (production log: 'Jan 2026' states no date
+    precision). The evidence text "Mar 2019" supports month precision, so the
+    answer is accepted with precision=month rather than refused and escalated.
+    """
+    llm = _Spy(
+        _payload(start_date=_field("Mar 2019", precision=None)),
+        _payload(),
+    )
+
+    response, result = await extract_cv(CV, llm=llm)
+
+    assert result.model == settings.EXTRACTION_MODEL_FAST
     assert response.roles[0].start_date.precision == "month"
 
 

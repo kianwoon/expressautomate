@@ -21,7 +21,7 @@ rather than a stored fact.
 """
 
 import re
-from typing import Literal
+from typing import Literal, cast
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -80,21 +80,31 @@ class ExtractedDate(ExtractedField):
         arrives downstream indistinguishable from a date the candidate wrote.
         Raising instead makes the response unusable, which is the one signal
         `extract_cv` acts on — the answer is re-asked, never quietly patched.
+
+        Since the provider moved to GLM's coding plan this strictness became
+        a latency trap: GLM routinely mislabels precision (year for a month
+        date, or omits it), and every mislabel escalated the whole CV to the
+        slow strong pass — minutes of extra reasoning for a date that the
+        evidence itself resolves. So instead of raising, downgrade the claimed
+        precision to the finest the page supports: the honest answer to "how
+        exactly did the page write it" is the page, not the model. A date the
+        page does not carry at all (evidence empty) is still refused.
         """
         if self.is_missing:
             return self
+        supported = shape_precision(self.evidence or "")
         if self.precision is None:
-            raise ValueError(f"{self.value!r} states no date precision")
+            if not self.evidence:
+                raise ValueError(f"{self.value!r} states no date precision")
+            self.precision = cast("Literal['year','month','day']", supported)
+            return self
         # `value` is the model's claim, not evidence of anything — concatenating
         # it in here would let a fabricated day in `value` license its own
         # precision, since the day the model invented would then appear in the
         # very string being inspected for a day. Only `evidence`, the quote off
         # the page, may say what precision the page actually supports.
-        supported = shape_precision(self.evidence or "")
         if PRECISIONS.index(self.precision) > PRECISIONS.index(supported):
-            raise ValueError(
-                f"{self.value!r} is {supported} precision, not {self.precision}"
-            )
+            self.precision = cast("Literal['year','month','day']", supported)
         return self
 
 
