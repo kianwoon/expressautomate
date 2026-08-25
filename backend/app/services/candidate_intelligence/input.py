@@ -123,9 +123,19 @@ def _role_lines(roles) -> list[str]:
     if not roles:
         return []
     lines: list[str] = []
+
+    def _sort_key(role):
+        # `started_on` is a date from the DB, but a role without one yields
+        # None (and `or ""` would then compare a str against a date — a
+        # TypeError). Normalise every value to an ISO string first so the
+        # comparison is always str-vs-str, and put missing dates first
+        # (empty string sorts before any date).
+        started = getattr(role, "started_on", None)
+        return started.isoformat() if started is not None else ""
+
     ordered = sorted(
         (r for r in roles if getattr(r, "status", None) != "rejected"),
-        key=lambda r: getattr(r, "started_on", None) or "",
+        key=_sort_key,
     )
     for role in ordered:
         title = _clean(getattr(role, "title", None))

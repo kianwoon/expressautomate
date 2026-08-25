@@ -105,6 +105,26 @@ def test_assemble_includes_roles_oldest_first():
     assert "Underwriter" in role_lines[1]
 
 
+def test_assemble_sorts_roles_with_missing_dates():
+    """A role with no started_on (None) must not crash the sort.
+
+    The sort key was `started_on or ""`, which compared a datetime.date
+    against a str when one role lacked a date — TypeError in production
+    (run_candidate_intelligence failed on '<' not supported between
+    'str' and 'datetime.date'). Missing dates sort first (empty string).
+    """
+    from datetime import date
+
+    dated = _Role(title="Dated", employer="Bank A", started_on=date(2020, 1, 1))
+    undated = _Role(title="Undated", employer="Bank B", started_on=None)
+    context = assemble(_FullCandidate(), roles=[dated, undated], skills=[], cv_text="x")
+    role_lines = [ln for ln in context.structured.split("\n") if ln.startswith("  - ")]
+    assert len(role_lines) == 2
+    # The undated role sorts first (its key is ""), the dated one after.
+    assert "Undated" in role_lines[0]
+    assert "Dated" in role_lines[1]
+
+
 def test_assemble_skips_rejected_roles():
     """A rejected role is one a human said did not happen."""
     rejected = _Role(title="CTO", employer="Fake Co", status="rejected")
