@@ -2,10 +2,11 @@
 
 Mirrors `test_job_intelligence_job.py`: seeds a `pending` row, runs the job
 with the engine's `analyze_candidate` replaced by a fake, and asserts the row
-reaches `done` with the right content. The no-content retry is the behaviour
-this file exists to pin: an empty model response (`LLMNoContent`) is not an
-answer, so the job re-asks a bounded number of times before failing, while any
-real-but-bad answer (`LLMInvalidJSON`) still fails on the first try.
+reaches `done` with the right content. The retry behaviour is what this file
+exists to pin: an empty model response (`LLMNoContent`) is not an answer, so
+the job re-asks a bounded number of times before failing; an unparseable
+answer (`LLMInvalidJSON`) gets the same bounded retry since GLM's coding-plan
+envelope is inconsistent — but never loops beyond the budget.
 
 No test here reaches a model or R2 — `_candidate_text` is faked like
 `analyze_candidate` is.
@@ -121,7 +122,15 @@ async def test_job_runs_and_marks_done(monkeypatch):
 
 
 async def test_job_marks_failed_on_model_error(monkeypatch):
-    """A real-but-bad answer fails the row once — no retry for a bad answer."""
+    """A real-but-bad answer fails the row after the retry budget is spent.
+
+    GLM's coding-plan envelope is inconsistent, so an unparseable answer is
+    re-asked once (the model's envelope choice and reasoning trace change
+    each call) — but a model that keeps answering in the wrong shape fails
+    the row rather than looping forever.
+    """
+    monkeypatch.setattr(settings, "CANDIDATE_INTELLIGENCE_NO_CONTENT_RETRIES", 1)
+    monkeypatch.setattr(settings, "CANDIDATE_INTELLIGENCE_NO_CONTENT_RETRY_DELAY_SECONDS", 0)
     fake = AsyncMock(side_effect=LLMInvalidJSON("bad"))
     _wire(monkeypatch, fake)
 
@@ -136,7 +145,7 @@ async def test_job_marks_failed_on_model_error(monkeypatch):
             assert row.state == "failed"
             assert row.failure_reason
             assert row.work is None
-        assert fake.call_count == 1, "a bad answer must not be re-asked"
+        assert fake.call_count == 2, "one retry for an unparseable GLM answer, then fail"
     finally:
         await _drop(tid)
 

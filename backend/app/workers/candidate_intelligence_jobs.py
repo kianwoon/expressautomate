@@ -36,7 +36,7 @@ from app.db.rls import tenant_session
 from app.models.candidate import Candidate, CandidateDocument, CandidateRole, CandidateSkill
 from app.models.candidate_intelligence import CandidateIntelligence
 from app.services.candidate_intelligence.engine import analyze_candidate
-from app.services.llm.client import LLMNoContent
+from app.services.llm.client import LLMInvalidJSON, LLMNoContent
 from app.services.storage.r2 import R2BodyStore
 
 log = get_logger(__name__)
@@ -220,28 +220,36 @@ async def _fail(tenant: uuid.UUID, record: uuid.UUID, reason: str) -> None:
 
 
 async def _analyze_with_no_content_retry(candidate, roles, skills, cv_text: str):
-    """Run the pipeline, re-asking after an empty response.
+    """Run the pipeline, re-asking after an empty or unparseable response.
 
     `LLMNoContent` means the model spent its budget thinking and never emitted
     an answer — re-asking is a different request, not "the same answer twice",
     so it gets a bounded retry (the model's reasoning trace is sampled even at
-    temperature zero, which thinking mode ignores anyway). Any other failure —
-    a real answer that failed to parse, a transport error — propagates
-    immediately to the caller's single fail path.
+    temperature zero, which thinking mode ignores anyway).
+
+    `LLMInvalidJSON` gets the same retry now that the provider is GLM's coding
+    plan: the model wraps answers in an envelope that is inconsistent (dict,
+    JSON string, malformed string, bare list) and the `_parse` layer rescues
+    most shapes but not all. Re-asking is materially different — the model's
+    envelope choice and reasoning trace change each call (production log
+    2026-08-25: `expected an object, got list` on the work pass). Any other
+    failure — a transport error — propagates immediately to the caller's
+    single fail path.
     """
     retries = settings.CANDIDATE_INTELLIGENCE_NO_CONTENT_RETRIES
     delay = settings.CANDIDATE_INTELLIGENCE_NO_CONTENT_RETRY_DELAY_SECONDS
-    last_error: LLMNoContent | None = None
+    last_error: BaseException | None = None
     for attempt in range(retries + 1):
         try:
             return await analyze_candidate(candidate, roles, skills, cv_text)
-        except LLMNoContent as exc:
+        except (LLMNoContent, LLMInvalidJSON) as exc:
             last_error = exc
             if attempt < retries:
                 log.warning(
-                    "candidate_intelligence_no_content_retry",
+                    "candidate_intelligence_retry",
                     attempt=attempt + 1,
                     retries=retries,
+                    kind=type(exc).__name__,
                 )
                 await asyncio.sleep(delay)
     raise last_error  # type: ignore[misc]  # retries >= 0 guarantees one attempt

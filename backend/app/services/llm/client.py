@@ -254,15 +254,27 @@ def _parse(content: str) -> dict:
         # on an attribute the caller assumed. Reject it where it happened.
         raise LLMInvalidJSON(f"expected an object, got {type(parsed).__name__}")
     # GLM's coding plan wraps every answer in an envelope: the model returns
-    # `{"answer": {...}}` or, less often, `{"answer": "<json string>"}`.
-    # Its injected system prompt forces this shape regardless of what the
-    # caller's prompt asks for, so a flat response only happens by accident.
-    # Unwrap it when present; otherwise every schema validation fails on the
-    # wrapper dict (input_value={'answer': ...} is not an OccupationProfile).
+    # `{"answer": {...}}` or `{"answer": "<json string>"}` or, less often,
+    # `{"answer": [...]}`. Its injected system prompt forces this shape
+    # regardless of what the caller's prompt asks for, so a flat response
+    # only happens by accident. Unwrap it when present; otherwise every
+    # schema validation fails on the wrapper dict (input_value={'answer': ...}
+    # is not an OccupationProfile).
     if set(parsed) == {"answer"}:
         answer = parsed["answer"]
         if isinstance(answer, dict):
             return answer
+        if isinstance(answer, list):
+            # GLM sometimes returns a list inside the envelope instead of an
+            # object — the model inferred an array response. The caller is
+            # expecting a dict, so this is genuinely wrong, but failing with
+            # "got list" here is less helpful than letting the caller's own
+            # schema validation reject it. Return the list as-is and let the
+            # pydantic model raise the meaningful error.
+            raise LLMInvalidJSON(
+                f"expected an object inside the answer envelope, "
+                f"got a list with {len(answer)} items"
+            )
         if isinstance(answer, str):
             # The answer is a JSON document inside the envelope string. Strip
             # a code fence if the model wrapped the string, then re-parse.
