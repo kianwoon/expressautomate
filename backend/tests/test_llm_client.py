@@ -109,6 +109,34 @@ async def test_glm_answer_envelope_is_unwrapped():
     assert "answer" not in result.data
 
 
+async def test_glm_answer_envelope_as_string_is_unwrapped():
+    """Sometimes GLM returns the answer as a JSON *string* inside the
+    envelope: `{"answer": "<json>"}` instead of `{"answer": {...}}`. The
+    parser must parse the inner string too."""
+    payload = {
+        "choices": [
+            {
+                "message": {
+                    "content": (
+                        '{"answer": "{\\"communication_style\\": \\"Direct\\",'
+                        ' \\"career_stage\\": \\"Mid-level\\"}"}'
+                    )
+                }
+            }
+        ],
+        "usage": {},
+        "model": "test/fast",
+    }
+
+    result = await complete_json(
+        "prompt", model="test/fast", schema={}, transport=_transport(payload)
+    )
+
+    assert result.data["communication_style"] == "Direct"
+    assert result.data["career_stage"] == "Mid-level"
+    assert "answer" not in result.data
+
+
 async def test_empty_content_raises_llm_no_content_not_a_generic_error():
     """An empty `content` — a reasoning model that spent its whole budget
     thinking — is the specific exception the job layer retries. It must arrive
