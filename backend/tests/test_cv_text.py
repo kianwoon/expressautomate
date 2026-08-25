@@ -365,3 +365,15 @@ def test_normal_prose_is_untouched():
 
     text = "Senior Operations Manager at Global Logistics"
     assert _despace_letterspaced(text) == text
+
+
+def test_word_position_newlines_are_collapsed():
+    """pypdf splits words at different x-positions with '\n \n'. The artifact
+    'University\\n \\nof\\n \\nLondon' must read 'University of London' so
+    quotes and skills survive verification. The repair lives in _extract_pdf
+    as a plain str.replace on each page's extracted text."""
+    fragmented = "University\n \nof\n \nLondon\n \nInstitute"
+    repaired = fragmented.replace("\n \n", " ")
+    assert repaired == "University of London Institute"
+    # No residual fragments
+    assert "\n \n" not in repaired

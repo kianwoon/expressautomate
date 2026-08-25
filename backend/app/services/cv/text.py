@@ -121,6 +121,14 @@ def _extract_pdf(data: bytes, *, max_chars: int) -> str:
             text = page.extract_text()
             if text:
                 text = _despace_letterspaced(text)
+                # pypdf splits words that sit at different x-positions on the
+                # same visual line with "\n \n" (newline, space, newline). A
+                # word-position PDF (e.g. certain exports) then reads
+                # "University\n \nof\n \nLondon" instead of
+                # "University of London", and no quote or skill survives
+                # verification. This is a layout artifact, not content, so
+                # collapse it to a single space.
+                text = text.replace("\n \n", " ")
                 text_parts.append(text)
                 total_len += len(text)
         return "".join(text_parts)[:max_chars]
