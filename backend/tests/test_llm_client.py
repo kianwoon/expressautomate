@@ -78,6 +78,37 @@ async def test_json_wrapped_in_a_code_fence_is_recovered():
     assert result.data == {"jobs": []}
 
 
+async def test_glm_answer_envelope_is_unwrapped():
+    """GLM's coding plan wraps every answer in `{"answer": {...}}` regardless
+    of what the prompt asks for — its injected system prompt forces it. A flat
+    response only happens by accident. Without unwrapping, every downstream
+    schema validation fails on the wrapper dict (`{'answer': {...}}` is not an
+    `OccupationProfile`)."""
+    payload = {
+        "choices": [
+            {
+                "message": {
+                    "content": (
+                        '{"answer": {"occupation": "Logistics Manager",'
+                        ' "seniority": "Manager", "people_management": true,'
+                        ' "industry": "Logistics", "functions": {"Ops": 100}}}'
+                    )
+                }
+            }
+        ],
+        "usage": {},
+        "model": "test/fast",
+    }
+
+    result = await complete_json(
+        "prompt", model="test/fast", schema={}, transport=_transport(payload)
+    )
+
+    assert result.data["occupation"] == "Logistics Manager"
+    assert result.data["industry"] == "Logistics"
+    assert "answer" not in result.data
+
+
 async def test_empty_content_raises_llm_no_content_not_a_generic_error():
     """An empty `content` — a reasoning model that spent its whole budget
     thinking — is the specific exception the job layer retries. It must arrive

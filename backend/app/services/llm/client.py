@@ -245,6 +245,13 @@ def _parse(content: str) -> dict:
         # A bare list or number parses fine and would then fail far downstream
         # on an attribute the caller assumed. Reject it where it happened.
         raise LLMInvalidJSON(f"expected an object, got {type(parsed).__name__}")
+    # GLM's coding plan wraps every answer in an envelope:
+    # `{"answer": {"occupation": ...}}`. Its injected system prompt forces
+    # this shape regardless of what the user prompt asks for, so a flat
+    # response only happens by accident. Unwrap it when present; otherwise
+    # every schema validation fails on the wrapper dict.
+    if set(parsed) == {"answer"} and isinstance(parsed["answer"], dict):
+        return parsed["answer"]
     return parsed
 
 
