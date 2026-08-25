@@ -159,6 +159,104 @@ async def test_a_readable_cv_becomes_roles_and_stored_text(agency, store, monkey
 
 
 @pytest.mark.asyncio
+async def test_a_readable_cv_auto_queues_candidate_intelligence(agency, store, monkeypatch):  # noqa: F811
+    """A successful CV read populates the Education tab without a manual click.
+    After the parse commits, the job enqueues `run_candidate_intelligence`
+    with a fresh PENDING row when no analysis row exists yet — so education
+    (and work, assessment) appear automatically after reading the CV.
+    """
+    tenant_id, user_id = agency
+    candidate_id = await _a_candidate_row(tenant_id, user_id)
+    document_id = await _seed(tenant_id, candidate_id, store, _pdf_with_text_pages(1, LINE))
+
+    enqueued: list[tuple[str, dict]] = []
+
+    async def _extract(source, **kwargs):
+        return await _fake_extraction(_one_role(source))(source)
+
+    async def _enqueue(name, **kwargs):
+        enqueued.append((name, kwargs))
+        return True
+
+    monkeypatch.setattr(cv_jobs, "extract_cv", _extract)
+    monkeypatch.setattr(cv_jobs, "enqueue", _enqueue)
+    await cv_jobs.parse_candidate_cv(
+        None,
+        tenant_id=str(tenant_id),
+        candidate_id=str(candidate_id),
+        document_id=str(document_id),
+    )
+
+    # The embedding enqueue happens first; the auto-intelligence is the
+    # second enqueue, targeting the interactive queue with a fresh row.
+    names = [name for name, _ in enqueued]
+    assert "compute_candidate_embedding" in names
+    ci_jobs = [
+        kwargs
+        for name, kwargs in enqueued
+        if name == cv_jobs.JOB_RUN_CANDIDATE_INTELLIGENCE
+    ]
+    assert len(ci_jobs) == 1
+    assert ci_jobs[0]["tenant_id"] == str(tenant_id)
+    assert ci_jobs[0]["candidate_id"] == str(candidate_id)
+    assert ci_jobs[0]["queue_name"] == settings.ARQ_INTERACTIVE_QUEUE
+
+    # The PENDING row the job will claim exists.
+    async with AdminSessionLocal() as s:
+        rows = (
+            await s.execute(
+                text(
+                    "SELECT state FROM candidate_intelligence"
+                    " WHERE candidate_id = :c"
+                ),
+                {"c": candidate_id},
+            )
+        ).all()
+    assert [(r.state,) for r in rows] == [("pending",)]
+    await _cleanup(tenant_id)
+
+
+@pytest.mark.asyncio
+async def test_a_readable_cv_does_not_requeue_an_existing_analysis(agency, store, monkeypatch):  # noqa: F811
+    """A previous manual analysis keeps its result — auto-queue only when none."""
+    tenant_id, user_id = agency
+    candidate_id = await _a_candidate_row(tenant_id, user_id)
+    document_id = await _seed(tenant_id, candidate_id, store, _pdf_with_text_pages(1, LINE))
+
+    async with AdminSessionLocal() as s:
+        await s.execute(
+            text(
+                "INSERT INTO candidate_intelligence (id, tenant_id, candidate_id,"
+                " state) VALUES (:i, :t, :c, 'done')"
+            ),
+            {"i": uuid.uuid4(), "t": tenant_id, "c": candidate_id},
+        )
+        await s.commit()
+
+    enqueued: list[tuple[str, dict]] = []
+
+    async def _extract(source, **kwargs):
+        return await _fake_extraction(_one_role(source))(source)
+
+    async def _enqueue(name, **kwargs):
+        enqueued.append((name, kwargs))
+        return True
+
+    monkeypatch.setattr(cv_jobs, "extract_cv", _extract)
+    monkeypatch.setattr(cv_jobs, "enqueue", _enqueue)
+    await cv_jobs.parse_candidate_cv(
+        None,
+        tenant_id=str(tenant_id),
+        candidate_id=str(candidate_id),
+        document_id=str(document_id),
+    )
+
+    names = [name for name, _ in enqueued]
+    assert cv_jobs.JOB_RUN_CANDIDATE_INTELLIGENCE not in names
+    await _cleanup(tenant_id)
+
+
+@pytest.mark.asyncio
 async def test_a_file_that_is_not_a_document_is_unreadable_and_not_retried(agency, store):  # noqa: F811
     tenant_id, user_id = agency
     candidate_id = await _a_candidate_row(tenant_id, user_id)

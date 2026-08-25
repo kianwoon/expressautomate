@@ -21,12 +21,13 @@ picks up — the cost of a genuinely slow CV is a retry, not a lost one.
 
 import uuid
 
-from sqlalchemy import update
+from sqlalchemy import select, update
 
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.db.rls import tenant_session
 from app.models.candidate import CandidateDocument
+from app.models.candidate_intelligence import CandidateIntelligence
 from app.services.cv.convert import ConversionUnavailable, is_legacy_office, maybe_convert
 from app.services.cv.extract import extract_cv
 from app.services.cv.ocr import OCRUnavailable, ocr_text
@@ -34,6 +35,7 @@ from app.services.cv.persist import persist_cv
 from app.services.cv.text import UnsupportedDocument, extract_text, sniff
 from app.services.llm.client import LLMInvalidJSON
 from app.services.storage.r2 import R2BodyStore, document_text_key
+from app.workers.candidate_intelligence_jobs import JOB_RUN_CANDIDATE_INTELLIGENCE
 from app.workers.embedding_jobs import JOB_COMPUTE_EMBEDDING
 from app.workers.queue import enqueue
 
@@ -351,3 +353,39 @@ async def parse_candidate_cv(
         tenant_id=str(tenant),
         candidate_id=str(candidate),
     )
+
+    # Auto-queue a Candidate Intelligence analysis so the Education tab (and
+    # the Work and Assessment tabs) populate without a manual "Run analysis"
+    # click. Only done when no analysis row exists yet — a previous manual run
+    # keeps its result, and the recruiter re-runs at their own pace.
+    async with tenant_session(tenant) as session:
+        existing = (
+            await session.execute(
+                select(CandidateIntelligence.id).where(
+                    CandidateIntelligence.candidate_id == candidate
+                )
+            )
+        ).scalar_one_or_none()
+        if existing is None:
+            ci_row_id = uuid.uuid4()
+            session.add(
+                CandidateIntelligence(
+                    id=ci_row_id,
+                    tenant_id=tenant,
+                    candidate_id=candidate,
+                    state=CandidateIntelligence.PENDING,
+                    created_by=None,  # auto-queued by the system
+                )
+            )
+            await session.commit()
+            if not await enqueue(
+                JOB_RUN_CANDIDATE_INTELLIGENCE,
+                queue_name=settings.ARQ_INTERACTIVE_QUEUE,
+                tenant_id=str(tenant),
+                candidate_id=str(candidate),
+                row_id=str(ci_row_id),
+            ):
+                log.warning(
+                    "cv_auto_intelligence_enqueue_failed",
+                    candidate_id=str(candidate),
+                )
