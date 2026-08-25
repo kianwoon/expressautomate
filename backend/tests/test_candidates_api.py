@@ -94,6 +94,39 @@ async def test_counts_are_tenant_wide_not_page_wide(agency_with_candidates) -> N
     assert len(first["items"]) == 1
 
 
+async def test_placeholder_rows_do_not_inflate_the_count(agency_with_candidates) -> None:
+    """The "All N" chip must match the rows the table shows.
+
+    A CV upload creates a placeholder candidate ("Uploaded CV") synchronously
+    before the ingest worker renames it. The list hides those rows, so the
+    count must too — otherwise "All 21" sits above a table of 18. This pins
+    the bug where the list excluded placeholders but the count did not.
+    """
+    from app.models.candidate import Candidate
+
+    tid, uid, ids = agency_with_candidates
+    placeholder_id = uuid.uuid4()
+    async with AdminSessionLocal() as s:
+        await s.execute(
+            text(
+                "INSERT INTO candidates (id, tenant_id, full_name, email, "
+                "pipeline_stage, record_status) VALUES (:i, :t, :n, NULL, :st, :rs)"
+            ),
+            {"i": placeholder_id, "t": tid, "n": Candidate.PLACEHOLDER_NAME,
+             "st": "new", "rs": "active"},
+        )
+        await s.commit()
+
+    async with await _client_for(tid, uid) as http:
+        body = (await http.get("/api/candidates")).json()
+
+    # The placeholder is hidden from the list AND from the count: the chip
+    # shows the same number as rows on the page.
+    assert placeholder_id not in {r["id"] for r in body["items"]}
+    assert body["total"] == 2  # Jane Tan + John Lim, not + the placeholder
+    assert body["counts"]["all"] == 2
+
+
 async def test_search_finds_a_candidate_by_email(agency_with_candidates) -> None:
     tid, uid, ids = agency_with_candidates
     async with await _client_for(tid, uid) as http:

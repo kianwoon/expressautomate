@@ -318,6 +318,11 @@ async def list_candidates(
             # The chips count what this recruiter may see. Counting the whole
             # tenant would leak the size of a colleague's book.
             .where(visible_candidates(user_uuid, role), candidate_scope(scope, user_uuid))
+            # Placeholder "Uploaded CV" rows are hidden from the list, so the
+            # count must exclude them too — otherwise "All 21" sits above a
+            # table of 18 (the list hides placeholders, the count did not,
+            # and a CV upload in the 2-5s ingest window over-reports).
+            .where(Candidate.full_name != Candidate.PLACEHOLDER_NAME)
             .group_by(Candidate.pipeline_stage)
         ):
             counts["all"] += n
