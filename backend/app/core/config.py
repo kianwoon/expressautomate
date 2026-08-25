@@ -634,7 +634,11 @@ class Settings(BaseSettings):
     # model that already answered, thinking longer. There is no request shape
     # here that can 400 when the first call did not.
     EXTRACTION_REASONING_EFFORT_FAST: str = "low"
-    EXTRACTION_REASONING_EFFORT_STRONG: str = "high"
+    # medium (was high) because GLM's 'high' effort on a multi-role CV
+    # produced a minutes-long reasoning trace — a 5-role CV escalated to
+    # high took 572s in production (2026-08-25). 'medium' still gives a
+    # more careful pass than 'low' at a fraction of the reasoning time.
+    EXTRACTION_REASONING_EFFORT_STRONG: str = "medium"
     # Stamped onto every extraction so a prompt change is attributable — without
     # it, a quality regression cannot be told from a change in the mail itself.
     # v2: the model-facing schema gained `salary_min`/`salary_max` so compound
