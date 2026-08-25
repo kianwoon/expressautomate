@@ -718,15 +718,14 @@ function Match({
   onToggle: () => void;
   onSubmit: (clientId: string) => void;
 }) {
-  // A redacted match already carries the name it wants shown — masked and
-  // abbreviated server-side — on the match itself. Fetching it by id would
-  // 404 (the caller does not hold this candidate), which is exactly the 404
-  // that used to leave a raw UUID on screen; `refetch` above no longer even
-  // tries. `full_name` is rendered verbatim, never expanded or prettified.
+  // The match now carries the candidate's name server-side (`full_name` on
+  // visible matches, the masked abbreviation on redacted ones), so the name
+  // renders on the first paint — no waiting on the per-candidate contacts
+  // fetch, which used to leave a raw UUID on screen for a beat. The contacts
+  // map remains the source for phone numbers (not carried on the match) and
+  // as a fallback for old cached runs without the joined name.
   const redacted = match.visible === false;
-  const who = redacted
-    ? (match.full_name ?? match.candidate_id)
-    : (contact?.full_name ?? match.candidate_id);
+  const who = match.full_name ?? contact?.full_name ?? match.candidate_id;
 
   const collision: CandidateCollision | null = redacted
     ? {

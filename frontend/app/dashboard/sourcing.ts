@@ -107,8 +107,12 @@ export type SourcingMatch = {
    * to carry.
    */
   visible?: boolean;
-  /** Only present on a redacted match — the abbreviated, contact-masked name
-   *  the server computed. Render verbatim; never expand or prettify it. */
+  /** The candidate's name, joined server-side at read time. On a visible
+   *  match it is the full name (so the shortlist renders it on first paint,
+   *  no per-candidate fetch); on a redacted match it is the abbreviated,
+   *  contact-masked name the server computed. Render verbatim; never expand
+   *  or prettify it. Absent on an older server response — fall back to the
+   *  contacts fetch or the id. */
   full_name?: string | null;
   /** Only present on a redacted match — who owns it. */
   held_by?: string | null;

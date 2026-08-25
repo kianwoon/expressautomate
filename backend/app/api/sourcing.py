@@ -106,7 +106,12 @@ def serialize_run(run: SourcingRun) -> dict:
 
 
 def serialize_match(
-    match, *, visible: bool, masked: dict | None = None, submitted: bool = False
+    match,
+    *,
+    visible: bool,
+    masked: dict | None = None,
+    submitted: bool = False,
+    full_name: str | None = None,
 ) -> dict:
     """One match, disclosed to exactly the tier this viewer is entitled to.
 
@@ -147,6 +152,12 @@ def serialize_match(
     if visible:
         return {
             **common,
+            # The candidate's name, joined at read time. The frontend used to
+            # fetch it per-candidate after the run loaded, so the shortlist
+            # rendered raw UUIDs for a beat before the names arrived. The run
+            # is a stored, bounded set (tens of rows), so carrying the name
+            # costs one SELECT and kills the flash of UUIDs.
+            "full_name": full_name,
             "reasons": match.reasons,
             "explanation": match.explanation,
             "explanation_evidence": match.explanation_evidence,
@@ -401,18 +412,20 @@ async def _with_matches(
     matches = await read_matches(session, tenant_id=tenant_uuid, run_id=run.id)
     ids = [m.candidate_id for m in matches]
     visible_ids: set[uuid.UUID] = set()
+    # Candidate id -> full_name for the visible matches. The shortlist renders
+    # names from the run payload so it never flashes raw UUIDs while a second
+    # per-candidate fetch resolves (see `serialize_match`).
+    names: dict[uuid.UUID, str] = {}
     if ids:
-        visible_ids = set(
-            (
-                await session.execute(
-                    select(Candidate.id)
-                    .where(Candidate.id.in_(ids))
-                    .where(visible_candidates(user_id, role))
-                )
+        rows = (
+            await session.execute(
+                select(Candidate.id, Candidate.full_name)
+                .where(Candidate.id.in_(ids))
+                .where(visible_candidates(user_id, role))
             )
-            .scalars()
-            .all()
-        )
+        ).all()
+        visible_ids = {row.id for row in rows}
+        names = {row.id: row.full_name for row in rows}
 
     # Which of the run's candidates already stand submitted to the run's
     # resolved client. Read here, at read time, not baked into the stored run:
@@ -448,6 +461,7 @@ async def _with_matches(
                 visible=visible,
                 masked=masked,
                 submitted=match.candidate_id in submitted_ids,
+                full_name=names.get(match.candidate_id),
             )
         )
     return {"run": serialize_run(run), "matches": serialized}
