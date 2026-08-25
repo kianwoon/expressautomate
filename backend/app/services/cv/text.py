@@ -6,6 +6,7 @@ history is often laid out as a table; PDF extraction reads the text layer only
 """
 
 import io
+import re
 import zipfile
 
 from docx import Document
@@ -119,6 +120,7 @@ def _extract_pdf(data: bytes, *, max_chars: int) -> str:
                 break
             text = page.extract_text()
             if text:
+                text = _despace_letterspaced(text)
                 text_parts.append(text)
                 total_len += len(text)
         return "".join(text_parts)[:max_chars]
@@ -134,6 +136,63 @@ def _extract_pdf(data: bytes, *, max_chars: int) -> str:
         # want all of them to surface as UnsupportedDocument rather than
         # leaking library internals to callers.
         raise UnsupportedDocument(f"Failed to parse PDF: {e}") from e
+
+
+# A token of exactly one character (a letter or digit). Used to detect the
+# letter-spaced layout some PDF generators (Canva, certain Google Docs
+# exports) produce: every character is drawn at its own x-position, and
+# pypdf then extracts "A d m i n i s t r a t i v e" instead of "Administrative".
+_SINGLE_CHAR_TOKEN = re.compile(r"^[A-Za-z0-9]$")
+
+
+def _despace_letterspaced(text: str) -> str:
+    """Collapse single-character spacing produced by a PDF layout artifact.
+
+    Some PDF generators draw each character at its own position, so the text
+    layer reads "A d m i n i s t r a t i v e  2 0 1 8" rather than
+    "Administrative 2018". Downstream every quote and every figure fails
+    verification: the model quotes "Administrative" but the source only has
+    "A d m i n i s t r a t i v e", and the amount check sees "2 0 1 8" as four
+    separate digits. This is a rendering artifact, not real content, so it is
+    repaired here at extraction time — the one place both the model's input
+    and the verification source agree.
+
+    Heuristic: a line whose tokens are predominantly single characters is
+    letter-spaced. We only collapse within such lines, so normal prose (whose
+    tokens are words) is untouched. Uppercase markers ("W O R K") are also
+    letter-spaced and collapse to "WORK", which is what the author meant.
+    """
+    lines = text.split("\n")
+    repaired = []
+    for line in lines:
+        # Letter-spaced lines use single spaces between letters and DOUBLE
+        # spaces between words ("I  c o n s i d e r  m y s e l f  a").
+        # Splitting on the single space would lose word boundaries; splitting
+        # on the double space first keeps them, then each word's inner single
+        # spaces are collapsed.
+        tokens = [t for t in line.split("  ") if t]
+        if len(tokens) < 2:
+            # No word separators: maybe a normal prose line. Only collapse if
+            # it is itself predominantly single characters.
+            singles = sum(1 for t in line.split(" ") if _SINGLE_CHAR_TOKEN.match(t))
+            total = len([t for t in line.split(" ") if t])
+            if total >= 3 and singles / total >= 0.7:
+                repaired.append("".join(t for t in line.split(" ") if t))
+            else:
+                repaired.append(line)
+            continue
+        # Count single-char tokens across the whole line to decide if this
+        # line is letter-spaced at all.
+        flat = line.split(" ")
+        singles = sum(1 for t in flat if _SINGLE_CHAR_TOKEN.match(t))
+        total = len([t for t in flat if t])
+        if total >= 3 and singles / total >= 0.7:
+            # Collapse each word's letter-spacing, keeping the word gaps.
+            words = ["".join(t for t in word.split(" ") if t) for word in tokens]
+            repaired.append(" ".join(words))
+        else:
+            repaired.append(line)
+    return "\n".join(repaired)
 
 
 def _extract_docx(data: bytes, *, max_chars: int) -> str:

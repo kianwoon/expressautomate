@@ -323,3 +323,45 @@ def test_pdf_extraction_stops_early_rather_than_reading_every_page(monkeypatch):
     # Not pinned to the exact page count (brittle against pypdf internals) —
     # just proof that we stopped well short of reading all fifty pages.
     assert pages_read <= 10, f"read {pages_read} pages to satisfy 200 characters"
+
+
+# --- Letter-spaced PDF text (Canva / Google Docs export artifact) ------------
+# Some PDF generators draw every character at its own x-position; pypdf then
+# extracts "A d m i n i s t r a t i v e  2 0 1 8" instead of
+# "Administrative 2018". If that text reaches verification, every quote and
+# every figure fails: the model quotes "Administrative" but the source has
+# only the spaced form, and the amount check reads "2 0 1 8" as four digits.
+
+
+def test_letterspaced_words_are_collapsed():
+    from app.services.cv.text import _despace_letterspaced
+
+    text = "A d m i n i s t r a t i v e  w o r k s"
+    assert _despace_letterspaced(text) == "Administrative works"
+
+
+def test_letterspaced_dates_are_collapsed():
+    """The amount check reads '2 0 1 8' as four single digits; the collapsed
+    '2018' is what the model quotes, so verification passes."""
+    from app.services.cv.text import _despace_letterspaced
+
+    text = "T E A M W O R K  G A R A G E  2 0 1 8  -  2 0 2 5"
+    assert "2018" in _despace_letterspaced(text)
+    assert "2025" in _despace_letterspaced(text)
+
+
+def test_letterspaced_word_boundaries_are_preserved():
+    """Word gaps in letter-spaced text are double spaces; collapsing must keep
+    them, so 'I  c o n s i d e r' becomes 'I consider', not 'Iconsider'."""
+    from app.services.cv.text import _despace_letterspaced
+
+    text = "I  c o n s i d e r  m y s e l f  a"
+    assert _despace_letterspaced(text) == "I consider myself a"
+
+
+def test_normal_prose_is_untouched():
+    """Ordinary text — words separated by single spaces — must not be altered."""
+    from app.services.cv.text import _despace_letterspaced
+
+    text = "Senior Operations Manager at Global Logistics"
+    assert _despace_letterspaced(text) == text
