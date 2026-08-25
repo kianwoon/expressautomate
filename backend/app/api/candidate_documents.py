@@ -453,6 +453,67 @@ async def download_document(
     return {"url": await store.presigned_get(key, ttl), "expires_in": ttl}
 
 
+@router.post(
+    "/candidates/{candidate_id}/documents/{document_id}/reprocess", status_code=202
+)
+async def reprocess_document(
+    request: Request,
+    candidate_id: uuid.UUID,
+    document_id: uuid.UUID,
+) -> dict:
+    """Re-queue an existing document for reading — no re-upload.
+
+    A `failed` parse is often transient (a provider hiccup, a timeout): the
+    bytes are already in R2 and the job reads them back by `object_key`, so
+    the only honest retry is to reset the row and enqueue the same job again.
+    This is what the panel's "Try again" does — it must not send the recruiter
+    back to the file chooser to re-upload a file we already hold.
+
+    The quota is deliberately NOT re-checked here: this is not a new upload,
+    and the document already spent its quota slot when it was first accepted.
+    A re-run costs a parse, but it is the same document the agency already
+    paid for, not a fresh one.
+    """
+    user_uuid, tenant_uuid, role = await _require_session_with_role(request)
+
+    async with tenant_session(tenant_uuid) as session:
+        await load_editable_candidate(session, candidate_id, user_uuid, role)
+        document = await _load_document(session, candidate_id, document_id)
+        # Reset the run state so the job's conditional claim (which only
+        # matches PENDING/PARSING) picks it up. `attempts` is zeroed too:
+        # the counter exists to bound a deterministic failure, and a person
+        # explicitly asking to try again is a fresh attempt, not another
+        # strike against the same exhausted budget.
+        document.parse_state = CandidateDocument.PENDING
+        document.parse_error = None
+        document.attempts = 0
+        await session.commit()
+        document_id_to_enqueue = document.id
+
+    if not await enqueue(
+        "parse_candidate_cv",
+        tenant_id=str(tenant_uuid),
+        candidate_id=str(candidate_id),
+        document_id=str(document_id_to_enqueue),
+    ):
+        log.warning(
+            "cv_reprocess_enqueue_failed", candidate_document_id=str(document_id_to_enqueue)
+        )
+        async with tenant_session(tenant_uuid) as session:
+            document = await session.get(CandidateDocument, document_id_to_enqueue)
+            if document is not None:
+                document.parse_state = CandidateDocument.FAILED
+                document.parse_error = _ENQUEUE_FAILED
+                await session.commit()
+                return serialize(document)
+
+    async with tenant_session(tenant_uuid) as session:
+        stored = await session.get(CandidateDocument, document_id_to_enqueue)
+        if stored is None:  # pragma: no cover - deleted between two statements
+            raise HTTPException(status_code=404, detail="Document not found")
+        return serialize(stored)
+
+
 @router.delete("/candidates/{candidate_id}/documents/{document_id}", status_code=204)
 async def delete_document(
     request: Request,

@@ -6,6 +6,7 @@ import type { Candidate, CandidateDocument, ParseState } from "../candidates";
 import {
   deleteCandidateDocument,
   getCandidateDocumentUrl,
+  reprocessCandidateDocument,
   uploadCandidateDocument,
 } from "../candidates";
 
@@ -186,16 +187,15 @@ function DocumentRow({
   document,
   busy,
   onRemove,
-  onRetry,
+  onReprocess,
 }: {
   candidateId: string;
   document: CandidateDocument;
   busy: boolean;
   onRemove: () => void;
-  /** Re-uploading is the retry: there is no endpoint that re-queues an
-   *  existing row, and inventing one on the client would be a button that
-   *  lies. This just puts the recruiter back at the file chooser. */
-  onRetry: () => void;
+  /** Re-queue this document for reading — the bytes are already stored, so
+   *  no re-upload is needed. */
+  onReprocess: () => void;
 }) {
   const [opening, setOpening] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -240,9 +240,9 @@ function DocumentRow({
             <button
               type="button"
               className="ch-tool"
-              onClick={onRetry}
+              onClick={onReprocess}
               disabled={busy}
-              aria-label={`Upload ${document.filename} again`}
+              aria-label={`Read ${document.filename} again`}
             >
               Try again
             </button>
@@ -345,6 +345,20 @@ export function CandidateCv({
     if (file) void upload(file);
   }
 
+  async function reprocess(document: CandidateDocument) {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await reprocessCandidateDocument(row.id, document.id);
+      onChanged();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "We could not re-read that CV just now.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function remove(document: CandidateDocument) {
     if (busy) return;
     if (
@@ -421,7 +435,7 @@ export function CandidateCv({
               document={document}
               busy={busy}
               onRemove={() => void remove(document)}
-              onRetry={() => fileRef.current?.click()}
+              onReprocess={() => void reprocess(document)}
             />
           ))}
         </ul>

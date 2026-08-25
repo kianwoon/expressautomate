@@ -665,6 +665,13 @@ export function candidateDocumentDownloadPath(id: string, documentId: string): s
   return `${candidateDocumentPath(id, documentId)}/download`;
 }
 
+/** Re-queue one uploaded CV for reading. The bytes are already stored; this
+ *  only resets the row and enqueues the parse job again, so a recruiter who
+ *  hits "Try again" does not have to re-choose the file. */
+export function candidateDocumentReprocessPath(id: string, documentId: string): string {
+  return `${candidateDocumentPath(id, documentId)}/reprocess`;
+}
+
 /** The spreadsheet imports an agency has run. POST (multipart) uploads one and
  *  GET lists the recent ones; both live here. */
 export const CANDIDATE_IMPORTS_PATH = `${CANDIDATES_PATH}/imports`;

@@ -22,6 +22,7 @@ import {
   candidateSharesPath,
   candidateDocumentDownloadPath,
   candidateDocumentPath,
+  candidateDocumentReprocessPath,
   candidateDocumentsPath,
   candidateImportErrorsPath,
   candidateImportUndoPath,
@@ -870,6 +871,22 @@ export async function deleteCandidateDocument(id: string, documentId: string): P
     headers: { Accept: "application/json" },
   });
   if (!res.ok) throw new ApiError(await readError(res));
+}
+
+/** Re-queue a document that failed to parse — the same file, already stored,
+ *  without making the recruiter choose it again. 202, like the upload: the
+ *  row comes back `pending` and the reading happens in the worker. */
+export async function reprocessCandidateDocument(
+  id: string,
+  documentId: string,
+): Promise<CandidateDocument> {
+  const res = await fetch(candidateDocumentReprocessPath(id, documentId), {
+    method: "POST",
+    credentials: "include",
+    headers: { Accept: "application/json" },
+  });
+  if (!res.ok) throw new ApiError(await readError(res));
+  return (await res.json()) as CandidateDocument;
 }
 
 export type DocumentUrl = { url: string; expires_in: number };

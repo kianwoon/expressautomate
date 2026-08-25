@@ -346,6 +346,102 @@ async def test_deleting_a_document_leaves_the_roles_it_produced(agency, store, q
     assert [r["employer"] for r in remaining.json()["roles"]] == ["Parkway Shenton"]
 
 
+# --- Reprocess (re-queue without re-upload) ----------------------------------
+
+
+async def test_reprocess_resets_a_failed_document_and_enqueues(agency, store, queued):
+    """A failed document can be re-queued by id — the bytes are already stored,
+    and the recruiter should not need to choose the file again."""
+    tid, uid, cid = agency
+
+    async with _client_for(tid, uid) as http:
+        doc = (await _upload(http, cid, _pdf_bytes())).json()
+
+    # Simulate a failed parse (the worker sets this on a crash/timeout).
+    async with AdminSessionLocal() as s:
+        await s.execute(
+            text(
+                "UPDATE candidate_documents SET parse_state = 'failed',"
+                " attempts = 3, parse_error = 'model failed' WHERE id = :i"
+            ),
+            {"i": doc["id"]},
+        )
+        await s.commit()
+
+    # Clear the upload enqueue so the reprocess enqueue is distinguishable.
+    queued.clear()
+
+    async with _client_for(tid, uid) as http:
+        response = await http.post(
+            f"/api/candidates/{cid}/documents/{doc['id']}/reprocess"
+        )
+
+    assert response.status_code == 202, response.text
+    body = response.json()
+    assert body["id"] == doc["id"]
+    assert body["parse_state"] == CandidateDocument.PENDING
+
+    # The reprocess enqueued a parse job, not uploaded a new document.
+    assert len(queued) == 1
+    name, kwargs = queued[0]
+    assert name == "parse_candidate_cv"
+    assert kwargs == {
+        "tenant_id": str(tid),
+        "candidate_id": str(cid),
+        "document_id": doc["id"],
+    }
+    # The attempts counter was zeroed so the job's conditional claim works.
+    async with AdminSessionLocal() as s:
+        row = (
+            await s.execute(
+                text("SELECT attempts FROM candidate_documents WHERE id = :i"),
+                {"i": doc["id"]},
+            )
+        ).scalar_one()
+    assert row == 0
+
+
+async def test_reprocess_of_another_agencys_document_is_404(
+    agency, other_agency, store, queued
+):
+    """Cross-tenant reprocess is refused, exactly like delete."""
+    tid, uid, _cid = agency
+    other_tid, other_uid, other_cid = other_agency
+
+    async with _client_for(other_tid, other_uid) as http:
+        doc = (await _upload(http, other_cid, _pdf_bytes())).json()
+
+    async with _client_for(tid, uid) as http:
+        response = await http.post(
+            f"/api/candidates/{other_cid}/documents/{doc['id']}/reprocess"
+        )
+    assert response.status_code == 404
+
+
+async def test_reprocess_fails_gracefully_when_enqueue_loses(
+    agency, store, monkeypatch
+):
+    """When Redis is down, the reprocess lands the row as failed rather than
+    sitting at `pending` with nobody coming to read it."""
+    tid, uid, cid = agency
+
+    async with _client_for(tid, uid) as http:
+        doc = (await _upload(http, cid, _pdf_bytes())).json()
+
+    async def _refuse(name: str, **kwargs) -> bool:
+        return False
+
+    monkeypatch.setattr(candidate_documents, "enqueue", _refuse)
+
+    async with _client_for(tid, uid) as http:
+        response = await http.post(
+            f"/api/candidates/{cid}/documents/{doc['id']}/reprocess"
+        )
+
+    assert response.status_code == 202, response.text
+    assert response.json()["parse_state"] == CandidateDocument.FAILED
+
+
 # --- The candidate GET ------------------------------------------------------
 
 

@@ -90,6 +90,9 @@
     "/api/candidates/{candidate_id}/documents/{document_id}/download": [
       "GET"
     ],
+    "/api/candidates/{candidate_id}/documents/{document_id}/reprocess": [
+      "POST"
+    ],
     "/api/candidates/{candidate_id}/export": [
       "GET"
     ],
