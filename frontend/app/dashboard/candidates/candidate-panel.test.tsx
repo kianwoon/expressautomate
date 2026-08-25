@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { Me } from "../../auth";
@@ -121,6 +121,9 @@ let jobsRun: CandidateJobs;
 let jobsRunError: string | null = null;
 let jobsPostCalls = 0;
 
+/** What `useCandidateIntelligence` GETs on mount. `null` = no analysis yet. */
+let intelView: Record<string, unknown> = { intelligence: null };
+
 beforeEach(() => {
   authState = me("u-1", "member");
   resetMembers();
@@ -128,6 +131,7 @@ beforeEach(() => {
   jobsRun = jobsView([], { saved_at: null });
   jobsRunError = null;
   jobsPostCalls = 0;
+  intelView = { intelligence: null };
   vi.stubGlobal(
     "fetch",
     vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
@@ -145,6 +149,9 @@ beforeEach(() => {
           return Promise.resolve({ ok: true, status: 200, json: async () => jobsRun });
         }
         return Promise.resolve({ ok: true, status: 200, json: async () => jobsGet });
+      }
+      if (url.includes("/intelligence")) {
+        return Promise.resolve({ ok: true, status: 200, json: async () => intelView });
       }
       return Promise.resolve({ ok: true, status: 200, json: async () => [] });
     }),
@@ -460,6 +467,58 @@ describe("Find Job on the candidate panel", () => {
     // is for, so the recruiter is taken to it rather than left on Details.
     expect((await screen.findByRole("tab", { name: "Jobs" })).getAttribute("aria-selected")).toBe(
       "true",
+    );
+  });
+
+  it("defaults to the Assessment tab when an analysis result exists", async () => {
+    // A stored, finished analysis: the sharp headline read is what the
+    // recruiter opens the modal for, so Assessment — not Details — is the tab
+    // they land on.
+    intelView = {
+      id: "i-1",
+      state: "done",
+      failure_reason: null,
+      analysed_at: "2026-08-25T10:00:00Z",
+      intelligence: {
+        work: { roles: [], education: [] },
+        assessment: {
+          headline: "A capable operations manager",
+          summary: "Summary",
+          work_level: "",
+          decision_authority: "",
+          scarce_capabilities: [],
+          depreciated_capabilities: [],
+          unproven_claims: [],
+          ai_exposure: "",
+          hire_readiness: "",
+          value_trajectory: "",
+        },
+      },
+    };
+    render(panel(candidate()));
+
+        // The effect runs after the fetch lands; wait for the Assessment tab to
+    // become selected. The default would be Details, so seeing Assessment
+    // selected proves the analysis-defaulting logic fired. Use `waitFor` since
+    // the tab element exists immediately (the tabs are always rendered) and
+    // only its `aria-selected` attribute changes.
+    await waitFor(() => {
+      const tab = screen.getByRole("tab", { name: "Assessment" });
+      expect(tab.getAttribute("aria-selected")).toBe("true");
+    });
+  });
+
+  it("stays on the tab the recruiter chose when analysis is absent", async () => {
+    // No analysis exists: the modal opens on Details, and a manual choice of
+    // another tab stays put (the analysis defaulting only applies when a
+    // result actually arrives — with none, nothing redirects).
+    intelView = { intelligence: null };
+    render(panel(candidate()));
+    fireEvent.click(await screen.findByRole("tab", { name: "Work" }));
+
+    expect(screen.getByRole("tab", { name: "Work" }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByRole("tab", { name: "Assessment" }).getAttribute("aria-selected")).toBe(
+      "false",
     );
   });
 });

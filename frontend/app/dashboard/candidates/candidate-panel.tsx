@@ -247,6 +247,19 @@ function Detail({
   const ci = useCandidateIntelligence(row.id);
   const [activeTab, setActiveTab] = useState<CandidateTab>("details");
 
+  // Land on the Assessment tab when a stored analysis result exists, instead
+  // of Details. The analysis loads asynchronously (the hook GETs it on mount),
+  // so the initial `details` is only a placeholder: once the result arrives
+  // and the recruiter has not already chosen a tab, the Assessment tab — the
+  // sharp headline read — becomes the default. `tabChosen` remembers a manual
+  // switch, so a recruiter who clicked elsewhere is never yanked back.
+  const tabChosen = useRef(false);
+  useEffect(() => {
+    if (ci.analysis && !tabChosen.current) {
+      setActiveTab("assessment");
+    }
+  }, [ci.analysis]);
+
   // Find Job: the best-fitting job orders, scored server-side on demand and
   // saved (one snapshot per candidate). The hook reads whatever was last
   // saved when the modal opens, and `run()` re-scores and replaces it — so
@@ -279,6 +292,7 @@ function Detail({
   async function runAnalysis() {
     await ci.run();
     // Land on the Assessment tab — the sharp headline read.
+    tabChosen.current = true;
     setActiveTab("assessment");
   }
 
@@ -286,6 +300,7 @@ function Detail({
     await jobs.run();
     // Land on the Jobs tab — the shortlist (or the failure that replaced it)
     // is what the button is for, and it is rendered there either way.
+    tabChosen.current = true;
     setActiveTab("jobs");
   }
 
@@ -579,7 +594,10 @@ function Detail({
                 role="tab"
                 aria-selected={activeTab === t.key}
                 className={activeTab === t.key ? "cand-tab cand-tab-on" : "cand-tab"}
-                onClick={() => setActiveTab(t.key)}
+                onClick={() => {
+                  tabChosen.current = true;
+                  setActiveTab(t.key);
+                }}
               >
                 {t.key === "jobs" ? jobsTabLabel(jobs) : t.label}
               </button>
