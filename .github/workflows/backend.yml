@@ -321,7 +321,11 @@ jobs:
         working-directory: backend
         run: |
           uv run alembic upgrade head
-          uv run pytest -q
+          # Parallel across workers (-n auto). --dist loadfile keeps every test
+          # in one file on a single worker, so tests that share global state
+          # within a module (RLS toggling, tenant-scoped sweep assertions)
+          # still run sequentially with each other while files parallelize.
+          uv run pytest -q -n auto --dist loadfile
 
   # The gateway is a separate stack with separate tests; it shares nothing with
   # the Python suite, so it runs as its own job rather than bolted onto `test`.
