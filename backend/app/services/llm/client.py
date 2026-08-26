@@ -260,7 +260,13 @@ def _parse(content: str) -> dict:
     # only happens by accident. Unwrap it when present; otherwise every
     # schema validation fails on the wrapper dict (input_value={'answer': ...}
     # is not an OccupationProfile).
-    if set(parsed) == {"answer"}:
+    #
+    # The envelope is not always the only key — GLM occasionally adds a
+    # top-level `confidence` beside it (`{"answer": ..., "confidence": 0.05}`,
+    # production log 2026-08-26). Unwrap on the presence of `answer` rather
+    # than requiring a single-key dict, so the extra field cannot defeat the
+    # unwrap and send the wrapper to the caller's schema.
+    if "answer" in parsed:
         answer = parsed["answer"]
         if isinstance(answer, dict):
             return answer

@@ -134,6 +134,36 @@ async def test_glm_answer_envelope_as_string_is_unwrapped():
 
     assert result.data["communication_style"] == "Direct"
     assert result.data["career_stage"] == "Mid-level"
+
+
+async def test_glm_answer_envelope_with_extra_key_is_unwrapped():
+    """GLM sometimes adds a top-level `confidence` beside the answer envelope
+    (`{"answer": "<json string>", "confidence": 0.05}`, production log
+    2026-08-26). The unwrap must fire on the presence of `answer` — not only
+    when it is the sole key — or the wrapper dict reaches the caller's schema
+    and JDUnderstanding fails on missing role/business_purpose/etc."""
+    import json as _json
+
+    inner = {
+        "role": "DMS Executive",
+        "business_purpose": "Handle DMS operations",
+        "work_environment": "Office",
+        "working_conditions": "Onsite 5 days",
+    }
+    content = _json.dumps({"answer": _json.dumps(inner), "confidence": 0.05})
+    payload = {
+        "choices": [{"message": {"content": content}}],
+        "usage": {},
+        "model": "test/fast",
+    }
+
+    result = await complete_json(
+        "prompt", model="test/fast", schema={}, transport=_transport(payload)
+    )
+
+    assert result.data["role"] == "DMS Executive"
+    assert result.data["business_purpose"] == "Handle DMS operations"
+    assert "answer" not in result.data
     assert "answer" not in result.data
 
 
