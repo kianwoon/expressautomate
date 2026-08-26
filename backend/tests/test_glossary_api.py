@@ -32,6 +32,10 @@ from app.models import User
 from app.models.glossary import PROTECTED_ATTRIBUTES, normalise
 from tests.conftest import AdminSessionLocal
 
+# Glossary is global seed data; these tests assert counts that only hold when
+# no other file writes concurrently — run serially in CI.
+pytestmark = pytest.mark.serial
+
 
 @pytest.fixture(autouse=True)
 def settings_the_suite_supplies(monkeypatch) -> None:

@@ -25,6 +25,10 @@ from app.core.config import settings
 from app.db.rls import tenant_session
 from app.main import app
 
+# Webhook counts and mailboxes are global; these tests only hold when no
+# other test file writes concurrently — run serially in CI.
+pytestmark = pytest.mark.serial
+
 SUBSCRIPTION_ID = "sub-x"
 CLIENT_STATE = "secret-x"
 

@@ -26,6 +26,11 @@ from app.core.config import settings
 from app.services.graph.client import GraphClient
 from app.workers import tasks
 
+# These tests assert GLOBAL row counts (ensure_subscriptions() == 1, etc.) that
+# only hold when no other test file writes concurrently — so CI runs this file
+# serially, after the parallel batch.
+pytestmark = pytest.mark.serial
+
 TERMINAL = ("extracted", "no_opportunity", "skipped", "unfetchable", "failed")
 
 

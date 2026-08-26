@@ -34,6 +34,10 @@ from app.services.graph.client import GraphClient
 from app.workers import jobs, tasks
 from tests.conftest import AdminSessionLocal
 
+# Mailbox intake state is global; these tests assert on row counts that only
+# hold when no other file writes concurrently — run serially in CI.
+pytestmark = pytest.mark.serial
+
 PAUSE = "/api/mailbox/pause"
 RESUME = "/api/mailbox/resume"
 SETTINGS = "/api/mailbox/settings"

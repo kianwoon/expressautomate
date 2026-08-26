@@ -55,3 +55,9 @@ asyncio_mode = "auto"
 asyncio_default_test_loop_scope = "session"
 asyncio_default_fixture_loop_scope = "session"
 testpaths = ["tests"]
+markers = [
+    # Tests that assert GLOBAL row counts (ensure_subscriptions == 1, replay
+    # sweeps, webhook counts). They only hold when no other test file writes
+    # concurrently, so CI runs them serially after the parallel batch.
+    "serial: must run alone, not parallel with other test files",
+]
