@@ -40,7 +40,7 @@ export function SyncActivity() {
         </p>
       ) : (
         <ul className="jo-events">
-          {state.events.map((event, index) => (
+          {state.events.slice(0, 10).map((event, index) => (
             <li key={`${event.at}-${index}`} data-outcome={event.outcome}>
               <span className="jo-event-dot" aria-hidden="true" />
               <span className="jo-event-body">

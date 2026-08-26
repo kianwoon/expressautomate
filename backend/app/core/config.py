@@ -935,8 +935,9 @@ class Settings(BaseSettings):
     SYNC_ACTIVITY_KEEP_PER_MAILBOX: int = Field(default=200, gt=0)
     # How many events the dashboard panel shows, newest first. Smaller than the
     # retained history on purpose — the panel answers "did the last sync work",
-    # and the rest is there for someone investigating afterwards.
-    SYNC_ACTIVITY_PAGE_LIMIT: int = Field(default=50, gt=0)
+    # and the rest is there for someone investigating afterwards. 10 keeps the
+    # "Recent sync activity" card a quick scan, not a scroll.
+    SYNC_ACTIVITY_PAGE_LIMIT: int = Field(default=10, gt=0)
 
     # --- Queue (Upstash Redis) ---
     REDIS_URL: str = ""
