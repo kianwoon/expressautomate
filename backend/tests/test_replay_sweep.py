@@ -194,7 +194,8 @@ async def test_the_sweep_is_bounded_by_the_limit(replayable, admin_session, monk
         text(
             "DELETE FROM email_messages WHERE tenant_id <> :t"
             " AND processing_status IN ('extracted', 'no_opportunity')"
-        )
+        ),
+        {"t": tenant_id},
     )
     await admin_session.commit()
 
