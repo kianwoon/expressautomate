@@ -172,23 +172,31 @@ async def test_a_stale_email_with_no_extraction_is_replayable(replayable, admin_
     assert requeued == 4, "the no-extraction row is stale too"
 
 
-async def test_the_sweep_is_bounded_by_the_limit(replayable, monkeypatch, queued):
+async def test_the_sweep_is_bounded_by_the_limit(replayable, admin_session, monkeypatch, queued):
     """A backlog drains gradually: one sweep claims at most
     `REPLAY_SWEEP_LIMIT` emails, so a prompt upgrade does not pay for every
     historical email in a single run.
 
-    The sweep is global — it claims stale rows across every tenant, and the
-    suite's other tests may briefly leave an `extracted` row with no
-    extraction behind (which the claim resolver treats as stale). Asserting
-    on the raw count would then fail not because the limit is broken but
-    because a row outside this test was claimable. So the assertion checks
-    the property the limit actually guarantees: the number of claims never
-    exceeds the limit, and the current-prompt email of this fixture is never
-    among them (the claim drains oldest-first, so a global leak could take
-    a slot that would otherwise go to this fixture's stale rows).
+    The sweep is global — it claims stale rows across every tenant — so this
+    test first clears every OTHER tenant's stale rows. Without that, a row
+    left behind by a different test (an `extracted` email whose extraction
+    never committed, which the claim resolver treats as stale) could take one
+    of the two slots and push this fixture's claims past the limit, failing
+    `assert requeued <= 2` not because the limit is broken but because the
+    test was not alone in the database. Isolation before assertion.
     """
     tenant_id, stale_ids, current_id = replayable
     monkeypatch.setattr(settings, "REPLAY_SWEEP_LIMIT", 2)
+
+    # Delete stale rows from every OTHER tenant so only this fixture's three
+    # are claimable. The fixture's tenant is excluded — its rows are the test.
+    await admin_session.execute(
+        text(
+            "DELETE FROM email_messages WHERE tenant_id <> :t"
+            " AND processing_status IN ('extracted', 'no_opportunity')"
+        )
+    )
+    await admin_session.commit()
 
     requeued = await tasks.replay_stale_extractions()
 
