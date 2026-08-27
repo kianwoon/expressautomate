@@ -27,6 +27,11 @@ from app.db.rls import tenant_session
 from app.main import app
 from app.services import ms_auth
 
+# Teardown deletes user rows unscoped (a signed-out recruiter has no
+# tenant scope to target); concurrent files' writes would collide.
+# Same global-state class f48cc82 serializes — run serially in CI.
+pytestmark = pytest.mark.serial
+
 AUTHORIZE_HOST = "https://login.microsoftonline.com"
 
 # Derived, never a literal: FRONTEND_ORIGIN differs between CI and a dev .env.
@@ -139,9 +144,7 @@ async def sign_in(client: httpx.AsyncClient, monkeypatch, result: dict) -> httpx
     )
 
 
-async def connect_mailbox(
-    client: httpx.AsyncClient, monkeypatch, result: dict
-) -> httpx.Response:
+async def connect_mailbox(client: httpx.AsyncClient, monkeypatch, result: dict) -> httpx.Response:
     """Walk the separate mailbox-consent round trip, for an already-signed-in user."""
     start = await client.get("/api/auth/microsoft/connect-mailbox")
     assert start.status_code == 307
@@ -171,7 +174,13 @@ async def start_ingestion(
 
 @pytest.fixture
 async def cleanup() -> list[uuid.UUID]:
-    """Tenants to remove afterwards; RLS means each needs its own scope."""
+    """Tenants to remove afterwards; RLS means each needs its own scope.
+
+    Teardown runs `DELETE FROM users` unscoped in places (a signed-out
+    recruiter has no tenant scope to target), so this file must not run
+    concurrently with any other file's writes — the global-state class
+    f48cc82 serializes.
+    """
     tenants: list[uuid.UUID] = []
     yield tenants
     for tid in tenants:
@@ -198,9 +207,7 @@ async def test_login_asks_for_no_prompt_by_default(client) -> None:
 async def test_login_forwards_select_account_so_an_account_can_be_switched(client) -> None:
     """Without this parameter Microsoft silently reuses the live SSO session,
     which is exactly what makes a second account unreachable."""
-    response = await client.get(
-        "/api/auth/microsoft/login", params={"prompt": "select_account"}
-    )
+    response = await client.get("/api/auth/microsoft/login", params={"prompt": "select_account"})
     assert response.status_code == 307
     query = parse_qs(urlparse(response.headers["location"]).query)
     assert query["prompt"] == ["select_account"]
@@ -239,9 +246,7 @@ async def test_callback_creates_the_tenant_and_user(client, monkeypatch, cleanup
     assert response.headers["location"] == DASHBOARD_URL
 
     async with tenant_session(uuid.UUID(tid)) as s:
-        rows = (
-            await s.execute(text("SELECT email, ms_object_id, last_login_at FROM users"))
-        ).all()
+        rows = (await s.execute(text("SELECT email, ms_object_id, last_login_at FROM users"))).all()
         ms_tenant_id = (await s.execute(text("SELECT ms_tenant_id FROM tenants"))).scalar_one()
     assert [(r[0], r[1]) for r in rows] == [("rachel@agency-a.sg", oid)]
     assert rows[0][2] is not None
@@ -542,14 +547,15 @@ async def test_signing_in_alone_does_not_count_as_a_connected_mailbox(
     assert "Mail.Read" not in mailbox["scopes"]
 
 
-async def test_me_reports_a_connected_mailbox_with_its_scopes(
-    client, monkeypatch, cleanup
-) -> None:
+async def test_me_reports_a_connected_mailbox_with_its_scopes(client, monkeypatch, cleanup) -> None:
     tid, oid = str(uuid.uuid4()), uuid.uuid4().hex
     cleanup.append(uuid.UUID(tid))
     await sign_in(client, monkeypatch, token_response(tid, oid, "rachel@agency-a.sg"))
-    await connect_mailbox(client, monkeypatch, token_response(tid, oid, "rachel@agency-a.sg",
-                                                              scopes=ms_auth.mailbox_scopes()))
+    await connect_mailbox(
+        client,
+        monkeypatch,
+        token_response(tid, oid, "rachel@agency-a.sg", scopes=ms_auth.mailbox_scopes()),
+    )
 
     mailbox = (await client.get("/api/auth/me")).json()["mailbox"]
     assert mailbox["provider"] == "microsoft"
@@ -582,18 +588,14 @@ async def test_me_reports_a_dead_grant_instead_of_claiming_connected(
     await start_ingestion(client, monkeypatch)
 
     async with tenant_session(uuid.UUID(tid)) as session:
-        await session.execute(
-            text("UPDATE mailboxes SET status = 'needs_reauth'")
-        )
+        await session.execute(text("UPDATE mailboxes SET status = 'needs_reauth'"))
 
     mailbox = (await client.get("/api/auth/me")).json()["mailbox"]
     assert mailbox["status"] == "needs_reauth"
     assert mailbox["ingestion_active"] is False
 
 
-async def test_me_counts_only_what_was_actually_ingested(
-    client, monkeypatch, cleanup
-) -> None:
+async def test_me_counts_only_what_was_actually_ingested(client, monkeypatch, cleanup) -> None:
     """Numbers on the dashboard are read, never inferred (§15).
 
     A count that came from anywhere but the rows themselves would be the one
@@ -620,9 +622,7 @@ async def test_me_counts_only_what_was_actually_ingested(
     assert before["newest_received"] is None
 
     async with tenant_session(uuid.UUID(tid)) as session:
-        mailbox_id = (
-            await session.execute(text("SELECT id FROM mailboxes"))
-        ).scalar_one()
+        mailbox_id = (await session.execute(text("SELECT id FROM mailboxes"))).scalar_one()
         # One per bucket, so the two waits cannot be conflated: `pending` is
         # being fetched now, `fetched` is stored and waiting on extraction.
         for n, status in enumerate(["extracted", "fetched", "skipped", "pending"]):
@@ -649,9 +649,7 @@ async def test_me_counts_only_what_was_actually_ingested(
     async with tenant_session(uuid.UUID(tid)) as session:
         extracted_email = (
             await session.execute(
-                text(
-                    "SELECT id FROM email_messages WHERE processing_status = 'extracted'"
-                )
+                text("SELECT id FROM email_messages WHERE processing_status = 'extracted'")
             )
         ).scalar_one()
         for title in ("Clinic Assistant", "Finance Officer"):
@@ -723,9 +721,7 @@ async def test_me_surfaces_the_worst_state_across_several_mailboxes(
     assert mailbox["status"] == "needs_reauth", "the broken one must not be hidden"
 
 
-async def test_me_reports_no_counts_before_a_mailbox_exists(
-    client, monkeypatch, cleanup
-) -> None:
+async def test_me_reports_no_counts_before_a_mailbox_exists(client, monkeypatch, cleanup) -> None:
     """Signing in alone provisions nothing, so there is nothing to count."""
     tid = str(uuid.uuid4())
     cleanup.append(uuid.UUID(tid))
@@ -736,9 +732,7 @@ async def test_me_reports_no_counts_before_a_mailbox_exists(
     assert mailbox["ingested"]["total"] == 0
 
 
-async def test_consent_waits_for_the_user_to_choose_a_period(
-    client, monkeypatch, cleanup
-) -> None:
+async def test_consent_waits_for_the_user_to_choose_a_period(client, monkeypatch, cleanup) -> None:
     """Consent grants permission; it does not choose how much mail to import.
 
     Provisioning here is what used to pull ninety days of someone's mail on the
@@ -791,8 +785,7 @@ async def test_choosing_a_period_provisions_the_mailbox(client, monkeypatch, cle
         row = (
             await session.execute(
                 text(
-                    "SELECT ms_user_id, scope, folder_id, status, initial_sync_from"
-                    " FROM mailboxes"
+                    "SELECT ms_user_id, scope, folder_id, status, initial_sync_from FROM mailboxes"
                 )
             )
         ).one()
@@ -884,9 +877,7 @@ async def test_reconnecting_revives_a_broken_mailbox(client, monkeypatch, cleanu
     await connect_mailbox(client, monkeypatch, grant)
 
     async with tenant_session(uuid.UUID(tid)) as session:
-        row = (
-            await session.execute(text("SELECT status, initial_sync_from FROM mailboxes"))
-        ).one()
+        row = (await session.execute(text("SELECT status, initial_sync_from FROM mailboxes"))).one()
     assert row.status == "active"
     assert row.initial_sync_from == chosen, "reconnecting must not re-walk history"
     assert [name for name, _ in queued] == ["recreate_subscription"]
@@ -937,16 +928,12 @@ async def test_reconnecting_revives_every_broken_mailbox(client, monkeypatch, cl
     await connect_mailbox(client, monkeypatch, grant)
 
     async with tenant_session(uuid.UUID(tid)) as session:
-        states = (
-            (await session.execute(text("SELECT status FROM mailboxes"))).scalars().all()
-        )
+        states = (await session.execute(text("SELECT status FROM mailboxes"))).scalars().all()
     assert states == ["active", "active"]
     assert [name for name, _ in queued] == ["recreate_subscription"] * 2
 
 
-async def test_reconnecting_a_healthy_mailbox_changes_nothing(
-    client, monkeypatch, cleanup
-) -> None:
+async def test_reconnecting_a_healthy_mailbox_changes_nothing(client, monkeypatch, cleanup) -> None:
     """Re-consenting when nothing is wrong must not churn a live subscription."""
     queued: list[tuple[str, dict]] = []
 
@@ -968,9 +955,7 @@ async def test_reconnecting_a_healthy_mailbox_changes_nothing(
     assert queued == []
 
 
-async def test_ingestion_is_refused_without_the_mailbox_grant(
-    client, monkeypatch, cleanup
-) -> None:
+async def test_ingestion_is_refused_without_the_mailbox_grant(client, monkeypatch, cleanup) -> None:
     """Microsoft can return a token narrower than asked for. Provisioning on
     that would leave a mailbox nothing can read."""
     queued: list[tuple[str, dict]] = []
@@ -999,9 +984,7 @@ async def test_ingestion_is_refused_without_the_mailbox_grant(
     assert queued == []
 
 
-async def test_me_reports_no_mailbox_when_no_token_was_stored(
-    client, monkeypatch, cleanup
-) -> None:
+async def test_me_reports_no_mailbox_when_no_token_was_stored(client, monkeypatch, cleanup) -> None:
     """Microsoft can return no refresh token — onboarding must say so, not guess."""
     tid = str(uuid.uuid4())
     cleanup.append(uuid.UUID(tid))
@@ -1020,9 +1003,7 @@ async def test_login_asks_only_for_the_identity_scopes(client) -> None:
     assert "Mail.Read" not in scopes_of(response)
 
 
-async def test_connect_mailbox_asks_for_the_mailbox_scopes(
-    client, monkeypatch, cleanup
-) -> None:
+async def test_connect_mailbox_asks_for_the_mailbox_scopes(client, monkeypatch, cleanup) -> None:
     """Identity scopes are re-requested alongside, or the incremental consent
     would hand back a token narrower than the one already held."""
     tid = str(uuid.uuid4())
@@ -1050,7 +1031,8 @@ async def test_connect_mailbox_does_not_change_who_is_signed_in(
     before = (await client.get("/api/auth/me")).json()["user"]["id"]
 
     done = await connect_mailbox(
-        client, monkeypatch,
+        client,
+        monkeypatch,
         token_response(tid, oid, "rachel@agency-a.sg", scopes=ms_auth.mailbox_scopes()),
     )
     assert done.status_code == 307
@@ -1058,9 +1040,7 @@ async def test_connect_mailbox_does_not_change_who_is_signed_in(
     assert (await client.get("/api/auth/me")).json()["user"]["id"] == before
 
 
-async def test_consenting_as_a_different_account_is_rejected(
-    client, monkeypatch, cleanup
-) -> None:
+async def test_consenting_as_a_different_account_is_rejected(client, monkeypatch, cleanup) -> None:
     """Microsoft will let the user approve as somebody else. Storing that token
     against the session user would file one person's mail credential under
     another person's row."""
@@ -1070,25 +1050,23 @@ async def test_consenting_as_a_different_account_is_rejected(
 
     # Same tenant, different person — the `oid` is the guard, not the address.
     response = await connect_mailbox(
-        client, monkeypatch,
-        token_response(tid, uuid.uuid4().hex, "sam@agency-a.sg",
-                       scopes=ms_auth.mailbox_scopes()),
+        client,
+        monkeypatch,
+        token_response(tid, uuid.uuid4().hex, "sam@agency-a.sg", scopes=ms_auth.mailbox_scopes()),
     )
     assert response.status_code == 400
     assert (await client.get("/api/auth/me")).json()["mailbox"]["connected"] is False
 
 
-async def test_consenting_from_another_tenant_is_rejected(
-    client, monkeypatch, cleanup
-) -> None:
+async def test_consenting_from_another_tenant_is_rejected(client, monkeypatch, cleanup) -> None:
     tid, other = str(uuid.uuid4()), str(uuid.uuid4())
     cleanup.extend([uuid.UUID(tid), uuid.UUID(other)])
     await sign_in(client, monkeypatch, token_response(tid, uuid.uuid4().hex, "rachel@agency-a.sg"))
 
     response = await connect_mailbox(
-        client, monkeypatch,
-        token_response(other, uuid.uuid4().hex, "sam@agency-b.sg",
-                       scopes=ms_auth.mailbox_scopes()),
+        client,
+        monkeypatch,
+        token_response(other, uuid.uuid4().hex, "sam@agency-b.sg", scopes=ms_auth.mailbox_scopes()),
     )
     assert response.status_code == 400
     assert (await client.get("/api/auth/me")).json()["mailbox"]["connected"] is False
@@ -1104,13 +1082,15 @@ async def test_signing_in_again_does_not_disconnect_a_connected_mailbox(
     cleanup.append(uuid.UUID(tid))
     await sign_in(client, monkeypatch, token_response(tid, oid, "rachel@agency-a.sg"))
     await connect_mailbox(
-        client, monkeypatch,
+        client,
+        monkeypatch,
         token_response(tid, oid, "rachel@agency-a.sg", scopes=ms_auth.mailbox_scopes()),
     )
 
     async with tenant_session(uuid.UUID(tid)) as s:
-        kept = (await s.execute(text("SELECT refresh_token_encrypted FROM ms_oauth_tokens"))
-                ).scalar_one()
+        kept = (
+            await s.execute(text("SELECT refresh_token_encrypted FROM ms_oauth_tokens"))
+        ).scalar_one()
 
     result = token_response(tid, oid, "rachel@agency-a.sg")
     result["refresh_token"] = "an-identity-only-refresh-token"
@@ -1118,8 +1098,9 @@ async def test_signing_in_again_does_not_disconnect_a_connected_mailbox(
 
     assert (await client.get("/api/auth/me")).json()["mailbox"]["connected"] is True
     async with tenant_session(uuid.UUID(tid)) as s:
-        still = (await s.execute(text("SELECT refresh_token_encrypted FROM ms_oauth_tokens"))
-                 ).scalar_one()
+        still = (
+            await s.execute(text("SELECT refresh_token_encrypted FROM ms_oauth_tokens"))
+        ).scalar_one()
     assert decrypt(still) == decrypt(kept) != "an-identity-only-refresh-token"
 
 
@@ -1138,7 +1119,8 @@ async def test_reconnecting_a_mailbox_rotates_the_refresh_token(
     cleanup.append(uuid.UUID(tid))
     await sign_in(client, monkeypatch, token_response(tid, oid, "rachel@agency-a.sg"))
     await connect_mailbox(
-        client, monkeypatch,
+        client,
+        monkeypatch,
         token_response(tid, oid, "rachel@agency-a.sg", scopes=ms_auth.mailbox_scopes()),
     )
 
@@ -1148,8 +1130,9 @@ async def test_reconnecting_a_mailbox_rotates_the_refresh_token(
     assert (await connect_mailbox(client, monkeypatch, again)).status_code == 307
 
     async with tenant_session(uuid.UUID(tid)) as s:
-        stored = (await s.execute(text("SELECT refresh_token_encrypted FROM ms_oauth_tokens"))
-                  ).scalar_one()
+        stored = (
+            await s.execute(text("SELECT refresh_token_encrypted FROM ms_oauth_tokens"))
+        ).scalar_one()
     assert decrypt(stored) == "a-rotated-refresh-token"
     # And the narrower grant is reported honestly, not remembered as connected.
     assert (await client.get("/api/auth/me")).json()["mailbox"]["connected"] is False
@@ -1325,9 +1308,7 @@ async def test_patch_me_only_touches_the_signed_in_users_own_row(
 
 
 async def test_patch_me_requires_a_session(client) -> None:
-    assert (
-        await client.patch("/api/auth/me", json={"preferred_name": "Wong"})
-    ).status_code == 401
+    assert (await client.patch("/api/auth/me", json={"preferred_name": "Wong"})).status_code == 401
 
 
 async def test_logout_clears_the_session(client, monkeypatch, cleanup) -> None:
@@ -1345,9 +1326,7 @@ async def test_me_rejects_a_forged_cookie(client) -> None:
 
 
 async def test_callback_without_a_flow_cookie_is_rejected(client) -> None:
-    response = await client.get(
-        "/api/auth/microsoft/callback", params={"code": "x"}
-    )
+    response = await client.get("/api/auth/microsoft/callback", params={"code": "x"})
     assert response.status_code == 400
 
 
@@ -1460,9 +1439,7 @@ async def test_a_callback_with_an_unknown_state_is_rejected(client) -> None:
     assert response.status_code == 400
 
 
-async def test_a_callback_that_cannot_reach_microsoft_is_502(
-    client, monkeypatch
-) -> None:
+async def test_a_callback_that_cannot_reach_microsoft_is_502(client, monkeypatch) -> None:
     """The token exchange posts to login.microsoftonline.com, and a stalled or
     refused connection there is Microsoft's problem, not the user's.
 

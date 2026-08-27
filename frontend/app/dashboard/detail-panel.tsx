@@ -197,6 +197,25 @@ function Detail({
   // analysis, the modal owns the layout. Survives row polls (same `key` rule
   // that keeps `placement` alive); resets when a different row is opened.
   const [activeTab, setActiveTab] = useState<TabKey>("origin");
+  // Whether the recruiter has chosen a tab themselves since this row opened.
+  // The auto-switch below must not fight a deliberate navigation: once they
+  // click a tab, landing on Work becomes their decision, not ours.
+  const tabTouched = useRef(false);
+
+  // A job order whose analysis already exists opens on the Work tab — that is
+  // the content a returning reader came for; Origin is where you go to check
+  // provenance, not where you start. Fires once per row, only when the
+  // analysis is actually done (a pending/failed row has nothing to show), and
+  // never overrides a tab the recruiter already picked. `ji.view` arrives
+  // asynchronously after mount (one GET, then polling while in flight), so
+  // this runs as an effect on its arrival rather than in initial state.
+  useEffect(() => {
+    if (tabTouched.current) return;
+    if (!ji.analysis) return;
+    setActiveTab("work");
+    // `ji.analysis` identity changes on every poll refetch; the guard above
+    // makes every run after the first a no-op.
+  }, [ji.analysis]);
 
   // The Origin tab is the tallest (it carries the facts, actions, prose and
   // shortlist). Once measured, its height is locked as the panel's min-height
@@ -421,7 +440,13 @@ function Detail({
           actions, prose, shortlist); Work / Person / Search are the three Job
           Intelligence stages, each fed by the one `ji` hook. The bar is always
           visible so a recruiter can step between them without scrolling. */}
-      <TabBar active={activeTab} onSelect={setActiveTab} />
+      <TabBar
+        active={activeTab}
+        onSelect={(tab) => {
+          tabTouched.current = true;
+          setActiveTab(tab);
+        }}
+      />
 
       {/* One container for every tab's content. `minHeight` is the Origin
           height (measured once it renders), locked so the modal stops

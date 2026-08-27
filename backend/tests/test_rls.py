@@ -16,6 +16,11 @@ from app.core.config import settings
 from app.db.rls import tenant_session, verify_rls_enforced
 from app.db.session import SessionLocal
 
+# The two-agencies fixture clears EVERY user row (DELETE FROM users) to prove
+# isolation from an empty slate; run concurrently that collides with any other
+# file's writes. Same global-state class f48cc82 serializes — run serially.
+pytestmark = pytest.mark.serial
+
 
 async def _seed(tenant_id: uuid.UUID, slug: str, email: str) -> None:
     """Seed a tenant through its own scope — the policy permits exactly this."""
@@ -25,10 +30,7 @@ async def _seed(tenant_id: uuid.UUID, slug: str, email: str) -> None:
             {"i": tenant_id, "n": slug, "s": slug},
         )
         await s.execute(
-            text(
-                "INSERT INTO users (id, tenant_id, email, role) "
-                "VALUES (:i, :t, :e, 'recruiter')"
-            ),
+            text("INSERT INTO users (id, tenant_id, email, role) VALUES (:i, :t, :e, 'recruiter')"),
             {"i": uuid.uuid4(), "t": tenant_id, "e": email},
         )
 
@@ -49,9 +51,7 @@ async def test_runtime_role_cannot_bypass_rls() -> None:
     """If this fails, every other isolation test is meaningless."""
     async with SessionLocal() as s:
         bypasses = (
-            await s.execute(
-                text("SELECT rolbypassrls FROM pg_roles WHERE rolname = current_user")
-            )
+            await s.execute(text("SELECT rolbypassrls FROM pg_roles WHERE rolname = current_user"))
         ).scalar_one()
     assert bypasses is False, "runtime role must not have BYPASSRLS"
 

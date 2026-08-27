@@ -31,6 +31,10 @@ from app.main import app
 from app.models import User
 from tests.conftest import AdminSessionLocal
 
+# Unscoped teardown deletes (see the `seeded` fixture) collide with other
+# files' mail writes under xdist — run serially in CI.
+pytestmark = pytest.mark.serial
+
 SETTINGS = "/api/mailbox/settings"
 LOOKBACK = "/api/mailbox/settings/lookback"
 
@@ -122,6 +126,10 @@ async def seeded():
 
     for tid in tenants:
         async with tenant_session(tid) as s:
+            # Unscoped deletes (RLS makes each tenant's rows only visible to
+            # its own scope, and these clear them all at once). Concurrent
+            # with any other file's mail writes that is a collision — the
+            # global-state class f48cc82 serializes — hence the serial mark.
             await s.execute(text("DELETE FROM mailboxes"))
             await s.execute(text("DELETE FROM users"))
             await s.execute(text("DELETE FROM tenants"))

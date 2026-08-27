@@ -17,6 +17,13 @@ from sqlalchemy import bindparam, text
 from app.core.config import settings
 from app.workers import tasks
 
+# The sweep is global and its bounded test clears OTHER tenants' email rows
+# (DELETE FROM email_messages WHERE tenant_id <> :t) to make the fixture's
+# rows the only claimable ones. Run concurrently with any other file's
+# ingest writes that DELETE collides with them — the same global-state class
+# f48cc82 serializes — so run serially in CI.
+pytestmark = pytest.mark.serial
+
 
 @pytest.fixture
 async def replayable(admin_session):

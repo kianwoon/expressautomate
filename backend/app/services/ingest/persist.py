@@ -46,6 +46,7 @@ a human has touched.
 
 import json
 import uuid
+from datetime import UTC, datetime
 
 from sqlalchemy import ARRAY, Text, bindparam, func, select, text, update
 from sqlalchemy.orm import aliased
@@ -54,6 +55,7 @@ from app.core.config import settings
 from app.core.logging import get_logger
 from app.db.rls import tenant_session
 from app.models import EmailMessage, Opportunity
+from app.models.job_intelligence import JobIntelligence
 from app.services.client_matching import match_client
 from app.services.events import KIND_EXTRACTION, publish
 from app.services.ingest.evidence import (
@@ -75,6 +77,23 @@ from app.services.notify.events import (
 from app.services.sourcing.preference import implied_sex
 
 log = get_logger(__name__)
+
+# The daily analysis allowance, charged by the same atomic statement the API's
+# POST uses (`app.api.job_intelligence._SPEND_RUN`). Duplicated here as text so
+# ingestion does not import from an api module — importing a route module into
+# a service is how circular imports start, and this statement will not drift:
+# its tests fail on both sides if the two ever disagree.
+# allow-hardcode: SQL statement mirrored from the api module, not configuration.
+_SPEND_ANALYSIS_RUN = text(
+    """
+    UPDATE tenants SET
+        llm_runs_count = CASE WHEN llm_runs_date = :today THEN llm_runs_count + 1
+                              ELSE 1 END,
+        llm_runs_date = :today
+    WHERE id = :tenant_id
+    RETURNING llm_runs_count
+    """
+)
 
 # Model field name -> the `opportunities` column that holds its raw string.
 # allow-hardcode: the target columns of a table, not configuration. A name here
@@ -476,6 +495,9 @@ async def persist(
     """
     extraction_id = uuid.uuid4()
     opportunity_ids: list[uuid.UUID] = []
+    # Freshly inserted, clean, still-visible opportunities — the candidates for
+    # an automatic analysis after commit (see the enqueue at the bottom).
+    auto_analyze_ids: list[uuid.UUID] = []
     # Every id emit() writes back, pending and rate-capped alike —
     # enqueue_deliveries() re-reads each row's own status afterwards, so this
     # list does not need to filter anything itself (see dispatch.py).
@@ -644,6 +666,16 @@ async def persist(
                         extraction_id=str(extraction_id),
                     )
 
+                # A candidate for the automatic analysis: fresh (this run wrote
+                # it — a retry's colliding id is the first run's row, which the
+                # recruiter has already seen), clean (a `needs_review` row is
+                # suspect input; paying 4-5 model calls to analyse data that a
+                # human still has to verify buys nothing), and this row only —
+                # a duplicate that `_maybe_supersede` hid under an existing row
+                # points at content the canonical row already covers.
+                if state != "needs_review":
+                    auto_analyze_ids.append(opportunity_id)
+
     # Outside the transaction, deliberately. Redis cannot join it, and a job
     # that starts before its row is committed reads nothing and exits without
     # retrying. `enqueue` fails soft; `flush_notifications` is what turns a
@@ -658,7 +690,106 @@ async def persist(
     # for.
     await publish(tenant_id, KIND_EXTRACTION)
 
+    # The automatic analysis. Runs on a fresh tenant session because this one
+    # is closed — the row and its visibility are committed facts by now, which
+    # is exactly what the analysis should read. Charged against the same daily
+    # allowance the Run button spends (`_SPEND_ANALYSIS_RUN` mirrors the API's
+    # statement), so auto-runs can never quietly exceed what was agreed; over
+    # quota skips with a log line rather than failing anything — ingestion has
+    # already succeeded, and an unanalysed job order costs nothing but the
+    # recruiter's click they have always had.
+    if auto_analyze_ids:
+        await _auto_run_analyses(tenant_id, auto_analyze_ids)
+
     return opportunity_ids
+
+
+async def _auto_run_analyses(
+    tenant_id: uuid.UUID, opportunity_ids: list[uuid.UUID]
+) -> None:
+    """Start an intelligence analysis for each freshly ingested job order.
+
+    Fails soft everywhere: ingestion succeeded and must not be dragged down by
+    the analysis queue being down, out of quota, or misconfigured. Every skip
+    logs so an operator can see why "no analysis appeared" happened.
+    """
+    # One spend call for all of this email's vacancies, then enqueue each one
+    # that fit under the allowance. The statement returns the post-increment
+    # count: it keeps counting past the quota (the API raises 429 on the same
+    # read), so compare instead of trying to stop mid-increment.
+    async with tenant_session(tenant_id) as session:
+        spent = (
+            await session.execute(
+                _SPEND_ANALYSIS_RUN,
+                {"today": datetime.now(UTC).date(), "tenant_id": tenant_id},
+            )
+        ).scalar_one()
+    over_quota = spent > settings.INTELLIGENCE_DAILY_QUOTA
+
+    from app.workers.job_intelligence_jobs import JOB_RUN_JOB_INTELLIGENCE
+    from app.workers.queue import enqueue
+
+    started = 0
+    for opportunity_id in opportunity_ids:
+        # A duplicate this run hid under an existing row is not its own job
+        # order; re-read the committed visibility to drop it.
+        async with tenant_session(tenant_id) as session:
+            hidden = (
+                await session.execute(
+                    select(Opportunity.superseded_by_opportunity_id).where(
+                        Opportunity.id == opportunity_id
+                    )
+                )
+            ).scalar_one()
+        if hidden is not None:
+            continue
+
+        if over_quota:
+            log.warning(
+                "job_intelligence_auto_skipped_quota",
+                tenant_id=str(tenant_id),
+                opportunity_id=str(opportunity_id),
+                spent=spent,
+                quota=settings.INTELLIGENCE_DAILY_QUOTA,
+            )
+            continue
+
+        row_id = uuid.uuid4()
+        async with tenant_session(tenant_id) as session:
+            session.add(
+                JobIntelligence(
+                    id=row_id,
+                    tenant_id=tenant_id,
+                    opportunity_id=opportunity_id,
+                    state=JobIntelligence.PENDING,
+                )
+            )
+            await session.commit()
+        enqueued = await enqueue(
+            JOB_RUN_JOB_INTELLIGENCE,
+            queue_name=settings.ARQ_INTERACTIVE_QUEUE,
+            tenant_id=str(tenant_id),
+            opportunity_id=str(opportunity_id),
+            row_id=str(row_id),
+        )
+        if enqueued:
+            started += 1
+        else:
+            # Same orphan-row risk the POST carries. Mark failed so the panel
+            # shows a sentence rather than spinning forever.
+            log.warning("job_intelligence_auto_enqueue_failed", row_id=str(row_id))
+            async with tenant_session(tenant_id) as session:
+                row = await session.get(JobIntelligence, row_id)
+                if row is not None:
+                    row.state = JobIntelligence.FAILED
+                    await session.commit()
+
+    if started:
+        log.info(
+            "job_intelligence_auto_started",
+            tenant_id=str(tenant_id),
+            count=started,
+        )
 
 
 async def _glossary(session) -> list[GlossaryEntry]:

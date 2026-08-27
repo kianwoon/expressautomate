@@ -16,6 +16,11 @@ from sqlalchemy.exc import DBAPIError
 from app.db.rls import tenant_session
 from app.db.session import SessionLocal
 
+# The two-agencies fixture clears every wa_sessions row (not per-tenant) in
+# teardown; run concurrently that collides with other files' WhatsApp writes.
+# Same global-state class f48cc82 serializes — run serially in CI.
+pytestmark = pytest.mark.serial
+
 
 async def _seed(tenant_id: uuid.UUID, slug: str, email: str) -> uuid.UUID:
     """A tenant, a recruiter, a session and one stored key. Returns session id."""
@@ -27,10 +32,7 @@ async def _seed(tenant_id: uuid.UUID, slug: str, email: str) -> uuid.UUID:
         )
         user_id = uuid.uuid4()
         await s.execute(
-            text(
-                "INSERT INTO users (id, tenant_id, email, role) "
-                "VALUES (:i, :t, :e, 'recruiter')"
-            ),
+            text("INSERT INTO users (id, tenant_id, email, role) VALUES (:i, :t, :e, 'recruiter')"),
             {"i": user_id, "t": tenant_id, "e": email},
         )
         await s.execute(
@@ -93,9 +95,7 @@ async def test_agency_b_cannot_read_agency_a_keys(two_agencies) -> None:
     assert rows == [], "agency B read agency A's signal keys"
 
     async with tenant_session(a) as s:
-        count = (
-            await s.execute(text("SELECT count(*) FROM wa_session_keys"))
-        ).scalar_one()
+        count = (await s.execute(text("SELECT count(*) FROM wa_session_keys"))).scalar_one()
     assert count == 1
 
 
@@ -103,9 +103,7 @@ async def test_unscoped_session_sees_no_sessions_or_keys(two_agencies) -> None:
     """Fail closed: forgetting to scope yields nothing, not everything."""
     async with SessionLocal() as s:
         assert (await s.execute(text("SELECT count(*) FROM wa_sessions"))).scalar_one() == 0
-        assert (
-            await s.execute(text("SELECT count(*) FROM wa_session_keys"))
-        ).scalar_one() == 0
+        assert (await s.execute(text("SELECT count(*) FROM wa_session_keys"))).scalar_one() == 0
 
 
 async def test_cannot_write_a_key_row_for_another_tenant(two_agencies) -> None:
@@ -133,9 +131,7 @@ async def test_b_cannot_delete_a_keys(two_agencies) -> None:
         assert result.rowcount == 0
 
     async with tenant_session(a) as s:
-        count = (
-            await s.execute(text("SELECT count(*) FROM wa_session_keys"))
-        ).scalar_one()
+        count = (await s.execute(text("SELECT count(*) FROM wa_session_keys"))).scalar_one()
     assert count == 1
 
 
@@ -143,9 +139,7 @@ async def test_one_session_per_user(two_agencies) -> None:
     """Two rows for one recruiter would let two sockets fight over one device."""
     (a, _), _ = two_agencies
     async with tenant_session(a) as s:
-        user_id = (
-            await s.execute(text("SELECT user_id FROM wa_sessions"))
-        ).scalar_one()
+        user_id = (await s.execute(text("SELECT user_id FROM wa_sessions"))).scalar_one()
 
     with pytest.raises(DBAPIError):
         async with tenant_session(a) as s:
@@ -171,7 +165,5 @@ async def test_deleting_a_session_takes_its_keys(two_agencies) -> None:
     (a, a_session), _ = two_agencies
     async with tenant_session(a) as s:
         await s.execute(text("DELETE FROM wa_sessions WHERE id = :i"), {"i": a_session})
-        count = (
-            await s.execute(text("SELECT count(*) FROM wa_session_keys"))
-        ).scalar_one()
+        count = (await s.execute(text("SELECT count(*) FROM wa_session_keys"))).scalar_one()
     assert count == 0
