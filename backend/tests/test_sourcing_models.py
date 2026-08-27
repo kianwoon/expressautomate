@@ -13,6 +13,10 @@ from app.models.sourcing import CandidateSubmission, SourcingMatch, SourcingRun
 from tests.conftest import AdminSessionLocal
 from tests.test_candidate_roles_api import _a_candidate_row, agency, other_agency  # noqa: F401
 
+# Global wipes between tests (see the cleanup fixture) collide with other
+# files' writes under xdist — run serially in CI.
+pytestmark = pytest.mark.serial
+
 
 async def _a_client_row(tenant_id) -> uuid.UUID:
     client_id = uuid.uuid4()
@@ -71,6 +75,9 @@ async def _an_opportunity_row(tenant_id) -> uuid.UUID:
 
 @pytest.fixture(autouse=True)
 async def _cleanup_sourcing_tables():
+    """Wipes shared tables globally between tests (not per-tenant), so this
+    file must not run concurrently with any other file's writes under xdist
+    — the same global-state class f48cc82 serializes."""
     yield
     async with AdminSessionLocal() as s:
         for table in (
