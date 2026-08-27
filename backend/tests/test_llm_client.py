@@ -10,7 +10,12 @@ import httpx
 import pytest
 
 from app.core.config import settings
-from app.services.llm.client import LLMInvalidJSON, LLMNoContent, complete_json
+from app.services.llm.client import (
+    LLMInvalidJSON,
+    LLMNoContent,
+    LLMResponseTruncated,
+    complete_json,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -58,9 +63,7 @@ async def test_non_json_content_raises_rather_than_guessing():
     }
 
     with pytest.raises(LLMInvalidJSON):
-        await complete_json(
-            "prompt", model="test/fast", schema={}, transport=_transport(payload)
-        )
+        await complete_json("prompt", model="test/fast", schema={}, transport=_transport(payload))
 
 
 async def test_json_wrapped_in_a_code_fence_is_recovered():
@@ -217,9 +220,7 @@ async def test_empty_content_raises_llm_no_content_not_a_generic_error():
     }
 
     with pytest.raises(LLMNoContent):
-        await complete_json(
-            "prompt", model="test/fast", schema={}, transport=_transport(payload)
-        )
+        await complete_json("prompt", model="test/fast", schema={}, transport=_transport(payload))
 
 
 async def test_a_tls_hang_surfaces_as_retryable_timeout_not_cancelled():
@@ -265,6 +266,7 @@ async def test_a_real_external_cancellation_still_propagates():
     `complete_json` must only ever convert the cancellation it raised itself
     for a hang, never one raised from outside.
     """
+
     async def never_returns():
         await asyncio.Event().wait()
 
@@ -274,3 +276,72 @@ async def test_a_real_external_cancellation_still_propagates():
     with pytest.raises(asyncio.CancelledError):
         await task
 
+
+async def test_truncated_at_budget_raises_llm_response_truncated_with_diagnosis():
+    """Regression for the 2026-08-27 job-intelligence search failure.
+
+    The content cut mid-string ('...AND recruiting A') and the error showed
+    only the first 500 characters — no way to tell a budget truncation from
+    plain malformation. When finish_reason=length, the raise is now the
+    distinct LLMResponseTruncated with the completion-token spend and the
+    tail of the content in the message.
+    """
+    long_content = '{"platform": "LinkedIn", "queries": ["(\\"talent acquisition\\") AND re'
+    payload = {
+        "choices": [
+            {
+                "message": {"content": long_content},
+                "finish_reason": "length",
+            }
+        ],
+        "usage": {"prompt_tokens": 900, "completion_tokens": 65536},
+        "model": "glm-5.3",
+    }
+
+    with pytest.raises(LLMResponseTruncated) as excinfo:
+        await complete_json("prompt", model="test/fast", schema={}, transport=_transport(payload))
+    msg = str(excinfo.value)
+    assert "finish_reason=length" in msg
+    # The tail points at where it actually stopped, mid-string — repr-quoted
+    # inside the diagnosis sentence, so match on the content itself.
+    assert "AND re" in msg
+
+
+async def test_malformed_json_on_unbounded_completion_keeps_class_and_carries_tail():
+    """Not every broken answer is a truncation.
+
+    finish_reason=stop means the model *chose* to stop there — that is an
+    ordinary invalid answer (re-ask / escalate), not a budget problem, so the
+    exception class must stay LLMInvalidJSON while still carrying the tail
+    diagnosis.
+    """
+    payload = {
+        "choices": [
+            {
+                "message": {"content": '{"a": [1, 2'},  # unclosed, but 'stop'
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {},
+        "model": "test/fast",
+    }
+
+    with pytest.raises(LLMInvalidJSON) as excinfo:
+        await complete_json("prompt", model="test/fast", schema={}, transport=_transport(payload))
+    assert not isinstance(excinfo.value, LLMResponseTruncated)
+    assert "finish_reason=stop" in str(excinfo.value)
+
+
+async def test_missing_finish_reason_is_reported_as_unknown_not_length():
+    """A provider that omits finish_reason must not be mistaken for one
+    that said length — the remedy differs (grow budget vs re-ask)."""
+    payload = {
+        "choices": [{"message": {"content": '{"broken"'}}],
+        "usage": {},
+        "model": "test/fast",
+    }
+
+    with pytest.raises(LLMInvalidJSON) as excinfo:
+        await complete_json("prompt", model="test/fast", schema={}, transport=_transport(payload))
+    assert not isinstance(excinfo.value, LLMResponseTruncated)
+    assert "no finish_reason" in str(excinfo.value)

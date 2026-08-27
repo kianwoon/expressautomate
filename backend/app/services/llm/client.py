@@ -53,6 +53,19 @@ class LLMNoContent(LLMInvalidJSON):
     """
 
 
+class LLMResponseTruncated(LLMInvalidJSON):
+    """The provider reported `finish_reason=length` and the answer did not parse.
+
+    Separate subclass, not a plain `LLMInvalidJSON`, because the remedy differs
+    from every other malformed answer. Truncation is not the model guessing
+    wrongly — it is the output budget ending before the answer did, and a
+    reasoning model spends thinking tokens out of that same budget. Re-asking
+    under a grown (or less reasoning-hungry) configuration asks a materially
+    different question, so a caller may retry this the way it retries
+    `LLMNoContent`, unlike an ordinary invalid answer.
+    """
+
+
 @dataclass
 class LLMResult:
     data: dict
@@ -200,9 +213,7 @@ async def complete_json(
                 # all three transport attempts on it — the same lost retry the
                 # uncaught hang caused, one hop later. `raise ... from` keeps
                 # the original as the chain's cause for the log.
-                raise TimeoutError(
-                    "LLM provider hang: retries exhausted"
-                ) from exc
+                raise TimeoutError("LLM provider hang: retries exhausted") from exc
             raise
         else:
             break
@@ -215,12 +226,35 @@ async def complete_json(
     # raise KeyError, which reads as a bug in this module rather than as the
     # unusable answer it is — and the gate's caller only handles the latter.
     choices = body.get("choices") or [{}]
-    content = (choices[0].get("message") or {}).get("content")
+    choice = choices[0] or {}
+    content = (choice.get("message") or {}).get("content")
+    finish_reason = choice.get("finish_reason")
     if not content:
         raise LLMNoContent("the model returned no content")
     usage = body.get("usage") or {}
+    try:
+        data = _parse(content)
+    except LLMInvalidJSON as exc:
+        # A parse failure here carries its diagnosis with it, or the failure
+        # stays a mystery: was the answer truncated at the token budget
+        # (`finish_reason=length` — expected on a reasoning model that spent
+        # everything thinking), or did the model emit well-formed-looking but
+        # broken JSON on an unbounded completion? The first production case
+        # (job intelligence search stage, 2026-08-27 05:29Z) showed a string
+        # cut mid-word, but the error's own [:500] preview could not say where
+        # the content ended and the log carried no budget information.
+        #
+        # `_truncate_reason` turns those two signals into one sentence and
+        # re-raises as `LLMResponseTruncated` when length was the cause, so a
+        # caller can tell "grow the budget / dial reasoning down" apart from
+        # "re-ask or escalate to a stronger model".
+        truncate_note = _truncate_reason(finish_reason, content)
+        message = f"{exc}; {truncate_note}"
+        if finish_reason == "length":
+            raise LLMResponseTruncated(message) from exc
+        raise type(exc)(message) from exc
     return LLMResult(
-        data=_parse(content),
+        data=data,
         # OpenRouter may route to a different model than the one requested.
         # Recording what answered, not what we asked for, is what makes a
         # per-model quality comparison mean anything.
@@ -230,6 +264,27 @@ async def complete_json(
         latency_ms=int((time.monotonic() - started) * 1000),
         raw=body,
     )
+
+
+def _truncate_reason(finish_reason: str | None, content: str) -> str:
+    """One diagnostic sentence about *where* a malformed answer stopped.
+
+    `length` means the output budget cut it — the useful number is how much
+    of the budget the answer consumed (completion tokens land in the same
+    body). Any other reason names itself; an absent one reads as unknown so
+    the log never invents a cause. The tail matters when the defect hides
+    past an error's [:500] head: 'ends mid-string' vs 'closes cleanly then
+    breaks' points at truncation versus malformation.
+    """
+    tail = content[-120:].replace("\n", "\\n")
+    if finish_reason == "length":
+        return (
+            f"provider reported finish_reason=length "
+            f"(output budget exhausted; ends mid-content: ...{tail!r})"
+        )
+    if finish_reason:
+        return f"finish_reason={finish_reason} (ends: ...{tail!r})"
+    return f"no finish_reason in response (ends: ...{tail!r})"
 
 
 def _parse(content: str) -> dict:
@@ -293,8 +348,7 @@ def _parse(content: str) -> dict:
             if isinstance(inner, dict):
                 return inner
             raise LLMInvalidJSON(
-                f"expected an object inside the answer envelope, "
-                f"got {type(inner).__name__}"
+                f"expected an object inside the answer envelope, got {type(inner).__name__}"
             )
     return parsed
 
