@@ -15,7 +15,25 @@ the plan a strategy. Confidence lives only where it is honest: a single
 self-reported number on the understanding, never on the persona or the plan.
 """
 
-from pydantic import BaseModel, Field
+from re import split as _re_split
+
+from pydantic import BaseModel, Field, field_validator
+
+
+def _coerce_str_list(value):
+    """Coerce a model-provided value into a list[str].
+
+    The LLM occasionally collapses a field the schema declares as an array
+    into one joined string (`potential_challenges` shipped the first one: a
+    KYC/SOW sentence where a list belonged). Pydantic would refuse it and kill
+    a paid analysis at the parse step. Split on arrows/commas/semicolons/
+    newlines — the joins models actually use — and drop empties.
+    """
+    if isinstance(value, str):
+        parts = _re_split(r"\s*[→,;]\s*|\n", value)
+        return [p.strip() for p in parts if p.strip()]
+    return value
+
 
 # The fields of each stage, as the model must answer them. Listed in module
 # constants rather than reconstructed from the Pydantic model because the
@@ -99,6 +117,17 @@ class JDUnderstanding(BaseModel):
     # a recruiter acts on without reading the rest.
     confidence: float = 0.0
 
+    # The model occasionally returns a joined string for one of the list
+    # fields above (the first production failure: `potential_challenges`
+    # arrived as one KYC/SOW sentence). Coerce before type-checking instead
+    # of killing a paid analysis at parse time. Applied to every stage below
+    # with list fields, since any of them can ship the same surprise.
+    _c_daily_activities = field_validator("daily_activities", mode="before")(_coerce_str_list)
+    _c_must_have = field_validator("must_have_requirements", mode="before")(_coerce_str_list)
+    _c_preferred = field_validator("preferred_requirements", mode="before")(_coerce_str_list)
+    _c_success = field_validator("success_characteristics", mode="before")(_coerce_str_list)
+    _c_challenges = field_validator("potential_challenges", mode="before")(_coerce_str_list)
+
 
 class CandidatePersona(BaseModel):
     """Who would do this work well — Module 2 of the design doc.
@@ -118,6 +147,14 @@ class CandidatePersona(BaseModel):
     salary_expectation: str
     availability: str
 
+    _c_backgrounds = field_validator("likely_backgrounds", mode="before")(_coerce_str_list)
+    _c_transferable_roles = field_validator("transferable_roles", mode="before")(_coerce_str_list)
+    _c_transferable_industries = field_validator("transferable_industries", mode="before")(
+        _coerce_str_list
+    )
+    _c_behaviours = field_validator("behaviours", mode="before")(_coerce_str_list)
+    _c_motivations = field_validator("motivations", mode="before")(_coerce_str_list)
+
 
 class SearchPlan(BaseModel):
     """How to look for that person — Module 3 of the design doc.
@@ -135,6 +172,9 @@ class SearchPlan(BaseModel):
     salary: str
     location: str
     employment_type: str
+
+    _c_queries = field_validator("queries", mode="before")(_coerce_str_list)
+    _c_negative_queries = field_validator("negative_queries", mode="before")(_coerce_str_list)
 
 
 class OccupationProfile(BaseModel):

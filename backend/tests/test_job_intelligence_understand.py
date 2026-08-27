@@ -86,3 +86,24 @@ async def test_understand_resolves_the_model_from_settings(monkeypatch):
     captured.clear()
     await understand(_CONTEXT, llm=_capture)
     assert captured["model"] == "test/fast"
+
+
+async def test_understand_coerces_a_joined_string_challenges_field():
+    """Regression for the 2026-08-27 production failure.
+
+    The model returned `potential_challenges` as one joined sentence instead
+    of a list — `Input should be a valid list [type=list_type]` killed a paid
+    analysis at parse time (`job_intelligence_failed` in arq). The engine now
+    splits it rather than failing.
+    """
+    payload = _full_payload(
+        potential_challenges="High volumes of KYC/SOW applications; tight "
+        "6-month engagement; compliance scrutiny"
+    )
+    llm = FakeLLM(payload)
+    result, _ = await understand(_CONTEXT, llm=llm)
+    assert result.potential_challenges == [
+        "High volumes of KYC/SOW applications",
+        "tight 6-month engagement",
+        "compliance scrutiny",
+    ]
