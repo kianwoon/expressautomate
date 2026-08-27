@@ -17,6 +17,11 @@ from sqlalchemy.exc import IntegrityError
 from app.db.rls import tenant_session
 from app.db.session import SessionLocal
 
+# `graph_subscriptions.subscription_id` is globally unique (not per tenant) and
+# these tests use fixed ids like `sub-old`; two xdist workers inserting the
+# same id concurrently violate the constraint. Run serially in CI.
+pytestmark = pytest.mark.serial
+
 
 async def _add_mailbox(
     session, tenant_id, *, ms_user_id="ms-user", scope="whole_inbox", user_id=None

@@ -12,11 +12,17 @@ same function `POST /api/wa/internal/status` calls — rather than writing
 import uuid
 from datetime import UTC, datetime, timedelta
 
+import pytest
 from sqlalchemy import text
 
 from app.core.config import settings
 from app.services.wa_gateway import GatewayUnreachableError, SessionSnapshot
 from app.workers import tasks
+
+# The liveness claim function is SECURITY DEFINER and counts rows across all
+# tenants; a concurrent insert from another xdist worker changes what it
+# returns. Run serially in CI.
+pytestmark = pytest.mark.serial
 
 
 async def _seed_agency(admin_session) -> tuple[uuid.UUID, uuid.UUID]:
@@ -104,14 +110,14 @@ async def test_only_connected_and_reconnecting_are_swept(admin_session, monkeypa
     assert checked_at is not None
 
     status, checked_at = await _row(admin_session, disconnected)
-    assert checked_at is not None and checked_at < datetime.now(UTC) - timedelta(
-        minutes=20
-    ), "a disconnected session has nothing to check and must be left untouched"
+    assert checked_at is not None and checked_at < datetime.now(UTC) - timedelta(minutes=20), (
+        "a disconnected session has nothing to check and must be left untouched"
+    )
 
     status, checked_at = await _row(admin_session, logged_out)
-    assert checked_at is not None and checked_at < datetime.now(UTC) - timedelta(
-        minutes=20
-    ), "a logged-out session has nothing to check and must be left untouched"
+    assert checked_at is not None and checked_at < datetime.now(UTC) - timedelta(minutes=20), (
+        "a logged-out session has nothing to check and must be left untouched"
+    )
 
     for tid in (tenant_id, t2, t3):
         await _cleanup(admin_session, tid)

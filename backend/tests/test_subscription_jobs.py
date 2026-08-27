@@ -20,6 +20,11 @@ from app.db.rls import tenant_session
 from app.services.graph.client import GraphClient
 from app.workers import jobs
 
+# `subscription_id` is globally unique (not per-tenant), and these tests use
+# fixed ids like `sub-old`; two xdist workers inserting the same id concurrently
+# violate the global constraint. Run serially in CI.
+pytestmark = pytest.mark.serial
+
 
 @pytest.fixture
 async def mailbox(admin_session):
