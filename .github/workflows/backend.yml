@@ -762,9 +762,19 @@ jobs:
           prune-cache: true
           cache-dependency-glob: backend/uv.lock
 
-      # Migrations are backend-only; a frontend commit must not touch the schema.
+      # Migrations are backend-only; a frontend commit must not touch the
+      # schema. Gated on `api`, not `worker` — this used to gate on `worker`
+      # and that was a live hole: api runs backend code too, so a backend
+      # change ships to api with worker=false. The commit that added the
+      # external-candidate search did exactly this — its first run failed at
+      # build (deploy never ran, migration never ran), the fix commit diffed
+      # frontend-only, and api deployed new code against a schema the
+      # migration had never created. The migration step must precede ANY
+      # deploy of code that knows the table. The setup-uv gate above stays
+      # `worker`-only only because a frontend-only run never executes either
+      # step; if this gate ever widens, widen it to match.
       - name: Migrate production
-        if: steps.freshness.outputs.stale == 'false' && steps.scope.outputs.worker == 'true'
+        if: steps.freshness.outputs.stale == 'false' && steps.scope.outputs.api == 'true'
         working-directory: backend
         env:
           DATABASE_ADMIN_URL: ${{ secrets.DATABASE_ADMIN_URL }}
