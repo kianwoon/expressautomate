@@ -40,11 +40,21 @@ export type ExternalTaskStatus =
   | "failed";
 
 /** The POST answer — `status` names what happened, and only `started` carries
- *  a task id. `unconfigured`/`unreachable`/`refused` are the structured,
- *  never-a-500 answers the route gives; `message` is the sentence to show. */
+ *  a task id. `unconfigured`/`unreachable`/`refused`/`not_provisioned` are the
+ *  structured, never-a-500 answers the route gives; `message` is the sentence
+ *  to show. */
 export type ExternalSearchStart =
   | { status: "started"; task_id: string; message: null }
-  | { status: "unconfigured" | "unreachable" | "refused"; task_id: null; message: string; retry_after_seconds?: number };
+  | {
+      status:
+        | "unconfigured"
+        | "unreachable"
+        | "refused"
+        | "not_provisioned";
+      task_id: null;
+      message: string;
+      retry_after_seconds?: number;
+    };
 
 /** The poll answer. */
 export type ExternalSearchStatus = {

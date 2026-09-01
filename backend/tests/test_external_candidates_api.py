@@ -26,6 +26,7 @@ import httpx
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
+from sqlalchemy.exc import DBAPIError
 
 from app.core.config import settings
 from app.main import app
@@ -398,6 +399,83 @@ async def test_a_refusing_career_bot_quotes_its_reason(monkeypatch):
             body = res.json()
             assert body["status"] == "refused"
             assert body["message"] == "unsupported platform 'xing'"
+    finally:
+        await _drop_agency(tid)
+
+
+async def test_a_missing_membership_table_is_structured_never_a_500(monkeypatch):
+    """2026-09-02 in production: api shipped the feature's code before its
+    migration ran, and `INSERT INTO external_candidate_searches` surfaced as
+    a 500 with a 120-line stack trace. A missing schema is a deployment
+    fault — it gets the same structured-answer treatment as an unreachable
+    career bot, with a sentence an operator can act on.
+
+    Simulates the fault at the real seam: the INSERT the route runs, not a
+    mock of the ORM.
+    """
+    monkeypatch.setattr(settings, "CAREER_BOT_URL", "http://career-bot.test")
+    monkeypatch.setattr(settings, "CAREER_BOT_API_KEY", "test-key")
+
+    async def _start_ok(self, payload):
+        return career_bot.StartedSearch(task_id="task-missing-table")
+
+    monkeypatch.setattr(career_bot.CareerBotClient, "start_search", _start_ok)
+
+    class _MissingTable:
+        sqlstate = "42P01"
+
+        def __str__(self):
+            return 'relation "external_candidate_searches" does not exist'
+
+    async def _insert_fails(self, *args, **kwargs):
+        raise DBAPIError(
+            "INSERT INTO external_candidate_searches", {}, _MissingTable()
+        )
+
+    # Patch the route module's session factory so ONLY the request's session
+    # fails to commit — the fixtures seed and clean up through the admin
+    # session, and patching AsyncSession.commit globally would break those.
+    # auth's `_require_session_with_role` opens its own tenant session before
+    # the route's, so the fault fires only on the SECOND commit through a
+    # patched factory (auth's is the first): the route's INSERT commit.
+    import app.db.rls as rls_module
+
+    real_session_local = rls_module.SessionLocal
+    armed = {"fired": False}
+
+    class _BrokenSessionLocal:
+        def __call__(self):
+            session = real_session_local()
+
+            async def _commit(*a, **kw):
+                if armed["fired"] and session.in_transaction():
+                    # Fail only a commit that still carries work — a
+                    # post-rollback no-op commit passes, matching the real
+                    # semantics the route relies on (`expunge_all` +
+                    # `rollback` leave the exit commit empty).
+                    raise DBAPIError(
+                        "INSERT INTO external_candidate_searches",
+                        {},
+                        _MissingTable(),
+                    )
+                armed["fired"] = True
+                return await session.__class__.commit(session)
+
+            session.commit = _commit
+            return session
+
+    monkeypatch.setattr(rls_module, "SessionLocal", _BrokenSessionLocal())
+    tid, uid = await _seed_agency()
+    oid = await _opportunity(tid, uid)
+    await _analyse(tid, oid, PLAN)
+    try:
+        async with _http(tid, uid) as c:
+            res = await c.post(f"/api/opportunities/{oid}/external-candidates/search")
+            assert res.status_code == 202, res.text
+            body = res.json()
+            assert body["status"] == "not_provisioned"
+            assert "migrations" in body["message"]
+            assert body["task_id"] is None
     finally:
         await _drop_agency(tid)
 

@@ -35,6 +35,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 from sqlalchemy import select
+from sqlalchemy.exc import DBAPIError
 
 from app.api.auth import _require_session_with_role
 from app.core.config import settings
@@ -60,6 +61,14 @@ router = APIRouter(tags=["external_candidates"])
 STATUS_UNCONFIGURED = "unconfigured"
 STATUS_UNREACHABLE = "unreachable"
 STATUS_REFUSED = "refused"
+STATUS_NOT_PROVISIONED = "not_provisioned"
+
+# SQLSTATE 42P01: the local membership table is absent. It shipped with the
+# feature's migration, and CI runs that migration on every api deploy — but
+# 2026-09-02 proved the chain is not unbreakable (a failed build followed by
+# frontend-only fixes let api ship the code without the migration). A missing
+# table is a deployment fault an operator must fix (run `alembic upgrade
+# head`), so it gets its own sentence rather than a 500 with a stack trace.
 
 # The fallback when the career bot sent no quotable reason. Its own wording
 # is preferred (§15) and `_MAX_MESSAGE_CHARS` bounds whatever arrived.
@@ -79,6 +88,30 @@ def _refusal(exc: CareerBotError) -> dict[str, Any]:
 
 def _unreachable_body(exc: CareerBotUnreachableError) -> dict[str, Any]:
     return {"status": STATUS_UNREACHABLE, "task_id": None, "message": exc.message}
+
+
+# SQLSTATE class 42 = insufficient schema / undefined object.
+_MISSING_TABLE = "42P01"
+
+
+def _not_provisioned_body(exc: Exception) -> dict[str, Any]:
+    """The structured answer for a database missing the feature's tables.
+
+    One catch around the whole database-touching half of the route: the
+    failure today (2026-09-02) surfaced as a 500 with a 120-line stack
+    trace for `relation "external_candidate_searches" does not exist` —
+    that sentence is exactly what the panel should have shown instead.
+    """
+    log.error("external_candidates_schema_missing", error=str(exc))
+    return {
+        "status": STATUS_NOT_PROVISIONED,
+        "task_id": None,
+        "message": (
+            "The external candidate search is not provisioned in this "
+            "deployment's database yet — an administrator needs to run the "
+            "pending migrations."
+        ),
+    }
 
 
 def _client() -> career_bot.CareerBotClient:
@@ -163,47 +196,67 @@ async def start_external_search(request: Request, opportunity_id: uuid.UUID) -> 
         }
 
     async with tenant_session(tenant_uuid) as session:
-        current = await load_visible_opportunity(session, opportunity_id, user_uuid, role)
-        plan, plan_opportunity_id = await _load_search_plan(session, current.id)
-        payload = _payload_from_plan(plan) if plan else {}
-        if not payload.get("queries"):
-            # 409, not 404: the job order exists and is visible — what is
-            # missing is a precondition of the action (an analysis with a
-            # search plan), the same reading `get_intelligence` takes when
-            # it answers `{"intelligence": None}` with 200 instead of 404.
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    "Run the job analysis first — external search uses the "
-                    "search plan from the Search tab."
-                ),
-            )
-
-        search_id = uuid.uuid4()
         try:
-            started = await _client().start_search(payload)
-        except CareerBotUnreachableError as exc:
-            log.warning("career_bot_start_unreachable", error=exc.message)
-            return _unreachable_body(exc)
-        except CareerBotError as exc:
-            log.warning(
-                "career_bot_start_refused", status=exc.status, message=exc.message
+            current = await load_visible_opportunity(
+                session, opportunity_id, user_uuid, role
             )
-            return _refusal(exc)
+            plan, plan_opportunity_id = await _load_search_plan(session, current.id)
+            payload = _payload_from_plan(plan) if plan else {}
+            if not payload.get("queries"):
+                # 409, not 404: the job order exists and is visible — what is
+                # missing is a precondition of the action (an analysis with a
+                # search plan), the same reading `get_intelligence` takes when
+                # it answers `{"intelligence": None}` with 200 instead of 404.
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "Run the job analysis first — external search uses the "
+                        "search plan from the Search tab."
+                    ),
+                )
 
-        # The local membership row, written only after the career bot
-        # accepted the search: a task id we could not start has no row, and
-        # a row we could not start has no task id.
-        session.add(
-            ExternalCandidateSearch(
-                id=search_id,
-                tenant_id=tenant_uuid,
-                opportunity_id=plan_opportunity_id or current.id,
-                task_id=started.task_id,
-                created_by=user_uuid,
+            search_id = uuid.uuid4()
+            try:
+                started = await _client().start_search(payload)
+            except CareerBotUnreachableError as exc:
+                log.warning("career_bot_start_unreachable", error=exc.message)
+                return _unreachable_body(exc)
+            except CareerBotError as exc:
+                log.warning(
+                    "career_bot_start_refused", status=exc.status, message=exc.message
+                )
+                return _refusal(exc)
+
+            # The local membership row, written only after the career bot
+            # accepted the search: a task id we could not start has no row, and
+            # a row we could not start has no task id.
+            session.add(
+                ExternalCandidateSearch(
+                    id=search_id,
+                    tenant_id=tenant_uuid,
+                    opportunity_id=plan_opportunity_id or current.id,
+                    task_id=started.task_id,
+                    created_by=user_uuid,
+                )
             )
-        )
-        await session.commit()
+            await session.commit()
+        except DBAPIError as exc:
+            if (
+                exc.orig is not None
+                and getattr(exc.orig, "sqlstate", None) == _MISSING_TABLE
+            ):
+                # The schema predates the feature — most likely the whole
+                # membership table is absent, so there is nothing started to
+                # speak of. Structured, not a 500. The rollback + expunge
+                # first: the `tenant_session` context manager commits AGAIN
+                # on the way out, and a session still holding the failed
+                # INSERT would re-raise the same fault there — a 500 after
+                # this handler had already returned cleanly. Expunging
+                # leaves the exit commit a clean no-op.
+                session.expunge_all()
+                await session.rollback()
+                return _not_provisioned_body(exc)
+            raise
 
     return {"status": "started", "task_id": started.task_id, "message": None}
 
