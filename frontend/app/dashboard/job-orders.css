@@ -1137,6 +1137,94 @@
   font-style: italic;
 }
 
+/* ---- External candidates tab ----
+   The career bot's ranked strangers, in the same visual grammar as the three
+   Job Intelligence stages above: same `jo-intel-stage` canvas, same type
+   scale. A result is a card, not a table row — a profile is prose (headline,
+   reason, gaps) with a few chips on it, and the source link is the row's
+   anchor because every result is traceable by the spec's own rule. */
+.jo-external-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+.jo-external-head .jo-intel-stage-title {
+  margin: 0;
+}
+.jo-external-find {
+  border: 1px solid var(--blue-600);
+  color: var(--blue-600);
+  background: var(--surface);
+  border-radius: var(--radius);
+  padding: 7px 14px;
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.jo-external-find:hover:not(:disabled) {
+  background: var(--blue-050);
+}
+.jo-external-find:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.jo-external-list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 12px;
+}
+.jo-external-row {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  display: grid;
+  gap: 6px;
+}
+.jo-external-row-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+.jo-external-name {
+  font-weight: 650;
+  color: var(--ink-900);
+  text-decoration: none;
+}
+a.jo-external-name:hover {
+  color: var(--blue-600);
+  text-decoration: underline;
+}
+.jo-external-score {
+  font-weight: 700;
+  font-size: 0.875rem;
+  color: var(--blue-600);
+  font-variant-numeric: tabular-nums;
+}
+.jo-external-reason {
+  margin: 0;
+}
+.jo-external-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.jo-external-chip {
+  font-size: 0.75rem;
+  color: var(--ink-700);
+  background: var(--surface-alt);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 2px 9px;
+}
+.jo-external-gaps {
+  color: var(--amber-700);
+}
+
 /* ---- Salary benchmark chart ----
    The first chart in the app. Library-free: a horizontal bar whose segments
    are the P25/Median/P75 bands and whose marker is the client offer. Every

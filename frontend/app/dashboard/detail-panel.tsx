@@ -8,6 +8,10 @@ import { type ClientMatch, ClientSearch } from "./client-search";
 import { DecodedCodes, ProtectedBadge, flagged } from "./codes";
 import { Dialog } from "./dialog";
 import { type TabKey, TabBar } from "./detail-panel-tabs";
+import {
+  ExternalCandidatesStage,
+} from "./external-candidates-panel";
+import { useExternalCandidates } from "./external-candidates";
 import { Salary, Value, day } from "./format";
 import { PersonStage, SearchStage, WorkStage, type StageState } from "./job-intelligence-panel";
 import { useJobIntelligence } from "./job-intelligence";
@@ -193,6 +197,10 @@ function Detail({
   // remount-on-row-change lifecycle the `key={row.id}` above gives this whole
   // component.
   const ji = useJobIntelligence(row.id);
+  // The external-candidates search — one hook for the "Find External
+  // Candidates" button and the External Candidates tab, the same split as
+  // `ji` above: the hook owns the search, the modal owns the layout.
+  const ext = useExternalCandidates(row.id);
   // Which tab is showing. Lives here, not in the hook: the hook owns the
   // analysis, the modal owns the layout. Survives row polls (same `key` rule
   // that keeps `placement` alive); resets when a different row is opened.
@@ -767,6 +775,19 @@ function Detail({
       {activeTab === "person" && <PersonStage intelligence={ji.analysis} state={stageState} />}
       {activeTab === "search" && (
         <SearchStage intelligence={ji.analysis} state={stageState} view={ji.view} />
+      )}
+      {activeTab === "external" && (
+        <ExternalCandidatesStage
+          state={{ hasSearchPlan: Boolean(ji.analysis?.search_plan) }}
+          starting={ext.starting}
+          startError={ext.startError}
+          taskId={ext.taskId}
+          taskStatus={ext.taskStatus}
+          taskError={ext.taskError}
+          results={ext.results}
+          resultsError={ext.resultsError}
+          onFind={() => void ext.start()}
+        />
       )}
       </div>
 

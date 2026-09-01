@@ -1052,6 +1052,26 @@ class Settings(BaseSettings):
     # constants elsewhere: caps how long one call holds FOR UPDATE SKIP
     # LOCKED. The SQL function itself also caps at 500.
     WA_LIVENESS_SWEEP_LIMIT: int = Field(default=200, gt=0)
+    # --- Career bot (external candidate search) ---
+    # External service that runs candidate searches on LinkedIn using the
+    # search plan the job-intelligence analysis produces (spec: the "search"
+    # tab). Empty by default for the same reason GRAPH_BASE_URL and
+    # WA_GATEWAY_URL are: a service's first call to an external system must
+    # be answerable at the edge (`career_bot_configured()`) rather than crash
+    # inside httpx — see the GRAPH_BASE_URL and R2_* outage notes in
+    # CLAUDE.md.
+    CAREER_BOT_URL: str = ""
+    # Sent verbatim as `X-API-Key` on every career bot call. The key is the
+    # only credential the service accepts; an absent key means the feature is
+    # off, not broken — the API answers `career_bot_not_configured`.
+    CAREER_BOT_API_KEY: str = ""
+    # The start call is synchronous (returns a task id) but the search itself
+    # runs for minutes on the career bot side and is polled, so the timeout
+    # only needs to cover one HTTP round trip. Longer than the WA gateway's
+    # because the career bot fronts a slow upstream, but still bounded so a
+    # dead URL fails fast into `career_bot_unreachable`.
+    CAREER_BOT_TIMEOUT_SECONDS: float = 15.0
+
     # Telegram echoes this in `X-Telegram-Bot-Api-Secret-Token`. Without it the
     # webhook accepts anything that can reach the URL, and the URL is public.
     TELEGRAM_WEBHOOK_SECRET: str = ""
@@ -1404,6 +1424,10 @@ class Settings(BaseSettings):
     def wa_gateway_configured(self) -> bool:
         """Same question, asked of the Baileys gateway (see WA_GATEWAY_URL)."""
         return bool(self.WA_GATEWAY_URL and self.WA_GATEWAY_SHARED_SECRET)
+
+    def career_bot_configured(self) -> bool:
+        """Same question, asked of the external candidate-search service."""
+        return bool(self.CAREER_BOT_URL and self.CAREER_BOT_API_KEY)
 
     def google_configured(self) -> bool:
         """Identity only — Google users have no mailbox to ingest."""

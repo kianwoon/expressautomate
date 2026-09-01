@@ -103,7 +103,10 @@ function opportunity(): Opportunity {
     location_raw: "West",
     employment_type: null,
     quality_state: "verified",
-    review_status: "new",
+    // "ready", not "new": `ReviewStatus` names three states and "new" is not
+    // one of them, so `"new" as Opportunity` no longer typechecks. Nothing in
+    // this file branches on review state — any valid value serves.
+    review_status: "ready",
     internet_message_id: null,
     graph_message_id: null,
     verified_fields: 0,

@@ -30,6 +30,7 @@ from app.api import (
     clients,
     clients_logo,
     events,
+    external_candidates,
     glossary,
     graph_webhook,
     job_intelligence,
@@ -151,6 +152,13 @@ api.include_router(sourcing.router)
 # FastAPI hands `intelligence` to the generic route as a path parameter and
 # answers 422 "not a valid UUID".
 api.include_router(job_intelligence.router)
+# Before `opportunities`, for the same shadowing reason as `sourcing` above:
+# this router owns the LITERAL paths
+# `/opportunities/{opportunity_id}/external-candidates/…`. Declared after
+# `/opportunities/{opportunity_id}`, the first literal segment would be
+# handed to the generic route as a path parameter and answered 422 "not a
+# valid UUID".
+api.include_router(external_candidates.router)
 # Before `opportunities`, for the same shadowing reason as `sourcing` above:
 # this router owns the LITERAL path `/opportunities/documents` (and the
 # no-opportunity-yet upload that makes the New job order dialog work).

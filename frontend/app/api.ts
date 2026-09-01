@@ -126,6 +126,38 @@ export function opportunityIntelligencePath(id: string): string {
   return `${OPPORTUNITIES_PATH}/${encodeURIComponent(id)}/intelligence`;
 }
 
+/**
+ * The external candidate search for one job order — the career bot proxied
+ * through the API, so the browser never holds the service's key.
+ *
+ * POST (no body — the search plan comes from the job's analysis server-side)
+ * starts a search and answers 202 with a task id; GET with a task id polls
+ * its status; GET on the `results` suffix reads the ranked list once the task
+ * completes. Both ids are in the path, so both are encoded for the same
+ * reason every id-in-path helper on this page encodes its id. Literal
+ * segments (`external-candidates`), so the routes are declared before the
+ * `{id}` route server-side.
+ */
+export function externalCandidateSearchPath(id: string, taskId?: string): string {
+  const base = `${OPPORTUNITIES_PATH}/${encodeURIComponent(id)}/external-candidates/search`;
+  return taskId ? `${base}/${encodeURIComponent(taskId)}` : base;
+}
+
+export function externalCandidateSearchResultsPath(id: string, taskId: string): string {
+  return `${externalCandidateSearchPath(id, taskId)}/results`;
+}
+
+/**
+ * How often the panel asks the career bot how the search is going. The
+ * service's own spec recommends ~5s (§3: "do not hammer") and its searches
+ * run 30–120s, so this sits between the sourcing poll and a guess. Same
+ * `|| ` guard as `SOURCING_POLL_MS` above — an unset variable and a typo both
+ * parse to `NaN`, and `setInterval(NaN)` fires as fast as the browser will
+ * let it.
+ */
+export const EXTERNAL_SEARCH_POLL_MS =
+  Number(process.env.NEXT_PUBLIC_EXTERNAL_SEARCH_POLL_MS) || 5000;
+
 /** One job order, for GET — the whole row, in the shape one row of the list
  *  comes back in. Read after every write, because each write route answers
  *  with only the fields it changed. Same id-in-path, same encoding, as the

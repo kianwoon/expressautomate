@@ -311,6 +311,15 @@
     "/api/opportunities/{opportunity_id}/client": [
       "POST"
     ],
+    "/api/opportunities/{opportunity_id}/external-candidates/search": [
+      "POST"
+    ],
+    "/api/opportunities/{opportunity_id}/external-candidates/search/{task_id}": [
+      "GET"
+    ],
+    "/api/opportunities/{opportunity_id}/external-candidates/search/{task_id}/results": [
+      "GET"
+    ],
     "/api/opportunities/{opportunity_id}/intelligence": [
       "GET",
       "POST"

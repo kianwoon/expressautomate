@@ -12,13 +12,14 @@
  * `role="tab"` / `aria-selected` carry the semantics to assistive tech.
  */
 
-export type TabKey = "origin" | "work" | "person" | "search";
+export type TabKey = "origin" | "work" | "person" | "search" | "external";
 
 export const JOB_ORDER_TABS: { key: TabKey; label: string }[] = [
   { key: "origin", label: "Origin" },
   { key: "work", label: "Work" },
   { key: "person", label: "Person" },
   { key: "search", label: "Search" },
+  { key: "external", label: "External Candidates" },
 ];
 
 export function TabBar({

@@ -8,6 +8,7 @@ from app.models.classification_usage import ClassificationUsage
 from app.models.client import Client, ClientMention
 from app.models.client_discovery import ClientDiscoveryRun
 from app.models.email_message import EmailMessage
+from app.models.external_candidate_search import ExternalCandidateSearch
 from app.models.extraction import (
     Extraction,
     ExtractionEvidence,
@@ -55,6 +56,7 @@ __all__ = [
     "EmailMessage",
     "Extraction",
     "ExtractionEvidence",
+    "ExternalCandidateSearch",
     "GlossaryCode",
     "GlossarySeedMark",
     "GraphSubscription",

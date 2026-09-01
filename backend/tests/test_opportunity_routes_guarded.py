@@ -77,6 +77,16 @@ EXEMPT: dict[str, dict[str, str]] = {
             "not edit rights."
         ),
     },
+    "external_candidates.py": {
+        "start_external_search": (
+            "Exempt from the EDIT assertion only, and it still fails the read "
+            "assertion if it drops the read guard. The row it writes is an "
+            "`external_candidate_searches` row, not the job order. A share "
+            "recipient may run an external search on work shown to them: "
+            "that is visibility, not edit rights — the same reading "
+            "`run_intelligence`'s exemption takes."
+        ),
+    },
     "clients.py": {
         "set_client_assignee": (
             "Reads no job order by id. It moves a whole client's open job "
