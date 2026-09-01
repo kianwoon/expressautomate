@@ -41,7 +41,6 @@ export function ExternalCandidatesStage({
   state,
   starting,
   startError,
-  taskId,
   taskStatus,
   taskError,
   results,
@@ -51,7 +50,6 @@ export function ExternalCandidatesStage({
   state: ExternalPanelState;
   starting: boolean;
   startError: string | null;
-  taskId: string | null;
   taskStatus: ExternalTaskStatus | null;
   taskError: string | null;
   results: ExternalSearchResults | null;

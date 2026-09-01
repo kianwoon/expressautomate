@@ -77,7 +77,6 @@ function panel(overrides: {
       state={overrides.state ?? PLAN}
       starting={overrides.starting ?? false}
       startError={overrides.startError ?? null}
-      taskId={overrides.taskStatus ? "task-1" : null}
       taskStatus={overrides.taskStatus ?? null}
       taskError={overrides.taskError ?? null}
       results={overrides.results ?? null}

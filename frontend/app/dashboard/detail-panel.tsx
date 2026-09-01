@@ -781,7 +781,6 @@ function Detail({
           state={{ hasSearchPlan: Boolean(ji.analysis?.search_plan) }}
           starting={ext.starting}
           startError={ext.startError}
-          taskId={ext.taskId}
           taskStatus={ext.taskStatus}
           taskError={ext.taskError}
           results={ext.results}
