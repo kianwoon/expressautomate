@@ -221,6 +221,68 @@ async def test_job_marks_failed_on_model_error(monkeypatch):
         await _drop(tid)
 
 
+async def test_thin_order_fails_before_the_pipeline(monkeypatch):
+    """A title-only order (the 2026-09-01 production failure) never reaches the
+    model: it fails with the actionable thin-context sentence instead of a paid
+    LLM call the anti-fabrication rule would make refuse."""
+    monkeypatch.setattr(settings, "JOB_INTELLIGENCE_MAX_ATTEMPTS", 3)
+    fake = AsyncMock(return_value=_outcome())
+    monkeypatch.setattr("app.workers.job_intelligence_jobs.analyze", fake)
+
+    tid, uid, oid, row_id = await _seed()
+    try:
+        # Strip the description so the order carries only a title (+ contract
+        # terms, which this fixture never had anyway).
+        async with AdminSessionLocal() as s:
+            await s.execute(
+                text("UPDATE opportunities SET job_description = '' WHERE id = :i"),
+                {"i": oid},
+            )
+            await s.commit()
+
+        await run_job_intelligence(
+            ctx={},
+            tenant_id=str(tid),
+            opportunity_id=str(oid),
+            row_id=str(row_id),
+        )
+
+        # The pipeline never ran, and the reason names the fix.
+        assert fake.call_count == 0
+        async with tenant_session(tid) as s:
+            row = await s.get(JobIntelligence, row_id)
+            assert row.state == "failed"
+            assert "description" in row.failure_reason
+    finally:
+        await _drop(tid)
+
+
+async def test_model_refusal_text_becomes_the_failure_reason(monkeypatch):
+    """The model's prose refusal is the diagnosis of a thin order, so its start
+    is surfaced to the recruiter instead of a generic "try again later"."""
+    monkeypatch.setattr(settings, "JOB_INTELLIGENCE_MAX_ATTEMPTS", 3)
+    refusal = "The job order contains almost no substantive information beyond the title. " * 20
+    fake = AsyncMock(side_effect=LLMInvalidJSON(refusal))
+    monkeypatch.setattr("app.workers.job_intelligence_jobs.analyze", fake)
+
+    tid, uid, oid, row_id = await _seed()
+    try:
+        await run_job_intelligence(
+            ctx={},
+            tenant_id=str(tid),
+            opportunity_id=str(oid),
+            row_id=str(row_id),
+        )
+
+        async with tenant_session(tid) as s:
+            row = await s.get(JobIntelligence, row_id)
+            assert row.state == "failed"
+            assert "almost no substantive information" in row.failure_reason
+            assert len(row.failure_reason) <= 240
+    finally:
+        await _drop(tid)
+
+
 async def test_job_gives_up_after_max_attempts(monkeypatch):
     """A row that has exhausted attempts is failed without running the pipeline."""
     monkeypatch.setattr(settings, "JOB_INTELLIGENCE_MAX_ATTEMPTS", 2)

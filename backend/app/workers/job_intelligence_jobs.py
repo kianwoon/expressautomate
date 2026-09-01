@@ -36,6 +36,7 @@ from app.models.job_intelligence import JobIntelligence
 from app.models.opportunity import Opportunity
 from app.models.opportunity_code import OpportunityCode
 from app.services.job_intelligence.engine import analyze
+from app.services.job_intelligence.input import is_thin
 from app.services.visibility import current_opportunity_id
 
 log = get_logger(__name__)
@@ -53,6 +54,14 @@ JOB_RUN_JOB_INTELLIGENCE = "run_job_intelligence"
 # allow-hardcode: a sentence shown to a recruiter, not configuration.
 _MODEL_FAILED = "The analysis could not be produced just now. Try again in a few minutes."
 _NO_CONTEXT = "This job order has no title or description to analyse. Add one and try again."
+# The order has a title and maybe contract terms but nothing about the work
+# itself — the exact shape that made the model refuse to answer (production,
+# arq 2026-09-01). Checked before the pipeline so a hopeless order fails with
+# an actionable sentence instead of burning a paid LLM call on a refusal.
+_THIN_CONTEXT = (
+    "This job order says almost nothing about the work — add a description, "
+    "requirements or skills to the order before running the analysis."
+)
 
 
 async def run_job_intelligence(
@@ -137,6 +146,17 @@ async def run_job_intelligence(
             ).scalars()
         )
 
+    if is_thin(opportunity):
+        # No description, requirements or skills — the model would refuse to
+        # invent the work. Fail before the LLM call with the actionable fix.
+        log.info(
+            "job_intelligence_skipped_thin_context",
+            row_id=row_id,
+            opportunity_id=opportunity_id,
+        )
+        await _fail(tenant, record, _THIN_CONTEXT)
+        return
+
     try:
         # A second session is opened for the pipeline so the occupation stage
         # can semantic-search `mom_occupations` (a global table readable under
@@ -154,7 +174,7 @@ async def run_job_intelligence(
             opportunity_id=opportunity_id,
             error=repr(exc),
         )
-        await _fail(tenant, record, _MODEL_FAILED)
+        await _fail(tenant, record, _recruiter_reason(exc))
         return
 
     if not outcome.result.understanding.role:
@@ -196,6 +216,30 @@ async def run_job_intelligence(
         opportunity_id=opportunity_id,
         latency_ms=outcome.stats.latency_ms,
     )
+
+
+def _recruiter_reason(exc: Exception) -> str:
+    """A failure sentence a recruiter can act on, from the exception.
+
+    When the model answered in prose instead of JSON (the usual reason an
+    analysis dies: the anti-fabrication rule made it refuse a thin order),
+    that prose *is* the diagnosis — "the order states almost nothing". Its
+    beginning is forwarded as the failure reason rather than a generic "try
+    again later" that hides the actual problem. Anything else (transport
+    errors, timeouts) keeps the generic sentence.
+
+    Truncated hard: `failure_reason` is a UI string, not a log, and a runaway
+    model answer must not render as a wall of text.
+    """
+    from app.services.llm.client import LLMInvalidJSON
+
+    if isinstance(exc, LLMInvalidJSON):
+        text = " ".join(str(exc).split()).strip()
+        if text:
+            # 240 keeps a sentence or two; enough to name the problem, short
+            # enough to never dominate the panel.
+            return text[:240]
+    return _MODEL_FAILED
 
 
 async def _fail(tenant: uuid.UUID, record: uuid.UUID, reason: str) -> None:

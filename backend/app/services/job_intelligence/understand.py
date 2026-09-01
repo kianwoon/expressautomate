@@ -26,6 +26,12 @@ actually do, why the role exists, and what doing it well looks like.
 Rules:
 - Ground every statement in the job order below. Do not invent requirements,
   tools, or conditions the order does not state or clearly imply.
+- If the job order says almost nothing about the work, do NOT refuse or
+  explain in prose. Still return valid JSON: fill each field with only what
+  the order supports (empty lists where nothing is known), give single-sentence
+  fields the shortest honest statement possible, and set `confidence` low
+  (near 0.0). A thin order answered thinly in JSON is correct; a refusal is
+  not an answer.
 - If a field below is absent or says "[redacted]", treat it as unknown and say
   so in plain words rather than guessing. "[redacted]" marks a requirement that
   was withheld for legal reasons — never treat it as a skill or a preference.
