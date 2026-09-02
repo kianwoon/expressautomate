@@ -756,7 +756,7 @@ jobs:
           echo "-> api=$API worker=$BACKEND arq=$ARQ gateway=$GATEWAY"
 
       - uses: astral-sh/setup-uv@v9.0.0
-        if: steps.freshness.outputs.stale == 'false' && steps.scope.outputs.worker == 'true'
+        if: steps.freshness.outputs.stale == 'false' && steps.scope.outputs.api == 'true'
         with:
           enable-cache: true
           prune-cache: true
@@ -770,9 +770,13 @@ jobs:
       # build (deploy never ran, migration never ran), the fix commit diffed
       # frontend-only, and api deployed new code against a schema the
       # migration had never created. The migration step must precede ANY
-      # deploy of code that knows the table. The setup-uv gate above stays
-      # `worker`-only only because a frontend-only run never executes either
-      # step; if this gate ever widens, widen it to match.
+      # deploy of code that knows the table. Both gates are `api`: a
+      # frontend-only commit redeploys api (the static export lives in the
+      # api image), and that deploy must never race an unmigrated schema.
+      # The setup-uv gate above once stayed `worker`-only while this step
+      # gated on `api` — a frontend-only run then died with
+      # `uv: command not found` (exit 127) because setup-uv never ran while
+      # the migration step did. The two gates must always match.
       - name: Migrate production
         if: steps.freshness.outputs.stale == 'false' && steps.scope.outputs.api == 'true'
         working-directory: backend
