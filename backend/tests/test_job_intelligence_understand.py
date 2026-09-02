@@ -58,6 +58,27 @@ def test_build_prompt_explains_the_redaction_marker():
     assert "withheld for legal reasons" in prompt
 
 
+def test_build_prompt_lets_typical_title_knowledge_through():
+    """The understand stage must not order the model into bare disclaimers.
+
+    A title-only order answered with "duties not described in the job order"
+    made the Run-anyway escape hatch useless: the recruiter pressed it to learn
+    what the title typically means. The prompt now splits its demands —
+    order-specific facts stay grounded in the order (anti-fabrication §15),
+    while `role`/`business_purpose`/`daily_activities` may draw on what the
+    title denotes, phrased as typical. Confidence still scores the ORDER, so a
+    rich write-up over a thin order cannot masquerade as a well-grounded one.
+    """
+    prompt = build_prompt("")
+    # The typical-knowledge allowance, with its phrasing guard.
+    assert "typically" in prompt
+    assert "never present it as" in prompt
+    # The honesty guard: confidence scores the order, not the write-up.
+    assert "not how full your write-up is" in prompt
+    # Order-specific facts stay grounded.
+    assert "must come from the order" in prompt
+
+
 async def test_understand_returns_a_validated_understanding():
     payload = _full_payload()
     llm = FakeLLM(payload)

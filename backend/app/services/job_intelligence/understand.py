@@ -19,19 +19,32 @@ from app.services.job_intelligence.schema import JDUnderstanding, json_schema
 from app.services.llm.client import LLMResult, complete_json
 
 # allow-hardcode: a prompt, not configuration.
+#
+# The grounding rule is two-tiered on purpose. Order-specific facts
+# (requirements, conditions, salary) must come from the order — the
+# anti-fabrication rule (§15). But `role`, `business_purpose` and
+# `daily_activities` are allowed to draw on what the title denotes in the
+# industry, phrased as typical. The thin-order guard already made that trade
+# explicit: a recruiter who presses "Run anyway" on a title-only order is
+# asking exactly for the typical meaning of the title, and a prompt that
+# answers "duties not described" makes the escape hatch useless. The
+# confidence field keeps the honesty: it scores the ORDER, not the write-up.
 PROMPT = """You are a recruitment analyst. Read this job order and explain the WORK it
 describes — not the keywords, the work. Reason about what the person will
 actually do, why the role exists, and what doing it well looks like.
 
 Rules:
-- Ground every statement in the job order below. Do not invent requirements,
-  tools, or conditions the order does not state or clearly imply.
-- If the job order says almost nothing about the work, do NOT refuse or
-  explain in prose. Still return valid JSON: fill each field with only what
-  the order supports (empty lists where nothing is known), give single-sentence
-  fields the shortest honest statement possible, and set `confidence` low
-  (near 0.0). A thin order answered thinly in JSON is correct; a refusal is
-  not an answer.
+- Never refuse and never answer in prose: always return valid JSON.
+- Separate what the ORDER states from what the TITLE implies. Requirements,
+  salary and working conditions must come from the order itself; where the
+  order is silent, say so plainly ("not stated in the order") rather than
+  inventing specifics.
+- `role`, `business_purpose` and `daily_activities` may draw on what this
+  title denotes in the industry: when the order gives little detail, describe
+  the work such a role typically covers. Phrase typical knowledge as typical
+  ("typically covers…", "generally exists to…") — never present it as
+  something the order stated. `work_environment` too when the order is silent
+  (e.g. "typically office-based; the order does not specify").
 - If a field below is absent or says "[redacted]", treat it as unknown and say
   so in plain words rather than guessing. "[redacted]" marks a requirement that
   was withheld for legal reasons — never treat it as a skill or a preference.
@@ -40,7 +53,8 @@ Rules:
   phrases. `role`, `business_purpose`, `work_environment` and
   `working_conditions` are single sentences.
 - `confidence` (0.0–1.0) is your honest estimate of how complete and
-  unambiguous the job order was, not how confident you feel in general.
+  unambiguous the JOB ORDER was — not how full your write-up is. A title-only
+  order stays near 0.0–0.3 even when the typical-role description is rich.
 
 Return JSON matching this schema:
 {schema}
