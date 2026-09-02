@@ -177,7 +177,7 @@ class Settings(BaseSettings):
     # no counter table to drift from the rows it counts. Generous next to
     # real use (the intelligence rows are one-per-entity upserts, and one
     # job order needs one document), tight next to a runaway client.
-    INTELLIGENCE_DAILY_QUOTA: int = Field(default=50, gt=0)
+    INTELLIGENCE_DAILY_QUOTA: int = Field(default=100, gt=0)
     OPPORTUNITY_DOCUMENT_DAILY_QUOTA: int = Field(default=100, gt=0)
     RENEW_INTERVAL_SECONDS: float = Field(default=900.0, gt=0)
     DELTA_SYNC_INTERVAL_SECONDS: float = Field(default=600.0, gt=0)
