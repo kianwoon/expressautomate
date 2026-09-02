@@ -196,11 +196,14 @@ async def test_post_maps_the_search_plan_and_returns_a_task(configured):
             assert body["task_id"]
 
             # The plan maps onto the career bot's body: queries as-is,
-            # negative_queries as `exclude`, the rest travelling by name.
+            # negative_queries as `exclude`, the plan's platform as the
+            # `platforms[]` list form the spec prefers over the legacy
+            # `platform` scalar.
             payload = _payload_of(configured)
             assert payload["queries"] == PLAN["queries"]
             assert payload["exclude"] == ["intern"]
-            assert payload["platform"] == "linkedin"
+            assert payload["platforms"] == ["linkedin"]
+            assert "platform" not in payload
             assert payload["location"] == "Singapore"
             assert payload["salary"] == "SGD 6k-8k"
             assert payload["employment_type"] == "Full-time"

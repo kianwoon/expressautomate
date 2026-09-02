@@ -31,6 +31,7 @@ function candidate(overrides: Partial<ExternalCandidate> = {}): ExternalCandidat
     subtitle: "Hands-On Software Architect",
     location: "Singapore, Singapore",
     source: "linkedin_people",
+    source_platform: "LinkedIn",
     source_url: "https://www.linkedin.com/in/yap-chean-wei/",
     match_score: 90.4,
     match_reason: "20+ yrs, Singapore-based, hands-on architect",
@@ -217,21 +218,39 @@ describe("a rendered candidate row", () => {
   it("maps the jobstreet source id to its platform name", () => {
     panel({
       taskStatus: "completed",
-      results: results({ results: [candidate({ source: "jobstreet - candidate" })] }),
+      results: results({
+        results: [candidate({ source: "jobstreet - candidate", source_platform: null })],
+      }),
     });
     expect(screen.getByTestId("jo-external-platform").textContent).toBe("JobStreet");
+  });
+
+  it("prefers the career bot's own source_platform label", () => {
+    panel({
+      taskStatus: "completed",
+      results: results({
+        results: [candidate({ source: "linkedin_people", source_platform: "LinkedIn" })],
+      }),
+    });
+    expect(screen.getByTestId("jo-external-platform").textContent).toBe("LinkedIn");
   });
 
   it("title-cases an unknown source id rather than inventing a platform", () => {
     panel({
       taskStatus: "completed",
-      results: results({ results: [candidate({ source: "glassdoor_people" })] }),
+      results: results({
+        results: [candidate({ source: "glassdoor_people", source_platform: null })],
+      }),
     });
     expect(screen.getByTestId("jo-external-platform").textContent).toBe("Glassdoor People");
   });
 
   it("shows no platform chip when the result carries no source", () => {
-    const row = { ...candidate(), source: undefined as unknown as string };
+    const row = {
+      ...candidate(),
+      source: undefined as unknown as string,
+      source_platform: null,
+    };
     panel({
       taskStatus: "completed",
       results: results({ results: [row] }),

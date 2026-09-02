@@ -79,6 +79,7 @@ export type ExternalCandidate = {
   subtitle: string | null;
   location: string | null;
   source: string;
+  source_platform: string | null;
   source_url: string | null;
   match_score: number;
   match_reason: string | null;
@@ -118,11 +119,20 @@ export type ExternalSearchSaved = {
   created_at: string | null;
 };
 
-/** The raw source id a result carries (e.g. `linkedin_people`) mapped to the
- *  platform name a recruiter recognises. The same ids the career bot itself
- *  labels (`matching.py`'s `_PLATFORM_LABELS`), so the two sides agree; an
- *  unknown id falls back to title-casing rather than a wrong platform name. */
-export function platformLabel(source: string | null | undefined): string | null {
+/** The platform name a recruiter recognises for one result. The career bot
+ *  now ships `source_platform` — its own display label (`LinkedIn`,
+ *  `JobStreet`, …) — and that is the truth; this fallback only covers rows
+ *  persisted before that field existed, where all we have is the raw source
+ *  id (`linkedin_people`). The same ids the career bot itself labels
+ *  (`matching.py`'s `_PLATFORM_LABELS`), so the two sides agree; an unknown
+ *  id falls back to title-casing rather than a wrong platform name. */
+export function platformLabel(
+  candidate: Pick<ExternalCandidate, "source" | "source_platform"> | null | undefined,
+): string | null {
+  if (!candidate) return null;
+  const shipped = candidate.source_platform;
+  if (typeof shipped === "string" && shipped.trim()) return shipped.trim();
+  const source = candidate.source;
   if (!source) return null;
   const key = source.trim().toLowerCase();
   if (!key) return null;

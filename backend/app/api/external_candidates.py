@@ -162,9 +162,12 @@ async def _load_search_plan(
 def _payload_from_plan(plan: dict[str, Any]) -> dict[str, Any]:
     """Map the SearchPlan the search tab shows into the career bot's body
     (spec §2). Field names travel as-is where they match; `negative_queries`
-    becomes `exclude`. Empty/None fields are dropped rather than sent as
-    nulls — the career bot treats an absent field and a null the same, and
-    a shorter request is an honest one.
+    becomes `exclude` and the single plan platform becomes `platforms[]` —
+    the list form the revised spec prefers (the legacy `platform` scalar is
+    the same as a one-element `platforms[]`, so this changes nothing today
+    while keeping the door open for multi-platform plans). Empty/None fields
+    are dropped rather than sent as nulls — the career bot treats an absent
+    field and a null the same, and a shorter request is an honest one.
     """
     payload: dict[str, Any] = {}
     queries = plan.get("queries")
@@ -174,14 +177,17 @@ def _payload_from_plan(plan: dict[str, Any]) -> dict[str, Any]:
     if isinstance(negative, list) and negative:
         payload["exclude"] = [n for n in negative if isinstance(n, str) and n.strip()]
     for source, target in (
-        ("platform", "platform"),
+        ("platform", "platforms"),
         ("location", "location"),
         ("salary", "salary"),
         ("employment_type", "employment_type"),
     ):
         value = plan.get(source)
         if isinstance(value, str) and value.strip():
-            payload[target] = value.strip()
+            if target == "platforms":
+                payload[target] = [value.strip()]
+            else:
+                payload[target] = value.strip()
     return payload
 
 

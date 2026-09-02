@@ -134,7 +134,7 @@ function Results({ results }: { results: ExternalSearchResults }) {
 
 function ExternalRow({ candidate }: { candidate: ExternalCandidate }) {
   const score = Math.round(candidate.match_score);
-  const platform = platformLabel(candidate.source);
+  const platform = platformLabel(candidate);
   const sourceUrl =
     typeof candidate.source_url === "string" && candidate.source_url.trim()
       ? candidate.source_url.trim()
