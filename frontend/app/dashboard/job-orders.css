@@ -1190,6 +1190,29 @@
   justify-content: space-between;
   gap: 12px;
 }
+/* Name + platform chip travel as one unit so the chip hugs the name on
+   narrow rows instead of drifting toward the score. */
+.jo-external-row-title {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+.jo-external-platform {
+  background: var(--blue-050);
+  border-color: transparent;
+  color: var(--blue-600);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.jo-external-open {
+  color: var(--blue-600);
+  text-decoration: none;
+  font-weight: 550;
+}
+a.jo-external-open:hover {
+  text-decoration: underline;
+}
 .jo-external-name {
   font-weight: 650;
   color: var(--ink-900);

@@ -4,6 +4,7 @@ import {
   type ExternalCandidate,
   type ExternalSearchResults,
   type ExternalTaskStatus,
+  platformLabel,
 } from "./external-candidates";
 
 /**
@@ -16,10 +17,13 @@ import {
  * tab in the same modal reads as a sibling rather than an embed.
  *
  * The panel shows what the career bot spec (§4) says a recruiter needs to
- * judge a stranger: who they are, why they matched (score + reason), what is
- * missing (gaps), and how well the profile holds up (credibility). A source
- * link accompanies every row — the spec's "every result is traceable" rule,
- * rendered.
+ * judge a stranger: who they are, why they matched (score + reason), which
+ * platform they came from (a chip keyed off `source`), what is missing
+ * (gaps), and how well the profile holds up (credibility). A source link
+ * accompanies every row that has a URL — the name is itself a link, and the
+ * "Open profile" chip in the meta row makes the way out explicit even when
+ * the scan pattern skips the name — the spec's "every result is traceable"
+ * rule, rendered.
  *
  * allow-hardcode: user-facing copy rendered to the page, not a list anything
  * is matched against.
@@ -130,21 +134,37 @@ function Results({ results }: { results: ExternalSearchResults }) {
 
 function ExternalRow({ candidate }: { candidate: ExternalCandidate }) {
   const score = Math.round(candidate.match_score);
+  const platform = platformLabel(candidate.source);
+  const sourceUrl =
+    typeof candidate.source_url === "string" && candidate.source_url.trim()
+      ? candidate.source_url.trim()
+      : null;
   return (
     <li className="jo-external-row" data-testid="jo-external-row">
       <div className="jo-external-row-head">
-        {candidate.source_url ? (
-          <a
-            className="jo-external-name"
-            href={candidate.source_url}
-            target="_blank"
-            rel="noreferrer noopener"
-          >
-            {candidate.title}
-          </a>
-        ) : (
-          <span className="jo-external-name">{candidate.title}</span>
-        )}
+        <span className="jo-external-row-title">
+          {sourceUrl ? (
+            <a
+              className="jo-external-name"
+              href={sourceUrl}
+              target="_blank"
+              rel="noreferrer noopener"
+            >
+              {candidate.title}
+            </a>
+          ) : (
+            <span className="jo-external-name">{candidate.title}</span>
+          )}
+          {platform && (
+            <span
+              className="jo-external-chip jo-external-platform"
+              data-testid="jo-external-platform"
+              title={`Found on ${platform}`}
+            >
+              {platform}
+            </span>
+          )}
+        </span>
         <span className="jo-external-score" title={`Match score ${candidate.match_score} of 100`}>
           {score}
         </span>
@@ -154,6 +174,17 @@ function ExternalRow({ candidate }: { candidate: ExternalCandidate }) {
         {candidate.match_reason ?? "Matched the search plan."}
       </p>
       <div className="jo-external-meta">
+        {sourceUrl && (
+          <a
+            className="jo-external-chip jo-external-open"
+            data-testid="jo-external-open"
+            href={sourceUrl}
+            target="_blank"
+            rel="noreferrer noopener"
+          >
+            Open profile ↗
+          </a>
+        )}
         {candidate.location && <span className="jo-external-chip">{candidate.location}</span>}
         {candidate.skills &&
           candidate.skills.slice(0, 6).map((skill) => (

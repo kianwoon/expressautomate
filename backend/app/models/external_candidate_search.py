@@ -10,16 +10,24 @@ could read that agency's candidate results through us — plan §18. The row is
 the membership check: task id AND tenant AND opportunity must all agree, and
 RLS scopes the tenant on top.
 
-Results are deliberately not persisted: the career bot retains them and every
-read is a passthrough, so no copy of external candidates' profile data lands
-in our database and carries no retention obligation (the source-provenance
-rule in CLAUDE.md). If results are ever stored locally, that rule applies to
-them from that day on.
+Results ARE persisted here now, on the row itself. The passthrough design
+assumed the career bot retains results; 2026-09-02 proved otherwise — a task
+polled at 14:28 was a 404 on their side by 14:41 the same day, and a panel
+that had shown ten ranked candidates showed nothing an hour later. When a
+read returns a completed task, its ranked list (the career bot's spec §4
+shape, verbatim) is written onto this row, so opening the job order again
+reloads the search from us instead of discovering the task has expired. The
+source-provenance rule in CLAUDE.md applies to that copy from this day on:
+each result carries its evidence (`source`, `source_url`, `match_reason`,
+`credibility`), and retention follows the row — deleting the job order
+deletes the searches and their results (CASCADE).
 """
 
+import datetime as dt
 import uuid
 
-from sqlalchemy import ForeignKey, Text
+from sqlalchemy import DateTime, ForeignKey, Text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PgUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -50,4 +58,19 @@ class ExternalCandidateSearch(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
     # reading `run_intelligence`'s exemption takes.
     created_by: Mapped[uuid.UUID | None] = mapped_column(
         PgUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL")
+    )
+
+    # The career bot's ranked list (its spec §4 shape), written when a read
+    # finds the task completed. NULL while the task is still working — and
+    # after a failure or a pause, which get no results to show, so a NULL
+    # here plus a stale task on the career bot's side simply means "run a
+    # fresh search".
+    results: Mapped[list | None] = mapped_column(JSONB)
+
+    # When the task reached its terminal state, from the same completed read
+    # that wrote `results`. The freshness line the panel shows is dated from
+    # this, not from created_at — a search the recruiter left running across
+    # lunch completed when it completed, not when they clicked.
+    finished_at: Mapped[dt.datetime | None] = mapped_column(
+        DateTime(timezone=True)
     )

@@ -553,3 +553,289 @@ async def test_the_error_envelope_message_is_carried_verbatim():
             await client.start_search({})
     assert excinfo.value.message == "Provide `queries` (list) or `query` (string)"
     assert excinfo.value.status == 422
+
+
+# --- Persistence: the career bot forgets tasks within hours (a task started
+# at 14:28 on 2026-09-02 was a 404 on their side the same afternoon), so a
+# terminal read stores the results on the membership row and GET …/latest
+# answers from it.
+
+
+async def _saved_rows(tid: uuid.UUID) -> list[tuple[str, str | None, int]]:
+    """(task_id, finished_at, n_results) for the tenant's search rows."""
+    async with AdminSessionLocal() as s:
+        rows = (
+            await s.execute(
+                text(
+                    "SELECT task_id, finished_at, jsonb_array_length(results)"
+                    " FROM external_candidate_searches WHERE tenant_id = :t"
+                    " ORDER BY created_at"
+                ),
+                {"t": tid},
+            )
+        ).fetchall()
+    return [(r[0], r[1], r[2] if r[2] is not None else -1) for r in rows]
+
+
+async def test_a_completed_results_read_persists_the_ranked_list(configured):
+    tid, uid = await _seed_agency()
+    oid = await _opportunity(tid, uid)
+    await _analyse(tid, oid, PLAN)
+    try:
+        async with _http(tid, uid) as c:
+            started = await c.post(
+                f"/api/opportunities/{oid}/external-candidates/search"
+            )
+            task_id = started.json()["task_id"]
+            await c.get(
+                f"/api/opportunities/{oid}/external-candidates/search/{task_id}/results"
+            )
+        saved = await _saved_rows(tid)
+        assert saved == [(task_id, saved[0][1], 2)], saved  # both fake results kept
+        assert saved[0][1] is not None  # finished_at stamped
+    finally:
+        await _drop_agency(tid)
+
+
+async def test_a_terminal_status_poll_persists_without_a_results_read(configured):
+    """A panel that only polls status must still leave the search readable:
+    the completed poll itself stores the list (by fetching it), so a tab
+    closed the moment the poll flips `completed` loses nothing."""
+    tid, uid = await _seed_agency()
+    oid = await _opportunity(tid, uid)
+    await _analyse(tid, oid, PLAN)
+    try:
+        async with _http(tid, uid) as c:
+            started = await c.post(
+                f"/api/opportunities/{oid}/external-candidates/search"
+            )
+            task_id = started.json()["task_id"]
+            # The fixture's get_task answers `running`; answer `completed`
+            # for this test only.
+            calls = configured
+
+            async def _done(self, tid_):
+                calls.append(("task", tid_, None))
+                return career_bot.TaskStatus(status="completed", error=None)
+
+            monkeypatch = pytest.MonkeyPatch()
+            try:
+                monkeypatch.setattr(career_bot.CareerBotClient, "get_task", _done)
+                await c.get(
+                    f"/api/opportunities/{oid}/external-candidates/search/{task_id}"
+                )
+            finally:
+                monkeypatch.undo()
+        saved = await _saved_rows(tid)
+        assert saved == [(task_id, saved[0][1], 2)], saved
+        # The persistence fetch went through the real seam: one results call
+        # the panel itself never made.
+        assert ("results", task_id, None) in calls
+    finally:
+        await _drop_agency(tid)
+
+
+async def test_a_failed_terminal_state_is_stamped_without_results(configured):
+    """A failed search is finished — `finished_at` set, no results — so the
+    panel never re-presents it as a fresh, working search."""
+    tid, uid = await _seed_agency()
+    oid = await _opportunity(tid, uid)
+    await _analyse(tid, oid, PLAN)
+    try:
+        async with _http(tid, uid) as c:
+            started = await c.post(
+                f"/api/opportunities/{oid}/external-candidates/search"
+            )
+            task_id = started.json()["task_id"]
+            calls = configured
+
+            async def _failed(self, tid_):
+                calls.append(("task", tid_, None))
+                return career_bot.TaskStatus(status="failed", error="nope")
+
+            monkeypatch = pytest.MonkeyPatch()
+            try:
+                monkeypatch.setattr(career_bot.CareerBotClient, "get_task", _failed)
+                await c.get(
+                    f"/api/opportunities/{oid}/external-candidates/search/{task_id}"
+                )
+            finally:
+                monkeypatch.undo()
+        saved = await _saved_rows(tid)
+        assert saved == [(task_id, saved[0][1], -1)], saved  # -1: results IS NULL
+        assert saved[0][1] is not None
+    finally:
+        await _drop_agency(tid)
+
+
+async def test_the_persist_write_is_idempotent(configured):
+    """A second terminal read of the same task is a no-op — re-opening the
+    tab cannot resurrect a finished search as new."""
+    tid, uid = await _seed_agency()
+    oid = await _opportunity(tid, uid)
+    await _analyse(tid, oid, PLAN)
+    try:
+        async with _http(tid, uid) as c:
+            started = await c.post(
+                f"/api/opportunities/{oid}/external-candidates/search"
+            )
+            task_id = started.json()["task_id"]
+            await c.get(
+                f"/api/opportunities/{oid}/external-candidates/search/{task_id}/results"
+            )
+            first = await _saved_rows(tid)
+            await c.get(
+                f"/api/opportunities/{oid}/external-candidates/search/{task_id}/results"
+            )
+            second = await _saved_rows(tid)
+        assert first == second
+        # Three results calls, never four: read 1 answers + persists (2),
+        # read 2 answers from the passthrough but persists nothing — the
+        # re-checked `finished_at` in its own session makes the second
+        # terminal read a no-op.
+        assert len([x for x in configured if x[0] == "results"]) == 3
+    finally:
+        await _drop_agency(tid)
+
+
+async def test_a_persist_failure_never_fails_the_read(monkeypatch, configured):
+    """The career bot's answer is already in hand when the write runs — a
+    persistence miss degrades to the old passthrough behaviour (results
+    shown now, lost on expiry), not to a 500.
+
+    Simulated at the real seam: the results route opens TWO tenant sessions
+    (the read's gate, then `_persist_terminal`'s write). Patching the route
+    module's `tenant_session` so the WRITE one raises exercises exactly the
+    branch the route relies on — the persist failure being swallowed —
+    without touching auth's or the gate's sessions.
+    """
+    tid, uid = await _seed_agency()
+    oid = await _opportunity(tid, uid)
+    await _analyse(tid, oid, PLAN)
+    try:
+        async with _http(tid, uid) as c:
+            started = await c.post(
+                f"/api/opportunities/{oid}/external-candidates/search"
+            )
+            task_id = started.json()["task_id"]
+
+            import app.api.external_candidates as routes
+
+            real_tenant_session = routes.tenant_session
+
+            # The route's own session is the 1st tenant_session of the
+            # request; the persist write is the 2nd. Count and break on the
+            # second — the write `_persist_terminal` must survive.
+            counter = {"n": 0}
+
+            def _counting_session(tenant_id):
+                counter["n"] += 1
+                if counter["n"] == 2:
+                    raise RuntimeError("database gone")
+                return real_tenant_session(tenant_id)
+
+            monkeypatch.setattr(routes, "tenant_session", _counting_session)
+            done = await c.get(
+                f"/api/opportunities/{oid}/external-candidates/search/{task_id}/results"
+            )
+            monkeypatch.undo()
+            assert done.status_code == 200, done.text
+            assert [r["title"] for r in done.json()["results"]] == ["One", "Two"]
+            # The write was attempted and lost: nothing finished was stored.
+            saved = await _saved_rows(tid)
+            assert saved == [(task_id, None, -1)], saved
+    finally:
+        await _drop_agency(tid)
+
+
+async def test_latest_returns_the_saved_search(configured):
+    tid, uid = await _seed_agency()
+    oid = await _opportunity(tid, uid)
+    await _analyse(tid, oid, PLAN)
+    try:
+        async with _http(tid, uid) as c:
+            started = await c.post(
+                f"/api/opportunities/{oid}/external-candidates/search"
+            )
+            task_id = started.json()["task_id"]
+            await c.get(
+                f"/api/opportunities/{oid}/external-candidates/search/{task_id}/results"
+            )
+            latest = await c.get(
+                f"/api/opportunities/{oid}/external-candidates/latest"
+            )
+            assert latest.status_code == 200
+            body = latest.json()
+            assert body["status"] == "ok"
+            search = body["search"]
+            assert search["task_id"] == task_id
+            assert search["task_status"] == "completed"
+            assert [r["title"] for r in search["results"]] == ["One", "Two"]
+            assert search["finished_at"]
+            # Two results calls, never three: read 1 answers and persists;
+            # the latest read is served from OUR row, not from a service
+            # whose tasks expire within hours.
+            assert len([x for x in configured if x[0] == "results"]) == 2
+    finally:
+        await _drop_agency(tid)
+
+
+async def test_latest_without_any_search_is_a_200_none(configured):
+    """"No search yet" is the state of the tab, not an error."""
+    tid, uid = await _seed_agency()
+    oid = await _opportunity(tid, uid)
+    try:
+        async with _http(tid, uid) as c:
+            latest = await c.get(
+                f"/api/opportunities/{oid}/external-candidates/latest"
+            )
+            assert latest.status_code == 200
+            assert latest.json() == {
+                "status": "none",
+                "search": None,
+                "message": None,
+            }
+        assert configured == []
+    finally:
+        await _drop_agency(tid)
+
+
+async def test_latest_of_another_agencys_job_order_is_404(configured):
+    tid, uid = await _seed_agency()
+    oid = await _opportunity(tid, uid)
+    await _analyse(tid, oid, PLAN)
+    other_tid, other_uid = await _seed_agency()
+    try:
+        async with _http(other_tid, other_uid) as c:
+            got = await c.get(
+                f"/api/opportunities/{oid}/external-candidates/latest"
+            )
+            assert got.status_code == 404
+        assert configured == []
+    finally:
+        await _drop_agency(tid)
+        await _drop_agency(other_tid)
+
+
+async def test_latest_reports_an_in_flight_saved_search_as_running(configured):
+    """A saved row with no `finished_at` is a task still working on the
+    career bot's side — the panel resumes polling it, so the latest answer
+    says `running` rather than pretending a terminal state."""
+    tid, uid = await _seed_agency()
+    oid = await _opportunity(tid, uid)
+    await _analyse(tid, oid, PLAN)
+    try:
+        async with _http(tid, uid) as c:
+            started = await c.post(
+                f"/api/opportunities/{oid}/external-candidates/search"
+            )
+            task_id = started.json()["task_id"]
+            latest = await c.get(
+                f"/api/opportunities/{oid}/external-candidates/latest"
+            )
+            body = latest.json()
+            assert body["search"]["task_id"] == task_id
+            assert body["search"]["task_status"] == "running"
+            assert body["search"]["results"] == []
+    finally:
+        await _drop_agency(tid)

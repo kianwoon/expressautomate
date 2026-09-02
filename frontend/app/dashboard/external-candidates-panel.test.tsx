@@ -208,6 +208,53 @@ describe("a rendered candidate row", () => {
     expect(row.querySelector(".jo-external-name")?.textContent).toBe("Chean Wei Yap");
   });
 
+  it("shows the platform the candidate came from", () => {
+    panel({ taskStatus: "completed", results: results() });
+    const chip = screen.getByTestId("jo-external-platform");
+    expect(chip.textContent).toBe("LinkedIn");
+  });
+
+  it("maps the jobstreet source id to its platform name", () => {
+    panel({
+      taskStatus: "completed",
+      results: results({ results: [candidate({ source: "jobstreet - candidate" })] }),
+    });
+    expect(screen.getByTestId("jo-external-platform").textContent).toBe("JobStreet");
+  });
+
+  it("title-cases an unknown source id rather than inventing a platform", () => {
+    panel({
+      taskStatus: "completed",
+      results: results({ results: [candidate({ source: "glassdoor_people" })] }),
+    });
+    expect(screen.getByTestId("jo-external-platform").textContent).toBe("Glassdoor People");
+  });
+
+  it("shows no platform chip when the result carries no source", () => {
+    panel({
+      taskStatus: "completed",
+      results: results({ results: [candidate({ source: null })] }),
+    });
+    expect(screen.queryByTestId("jo-external-platform")).toBeNull();
+  });
+
+  it("offers an explicit Open profile link when a source URL exists", () => {
+    panel({ taskStatus: "completed", results: results() });
+    const open = screen.getByTestId("jo-external-open") as HTMLAnchorElement;
+    expect(open.textContent).toContain("Open profile");
+    expect(open.href).toBe("https://www.linkedin.com/in/yap-chean-wei/");
+    expect(open.target).toBe("_blank");
+    expect(open.rel).toContain("noreferrer");
+  });
+
+  it("offers no Open profile link when the source URL is missing", () => {
+    panel({
+      taskStatus: "completed",
+      results: results({ results: [candidate({ source_url: null })] }),
+    });
+    expect(screen.queryByTestId("jo-external-open")).toBeNull();
+  });
+
   it("shows location and the first six skills as chips", () => {
     panel({
       taskStatus: "completed",
@@ -222,7 +269,19 @@ describe("a rendered candidate row", () => {
     const chips = [
       ...screen.getByTestId("jo-external-row").querySelectorAll(".jo-external-chip"),
     ].map((el) => el.textContent);
-    expect(chips).toEqual(["Singapore, Singapore", "A", "B", "C", "D", "E", "F"]);
+    // The platform chip rides beside the name; the Open-profile link chip
+    // leads the meta row — this fixture's row carries a source URL.
+    expect(chips).toEqual([
+      "LinkedIn",
+      "Open profile ↗",
+      "Singapore, Singapore",
+      "A",
+      "B",
+      "C",
+      "D",
+      "E",
+      "F",
+    ]);
   });
 
   it("lists the gaps the search found", () => {

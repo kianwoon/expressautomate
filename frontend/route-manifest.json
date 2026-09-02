@@ -311,6 +311,9 @@
     "/api/opportunities/{opportunity_id}/client": [
       "POST"
     ],
+    "/api/opportunities/{opportunity_id}/external-candidates/latest": [
+      "GET"
+    ],
     "/api/opportunities/{opportunity_id}/external-candidates/search": [
       "POST"
     ],

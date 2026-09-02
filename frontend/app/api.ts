@@ -148,6 +148,18 @@ export function externalCandidateSearchResultsPath(id: string, taskId: string): 
 }
 
 /**
+ * The newest saved external search for one job order — what a returning
+ * visitor sees. The career bot's own retention of task results is short (a
+ * task id usable at 14:28 was a 404 the same afternoon), so the backend
+ * keeps the ranked list on the search row and this reads it back. Literal
+ * `latest` segment, declared before the `{taskId}` route server-side for
+ * the same reason the other literal segments are.
+ */
+export function externalCandidateLatestPath(id: string): string {
+  return `${OPPORTUNITIES_PATH}/${encodeURIComponent(id)}/external-candidates/latest`;
+}
+
+/**
  * How often the panel asks the career bot how the search is going. The
  * service's own spec recommends ~5s (§3: "do not hammer") and its searches
  * run 30–120s, so this sits between the sourcing poll and a guess. Same

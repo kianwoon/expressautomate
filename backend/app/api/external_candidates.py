@@ -28,8 +28,22 @@ browser would publish it. Three of its behaviours follow from being a proxy:
 
 The career bot is async by design (spec: start → poll every ~5s → results),
 so POST returns 202 with the task id, exactly as `start_sourcing` answers.
+
+**Results are persisted at the terminal read.** The career bot's retention
+turned out to be short — a task polled at 14:28 was a 404 on their side the
+same afternoon — so the passthrough design left a completed panel pointing
+at an expired task. `get_external_search_status` and
+`get_external_search_results` write the ranked list onto the membership row
+when a read finds the task completed (and `failed`/`paused` set
+`finished_at` too, so a dead search is never re-shown as fresh), and
+`GET …/external-candidates/latest` returns the newest search row for the
+opportunity — results from us when the career bot has already forgotten the
+task. The source-provenance rule in CLAUDE.md applies to the stored copy:
+each result carries its own evidence (`source`, `source_url`,
+`match_reason`, `credibility`), and the row's retention is the job order's.
 """
 
+import datetime as dt
 import uuid
 from typing import Any
 
@@ -269,14 +283,19 @@ class _TaskGate:
     `tenant_session`, so RLS scopes the tenant before the query runs, and
     `load_visible_opportunity` scopes the recruiter on top — a colleague's
     unshared job order is not visible, so neither are its external searches.
+
+    `check()` keeps the row it vouched for: the terminal read writes the
+    results onto exactly that row, so persistence can never attach a career
+    bot's answer to a row other than the one that authorised the read.
     """
 
     def __init__(self, session, opportunity_id: uuid.UUID, task_id: str) -> None:
         self._session = session
         self._opportunity_id = opportunity_id
         self._task_id = task_id
+        self.row: ExternalCandidateSearch | None = None
 
-    async def check(self) -> None:
+    async def check(self) -> ExternalCandidateSearch:
         row = (
             await self._session.execute(
                 select(ExternalCandidateSearch).where(
@@ -289,6 +308,71 @@ class _TaskGate:
             # Same answer for "no such task" and "not yours" — a 404 that
             # cannot be probed for which task ids exist.
             raise HTTPException(status_code=404, detail="Search not found.")
+        self.row = row
+        return row
+
+
+# Terminal career-bot task states. `completed` is the only one with results
+# worth keeping; `failed`/`paused` still get `finished_at` so a dead search
+# is never re-presented as if it were still fresh.
+_TERMINAL_TASK_STATUSES = {"completed", "failed", "paused"}
+
+
+async def _persist_terminal(
+    tenant_uuid: uuid.UUID, row: ExternalCandidateSearch, task_status: str
+) -> None:
+    """Write the terminal state of one search onto its row, idempotently.
+
+    The row arrives detached — the read that authorised the career-bot call
+    ran in its own `tenant_session`, now closed — so this re-reads the row in
+    a session of its own, re-checks `finished_at` there (the guard that makes
+    a second terminal read a no-op even across requests), sets the terminal
+    columns and commits. For a `completed` task the ranked list is fetched
+    again through the client, so the status poll and the results read cannot
+    disagree about what was stored.
+
+    A failure here must not fail the read: the route already has the career
+    bot's answer in hand, and a persistence miss degrades to exactly the
+    pre-persistence behaviour (results shown now, lost on expiry) — not to a
+    500 the recruiter cannot act on. The session is created inside the try
+    for the same reason: an unavailable database is a persistence miss, not
+    an error page.
+    """
+    if task_status not in _TERMINAL_TASK_STATUSES:
+        return
+    try:
+        async with tenant_session(tenant_uuid) as session:
+            fresh = await session.get(ExternalCandidateSearch, row.id)
+            if fresh is None or fresh.finished_at is not None:
+                return
+            if task_status == "completed":
+                body = await _client().get_results(fresh.task_id)
+                fresh.results = body.get("results") or []
+            fresh.finished_at = dt.datetime.now(dt.UTC)
+            await session.commit()
+    except Exception:
+        log.warning("external_search_results_persist_failed", task_id=row.task_id)
+
+
+async def _latest_search_row(
+    session, opportunity_id: uuid.UUID
+) -> ExternalCandidateSearch | None:
+    """The newest search row for this opportunity — the finished search a
+    returning visitor sees, whatever the career bot still remembers."""
+    return (
+        await session.execute(
+            select(ExternalCandidateSearch)
+            .where(ExternalCandidateSearch.opportunity_id == opportunity_id)
+            # Finished searches first (newest), then in-flight ones by when
+            # they were started — the search a returning visitor sees is the
+            # one that most recently mattered.
+            .order_by(
+                ExternalCandidateSearch.finished_at.desc().nulls_last(),
+                ExternalCandidateSearch.created_at.desc(),
+            )
+            .limit(1)
+        )
+    ).scalar_one_or_none()
 
 
 @router.get("/opportunities/{opportunity_id}/external-candidates/search/{task_id}")
@@ -307,7 +391,8 @@ async def get_external_search_status(
 
     async with tenant_session(tenant_uuid) as session:
         current = await load_visible_opportunity(session, opportunity_id, user_uuid, role)
-        await _TaskGate(session, current.id, task_id).check()
+        gate = _TaskGate(session, current.id, task_id)
+        row = await gate.check()
 
     try:
         task = await _client().get_task(task_id)
@@ -315,6 +400,12 @@ async def get_external_search_status(
         return _unreachable_body(exc)
     except CareerBotError as exc:
         return _refusal(exc)
+
+    # The terminal state lands on the row the same read authorised — a
+    # completed poll stores the results, so a panel that only ever polls
+    # status still leaves the search readable after the career bot expires
+    # the task.
+    await _persist_terminal(tenant_uuid, row, task.status)
 
     return {
         "status": "polled",
@@ -344,7 +435,8 @@ async def get_external_search_results(
 
     async with tenant_session(tenant_uuid) as session:
         current = await load_visible_opportunity(session, opportunity_id, user_uuid, role)
-        await _TaskGate(session, current.id, task_id).check()
+        gate = _TaskGate(session, current.id, task_id)
+        row = await gate.check()
 
     try:
         body = await _client().get_results(task_id)
@@ -352,6 +444,13 @@ async def get_external_search_results(
         return _unreachable_body(exc)
     except CareerBotError as exc:
         return _refusal(exc)
+
+    # A completed results read is the terminal event of a search — store it
+    # on the row the read was authorised against, so the panel that showed
+    # these candidates can show them again tomorrow.
+    body_status = body.get("status")
+    if isinstance(body_status, str):
+        await _persist_terminal(tenant_uuid, row, body_status)
 
     return {
         "status": "ok",
@@ -361,4 +460,71 @@ async def get_external_search_results(
         "results": body.get("results") or [],
         "message": None,
     }
+
+
+@router.get("/opportunities/{opportunity_id}/external-candidates/latest")
+async def get_latest_external_search(
+    request: Request, opportunity_id: uuid.UUID
+) -> dict:
+    """The newest search for this job order — what a returning visitor sees.
+
+    Opening the job order again must show the candidates the last search
+    found, not an empty tab, and the career bot's own retention is too short
+    to rely on (a task started at 14:28 was a 404 on their side the same
+    afternoon). The route answers from OUR row: the saved ranked list when
+    the search finished, its career-bot task status when it is still in
+    flight, and `none` when no search has ever run — the panel offers a
+    fresh search in every one of those cases, plus re-polls through the
+    per-task routes when the saved row says the task is still working.
+
+    200 even when the answer is `none`: "no search yet" is the state of the
+    tab, not an error, the same reading `get_intelligence` takes when it
+    answers `{"intelligence": None}`.
+    """
+    user_uuid, tenant_uuid, role = await _require_session_with_role(request)
+
+    if not settings.career_bot_configured():
+        return {
+            "status": STATUS_UNCONFIGURED,
+            "search": None,
+            "message": "External candidate search is not set up for this deployment.",
+        }
+
+    async with tenant_session(tenant_uuid) as session:
+        current = await load_visible_opportunity(session, opportunity_id, user_uuid, role)
+        row = await _latest_search_row(session, current.id)
+        if row is None:
+            return {"status": "none", "search": None, "message": None}
+        return {
+            "status": "ok",
+            "search": _search_payload(row),
+            "message": None,
+        }
+
+
+def _search_payload(row: ExternalCandidateSearch) -> dict[str, Any]:
+    """The saved-search shape the panel consumes — the row's own facts, plus
+    `results` as the career bot's verbatim ranked list."""
+    return {
+        "task_id": row.task_id,
+        "task_status": row_status_of(row),
+        "results": row.results or [],
+        "finished_at": row.finished_at.isoformat() if row.finished_at else None,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+    }
+
+
+def row_status_of(row: ExternalCandidateSearch) -> str | None:
+    """The task status a saved row can honestly claim.
+
+    A finished row keeps the terminal status it finished with — `completed`
+    with results, `failed` or `paused` without — and an unfinished row is a
+    task still working on the career bot's side, so the panel keeps polling
+    it through the per-task routes exactly as it did while the tab was open.
+    """
+    if row.finished_at is None:
+        return "running"
+    if row.results:
+        return "completed"
+    return "failed"
 

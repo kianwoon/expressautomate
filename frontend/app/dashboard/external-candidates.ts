@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
+  externalCandidateLatestPath,
   externalCandidateSearchPath,
   externalCandidateSearchResultsPath,
   EXTERNAL_SEARCH_POLL_MS,
@@ -15,10 +16,14 @@ import { ApiError, readError } from "./candidates";
  * The search runs on the career bot, minutes long by its own design (spec §3:
  * poll every ~5s), and our API proxies it: POST starts the search and answers
  * 202 with a `task_id`; GET …/{task_id} reads the task's status; GET
- * …/{task_id}/results reads the ranked list. The hook mirrors
- * `useJobIntelligence`: one `start()`, one polling loop, one result, owned in
- * one place and keyed on the opportunity id so it follows the modal's
- * remount-on-row-change lifecycle.
+ * …/{task_id}/results reads the ranked list. GET …/latest reads the newest
+ * SAVED search — the career bot expires task results within hours, so the
+ * backend keeps them on the search row and a returning visitor reloads them
+ * from us. The hook mirrors `useJobIntelligence`: one `start()`, one polling
+ * loop, one result, owned in one place and keyed on the opportunity id so it
+ * follows the modal's remount-on-row-change lifecycle. On mount it loads the
+ * saved search: finished results render immediately; a task still in flight
+ * resumes the poll where the last tab left it.
  *
  * Everything goes out with `credentials: "include"` and comes back through
  * `readError`, so a refusal the server worded reaches the recruiter in the
@@ -101,6 +106,55 @@ export type ExternalSearchResults = {
   message: string | null;
 };
 
+/** The newest SAVED search, as GET …/latest answers it — the row's own facts
+ *  plus `results` as the career bot's verbatim ranked list. `task_status` is
+ *  our reading of the row (`running` while unfinished, the terminal state it
+ *  finished with otherwise), not a live poll of the career bot. */
+export type ExternalSearchSaved = {
+  task_id: string;
+  task_status: ExternalTaskStatus | null;
+  results: ExternalCandidate[];
+  finished_at: string | null;
+  created_at: string | null;
+};
+
+/** The raw source id a result carries (e.g. `linkedin_people`) mapped to the
+ *  platform name a recruiter recognises. The same ids the career bot itself
+ *  labels (`matching.py`'s `_PLATFORM_LABELS`), so the two sides agree; an
+ *  unknown id falls back to title-casing rather than a wrong platform name. */
+export function platformLabel(source: string | null | undefined): string | null {
+  if (!source) return null;
+  const key = source.trim().toLowerCase();
+  if (!key) return null;
+  if (key.includes("linkedin")) return "LinkedIn";
+  if (key.includes("jobstreet")) return "JobStreet";
+  if (key.includes("mycareersfuture")) return "MyCareersFuture";
+  if (key.includes("fastjobs")) return "FastJobs";
+  return source
+    .trim()
+    .split(/[\s_-]+/)
+    .map((word) => (word ? word[0].toUpperCase() + word.slice(1) : word))
+    .join(" ");
+
+}
+
+/** Read the newest saved search for a job order. `status: "none"` means no
+ *  search has ever run — the state of the tab, not an error. */
+export async function getLatestExternalSearch(
+  opportunityId: string,
+): Promise<{ status: string; search: ExternalSearchSaved | null; message: string | null }> {
+  const res = await fetch(externalCandidateLatestPath(opportunityId), {
+    credentials: "include",
+    headers: { Accept: "application/json" },
+  });
+  if (!res.ok) throw new ApiError(await readError(res));
+  return (await res.json()) as {
+    status: string;
+    search: ExternalSearchSaved | null;
+    message: string | null;
+  };
+}
+
 /** Start one search. 202 with `status: "started"` and a task id — the answer
  *  arrives by polling, not in this response. The structured refusals
  *  (`unconfigured` / `unreachable` / `refused`) are ordinary answers here,
@@ -150,6 +204,17 @@ export function externalSearchInFlight(status: ExternalTaskStatus | null): boole
   return status === "pending" || status === "running" || status === "waiting_approval";
 }
 
+/** The summary line for a SAVED search. The career bot's own summary ("10
+ *  ranked results") is not stored, so the line is derived from what is: the
+ *  count when results survived, otherwise a sentence that says the search
+ *  finished without them. */
+function savedSummary(saved: ExternalSearchSaved): string | null {
+  if (saved.results.length > 0) {
+    return `${saved.results.length} saved result${saved.results.length === 1 ? "" : "s"} from the last search.`;
+  }
+  return null;
+}
+
 /**
  * The external-search state for one job order, owned in one place — the same
  * split as `useJobIntelligence`: the hook owns the search, the modal owns the
@@ -187,6 +252,42 @@ export function useExternalCandidates(rowId: string): {
     setResultsError(null);
     setStartError(null);
   }, []);
+
+  // On mount, load the newest SAVED search. Finished results render at once
+  // — opening the job order again shows the candidates the last search
+  // found, even though the career bot has long since expired the task. A
+  // saved search still in flight resumes the poll through the per-task
+  // routes, the same state a mid-search tab reload must land in. A load
+  // failure stays quiet: the tab simply reads "no search yet", and Find
+  // works exactly as it did before this fetch existed.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const body = await getLatestExternalSearch(rowId);
+        if (cancelled || body.status !== "ok" || !body.search) return;
+        const saved = body.search;
+        if (saved.task_status === "running") {
+          setTaskId(saved.task_id);
+          setTaskStatus("running");
+          return;
+        }
+        setResults({
+          status: "ok",
+          task_id: saved.task_id,
+          task_status: saved.task_status,
+          summary: savedSummary(saved),
+          results: saved.results,
+          message: null,
+        });
+      } catch {
+        // No saved search readable — the tab starts empty either way.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [rowId]);
 
   const start = useCallback(async () => {
     setStarting(true);
