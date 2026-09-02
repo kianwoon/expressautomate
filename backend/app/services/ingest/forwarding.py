@@ -32,9 +32,19 @@ from dataclasses import dataclass
 # followed (not necessarily immediately) by ``Sent:`` for it to count as a
 # forwarding header rather than a stray ``From:`` in the body prose — a
 # recruiter's signature that says "From: the HR desk" would otherwise match.
+#
+# ``[^\n]*`` on the name is load-bearing. A ``From:`` line without an
+# angle-bracket address (a reply header such as "From: Jocelyn Chan |
+# Recruit Express" whose next line is ``Sent:``) must fail to match rather
+# than let the name group run on past newlines hunting for some later
+# ``<email>`` — with DOTALL that hunt swallowed the entire email body into
+# a buddy's name (production, 2026-09-02: "Jocelyn Chan | Recruit Express
+# Sent: Tuesday, 1 September …" — a thousand-character name keyed on the
+# *recipient's* address). A name never spans lines; if the address is not
+# on the same line, this is not a parseable forwarding header.
 _FORWARD_HEADER = re.compile(
-    r"From:\s*(.*?)<([^<>]+@[^<>]+)>\s*\nSent:",
-    re.IGNORECASE | re.DOTALL,
+    r"From:\s*([^\n]*?)<([^<>@\n]+@[^<>\n]+)>\s*\nSent:",
+    re.IGNORECASE,
 )
 
 # The name can carry a display title with pipe separators

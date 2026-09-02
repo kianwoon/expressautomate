@@ -75,3 +75,30 @@ def test_first_forward_in_a_chain_is_the_original_sender():
     result = extract_original_sender(source)
     assert result is not None
     assert result.email == "b@agency.com"
+
+
+def test_from_line_without_angle_email_does_not_swallow_the_body():
+    """Regression for the 2026-09-02 MOHH ingestion (production).
+
+    A reply header can carry a ``From:`` line with a name but no
+    angle-bracket address, followed by ``Sent:``. The old DOTALL pattern
+    let the name group run across newlines hunting for the next
+    ``<email>`` anywhere in the message — it swallowed the entire body
+    into the "name" and keyed the buddy on the *recipient's* address.
+    A name never spans lines: this header shape must simply not match,
+    so the caller falls back to the envelope sender.
+    """
+    source = (
+        "SENDER: denyse.tan@recruitexpress.com.sg\n"
+        "Jocelyn Chan | Recruit Express\n"
+        "From: Jocelyn Chan | Recruit Express\n"
+        "Sent: Tuesday, 1 September 2026 2:06 pm\n"
+        "To: Denyse Tan | Recruit Express <denyse.tan@recruitexpress.com.sg>\n"
+        "Subject: RE: Denyse Temp Orders!\n"
+        "pls help MOHH- Located at Buona Vista 6 Months Contract HRIS Admin"
+        " Support. Requirements Diploma and above. Proficient in Microsoft"
+        " Office, particularly Excel and Outlook.\n"
+        "Warmest Regards, Jocelyn Chan|Consultant | Recruit Express Pte Ltd"
+        " <jocelynchan@recruitexpress.com.sg>\n"
+    )
+    assert extract_original_sender(source) is None
