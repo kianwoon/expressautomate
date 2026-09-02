@@ -34,7 +34,6 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import (
-    Boolean,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -79,15 +78,6 @@ class JobIntelligence(Base, UUIDPrimaryKey, TenantScoped, Timestamps):
     # Why a `failed` run failed, in a sentence a recruiter can act on. Same
     # role as `SourcingRun.failure_reason`.
     failure_reason: Mapped[str | None] = mapped_column(Text)
-    # Set when the recruiter chose "Run anyway" on a thin order (no description,
-    # requirements or skills): the worker then skips its `is_thin` pre-flight and
-    # the understand prompt answers the order thinly at low confidence instead of
-    # refusing. A column, not job-payload state, so `rescan_stuck` re-enqueues
-    # inherit it — the sweep re-enqueues with a bare (tenant, row) pair and would
-    # otherwise strip the recruiter's choice mid-flight.
-    allow_thin: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, server_default="false"
-    )
     attempts: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default="0"
     )

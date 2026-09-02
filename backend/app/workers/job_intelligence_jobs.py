@@ -36,7 +36,6 @@ from app.models.job_intelligence import JobIntelligence
 from app.models.opportunity import Opportunity
 from app.models.opportunity_code import OpportunityCode
 from app.services.job_intelligence.engine import analyze
-from app.services.job_intelligence.input import is_thin
 from app.services.visibility import current_opportunity_id
 
 log = get_logger(__name__)
@@ -54,15 +53,6 @@ JOB_RUN_JOB_INTELLIGENCE = "run_job_intelligence"
 # allow-hardcode: a sentence shown to a recruiter, not configuration.
 _MODEL_FAILED = "The analysis could not be produced just now. Try again in a few minutes."
 _NO_CONTEXT = "This job order has no title or description to analyse. Add one and try again."
-# The order has a title and maybe contract terms but nothing about the work
-# itself — the exact shape that made the model refuse to answer (production,
-# arq 2026-09-01). Checked before the pipeline so a hopeless order fails with
-# an actionable sentence instead of burning a paid LLM call on a refusal.
-_THIN_CONTEXT = (
-    "This job order says almost nothing about the work — add a description, "
-    "requirements or skills to the order, or use Run anyway to analyse it "
-    "from the title alone at low confidence."
-)
 
 
 async def run_job_intelligence(
@@ -137,29 +127,15 @@ async def run_job_intelligence(
             log.info("job_intelligence_opportunity_missing", row_id=row_id)
             await _fail(tenant, record, _MODEL_FAILED)
             return
-        codes = list(
-            (
-                await session.execute(
-                    select(OpportunityCode).where(
-                        OpportunityCode.opportunity_id == opportunity_key
-                    )
+    codes = list(
+        (
+            await session.execute(
+                select(OpportunityCode).where(
+                    OpportunityCode.opportunity_id == opportunity_key
                 )
-            ).scalars()
-        )
-
-    if is_thin(opportunity) and not row.allow_thin:
-        # No description, requirements or skills — the model would refuse to
-        # invent the work. Fail before the LLM call with the actionable fix.
-        # The recruiter can override this from the panel ("Run anyway"), which
-        # sets `allow_thin` on the row and re-runs; the flag lives on the row
-        # rather than the job payload so `rescan_stuck` re-enqueues inherit it.
-        log.info(
-            "job_intelligence_skipped_thin_context",
-            row_id=row_id,
-            opportunity_id=opportunity_id,
-        )
-        await _fail(tenant, record, _THIN_CONTEXT)
-        return
+            )
+        ).scalars()
+    )
 
     try:
         # A second session is opened for the pipeline so the occupation stage

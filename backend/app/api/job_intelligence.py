@@ -36,8 +36,6 @@ from app.core.config import settings
 from app.core.logging import get_logger
 from app.db.rls import tenant_session
 from app.models.job_intelligence import JobIntelligence
-from app.models.opportunity import Opportunity
-from app.services.job_intelligence.input import is_thin
 from app.services.visibility import load_visible_opportunity, opportunity_chain_ids
 from app.workers.job_intelligence_jobs import JOB_RUN_JOB_INTELLIGENCE
 from app.workers.queue import enqueue
@@ -91,19 +89,17 @@ _ENQUEUE_FAILED = (
 
 
 @router.post("/opportunities/{opportunity_id}/intelligence", status_code=202)
-async def run_intelligence(
-    request: Request, opportunity_id: uuid.UUID, allow_thin: bool = False
-) -> dict:
+async def run_intelligence(request: Request, opportunity_id: uuid.UUID) -> dict:
     """Queue a Job Intelligence analysis for this job order.
 
     202, not 200: the row exists but the answer does not, exactly as
     `start_sourcing` answers. The worker does the three model calls.
 
-    `allow_thin` is the "Run anyway" escape hatch for an order with no
-    description, requirements or skills: the worker then skips its `is_thin`
-    pre-flight and the understand prompt answers thinly at low confidence
-    instead of the pipeline refusing. Persisted on the row (not passed in the
-    job payload) so `rescan_stuck` re-enqueues inherit the recruiter's choice.
+    Every order is analysed, including a title-only one: the understand
+    prompt's two-tier grounding makes a thin order produce a useful
+    typical-role write-up at low confidence, so there is no pre-flight
+    refusal to escape with a flag — the one-click contract is "Run analysis
+    always runs".
     """
     user_uuid, tenant_uuid, role = await _require_session_with_role(request)
 
@@ -140,7 +136,6 @@ async def run_intelligence(
                     tenant_id=tenant_uuid,
                     opportunity_id=opportunity_id,
                     state=JobIntelligence.PENDING,
-                    allow_thin=allow_thin,
                     created_by=user_uuid,
                 )
             )
@@ -150,9 +145,6 @@ async def run_intelligence(
             existing.understanding = None
             existing.persona = None
             existing.search_plan = None
-            # Each run states the flag afresh — a normal re-run clears a
-            # previous "Run anyway", so the guard is back between runs.
-            existing.allow_thin = allow_thin
             # A re-run is a fresh attempt, not a continuation of the last
             # failed one. Without this, the attempts counter accumulates
             # across re-runs; once it passes `JOB_INTELLIGENCE_MAX_ATTEMPTS`
@@ -213,27 +205,14 @@ async def get_intelligence(request: Request, opportunity_id: uuid.UUID) -> dict:
         ).scalar_one_or_none()
         if row is None:
             return {"intelligence": None}
-        # A failed row may be a thin-context refusal, and the panel needs to
-        # know to offer "Run anyway" — so the opportunity is loaded to compute
-        # `is_thin` for it. Only loaded for a failed row: a done or pending
-        # analysis never renders the button, and a SELECT per poll is waste.
-        thin = None
-        if row.state == JobIntelligence.FAILED:
-            opportunity = await session.get(Opportunity, row.opportunity_id)
-            thin = is_thin(opportunity) if opportunity is not None else None
-        return _serialize(row, thin=thin)
+        return _serialize(row)
 
 
-def _serialize(row: JobIntelligence, thin: bool | None = None) -> dict:
+def _serialize(row: JobIntelligence) -> dict:
     """The shape both POST and GET return: state, then the analysis if done.
 
     `intelligence` is `null` until the row is `done` — the panel renders the
     state for `pending`/`running`/`failed` and the analysis only on success.
-
-    `thin` is `is_thin` of the job order itself, present only on a `failed`
-    row — the "Run anyway" button shows for a failure the thin-context guard
-    caused, not for transport errors. The frontend must not string-match
-    `failure_reason` copy to detect this: a machine flag, not prose.
     """
     body: dict = {
         "id": str(row.id),
@@ -251,6 +230,4 @@ def _serialize(row: JobIntelligence, thin: bool | None = None) -> dict:
         body["removed_codes"] = row.removed_codes
     else:
         body["intelligence"] = None
-        if row.state == JobIntelligence.FAILED and thin is not None:
-            body["thin"] = thin
     return body

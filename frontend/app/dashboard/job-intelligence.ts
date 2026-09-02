@@ -100,10 +100,6 @@ export type IntelligenceView = {
   intelligence: Intelligence | null;
   /** Present only on a `done` row. */
   removed_codes?: string[] | null;
-  /** Present only on a `failed` row: true when the failure is the thin-context
-   *  guard (the order has no description, requirements or skills) — the one
-   *  failure "Run anyway" can override. A machine flag, never prose-matched. */
-  thin?: boolean | null;
 };
 
 /** What GET returns when no analysis exists for this job order yet. */
@@ -113,24 +109,18 @@ export type NoIntelligence = { intelligence: null };
  * Start (or re-run) the analysis. Returns 202 with the `pending` row — the
  * answer arrives on a later GET, not in this response.
  *
- * `allowThin` is the "Run anyway" override: the worker then skips its
- * thin-order pre-flight and answers the order from the title alone, at low
- * confidence. The server stores it on the row, so a poll-inherited re-enqueue
- * keeps the recruiter's choice.
+ * Every order is analysed, including a title-only one: the understand prompt's
+ * two-tier grounding makes a thin order produce a useful typical-role
+ * write-up at low confidence, so there is no override flag to send.
  */
 export async function runIntelligence(
   opportunityId: string,
-  allowThin = false,
 ): Promise<IntelligenceView> {
-  const res = await fetch(
-    opportunityIntelligencePath(opportunityId) +
-      (allowThin ? "?allow_thin=true" : ""),
-    {
-      method: "POST",
-      credentials: "include",
-      headers: { Accept: "application/json" },
-    },
-  );
+  const res = await fetch(opportunityIntelligencePath(opportunityId), {
+    method: "POST",
+    credentials: "include",
+    headers: { Accept: "application/json" },
+  });
   if (!res.ok) throw new ApiError(await readError(res));
   return (await res.json()) as IntelligenceView;
 }
@@ -179,7 +169,6 @@ export type JobIntelligencePhase =
 export function useJobIntelligence(rowId: string): {
   phase: JobIntelligencePhase;
   run: () => Promise<void>;
-  runAnyway: () => Promise<void>;
   starting: boolean;
   waiting: boolean;
   runError: string | null;
@@ -220,32 +209,24 @@ export function useJobIntelligence(rowId: string): {
     return () => clearInterval(timer);
   }, [waiting, refetch]);
 
-  const run = useCallback(
-    async (allowThin: boolean) => {
-      setStarting(true);
-      setRunError(null);
-      try {
-        const started = await runIntelligence(rowId, allowThin);
-        setPhase({ status: "idle", view: started });
-      } catch (err) {
-        setRunError(
-          err instanceof Error ? err.message : "The analysis could not start just now.",
-        );
-      } finally {
-        setStarting(false);
-      }
-    },
-    [rowId],
-  );
-
-  /** The plain run — the header button and the guard-refused re-run. */
-  const runNormal = useCallback(() => run(false), [run]);
-  /** The "Run anyway" escape hatch for a thin-order refusal. */
-  const runAnyway = useCallback(() => run(true), [run]);
+  const run = useCallback(async () => {
+    setStarting(true);
+    setRunError(null);
+    try {
+      const started = await runIntelligence(rowId);
+      setPhase({ status: "idle", view: started });
+    } catch (err) {
+      setRunError(
+        err instanceof Error ? err.message : "The analysis could not start just now.",
+      );
+    } finally {
+      setStarting(false);
+    }
+  }, [rowId]);
 
   const analysis =
     view && "intelligence" in view && view.intelligence ? view.intelligence : null;
 
-  return { phase, run: runNormal, runAnyway, starting, waiting, runError, view, analysis };
+  return { phase, run, starting, waiting, runError, view, analysis };
 }
 

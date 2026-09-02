@@ -82,34 +82,8 @@ def assemble(opportunity, codes=()) -> OpportunityContext:
     return OpportunityContext(text=text, removed_codes=removed)
 
 
-def is_thin(opportunity) -> bool:
-    """True when the order carries no description of the work itself.
-
-    A title plus contract terms (salary, duration, employment type) is not
-    enough for the understanding stage to reason about: the anti-fabrication
-    rule in its prompt then makes the model refuse rather than invent, and a
-    paid LLM call dies on `LLMInvalidJSON` (production, arq 2026-09-01 — a
-    Business Operation Executive order whose only content was title, salary
-    cap and a 1-year contract). The worker checks this *before* the pipeline
-    and fails with an actionable sentence instead.
-
-    The fields checked are exactly the ones that describe work: free-text
-    description, requirements, and the skills array. A missing title does not
-    make an order thin on its own — a description without a title is still
-    analysable, and the empty-context case is already caught downstream.
-    """
-    has_description = _clean(getattr(opportunity, "job_description", None))
-    has_requirements = _clean(getattr(opportunity, "requirements", None))
-    skills = _clean_list(getattr(opportunity, "skills", None))
-    return not (has_description or has_requirements or skills)
-
-
 def _clean(value) -> str:
     return (value or "").strip()
-
-
-def _clean_list(value) -> list[str]:
-    return [v for v in (value or []) if _clean(v)]
 
 
 def _structured_lines(opportunity) -> list[str]:

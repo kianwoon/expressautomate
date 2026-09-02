@@ -221,10 +221,11 @@ async def test_job_marks_failed_on_model_error(monkeypatch):
         await _drop(tid)
 
 
-async def test_thin_order_fails_before_the_pipeline(monkeypatch):
-    """A title-only order (the 2026-09-01 production failure) never reaches the
-    model: it fails with the actionable thin-context sentence instead of a paid
-    LLM call the anti-fabrication rule would make refuse."""
+async def test_thin_order_runs_the_pipeline(monkeypatch):
+    """A title-only order (the 2026-09-01 production shape) is analysed, not
+    refused. The understand prompt's two-tier grounding answers such an order
+    with a typical-role write-up at low confidence, so there is no pre-flight
+    guard left to fail it — one click always runs."""
     monkeypatch.setattr(settings, "JOB_INTELLIGENCE_MAX_ATTEMPTS", 3)
     fake = AsyncMock(return_value=_outcome())
     monkeypatch.setattr("app.workers.job_intelligence_jobs.analyze", fake)
@@ -247,46 +248,7 @@ async def test_thin_order_fails_before_the_pipeline(monkeypatch):
             row_id=str(row_id),
         )
 
-        # The pipeline never ran, and the reason names the fix.
-        assert fake.call_count == 0
-        async with tenant_session(tid) as s:
-            row = await s.get(JobIntelligence, row_id)
-            assert row.state == "failed"
-            assert "description" in row.failure_reason
-            assert "Run anyway" in row.failure_reason
-    finally:
-        await _drop(tid)
-
-
-async def test_allow_thin_runs_the_pipeline_on_a_thin_order(monkeypatch):
-    """The "Run anyway" escape hatch: a row flagged allow_thin skips the
-    is_thin pre-flight and analyses the title-only order — the recruiter's
-    choice, persisted on the row so a rescan re-enqueue keeps it."""
-    monkeypatch.setattr(settings, "JOB_INTELLIGENCE_MAX_ATTEMPTS", 3)
-    fake = AsyncMock(return_value=_outcome())
-    monkeypatch.setattr("app.workers.job_intelligence_jobs.analyze", fake)
-
-    tid, uid, oid, row_id = await _seed()
-    try:
-        async with AdminSessionLocal() as s:
-            await s.execute(
-                text("UPDATE opportunities SET job_description = '' WHERE id = :i"),
-                {"i": oid},
-            )
-            await s.execute(
-                text("UPDATE job_intelligence SET allow_thin = true WHERE id = :i"),
-                {"i": row_id},
-            )
-            await s.commit()
-
-        await run_job_intelligence(
-            ctx={},
-            tenant_id=str(tid),
-            opportunity_id=str(oid),
-            row_id=str(row_id),
-        )
-
-        # The pipeline ran despite the thin order, and the row is done.
+        # The pipeline ran on the thin order, and the row is done.
         assert fake.call_count == 1
         async with tenant_session(tid) as s:
             row = await s.get(JobIntelligence, row_id)
