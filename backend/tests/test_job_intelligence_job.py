@@ -253,6 +253,45 @@ async def test_thin_order_fails_before_the_pipeline(monkeypatch):
             row = await s.get(JobIntelligence, row_id)
             assert row.state == "failed"
             assert "description" in row.failure_reason
+            assert "Run anyway" in row.failure_reason
+    finally:
+        await _drop(tid)
+
+
+async def test_allow_thin_runs_the_pipeline_on_a_thin_order(monkeypatch):
+    """The "Run anyway" escape hatch: a row flagged allow_thin skips the
+    is_thin pre-flight and analyses the title-only order — the recruiter's
+    choice, persisted on the row so a rescan re-enqueue keeps it."""
+    monkeypatch.setattr(settings, "JOB_INTELLIGENCE_MAX_ATTEMPTS", 3)
+    fake = AsyncMock(return_value=_outcome())
+    monkeypatch.setattr("app.workers.job_intelligence_jobs.analyze", fake)
+
+    tid, uid, oid, row_id = await _seed()
+    try:
+        async with AdminSessionLocal() as s:
+            await s.execute(
+                text("UPDATE opportunities SET job_description = '' WHERE id = :i"),
+                {"i": oid},
+            )
+            await s.execute(
+                text("UPDATE job_intelligence SET allow_thin = true WHERE id = :i"),
+                {"i": row_id},
+            )
+            await s.commit()
+
+        await run_job_intelligence(
+            ctx={},
+            tenant_id=str(tid),
+            opportunity_id=str(oid),
+            row_id=str(row_id),
+        )
+
+        # The pipeline ran despite the thin order, and the row is done.
+        assert fake.call_count == 1
+        async with tenant_session(tid) as s:
+            row = await s.get(JobIntelligence, row_id)
+            assert row.state == "done"
+            assert row.failure_reason is None
     finally:
         await _drop(tid)
 

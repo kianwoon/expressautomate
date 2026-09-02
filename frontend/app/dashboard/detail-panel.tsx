@@ -340,9 +340,19 @@ function Detail({
     failed: ji.view !== null && "state" in ji.view && ji.view.state === "failed",
     failureReason:
       ji.view !== null && "failure_reason" in ji.view ? ji.view.failure_reason : null,
+    thin:
+      ji.view !== null && "thin" in ji.view ? ji.view.thin === true : false,
     loading: ji.phase.status === "loading",
     readError: ji.phase.status === "error" ? ji.phase.message : null,
   };
+
+  // The thin-order escape hatch, wired once here and shared by all three
+  // stage notices — the same handler the header button drives, only with the
+  // override flag set.
+  async function runAnalysisAnyway() {
+    await ji.runAnyway();
+    setActiveTab("work");
+  }
 
   return (
     <Dialog
@@ -770,11 +780,26 @@ function Detail({
             period: row.salary_period,
             raw: row.salary_raw,
           }}
+          onRunAnyway={() => void runAnalysisAnyway()}
+          starting={ji.starting}
         />
       )}
-      {activeTab === "person" && <PersonStage intelligence={ji.analysis} state={stageState} />}
+      {activeTab === "person" && (
+        <PersonStage
+          intelligence={ji.analysis}
+          state={stageState}
+          onRunAnyway={() => void runAnalysisAnyway()}
+          starting={ji.starting}
+        />
+      )}
       {activeTab === "search" && (
-        <SearchStage intelligence={ji.analysis} state={stageState} view={ji.view} />
+        <SearchStage
+          intelligence={ji.analysis}
+          state={stageState}
+          view={ji.view}
+          onRunAnyway={() => void runAnalysisAnyway()}
+          starting={ji.starting}
+        />
       )}
       {activeTab === "external" && (
         <ExternalCandidatesStage

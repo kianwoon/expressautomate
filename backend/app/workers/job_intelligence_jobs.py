@@ -60,7 +60,8 @@ _NO_CONTEXT = "This job order has no title or description to analyse. Add one an
 # an actionable sentence instead of burning a paid LLM call on a refusal.
 _THIN_CONTEXT = (
     "This job order says almost nothing about the work — add a description, "
-    "requirements or skills to the order before running the analysis."
+    "requirements or skills to the order, or use Run anyway to analyse it "
+    "from the title alone at low confidence."
 )
 
 
@@ -146,9 +147,12 @@ async def run_job_intelligence(
             ).scalars()
         )
 
-    if is_thin(opportunity):
+    if is_thin(opportunity) and not row.allow_thin:
         # No description, requirements or skills — the model would refuse to
         # invent the work. Fail before the LLM call with the actionable fix.
+        # The recruiter can override this from the panel ("Run anyway"), which
+        # sets `allow_thin` on the row and re-runs; the flag lives on the row
+        # rather than the job payload so `rescan_stuck` re-enqueues inherit it.
         log.info(
             "job_intelligence_skipped_thin_context",
             row_id=row_id,

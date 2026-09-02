@@ -84,6 +84,7 @@ function HookHarness({ rowId }: { rowId: string }) {
   return (
     <div>
       <button onClick={() => void ji.run()}>run</button>
+      <button onClick={() => void ji.runAnyway()}>run-anyway</button>
       <span data-testid="starting">{String(ji.starting)}</span>
       <span data-testid="waiting">{String(ji.waiting)}</span>
       <span data-testid="has-analysis">{String(!!ji.analysis)}</span>
@@ -163,6 +164,35 @@ describe("useJobIntelligence hook", () => {
     );
     expect(postCall).toBeDefined();
   });
+
+  it("runAnyway POSTs with the allow_thin override", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+
+    fetchMock.mockResolvedValueOnce(jsonResponse({ intelligence: null }));
+    render(<HookHarness rowId="op-1" />);
+    await waitFor(() => {
+      expect(screen.getByTestId("has-analysis").textContent).toBe("false");
+    });
+
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({
+        id: "row-1",
+        state: "pending",
+        failure_reason: null,
+        analysed_at: null,
+        intelligence: null,
+      }),
+    );
+    screen.getByText("run-anyway").click();
+
+    await waitFor(() => {
+      const postCall = fetchMock.mock.calls.find(
+        (c) => (c[1] as RequestInit | undefined)?.method === "POST",
+      );
+      expect(postCall).toBeDefined();
+      expect(String(postCall![0])).toContain("allow_thin=true");
+    });
+  });
 });
 
 describe("stage panels", () => {
@@ -171,6 +201,7 @@ describe("stage panels", () => {
     waiting: false,
     failed: false,
     failureReason: null,
+    thin: false,
     loading: false,
     readError: null,
   };
@@ -227,5 +258,46 @@ describe("stage panels", () => {
     };
     render(<WorkStage intelligence={null} state={failed} offer={NO_OFFER} />);
     expect(screen.getByText(/no title to analyse/i)).toBeDefined();
+  });
+
+  it("a thin-order failure offers Run anyway, and clicking it calls onRunAnyway", () => {
+    const onRunAnyway = vi.fn();
+    const failed: StageState = {
+      ...empty,
+      failed: true,
+      failureReason:
+        "This job order says almost nothing about the work — add a description, requirements or skills to the order, or use Run anyway to analyse it from the title alone at low confidence.",
+      thin: true,
+    };
+    render(
+      <WorkStage
+        intelligence={null}
+        state={failed}
+        offer={NO_OFFER}
+        onRunAnyway={onRunAnyway}
+      />,
+    );
+    const button = screen.getByText(/Run anyway \(low confidence\)/i);
+    button.click();
+    expect(onRunAnyway).toHaveBeenCalledTimes(1);
+  });
+
+  it("a non-thin failure offers no Run anyway — the override is only for the guard", () => {
+    const onRunAnyway = vi.fn();
+    const failed: StageState = {
+      ...empty,
+      failed: true,
+      failureReason: "The analysis could not be produced just now.",
+      thin: false,
+    };
+    render(
+      <WorkStage
+        intelligence={null}
+        state={failed}
+        offer={NO_OFFER}
+        onRunAnyway={onRunAnyway}
+      />,
+    );
+    expect(screen.queryByText(/Run anyway/i)).toBeNull();
   });
 });

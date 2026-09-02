@@ -30,6 +30,10 @@ export type StageState = {
   waiting: boolean;
   failed: boolean;
   failureReason: string | null;
+  /** True when the failure is the thin-context guard — the one failure the
+   *  "Run anyway" button can override. A machine flag from the API, never
+   *  matched against `failureReason` copy. */
+  thin: boolean;
   loading: boolean;
   readError: string | null;
 };
@@ -39,14 +43,41 @@ export type StageState = {
 const NOTHING_YET =
   'No analysis yet. Use "Run analysis" at the top to understand the work, the ideal person, and how to find them.';
 
-function StageNotice({ state }: { state: StageState }) {
+function StageNotice({
+  state,
+  onRunAnyway,
+  starting,
+}: {
+  state: StageState;
+  onRunAnyway?: () => void;
+  starting?: boolean;
+}) {
   if (state.hasAnalysis) return null;
   if (state.waiting) return <AnalysisProgress subject="this job order" />;
   if (state.failed && state.failureReason)
     return (
-      <p className="body src-error" role="alert">
-        {state.failureReason}
-      </p>
+      <>
+        <p className="body src-error" role="alert">
+          {state.failureReason}
+        </p>
+        {/* The escape hatch for a thin-order refusal: the order stays
+            undernourished, but a title like "Assistant Manager, Tik Tok
+            Marketing" still grounds a low-confidence analysis. Offered only
+            when the API said `thin: true` — never for transport errors,
+            quota refusals, or exhausted attempts. */}
+        {state.thin && onRunAnyway && (
+          <p className="body src-note">
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={onRunAnyway}
+              disabled={starting}
+            >
+              {starting ? "Starting…" : "Run anyway (low confidence)"}
+            </button>
+          </p>
+        )}
+      </>
     );
   if (state.readError)
     return (
@@ -62,12 +93,17 @@ export function WorkStage({
   intelligence,
   state,
   offer,
+  onRunAnyway,
+  starting,
 }: {
   intelligence: Intelligence | null;
   state: StageState;
   offer: Offer;
+  onRunAnyway?: () => void;
+  starting?: boolean;
 }) {
-  if (!intelligence) return <StageNotice state={state} />;
+  if (!intelligence)
+    return <StageNotice state={state} onRunAnyway={onRunAnyway} starting={starting} />;
   const u = intelligence.understanding;
   return (
     <>
@@ -92,11 +128,16 @@ export function WorkStage({
 export function PersonStage({
   intelligence,
   state,
+  onRunAnyway,
+  starting,
 }: {
   intelligence: Intelligence | null;
   state: StageState;
+  onRunAnyway?: () => void;
+  starting?: boolean;
 }) {
-  if (!intelligence) return <StageNotice state={state} />;
+  if (!intelligence)
+    return <StageNotice state={state} onRunAnyway={onRunAnyway} starting={starting} />;
   const p = intelligence.persona;
   return (
     <Stage title="The ideal person">
@@ -117,12 +158,17 @@ export function SearchStage({
   intelligence,
   state,
   view,
+  onRunAnyway,
+  starting,
 }: {
   intelligence: Intelligence | null;
   state: StageState;
   view: IntelligenceView | NoIntelligence | null;
+  onRunAnyway?: () => void;
+  starting?: boolean;
 }) {
-  if (!intelligence) return <StageNotice state={state} />;
+  if (!intelligence)
+    return <StageNotice state={state} onRunAnyway={onRunAnyway} starting={starting} />;
   const s = intelligence.search_plan;
   const removed = view && "removed_codes" in view ? view.removed_codes : null;
   return (

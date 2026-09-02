@@ -240,6 +240,78 @@ async def test_rerun_resets_attempts_so_a_failed_row_can_run_again(queued):
         await _drop_agency(tid)
 
 
+async def test_allow_thin_is_stored_and_reported_on_a_failed_row(queued):
+    """The "Run anyway" flag travels POST → row → GET, and a failed row over a
+    thin order carries `thin: true` so the panel offers the override.
+
+    The frontend must never string-match `failure_reason` copy to detect the
+    thin case — this pins the machine flag it reads instead.
+    """
+    from app.core.config import settings as cfg
+
+    tid, uid = await _seed_agency()
+    oid = await _opportunity(tid, uid)
+    try:
+        # Make the order thin: title only.
+        async with AdminSessionLocal() as s:
+            await s.execute(
+                text("UPDATE opportunities SET job_description = '' WHERE id = :i"),
+                {"i": oid},
+            )
+            await s.commit()
+        monkeypatch_quota = cfg.INTELLIGENCE_DAILY_QUOTA
+        assert monkeypatch_quota  # quota is set; this test spends one run
+
+        async with _http(tid, uid) as c:
+            # A plain run: pending, and no thin marker yet (not failed).
+            first = await c.post(f"/api/opportunities/{oid}/intelligence")
+            assert first.status_code == 202
+            row_id = first.json()["id"]
+
+            # Simulate the thin-context guard failing it.
+            async with AdminSessionLocal() as s:
+                await s.execute(
+                    text(
+                        "UPDATE job_intelligence SET state = 'failed',"
+                        " failure_reason = 'thin order' WHERE id = :i"
+                    ),
+                    {"i": row_id},
+                )
+                await s.commit()
+
+            got = await c.get(f"/api/opportunities/{oid}/intelligence")
+            assert got.json()["state"] == "failed"
+            assert got.json()["thin"] is True
+
+            # Run anyway: the flag is stored on the row for the worker.
+            second = await c.post(
+                f"/api/opportunities/{oid}/intelligence", params={"allow_thin": "true"}
+            )
+            assert second.status_code == 202
+            async with AdminSessionLocal() as s:
+                stored = (
+                    await s.execute(
+                        text("SELECT allow_thin FROM job_intelligence WHERE id = :i"),
+                        {"i": row_id},
+                    )
+                ).scalar_one()
+            assert stored is True
+
+            # A plain re-run clears the override — the guard is back.
+            third = await c.post(f"/api/opportunities/{oid}/intelligence")
+            assert third.status_code == 202
+            async with AdminSessionLocal() as s:
+                stored = (
+                    await s.execute(
+                        text("SELECT allow_thin FROM job_intelligence WHERE id = :i"),
+                        {"i": row_id},
+                    )
+                ).scalar_one()
+            assert stored is False
+    finally:
+        await _drop_agency(tid)
+
+
 async def test_another_agencys_job_order_is_404(queued):
     tid, uid = await _seed_agency()
     oid = await _opportunity(tid, uid)
