@@ -231,9 +231,10 @@ describe("a rendered candidate row", () => {
   });
 
   it("shows no platform chip when the result carries no source", () => {
+    const row = { ...candidate(), source: undefined as unknown as string };
     panel({
       taskStatus: "completed",
-      results: results({ results: [candidate({ source: null })] }),
+      results: results({ results: [row] }),
     });
     expect(screen.queryByTestId("jo-external-platform")).toBeNull();
   });
