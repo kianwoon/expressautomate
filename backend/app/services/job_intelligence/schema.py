@@ -142,10 +142,17 @@ class CandidatePersona(BaseModel):
     transferable_industries: list[str] = Field(default_factory=list)
     behaviours: list[str] = Field(default_factory=list)
     communication_style: str
-    career_stage: str
+    # Defaulted, not required: the schema in the prompt already names all
+    # three and marks them `required`, but the schema travels as prose —
+    # `complete_json(schema=None)` — so nothing at the protocol level stops
+    # the model from silently dropping one. That happened in production
+    # (2026-09-02, `career_stage`/`salary_expectation`/`availability` missing
+    # on an otherwise complete persona) and Pydantic's refusal killed an
+    # already-paid analysis. An empty string degrades one panel line instead.
+    career_stage: str = ""
     motivations: list[str] = Field(default_factory=list)
-    salary_expectation: str
-    availability: str
+    salary_expectation: str = ""
+    availability: str = ""
 
     _c_backgrounds = field_validator("likely_backgrounds", mode="before")(_coerce_str_list)
     _c_transferable_roles = field_validator("transferable_roles", mode="before")(_coerce_str_list)
