@@ -6,6 +6,7 @@ import {
   type ExternalTaskStatus,
   platformLabel,
 } from "./external-candidates";
+import { AnalysisProgress } from "./intel-progress";
 
 /**
  * The External Candidates panel — presentational only.
@@ -90,7 +91,11 @@ export function ExternalCandidatesStage({
         </p>
       )}
       {isWorking(taskStatus) && (
-        <p className="body src-note">Searching external sources — this takes a minute or two.</p>
+        <AnalysisProgress
+          subject="external sources"
+          verb="Searching"
+          note="Searching external sources — this takes a minute or two."
+        />
       )}
       {resultsError && (
         <p className="body src-error" role="alert">

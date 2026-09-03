@@ -21,13 +21,23 @@
  * is matched against.
  */
 
-export function AnalysisProgress({ subject }: { subject: string }) {
+export function AnalysisProgress({
+  subject,
+  verb = "Analysing",
+  note = "The three stages run in sequence — this can take a minute or two.",
+}: {
+  subject: string;
+  /** The action word before the subject — "Analysing" for intelligence, "Searching" for external sources. */
+  verb?: string;
+  /** The honest duration note under the bar; defaults to the intelligence stages copy. */
+  note?: string;
+}) {
   return (
     <div className="intel-progress" role="status">
       <div className="intel-progress-head">
         <span className="intel-spinner" aria-hidden="true" />
         <p className="intel-progress-title">
-          Analysing {subject}
+          {verb} {subject}
           <span className="intel-dots" aria-hidden="true">
             <i />
             <i />
@@ -38,9 +48,7 @@ export function AnalysisProgress({ subject }: { subject: string }) {
       <div className="intel-bar" aria-hidden="true">
         <span className="intel-bar-track" />
       </div>
-      <p className="intel-progress-note">
-        The three stages run in sequence — this can take a minute or two.
-      </p>
+      <p className="intel-progress-note">{note}</p>
       <div className="intel-skeleton" aria-hidden="true">
         <span className="intel-skel intel-skel-field" />
         <span className="intel-skel intel-skel-field" />
