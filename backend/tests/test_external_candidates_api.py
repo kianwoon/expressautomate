@@ -98,6 +98,52 @@ async def _opportunity(tenant_id: uuid.UUID, user_id: uuid.UUID) -> uuid.UUID:
     return opportunity_id
 
 
+async def _supersede(
+    tenant_id: uuid.UUID, predecessor_id: uuid.UUID
+) -> uuid.UUID:
+    """A newer revision of the same job order: a fresh opportunity row with
+    `superseded_by_opportunity_id` pointing at it from the predecessor — the
+    chain `opportunity_chain_ids` walks."""
+    successor_id = uuid.uuid4()
+    async with AdminSessionLocal() as s:
+        mailbox_id, message_id = uuid.uuid4(), uuid.uuid4()
+        await s.execute(
+            text(
+                "INSERT INTO mailboxes (id, tenant_id, user_id, ms_user_id,"
+                " folder_id, scope, retention_months) VALUES"
+                " (:i, :t, (SELECT id FROM users WHERE tenant_id = :t LIMIT 1),"
+                " :m, 'inbox', 'user', 24)"
+            ),
+            {"i": mailbox_id, "t": tenant_id, "m": f"oid-{mailbox_id.hex[:8]}"},
+        )
+        await s.execute(
+            text(
+                "INSERT INTO email_messages (id, tenant_id, mailbox_id,"
+                " graph_message_id, internet_message_id, subject)"
+                " VALUES (:i, :t, :m, :g, :g, 'Role wanted (v2)')"
+            ),
+            {"i": message_id, "t": tenant_id, "m": mailbox_id, "g": message_id.hex},
+        )
+        await s.execute(
+            text(
+                "INSERT INTO opportunities (id, tenant_id, email_message_id,"
+                " job_title_raw, job_description, review_status, quality_state)"
+                " VALUES (:i, :t, :e, 'Logistics Manager', 'Run the warehouse.',"
+                " 'ready', 'likely')"
+            ),
+            {"i": successor_id, "t": tenant_id, "e": message_id},
+        )
+        await s.execute(
+            text(
+                "UPDATE opportunities SET superseded_by_opportunity_id = :s"
+                " WHERE id = :p"
+            ),
+            {"s": successor_id, "p": predecessor_id},
+        )
+        await s.commit()
+    return successor_id
+
+
 async def _analyse(
     tenant_id: uuid.UUID, opportunity_id: uuid.UUID, plan: dict | None = None
 ) -> None:
@@ -286,6 +332,61 @@ async def test_a_task_id_without_a_local_row_is_404(configured):
             )
             assert got.status_code == 404
         assert configured == []  # the career bot was never asked
+    finally:
+        await _drop_agency(tid)
+
+
+async def test_search_started_on_a_superseded_predecessor_is_pollable(configured):
+    """Regression: the plan can live on a superseded revision, so `start`
+    writes the membership row with the predecessor's opportunity id. The
+    poll routes are driven with the current id and must still find the row
+    via the supersede chain — not 404 with "Search not found."
+    """
+    tid, uid = await _seed_agency()
+    old_oid = await _opportunity(tid, uid)
+    oid = await _supersede(tid, old_oid)
+    # The newest analysis row belongs to the predecessor.
+    await _analyse(tid, old_oid, PLAN)
+    try:
+        async with _http(tid, uid) as c:
+            started = await c.post(
+                f"/api/opportunities/{oid}/external-candidates/search"
+            )
+            assert started.status_code == 202, started.text
+            task_id = started.json()["task_id"]
+
+            poll = await c.get(
+                f"/api/opportunities/{oid}/external-candidates/search/{task_id}"
+            )
+            assert poll.status_code == 200, poll.text
+            assert poll.json()["task_status"] == "running"
+
+            done = await c.get(
+                f"/api/opportunities/{oid}/external-candidates/search/{task_id}/results"
+            )
+            assert done.status_code == 200, done.text
+    finally:
+        await _drop_agency(tid)
+
+
+async def test_a_task_id_without_a_local_row_stays_404_across_the_chain(configured):
+    """Chain-scoped matching must not weaken the membership check: a task id
+    no row vouches for is still 404 even though the chain is now searched."""
+    tid, uid = await _seed_agency()
+    old_oid = await _opportunity(tid, uid)
+    oid = await _supersede(tid, old_oid)
+    await _analyse(tid, old_oid, PLAN)
+    try:
+        async with _http(tid, uid) as c:
+            got = await c.get(
+                f"/api/opportunities/{oid}/external-candidates/search/not-a-task"
+            )
+            assert got.status_code == 404
+            got = await c.get(
+                f"/api/opportunities/{oid}/external-candidates/search/not-a-task/results"
+            )
+            assert got.status_code == 404
+        assert configured == []
     finally:
         await _drop_agency(tid)
 

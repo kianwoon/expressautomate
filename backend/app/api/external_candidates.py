@@ -290,6 +290,12 @@ class _TaskGate:
     `load_visible_opportunity` scopes the recruiter on top — a colleague's
     unshared job order is not visible, so neither are its external searches.
 
+    The row may live on any revision of the supersede chain: a plan read
+    from an older revision starts the search there, so the membership row
+    carries that predecessor's opportunity id while the panel polls with
+    the current one. `check()` therefore matches the whole chain (all ids
+    within the same tenant, RLS-enforced), not just the current id.
+
     `check()` keeps the row it vouched for: the terminal read writes the
     results onto exactly that row, so persistence can never attach a career
     bot's answer to a row other than the one that authorised the read.
@@ -302,12 +308,23 @@ class _TaskGate:
         self.row: ExternalCandidateSearch | None = None
 
     async def check(self) -> ExternalCandidateSearch:
+        # Chain-scoped agreement: the membership row's opportunity id may be
+        # a superseded predecessor (the plan was read there), so the poll's
+        # current id is matched against the whole chain. All chain ids are
+        # in this tenant (RLS via tenant_session) and the route already ran
+        # `load_visible_opportunity` on the requested id.
+        chain = await opportunity_chain_ids(self._session, self._opportunity_id)
         row = (
             await self._session.execute(
-                select(ExternalCandidateSearch).where(
+                select(ExternalCandidateSearch)
+                .where(
                     ExternalCandidateSearch.task_id == self._task_id,
-                    ExternalCandidateSearch.opportunity_id == self._opportunity_id,
+                    ExternalCandidateSearch.opportunity_id.in_(chain),
                 )
+                # A task id re-used across chain revisions could match more
+                # than one row; the newest is the one still in play.
+                .order_by(ExternalCandidateSearch.created_at.desc())
+                .limit(1)
             )
         ).scalar_one_or_none()
         if row is None:
