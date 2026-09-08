@@ -119,6 +119,17 @@ export type ExternalSearchSaved = {
   created_at: string | null;
 };
 
+/** The user-facing head of the career bot's `summary`. The service returns
+ *  the human line, then " — ", then the operator-facing plan log (spec §3:
+ *  `plan_detail` is ours to read, not the recruiter's), so everything after
+ *  the first " — " is trimmed. No " — " means the summary is already just
+ *  the head; null/empty — or a head that is itself empty — yields null. */
+export function summaryLine(summary: string | null): string | null {
+  if (!summary) return null;
+  const head = summary.split(" — ")[0].trim();
+  return head || null;
+}
+
 /** The platform name a recruiter recognises for one result. The career bot
  *  now ships `source_platform` — its own display label (`LinkedIn`,
  *  `JobStreet`, …) — and that is the truth; this fallback only covers rows

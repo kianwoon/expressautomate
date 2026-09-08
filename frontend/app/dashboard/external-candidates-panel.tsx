@@ -5,6 +5,7 @@ import {
   type ExternalSearchResults,
   type ExternalTaskStatus,
   platformLabel,
+  summaryLine,
 } from "./external-candidates";
 import { AnalysisProgress } from "./intel-progress";
 
@@ -118,16 +119,17 @@ function buttonLabel(starting: boolean, status: ExternalTaskStatus | null): stri
 }
 
 function Results({ results }: { results: ExternalSearchResults }) {
+  const line = summaryLine(results.summary);
   if (results.results.length === 0) {
     return (
       <p className="body src-note">
-        {results.summary ?? "No external candidates matched this search."}
+        {line ?? "No external candidates matched this search."}
       </p>
     );
   }
   return (
     <>
-      {results.summary && <p className="body jo-sub">{results.summary}</p>}
+      {line && <p className="body jo-sub">{line}</p>}
       <ul className="jo-external-list">
         {results.results.map((candidate) => (
           <ExternalRow key={candidate.id} candidate={candidate} />

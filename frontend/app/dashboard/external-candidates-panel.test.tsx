@@ -5,10 +5,11 @@ import {
   ExternalCandidatesStage,
   type ExternalPanelState,
 } from "./external-candidates-panel";
-import type {
-  ExternalCandidate,
-  ExternalSearchResults,
-  ExternalTaskStatus,
+import {
+  summaryLine,
+  type ExternalCandidate,
+  type ExternalSearchResults,
+  type ExternalTaskStatus,
 } from "./external-candidates";
 
 /**
@@ -171,6 +172,40 @@ describe("the sentences a recruiter is shown", () => {
       screen.getByText("No external candidates matched this search."),
     ).toBeTruthy();
     expect(screen.queryByTestId("jo-external-row")).toBeNull();
+  });
+});
+
+describe("summaryLine", () => {
+  const FULL =
+    "10 ranked results — Extension plan v2: 5 queries [...] → 5 unique | jobstreet - candidate flow: 20 results";
+
+  it("keeps only the head before the plan log", () => {
+    expect(summaryLine(FULL)).toBe("10 ranked results");
+  });
+
+  it("returns the whole trimmed string when there is no plan log", () => {
+    expect(summaryLine("  10 ranked results  ")).toBe("10 ranked results");
+  });
+
+  it("yields null for null, empty, or a head-only-whitespace summary", () => {
+    expect(summaryLine(null)).toBeNull();
+    expect(summaryLine("")).toBeNull();
+    expect(summaryLine("   — log")).toBeNull();
+  });
+});
+
+describe("the summary line above the ranked list", () => {
+  it("shows the user-facing head and never the operator plan log", () => {
+    panel({
+      taskStatus: "completed",
+      results: results({
+        summary:
+          "10 ranked results — Extension plan v2: 5 queries [...] → 5 unique | jobstreet - candidate flow: 20 results",
+      }),
+    });
+    expect(screen.getByText("10 ranked results")).toBeTruthy();
+    expect(screen.queryByText(/Extension plan v2/)).toBeNull();
+    expect(document.querySelector(".jo-sub")?.textContent).toBe("10 ranked results");
   });
 });
 
