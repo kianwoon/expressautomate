@@ -369,23 +369,48 @@ async def _persist_terminal(
             if fresh is None or fresh.finished_at is not None:
                 return
             if task_status == "completed":
-                body = await _client().get_results(fresh.task_id)
+                try:
+                    body = await _client().get_results(fresh.task_id)
+                except CareerBotError as exc:
+                    # The career bot can no longer produce results for this
+                    # task (expired/404'd). Leave the row untouched — no
+                    # terminal mark, no results — so the panel offers a
+                    # fresh search instead of a dead `failed` row.
+                    log.warning(
+                        "external_search_results_fetch_failed",
+                        task_id=row.task_id,
+                        error=str(exc),
+                    )
+                    return
                 fresh.results = body.get("results") or []
             fresh.finished_at = dt.datetime.now(dt.UTC)
             await session.commit()
-    except Exception:
-        log.warning("external_search_results_persist_failed", task_id=row.task_id)
+    except Exception as exc:
+        log.warning(
+            "external_search_results_persist_failed",
+            task_id=row.task_id,
+            error=str(exc),
+            exc_info=True,
+        )
 
 
 async def _latest_search_row(
-    session, opportunity_id: uuid.UUID
+    session, chain: list[uuid.UUID]
 ) -> ExternalCandidateSearch | None:
-    """The newest search row for this opportunity — the finished search a
-    returning visitor sees, whatever the career bot still remembers."""
+    """The newest search row across this opportunity's supersede chain — the
+    finished search a returning visitor sees, whatever the career bot still
+    remembers.
+
+    The chain is passed in by the caller (an RLS tenant session, so every id
+    in it stays in-tenant): a search started while the newest intelligence
+    row belonged to a superseded predecessor wrote its `opportunity_id` as
+    that predecessor, and the row must still be found when the current
+    opportunity is opened.
+    """
     return (
         await session.execute(
             select(ExternalCandidateSearch)
-            .where(ExternalCandidateSearch.opportunity_id == opportunity_id)
+            .where(ExternalCandidateSearch.opportunity_id.in_(chain))
             # Finished searches first (newest), then in-flight ones by when
             # they were started — the search a returning visitor sees is the
             # one that most recently mattered.
@@ -515,7 +540,8 @@ async def get_latest_external_search(
 
     async with tenant_session(tenant_uuid) as session:
         current = await load_visible_opportunity(session, opportunity_id, user_uuid, role)
-        row = await _latest_search_row(session, current.id)
+        chain = await opportunity_chain_ids(session, current.id)
+        row = await _latest_search_row(session, chain)
         if row is None:
             return {"status": "none", "search": None, "message": None}
         return {

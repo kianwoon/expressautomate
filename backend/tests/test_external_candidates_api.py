@@ -852,6 +852,83 @@ async def test_a_persist_failure_never_fails_the_read(monkeypatch, configured):
         await _drop_agency(tid)
 
 
+async def test_latest_finds_a_search_started_under_a_superseded_predecessor(configured):
+    """Regression: the search was started while the newest intelligence row
+    belonged to a superseded predecessor, so the row carries the
+    predecessor's opportunity id. Re-opening the CURRENT job order must
+    still find it via the supersede chain — not answer `none` with an
+    empty tab."""
+    tid, uid = await _seed_agency()
+    old_oid = await _opportunity(tid, uid)
+    oid = await _supersede(tid, old_oid)
+    await _analyse(tid, old_oid, PLAN)
+    try:
+        async with _http(tid, uid) as c:
+            started = await c.post(
+                f"/api/opportunities/{oid}/external-candidates/search"
+            )
+            assert started.status_code == 202, started.text
+            task_id = started.json()["task_id"]
+
+            done = await c.get(
+                f"/api/opportunities/{oid}/external-candidates/search/{task_id}/results"
+            )
+            assert done.status_code == 200, done.text
+
+            latest = await c.get(
+                f"/api/opportunities/{oid}/external-candidates/latest"
+            )
+            assert latest.status_code == 200, latest.text
+            body = latest.json()
+            assert body["status"] == "ok", body
+            assert body["search"]["task_id"] == task_id
+            assert [r["title"] for r in body["search"]["results"]] == ["One", "Two"]
+    finally:
+        await _drop_agency(tid)
+
+
+async def test_a_career_bot_results_error_leaves_the_row_fresh(configured):
+    """When the career bot can no longer produce results for a completed
+    task (expired/404'd on its side), the row is NOT stamped terminal as a
+    dead failed search — `finished_at` stays NULL, results stay NULL — so
+    the panel offers a fresh search instead."""
+    tid, uid = await _seed_agency()
+    oid = await _opportunity(tid, uid)
+    await _analyse(tid, oid, PLAN)
+    try:
+        async with _http(tid, uid) as c:
+            started = await c.post(
+                f"/api/opportunities/{oid}/external-candidates/search"
+            )
+            task_id = started.json()["task_id"]
+            calls = configured
+
+            async def _done(self, tid_):
+                calls.append(("task", tid_, None))
+                return career_bot.TaskStatus(status="completed", error=None)
+
+            async def _gone(self, tid_):
+                calls.append(("results", tid_, None))
+                raise career_bot.CareerBotError("task not found", 404)
+
+            monkeypatch = pytest.MonkeyPatch()
+            try:
+                monkeypatch.setattr(career_bot.CareerBotClient, "get_task", _done)
+                monkeypatch.setattr(career_bot.CareerBotClient, "get_results", _gone)
+                poll = await c.get(
+                    f"/api/opportunities/{oid}/external-candidates/search/{task_id}"
+                )
+            finally:
+                monkeypatch.undo()
+            # The poll itself still answers with the career bot's verdict.
+            assert poll.status_code == 200, poll.text
+            assert poll.json()["task_status"] == "completed"
+        saved = await _saved_rows(tid)
+        assert saved == [(task_id, None, -1)], saved  # untouched: not terminal
+    finally:
+        await _drop_agency(tid)
+
+
 async def test_latest_returns_the_saved_search(configured):
     tid, uid = await _seed_agency()
     oid = await _opportunity(tid, uid)
