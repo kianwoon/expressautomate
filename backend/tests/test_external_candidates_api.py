@@ -961,6 +961,40 @@ async def test_latest_returns_the_saved_search(configured):
         await _drop_agency(tid)
 
 
+async def test_new_search_replaces_a_finished_list(configured):
+    """Rerunning "Find External Candidates" on a job order that already has a
+    saved list must REPLACE it: `latest` answers with the new in-flight row
+    (running, no results), not the old completed search — including on
+    reopen."""
+    tid, uid = await _seed_agency()
+    oid = await _opportunity(tid, uid)
+    await _analyse(tid, oid, PLAN)
+    try:
+        async with _http(tid, uid) as c:
+            first = await c.post(
+                f"/api/opportunities/{oid}/external-candidates/search"
+            )
+            await c.get(
+                f"/api/opportunities/{oid}/external-candidates"
+                f"/search/{first.json()['task_id']}/results"
+            )
+            # A newer search starts while the old one is finished.
+            second = await c.post(
+                f"/api/opportunities/{oid}/external-candidates/search"
+            )
+            new_task_id = second.json()["task_id"]
+            latest = await c.get(
+                f"/api/opportunities/{oid}/external-candidates/latest"
+            )
+            assert latest.status_code == 200
+            search = latest.json()["search"]
+            assert search["task_id"] == new_task_id
+            assert search["task_status"] == "running"
+            assert search["results"] == []
+    finally:
+        await _drop_agency(tid)
+
+
 async def test_latest_without_any_search_is_a_200_none(configured):
     """"No search yet" is the state of the tab, not an error."""
     tid, uid = await _seed_agency()

@@ -397,9 +397,14 @@ async def _persist_terminal(
 async def _latest_search_row(
     session, chain: list[uuid.UUID]
 ) -> ExternalCandidateSearch | None:
-    """The newest search row across this opportunity's supersede chain — the
-    finished search a returning visitor sees, whatever the career bot still
+    """The newest STARTED search row across this opportunity's supersede
+    chain — the search the panel sees, whatever the career bot still
     remembers.
+
+    Ordered by `created_at` alone: each start creates a new row, so the
+    newest-created row is always the current search — in-flight while
+    working, terminal after. A fresh search supersedes a finished one the
+    moment it starts (replace-on-rerun), including on reopen.
 
     The chain is passed in by the caller (an RLS tenant session, so every id
     in it stays in-tenant): a search started while the newest intelligence
@@ -411,13 +416,7 @@ async def _latest_search_row(
         await session.execute(
             select(ExternalCandidateSearch)
             .where(ExternalCandidateSearch.opportunity_id.in_(chain))
-            # Finished searches first (newest), then in-flight ones by when
-            # they were started — the search a returning visitor sees is the
-            # one that most recently mattered.
-            .order_by(
-                ExternalCandidateSearch.finished_at.desc().nulls_last(),
-                ExternalCandidateSearch.created_at.desc(),
-            )
+            .order_by(ExternalCandidateSearch.created_at.desc())
             .limit(1)
         )
     ).scalar_one_or_none()
