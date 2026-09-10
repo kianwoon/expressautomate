@@ -28,7 +28,48 @@ from app.services.job_intelligence.persona import infer_persona
 from app.services.job_intelligence.schema import JobIntelligenceResult
 from app.services.job_intelligence.search import plan_search
 from app.services.job_intelligence.understand import understand
-from app.services.llm.client import complete_json
+from app.services.llm.client import (
+    LLMNoContent,
+    LLMResponseTruncated,
+    complete_json,
+)
+
+# Ceiling for the grown-budget truncation retry. 131072 mirrors
+# CANDIDATE_INTELLIGENCE_MAX_TOKENS — 2× the per-stage default and still far
+# under the 384K output ceiling the providers document, so growing into it is
+# always a legal request.
+_TRUNCATION_RETRY_MAX_TOKENS_CAP = 131072
+
+
+def _truncation_retry(llm):
+    """Wrap a stage's llm callable with one retry on a truncated/empty answer.
+
+    `LLMResponseTruncated` (`finish_reason=length`) and `LLMNoContent` are the
+    two failures the client's docstring marks retryable: the answer was never
+    emitted — a reasoning model spent its whole output budget thinking — so
+    re-asking under a grown `max_tokens` and the reasoning knob removed is a
+    *materially different request*, not a temperature-zero replay of the same
+    answer. Ordinary `LLMInvalidJSON` is deliberately not caught: a real bad
+    answer replayed at temperature zero is the same answer twice, and guessing
+    or repairing truncated JSON would fabricate data. One retry only — a
+    second miss means the budget itself is wrong and the analysis fails
+    terminally, where the worker records an actionable reason.
+    """
+
+    async def resolve(prompt, **kwargs):
+        try:
+            return await llm(prompt, **kwargs)
+        except (LLMResponseTruncated, LLMNoContent):
+            retry_body = dict(kwargs.get("extra_body") or {})
+            budget = retry_body.get("max_tokens") or settings.JOB_INTELLIGENCE_MAX_TOKENS
+            retry_body["max_tokens"] = min(budget * 2, _TRUNCATION_RETRY_MAX_TOKENS_CAP)
+            # Removing `reasoning_effort` asks for the provider's default (its
+            # minimum reasoning spend) — the other half of the material change.
+            retry_body.pop("reasoning_effort", None)
+            kwargs = {**kwargs, "extra_body": retry_body}
+            return await llm(prompt, **kwargs)
+
+    return resolve
 
 
 async def _glm_complete_json(prompt, **kwargs):
@@ -102,7 +143,7 @@ async def analyze(
     — GLM (the Z.AI wrapper) when the Job Intelligence GLM provider is enabled,
     otherwise `complete_json`.
     """
-    llm = llm or _get_llm_for_job_intelligence()
+    llm = _truncation_retry(llm or _get_llm_for_job_intelligence())
     context: OpportunityContext = assemble(opportunity, codes)
 
     understanding, r1 = await understand(context.text, llm=llm)

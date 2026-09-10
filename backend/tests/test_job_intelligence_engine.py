@@ -19,7 +19,36 @@ from app.services.job_intelligence.engine import (
     _glm_complete_json,
     analyze,
 )
-from app.services.llm.client import FakeLLM, complete_json
+from app.services.llm.client import (
+    FakeLLM,
+    LLMInvalidJSON,
+    LLMNoContent,
+    LLMResponseTruncated,
+    LLMResult,
+    complete_json,
+)
+
+
+class _SequenceLLM:
+    """Test double that raises queued exceptions before returning results.
+
+    A plain `FakeLLM` only queues dicts; the truncation retry needs a stage
+    call that fails first and answers on the retry, so this stand-in records
+    the `extra_body` of every call for assertions on the material change.
+    """
+
+    def __init__(self, *outcomes) -> None:
+        self.outcomes = list(outcomes)
+        self.prompts: list[str] = []
+        self.extra_bodies: list[dict] = []
+
+    async def __call__(self, prompt: str, *, model: str, schema: dict, **kwargs):
+        self.prompts.append(prompt)
+        self.extra_bodies.append(kwargs.get("extra_body") or {})
+        outcome = self.outcomes.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return LLMResult(data=outcome, model=model)
 
 
 @pytest.fixture(autouse=True)
@@ -224,3 +253,60 @@ async def test_analyze_uses_glm_client_when_enabled(monkeypatch):
     outcome = await analyze(_Opp(), codes=(), llm=llm)
     assert outcome.result.understanding.role == "Logistics Manager"
     assert len(llm.prompts) == 4
+
+
+async def test_analyze_retries_truncated_stage_with_grown_budget(monkeypatch):
+    """The persona stage returns truncated JSON (`finish_reason=length`): the
+    engine retries it once with a doubled `max_tokens` and the reasoning knob
+    removed — a materially different request — and the analysis succeeds."""
+    monkeypatch.setattr(settings, "JOB_INTELLIGENCE_MAX_TOKENS", 65536)
+    monkeypatch.setattr(settings, "JOB_INTELLIGENCE_REASONING_EFFORT", "low")
+
+    llm = _SequenceLLM(
+        _understanding_payload(),
+        _occupation_profile_payload(),
+        LLMResponseTruncated("cut mid-key transferable_roles; finish_reason=length"),
+        _persona_payload(),
+        _search_payload(),
+    )
+    outcome = await analyze(_Opp(), codes=(), llm=llm)
+
+    assert outcome.result.persona.likely_backgrounds == ["Logistics coordinator"]
+    # Five calls: the persona retry adds exactly one.
+    assert len(llm.prompts) == 5
+    retry_body = llm.extra_bodies[3]
+    assert retry_body["max_tokens"] == 131072  # 65536 doubled
+    assert "reasoning_effort" not in retry_body
+    # The first persona attempt still asked the configured budget.
+    assert llm.extra_bodies[2] == {"max_tokens": 65536, "reasoning_effort": "low"}
+
+
+async def test_analyze_retries_no_content_stage_once(monkeypatch):
+    """`LLMNoContent` (reasoning burned the whole budget, nothing emitted)
+    gets the same one materially-different retry as truncation."""
+    llm = _SequenceLLM(
+        _understanding_payload(),
+        LLMNoContent("the model returned no content"),
+        _occupation_profile_payload(),
+        _persona_payload(),
+        _search_payload(),
+    )
+    outcome = await analyze(_Opp(), codes=(), llm=llm)
+    assert outcome.result.understanding.role == "Logistics Manager"
+    assert len(llm.prompts) == 5
+
+
+async def test_analyze_ordinary_invalid_json_fails_fast_with_no_retry(monkeypatch):
+    """A real malformed answer is not retried: temperature zero replays the
+    same answer, and guessing at truncated JSON would fabricate data."""
+    llm = _SequenceLLM(
+        _understanding_payload(),
+        _occupation_profile_payload(),
+        LLMInvalidJSON("the model answered in prose, not JSON"),
+        _persona_payload(),
+        _search_payload(),
+    )
+    with pytest.raises(LLMInvalidJSON):
+        await analyze(_Opp(), codes=(), llm=llm)
+    # Three calls only — the persona failure propagated immediately.
+    assert len(llm.prompts) == 3

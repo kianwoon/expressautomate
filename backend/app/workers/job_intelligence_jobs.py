@@ -144,10 +144,13 @@ async def run_job_intelligence(
         # only the search, because the search runs mid-pipeline.
         async with tenant_session(tenant) as session:
             outcome = await analyze(opportunity, codes, session=session)
-    except Exception as exc:  # noqa: BLE001 — a terminal failure, never a retry
-        # A bad model answer, or a transport failure reaching the LLM provider. Either
-        # is a failed run the recruiter can retry; neither is retried here,
-        # because temperature zero makes a plain retry the same answer twice.
+    except Exception as exc:  # noqa: BLE001 — a terminal failure at this layer
+        # A bad model answer, or a transport failure reaching the LLM provider.
+        # The engine already spent its one materially-different retry on the
+        # two budget-shaped failures (LLMResponseTruncated / LLMNoContent — a
+        # grown budget and no reasoning knob, per the client's docstring), so
+        # reaching here means the retry missed too and a plain re-ask at
+        # temperature zero would be the same answer twice.
         log.warning(
             "job_intelligence_failed",
             row_id=row_id,
@@ -211,8 +214,16 @@ def _recruiter_reason(exc: Exception) -> str:
     Truncated hard: `failure_reason` is a UI string, not a log, and a runaway
     model answer must not render as a wall of text.
     """
-    from app.services.llm.client import LLMInvalidJSON
+    from app.services.llm.client import LLMInvalidJSON, LLMResponseTruncated
 
+    if isinstance(exc, LLMResponseTruncated):
+        # Actionable, not a wall of the raw preview: the engine's grown-budget
+        # retry already missed, so the fix is human (rerun later / report it),
+        # not a token count.
+        return (
+            "The model's answer was cut off by its output budget, even after a "
+            "retry with a larger budget. Please try again or report this."
+        )
     if isinstance(exc, LLMInvalidJSON):
         text = " ".join(str(exc).split()).strip()
         if text:
