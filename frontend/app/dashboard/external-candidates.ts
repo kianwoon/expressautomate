@@ -260,10 +260,11 @@ export function useExternalCandidates(rowId: string): {
   const [taskError, setTaskError] = useState<string | null>(null);
   const [results, setResults] = useState<ExternalSearchResults | null>(null);
   const [resultsError, setResultsError] = useState<string | null>(null);
-  // Results are fetched once, when the task completes; the ref guards the
-  // poll effect's cleanup race (the interval can fire once more after the
-  // status flips terminal before the effect tears down).
-  const fetchingResults = useRef(false);
+  // Results are fetched once per (rowId, taskId), when the task completes.
+  // The claim is keyed and released in the effect's cleanup, so a teardown +
+  // re-run while the fetch is in flight (StrictMode double-invoke, a poll
+  // re-render) refetches instead of swallowing the response.
+  const fetchedFor = useRef<string | null>(null);
 
   const reset = useCallback(() => {
     setTaskId(null);
@@ -359,11 +360,16 @@ export function useExternalCandidates(rowId: string): {
     };
   }, [rowId, taskId, taskStatus]);
 
-  // Results, fetched once when the task completes.
+  // Results, fetched once when the task completes. The claim is per
+  // (rowId, taskId): a re-run before the fetch resolves must retry, not
+  // early-return while the cancelled first run drops its response — that
+  // race left a completed search showing a blank tab until remount.
   useEffect(() => {
-    if (!taskId || taskStatus !== "completed" || fetchingResults.current) return;
+    if (!taskId || taskStatus !== "completed") return;
+    const claim = `${rowId}:${taskId}`;
+    if (fetchedFor.current === claim) return;
+    fetchedFor.current = claim;
     let cancelled = false;
-    fetchingResults.current = true;
     (async () => {
       try {
         const body = await getExternalSearchResults(rowId, taskId);
@@ -376,12 +382,11 @@ export function useExternalCandidates(rowId: string): {
               : "The results could not be read just now.",
           );
         }
-      } finally {
-        fetchingResults.current = false;
       }
     })();
     return () => {
       cancelled = true;
+      if (fetchedFor.current === claim) fetchedFor.current = null;
     };
   }, [rowId, taskId, taskStatus]);
 
