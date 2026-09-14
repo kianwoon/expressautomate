@@ -313,17 +313,19 @@ async def test_malformed_json_on_unbounded_completion_keeps_class_and_carries_ta
     finish_reason=stop means the model *chose* to stop there — that is an
     ordinary invalid answer (re-ask / escalate), not a budget problem, so the
     exception class must stay LLMInvalidJSON while still carrying the tail
-    diagnosis.
+    diagnosis. The content ends at a `}` (so the shape check does not call it
+    truncated) yet is malformed (the array never closes) — a genuinely bad
+    answer, not one cut off mid-JSON.
     """
     payload = {
         "choices": [
             {
-                "message": {"content": '{"a": [1, 2'},  # unclosed, but 'stop'
+                "message": {"content": '{"a": [1, 2}'},  # closes on `}` but the array is unclosed
                 "finish_reason": "stop",
             }
         ],
         "usage": {},
-        "model": "test/fast",
+        "model": "secret://project/APP_ENV/fast",
     }
 
     with pytest.raises(LLMInvalidJSON) as excinfo:
@@ -332,16 +334,81 @@ async def test_malformed_json_on_unbounded_completion_keeps_class_and_carries_ta
     assert "finish_reason=stop" in str(excinfo.value)
 
 
-async def test_missing_finish_reason_is_reported_as_unknown_not_length():
+async def test_missing_finish_reason_keeps_class_unknown_but_not_truncated():
     """A provider that omits finish_reason must not be mistaken for one
-    that said length — the remedy differs (grow budget vs re-ask)."""
+    that said length — the remedy differs (grow budget vs re-ask).
+
+    The content ends at `}` (complete-looking) so this is a plain invalid
+    answer; only the mid-JSON shape promotes to truncated here, not the
+    absence of a reason on its own."""
     payload = {
-        "choices": [{"message": {"content": '{"broken"'}}],
+        "choices": [{"message": {"content": '{"broken":}'}}],
         "usage": {},
-        "model": "test/fast",
+        "model": "secret://project/APP_ENV/fast",
     }
 
     with pytest.raises(LLMInvalidJSON) as excinfo:
         await complete_json("prompt", model="test/fast", schema={}, transport=_transport(payload))
     assert not isinstance(excinfo.value, LLMResponseTruncated)
     assert "no finish_reason" in str(excinfo.value)
+
+
+async def test_truncated_mid_key_with_stop_is_classified_truncated():
+    """Regression for the Job Intelligence analyses failure this fixes.
+
+    The provider cut the answer mid-key (`...","business_purpos`) while
+    reporting finish_reason=stop. Trusting the reported reason alone left it a
+    plain LLMInvalidJSON, so the engine's truncation retry never fired and the
+    recruiter saw the raw JSON head as the failure reason. The shape check now
+    catches it: content that does not end at a JSON closer is truncated, and
+    the message names the provider's actual (non-length) reason plus the tail.
+    """
+    truncated_content = (
+        '{"role":"Finance Operations Analyst","business_purpos'
+    )
+    payload = {
+        "choices": [
+            {
+                "message": {"content": truncated_content},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 800, "completion_tokens": 32000},
+        "model": "glm-4.6",
+    }
+
+    with pytest.raises(LLMResponseTruncated) as excinfo:
+        await complete_json("prompt", model="test/fast", schema={}, transport=_transport(payload))
+    msg = str(excinfo.value)
+    assert "finish_reason=stop" in msg
+    assert "business_purpos" in msg
+
+
+async def test_truncated_mid_key_with_no_finish_reason_is_classified_truncated():
+    """Same shape check applies when the provider reports no finish_reason."""
+    payload = {
+        "choices": [{"message": {"content": '{"role":"Finance","business'}}],
+        "usage": {},
+        "model": "glm-4.6",
+    }
+
+    with pytest.raises(LLMResponseTruncated) as excinfo:
+        await complete_json("prompt", model="test/fast", schema={}, transport=_transport(payload))
+    assert "no finish_reason" in str(excinfo.value)
+
+
+async def test_complete_but_malformed_json_ending_in_brace_stays_invalid():
+    """No behavior change: content that ends at `}` but will not parse is a
+    genuinely bad answer (returns it as ordinary LLMInvalidJSON), not a
+    budget truncation — replaying it at temperature zero is the same answer
+    twice."""
+    payload = {
+        "choices": [{"message": {"content": '{"role": "Analyst",,}'}}],
+        "usage": {},
+        "model": "glm-4.6",
+    }
+
+    with pytest.raises(LLMInvalidJSON) as excinfo:
+        await complete_json("prompt", model="test/fast", schema={}, transport=_transport(payload))
+    assert not isinstance(excinfo.value, LLMResponseTruncated)
+

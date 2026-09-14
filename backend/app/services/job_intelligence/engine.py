@@ -44,7 +44,7 @@ _TRUNCATION_RETRY_MAX_TOKENS_CAP = 131072
 def _truncation_retry(llm):
     """Wrap a stage's llm callable with one retry on a truncated/empty answer.
 
-    `LLMResponseTruncated` (`finish_reason=length`) and `LLMNoContent` are the
+    `LLMResponseTruncated` and `LLMNoContent` are the
     two failures the client's docstring marks retryable: the answer was never
     emitted — a reasoning model spent its whole output budget thinking — so
     re-asking under a grown `max_tokens` and the reasoning knob removed is a
@@ -54,6 +54,12 @@ def _truncation_retry(llm):
     or repairing truncated JSON would fabricate data. One retry only — a
     second miss means the budget itself is wrong and the analysis fails
     terminally, where the worker records an actionable reason.
+
+    Production failure this fixes: the GLM coding-plan provider truncated an
+    answer mid-key while reporting a non-length finish_reason, so the client
+    raised a plain `LLMInvalidJSON` and this retry never fired. The client now
+    also classifies visibly mid-JSON content as `LLMResponseTruncated`
+    regardless of the reported reason, so this wrapper catches it.
     """
 
     async def resolve(prompt, **kwargs):

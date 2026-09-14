@@ -13,6 +13,19 @@ Like the Graph client, it classifies rather than retries: `LLMInvalidJSON` says
 "this response is unusable", and everything else is left as the httpx error it
 already is. The job layer is the only place that knows whether re-asking a model
 is worth the tokens, so it owns retry and escalation to the strong model.
+
+One production failure made that classification too narrow. A budget-truncated
+answer is retryable exactly like `finish_reason=length`, but the GLM coding-plan
+provider (and others) sometimes cut the answer off mid-JSON while reporting a
+finish_reason that is *not* `length` — `stop`, or nothing at all. The old code
+trusted the reported reason alone, so those answers fell through as a plain
+`LLMInvalidJSON`, the job layer's truncation retry never fired, and the recruiter
+saw the raw JSON head as the failure reason. The fix below also inspects the
+*shape* of the raw content: an answer that visibly ends mid-JSON (no closing
+`}`/`]`) is classified `LLMResponseTruncated` whatever the provider claimed. A
+failure that ends at a `}`/`]` but still will not parse stays a plain
+`LLMInvalidJSON` — that is a genuinely bad answer, and replaying it at
+temperature zero is the same answer twice.
 """
 
 import asyncio
@@ -248,9 +261,20 @@ async def complete_json(
         # re-raises as `LLMResponseTruncated` when length was the cause, so a
         # caller can tell "grow the budget / dial reasoning down" apart from
         # "re-ask or escalate to a stronger model".
+        #
+        # The reported reason alone is not enough. A second production case
+        # (job intelligence analyses) truncated the answer mid-key while
+        # reporting a non-length finish_reason, so the classification missed
+        # it, the retry never fired, and the recruiter was shown the raw JSON
+        # head (`{"role":"Finance Operations Analyst...","business_purpos`) as
+        # the failure reason. Trust the shape too: an answer that does not end
+        # at a JSON closer is visibly cut off and gets the same retryable
+        # class, whatever `finish_reason` says. A complete-looking object that
+        # ends at `}`/`]` and still will not parse is left as the ordinary
+        # invalid answer — that is a real bad response, not a budget problem.
         truncate_note = _truncate_reason(finish_reason, content)
         message = f"{exc}; {truncate_note}"
-        if finish_reason == "length":
+        if finish_reason == "length" or _looks_truncated(content):
             raise LLMResponseTruncated(message) from exc
         raise type(exc)(message) from exc
     return LLMResult(
@@ -266,6 +290,21 @@ async def complete_json(
     )
 
 
+def _looks_truncated(content: str) -> bool:
+    """Whether the raw content visibly stops mid-JSON.
+
+    The conservative shape check that backs the non-length truncation
+    classification: strip trailing whitespace and look at the last character.
+    JSON can only end at `}` or `]` — anything else (a key char, a comma, an
+    unclosed quote) means the answer was cut off, not completed wrongly. This
+    deliberately ignores string-escaping subtleties: the only failure it must
+    not misclassify is "complete but malformed", and such content does end at
+    a closer. Erring toward ordinary `LLMInvalidJSON` on the ambiguous cases
+    keeps the existing "real bad answer replayed twice" rationale intact.
+    """
+    return content.rstrip()[-1:] not in ("}", "]")
+
+
 def _truncate_reason(finish_reason: str | None, content: str) -> str:
     """One diagnostic sentence about *where* a malformed answer stopped.
 
@@ -275,6 +314,11 @@ def _truncate_reason(finish_reason: str | None, content: str) -> str:
     the log never invents a cause. The tail matters when the defect hides
     past an error's [:500] head: 'ends mid-string' vs 'closes cleanly then
     breaks' points at truncation versus malformation.
+
+    Production failure this fixes: the GLM coding-plan provider truncated an
+    answer mid-key while reporting a non-length finish_reason, so the reason
+    sentence named a cause that did not match the shape — hence the caller
+    also consults `_looks_truncated` rather than trusting this string alone.
     """
     tail = content[-120:].replace("\n", "\\n")
     if finish_reason == "length":
