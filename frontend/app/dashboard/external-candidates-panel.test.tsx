@@ -10,6 +10,7 @@ import {
   type ExternalCandidate,
   type ExternalSearchResults,
   type ExternalTaskStatus,
+  type IdentityEvidenceItem,
   type IdentityResolutionSummary,
   type IdentityResolveMode,
   type ResolvedIdentity,
@@ -620,6 +621,67 @@ describe("the identity modal", () => {
       "none corroborates your employer",
     );
     expect(screen.queryByText("Professional profile found:", { exact: false })).toBeNull();
+  });
+
+  it("groups repeated matched evidence into one row with a count", () => {
+    const page = (url: string): IdentityEvidenceItem => ({
+      type: "name",
+      value: "Andrew Ng",
+      source_url: url,
+      source_domain: "rocketreach.co",
+      query: "q",
+      confidence: 90,
+      weight: 20,
+    });
+    panel({
+      taskStatus: "completed",
+      results: results(),
+      identities: {
+        "c-1": identity({
+          evidence: [
+            page("https://rocketreach.co/a"),
+            page("https://rocketreach.co/b"),
+            page("https://rocketreach.co/c"),
+          ],
+        }),
+      },
+    });
+    fireEvent.click(screen.getByTestId("jo-identity-view"));
+    const groups = screen.getAllByTestId("jo-identity-evidence-group");
+    expect(groups).toHaveLength(1);
+    expect(groups[0].textContent).toBe("✓ Andrew Ng — rocketreach.co ×3");
+  });
+
+  it("lists up to two domains when a group spans sources", () => {
+    const item = (type: string, value: string, domain: string): IdentityEvidenceItem => ({
+      type,
+      value,
+      source_url: `https://${domain}/x`,
+      source_domain: domain,
+      query: "q",
+      confidence: 90,
+      weight: 20,
+    });
+    panel({
+      taskStatus: "completed",
+      results: results(),
+      identities: {
+        "c-1": identity({
+          evidence: [
+            item("name", "Andrew Ng", "rocketreach.co"),
+            item("name", "Andrew Ng", "linkedin.com"),
+            item("current_company", "UBS", "rocketreach.co"),
+          ],
+        }),
+      },
+    });
+    fireEvent.click(screen.getByTestId("jo-identity-view"));
+    const groups = screen.getAllByTestId("jo-identity-evidence-group");
+    expect(groups).toHaveLength(2);
+    expect(groups[0].textContent).toBe(
+      "✓ Andrew Ng — rocketreach.co, linkedin.com ×2",
+    );
+    expect(groups[1].textContent).toBe("✓ UBS — rocketreach.co");
   });
 
   it("warns when the web shows a different employer than the record", () => {

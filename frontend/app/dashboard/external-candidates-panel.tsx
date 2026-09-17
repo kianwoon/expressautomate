@@ -6,6 +6,7 @@ import {
   type ExternalCandidate,
   type ExternalSearchResults,
   type ExternalTaskStatus,
+  type IdentityEvidenceItem,
   type IdentityResolutionSummary,
   type IdentityResolveMode,
   type ResolvedIdentity,
@@ -378,6 +379,45 @@ function ExternalRow({
   );
 }
 
+/** One display group of matched evidence: the backend emits one item per
+ *  source URL (§13), so the same signal repeats across pages. Grouping is a
+ *  display concern only — contradiction and same-name rows stay per-item. */
+type EvidenceGroup = {
+  type: string;
+  value: string;
+  domains: string[];
+  count: number;
+};
+
+/** Group by (type, value), preserving first-seen order. */
+function groupEvidence(items: IdentityEvidenceItem[]): EvidenceGroup[] {
+  const map = new Map<string, EvidenceGroup>();
+  for (const item of items) {
+    const key = `${item.type}\u0000${item.value}`;
+    let group = map.get(key);
+    if (!group) {
+      group = { type: item.type, value: item.value, domains: [], count: 0 };
+      map.set(key, group);
+    }
+    group.count += 1;
+    if (item.source_domain && !group.domains.includes(item.source_domain)) {
+      group.domains.push(item.source_domain);
+    }
+  }
+  return [...map.values()];
+}
+
+/** The " — {source}" note: one page names its domain, several name the domain
+ *  with a count; differing domains list up to two. */
+function groupNote(group: EvidenceGroup): string | null {
+  if (group.domains.length === 0) return null;
+  if (group.count <= 1) return group.domains[0];
+  if (group.domains.length === 1) return `${group.domains[0]} ×${group.count}`;
+  const shown = group.domains.slice(0, 2).join(", ");
+  const extra = group.domains.length > 2 ? ` +${group.domains.length - 2}` : "";
+  return `${shown}${extra} ×${group.count}`;
+}
+
 /** §28 — the resolution modal: confidence, the matched-evidence checklist,
  *  the professional profile link, a freshness warning when the web disagrees
  *  with the record, and the candidate's past results to reopen. */
@@ -401,6 +441,7 @@ function IdentityModal({
     (e) => e.type === "contradiction" || (e.weight ?? 0) < 0,
   );
   const sameName = identity.evidence.filter((e) => e.type === "same_name_profile");
+  const matchedGroups = groupEvidence(matched);
   return (
     <div
       className="jo-identity-modal-backdrop"
@@ -443,14 +484,19 @@ function IdentityModal({
           <p className="body src-note">No corroborating evidence found.</p>
         ) : (
           <ul className="jo-identity-evidence" data-testid="jo-identity-evidence">
-            {matched.map((item, index) => (
-              <li key={`${item.type}-${index}`} className="body">
-                ✓ {item.value}
-                {item.source_domain && (
-                  <span className="jo-sub"> — {item.source_domain}</span>
-                )}
-              </li>
-            ))}
+            {matchedGroups.map((group, index) => {
+              const note = groupNote(group);
+              return (
+                <li
+                  key={`${group.type}-${index}`}
+                  className="body"
+                  data-testid="jo-identity-evidence-group"
+                >
+                  ✓ {group.value}
+                  {note && <span className="jo-sub"> — {note}</span>}
+                </li>
+              );
+            })}
             {contradictions.map((item, index) => (
               <li
                 key={`contra-${item.type}-${index}`}
