@@ -436,7 +436,7 @@ export type IdentityEvidenceItem = {
 export type ResolvedIdentity = {
   id: string;
   candidate_key: string;
-  status: "resolved" | "probable" | "unresolved";
+  status: "resolved" | "probable" | "unresolved" | "needs_context";
   confidence: number;
   canonical_profile_url: string | null;
   current_company: string | null;
@@ -449,6 +449,9 @@ export type ResolvedIdentity = {
   created_at: string | null;
   expires_at: string | null;
   cached?: boolean;
+  /** Present on the structured `needs_context` answer (§4): the sentence
+   *  naming what the recruiter must add before a resolve can run. */
+  message?: string | null;
 };
 
 /** A row of the history list — enough to reopen the modal by id. */
@@ -466,20 +469,28 @@ export type IdentityResolutionSummary = {
 export type IdentityResolveMode = "normal" | "refresh" | "deep";
 
 /** What the POST needs from a candidate — the §6 fingerprint fields, taken
- *  from the candidate object the panel already has.
+ *  from the FULL candidate object the panel already has.
  *
  *  The career bot's result shape has no dedicated employer field, so the
- *  fingerprint is assembled from what it does carry, conservatively: an
- *  explicit `company`/`employer` field when a future version ships one, else
- *  the "Title at Company" split of `subtitle`, and `location` verbatim. A
+ *  fingerprint is assembled from everything that carries identity signal: an
+ *  explicit `company`/`employer` when present, else the "Title at Company"
+ *  split of `subtitle`; `location` verbatim; `previous_companies` recovered
+ *  from the review prose only when it names a clear "previously at X" marker;
+ *  the top skills; and the summary/match_reason as truncated `context`. A
  *  wrong value here poisons the whole resolution (§52: employer and location
- *  carry the weight), so nothing is guessed beyond that one split. */
+ *  carry the weight), so nothing is guessed beyond those explicit patterns.
+ *
+ *  Backward compatible: an older backend ignores the extra keys. */
 export function identityFingerprint(candidate: ExternalCandidate): {
   name: string;
   current_company: string | null;
   current_title: string | null;
   location: string | null;
   previous_companies: string[];
+  skills: string[];
+  context: string | null;
+  source_profile_url: string | null;
+  source_provider: string | null;
 } {
   const record = candidate as Record<string, unknown>;
   const explicitCompany =
@@ -494,13 +505,56 @@ export function identityFingerprint(candidate: ExternalCandidate): {
   const at = subtitle ? subtitle.split(/\s+at\s+/i) : [];
   const parsedTitle = at.length === 2 ? at[0].trim() : subtitle;
   const parsedCompany = at.length === 2 ? at[1].trim() : null;
+
+  const prose = [candidate.summary, candidate.match_reason]
+    .filter((s): s is string => typeof s === "string" && s.trim().length > 0)
+    .join(" — ");
+  // Recover previous employers only from an explicit "previously at X" /
+  // "ex-X" marker — §52 warns against guessing, so a bare sentence with no
+  // marker yields nothing.
+  const previous = previousCompaniesFromProse(prose);
+
+  const skills = Array.isArray(candidate.skills)
+    ? candidate.skills
+        .filter((s): s is string => typeof s === "string" && s.trim().length > 0)
+        .slice(0, 8)
+    : [];
+
   return {
     name: candidate.title,
     current_company: explicitCompany ?? parsedCompany,
-    current_title: parsedTitle,
+    current_title: parsedTitle ?? null,
     location: candidate.location ?? null,
-    previous_companies: [],
+    previous_companies: previous,
+    skills,
+    context: prose ? prose.slice(0, 500) : null,
+    source_profile_url:
+      typeof candidate.source_url === "string" && candidate.source_url.trim()
+        ? candidate.source_url.trim()
+        : null,
+    source_provider:
+      typeof candidate.source_platform === "string" && candidate.source_platform.trim()
+        ? candidate.source_platform.trim()
+        : null,
   };
+}
+
+/** Named former employers recovered from the review prose. Only an explicit
+ *  marker counts — "previously at X", "ex-X", "former X" — because §52 makes a
+ *  wrong employer the most expensive mistake here. */
+function previousCompaniesFromProse(prose: string): string[] {
+  const out: string[] = [];
+  const patterns = [
+    /\b[Pp]reviously(?:\s+(?:at|with|worked\s+at))?\s+([A-Z][\w&'-]*(?:\s+[A-Z][\w&'-]*){0,3})/g,
+    /\b[Ff]ormer(?:ly)?\s+([A-Z][\w&'-]*(?:\s+[A-Z][\w&'-]*){0,3})/g,
+  ];
+  for (const pattern of patterns) {
+    for (const match of prose.matchAll(pattern)) {
+      const name = match[1]?.trim().replace(/[.,;:'-]+$/, "");
+      if (name && !out.includes(name)) out.push(name);
+    }
+  }
+  return out.slice(0, 3);
 }
 
 /** Resolve one candidate. The structured statuses (`unconfigured` /
@@ -585,6 +639,15 @@ export function useIdentityResolution(opportunityId: string): {
       setError(null);
       try {
         const body = await resolveIdentity(opportunityId, candidate, mode);
+        if (body.status === "needs_context") {
+          // §4: no search ran, nothing was persisted. Surface the server's
+          // sentence (naming what to add) rather than a fake resolved badge.
+          setError(
+            body.message ??
+              "Add an employer, job title, location or a skill before resolving.",
+          );
+          return;
+        }
         setResults((prev) => ({ ...prev, [candidate.id]: body }));
         await refreshHistory();
       } catch (err) {

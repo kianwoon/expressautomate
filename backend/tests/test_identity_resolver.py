@@ -82,7 +82,7 @@ def result(title, url, snippet=None, query="q"):
 
 
 def fp(**overrides) -> Fingerprint:
-    base = dict(
+    base: dict = dict(
         name="Claire Sze Wei Chew",
         location="Singapore",
         current_company="Standard Chartered",
@@ -241,6 +241,103 @@ async def test_build_queries_only_uses_present_fields():
 def test_fingerprint_hash_is_stable_and_field_sensitive():
     assert fp().hash() == fp().hash()
     assert fp().hash() != fp(current_company="HSBC").hash()
+
+
+def test_hash_ignores_context_but_tracks_skills():
+    """The cache key must survive a reworded summary (context out) but change
+    when the skills change (they anchor queries)."""
+    assert fp(context="a summary").hash() == fp(context="a different summary").hash()
+    assert fp(skills=("Python",)).hash() != fp(skills=("Go",)).hash()
+
+
+# --------------------------------------------------------------------------- #
+# Full-context enrichment (§4, §6)
+# --------------------------------------------------------------------------- #
+
+
+def test_skill_anchored_query_when_no_company():
+    """§4/§8 — with no employer, a named skill plus location anchors the query,
+    never the bare name."""
+    queries = build_queries(
+        fp(current_company=None, current_title=None, previous_companies=(),
+           skills=("Product Control", "Basel III"))
+    )
+    assert queries, "a title/skill/location fingerprint must still produce queries"
+    assert all('"Claire Sze Wei Chew"' in q for q in queries)
+    assert any("Product Control" in q for q in queries)
+    assert '"Claire Sze Wei Chew"' not in queries  # never the bare name
+
+
+def test_source_profile_query_is_emitted():
+    queries = build_queries(
+        fp(source_profile_url="https://www.linkedin.com/in/claire-chew",
+           source_provider="linkedin.com")
+    )
+    assert "https://www.linkedin.com/in/claire-chew" in queries
+    assert any("site:linkedin.com" in q for q in queries)
+
+
+def test_name_only_fingerprint_builds_no_queries():
+    """§4 — no company/title/location/skill/profile = nothing to search."""
+    empty = fp(
+        current_company=None, current_title=None, location=None,
+        previous_companies=(), skills=(),
+    )
+    assert build_queries(empty) == []
+    assert empty.has_context() is False
+
+
+async def test_name_only_resolve_makes_no_provider_call():
+    """§4 — a name-only fingerprint never reaches Serper and is unresolved."""
+    empty = fp(
+        current_company=None, current_title=None, location=None,
+        previous_companies=(), skills=(),
+    )
+    provider = FakeProvider({})
+    res = await resolve(empty, provider)
+    assert res.status == "needs_context"
+    assert res.queries_used == 0
+    assert provider.queries == []
+    assert res.confidence == 0
+
+
+async def test_skill_match_contributes_bounded_evidence():
+    """§15 — a matched skill adds evidence, capped so it cannot alone resolve."""
+    fp_ = fp(current_company=None, current_title=None, previous_companies=(),
+             location="Singapore", skills=("Product Control", "Basel III"))
+    queries = build_queries(fp_)
+    provider = FakeProvider(
+        {
+            q: [
+                result(
+                    "Claire Sze Wei Chew Product Control Basel III Singapore",
+                    "https://news.example.com/x",
+                )
+            ]
+            for q in queries
+        }
+    )
+    res = await resolve(fp_, provider)
+    skill_types = [e.type for e in res.evidence]
+    assert "skills" in skill_types
+    skill_ev = next(e for e in res.evidence if e.type == "skills")
+    assert skill_ev.weight <= identity_resolver.WEIGHTS["skills"]
+
+
+async def test_source_profile_url_match_is_strong_evidence():
+    """§6 — a result whose URL is the discovered source profile scores high."""
+    url = "https://www.linkedin.com/in/claire-chew"
+    fp_ = fp(source_profile_url=url)
+    queries = build_queries(fp_)
+    provider = FakeProvider(
+        {
+            q: [result("Claire Sze Wei Chew", url)]
+            for q in queries
+        }
+    )
+    res = await resolve(fp_, provider)
+    assert res.canonical_profile_url == url
+    assert any(e.type == "source_profile" for e in res.evidence)
 
 
 # --------------------------------------------------------------------------- #
@@ -455,6 +552,30 @@ async def test_missing_name_is_422(provider):
                 json={"mode": "normal", "candidate": {"name": ""}},
             )
             assert res.status_code == 422
+    finally:
+        await _drop_agency(tid)
+
+
+async def test_name_only_candidate_is_needs_context_with_no_provider_call(provider):
+    """§4 — the route answers needs_context for a name-only fingerprint, makes
+    no Serper call, and persists nothing."""
+    tid, uid = await _seed_agency()
+    oid = await _opportunity(tid, uid)
+    before = len(provider.queries)
+    try:
+        async with _http(tid, uid) as c:
+            res = await c.post(
+                f"/api/opportunities/{oid}/candidates/cand-1/resolve-identity",
+                json={"mode": "normal", "candidate": {"name": "Claire Sze Wei Chew"}},
+            )
+            assert res.status_code == 200, res.text
+            body = res.json()
+            assert body["status"] == "needs_context"
+            assert "name alone" in body["message"]
+            assert len(provider.queries) == before
+            # Nothing persisted — the history stays empty.
+            hist = await c.get(f"/api/opportunities/{oid}/identity-resolutions")
+            assert hist.json()["resolutions"] == []
     finally:
         await _drop_agency(tid)
 

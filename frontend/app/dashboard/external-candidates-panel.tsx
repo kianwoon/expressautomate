@@ -199,6 +199,7 @@ function Results({
 function statusLabel(status: ResolvedIdentity["status"]): string {
   if (status === "resolved") return "Resolved";
   if (status === "probable") return "Probable";
+  if (status === "needs_context") return "Needs more detail";
   return "Not resolved";
 }
 

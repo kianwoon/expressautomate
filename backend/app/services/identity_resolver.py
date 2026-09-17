@@ -47,6 +47,10 @@ WEIGHTS: dict[str, int] = {
     "career_history": 10,
     "profile_url": 15,
     "education": 5,
+    # §15 skill signal: a page corroborating a named skill is real identity
+    # evidence, but capped low — a common skill ("AWS") appears on thousands of
+    # unrelated pages, so this can nudge a cluster, never resolve one alone.
+    "skills": 10,
     "employer_contradiction": -30,
     "location_contradiction": -25,
     "role_contradiction": -20,
@@ -166,10 +170,20 @@ class Fingerprint:
     current_title: str | None = None
     location: str | None = None
     previous_companies: tuple[str, ...] = ()
+    # §6 enrichment (2026-09): the resolver uses the candidate's FULL data, not
+    # a name alone. `skills` anchors queries when no employer is known;
+    # `context` (summary/match_reason prose) stays out of the hash so a reworded
+    # summary does not miss the §34 cache; a source profile URL is a discovered
+    # identity we can search around.
+    skills: tuple[str, ...] = ()
+    context: str | None = None
+    source_profile_url: str | None = None
+    source_provider: str | None = None
 
     @classmethod
     def from_body(cls, candidate: dict) -> "Fingerprint":
         prev = candidate.get("previous_companies") or []
+        skills = candidate.get("skills") or []
         return cls(
             name=str(candidate.get("name") or "").strip(),
             current_company=_clean(candidate.get("current_company")),
@@ -178,6 +192,26 @@ class Fingerprint:
             previous_companies=tuple(
                 c for c in (_clean(p) for p in prev) if c
             ),
+            skills=tuple(s for s in (_clean(s) for s in skills) if s),
+            context=_clean(candidate.get("context")),
+            source_profile_url=_clean(candidate.get("source_profile_url")),
+            source_provider=_clean(candidate.get("source_provider")),
+        )
+
+    def has_context(self) -> bool:
+        """Whether anything beyond the bare name is known.
+
+        §4: a name-only fingerprint must not be searched — Serper would return
+        a page of strangers and the whole run is wasted budget. Employer,
+        title, location, a skill, or a discovered profile URL all count.
+        """
+        return bool(
+            self.current_company
+            or self.current_title
+            or self.location
+            or self.previous_companies
+            or self.skills
+            or self.source_profile_url
         )
 
     def as_dict(self) -> dict:
@@ -187,16 +221,26 @@ class Fingerprint:
             "current_title": self.current_title,
             "location": self.location,
             "previous_companies": list(self.previous_companies),
+            "skills": list(self.skills),
+            "context": self.context,
+            "source_profile_url": self.source_profile_url,
+            "source_provider": self.source_provider,
         }
 
     def hash(self) -> str:
-        """§34 cache key: normalized_name + company + title + location."""
+        """§34 cache key: normalized name + company + title + location + skills.
+
+        `context` is deliberately excluded: it is free prose that can be
+        reworded without changing who the candidate is, and hashing it would
+        miss a cache hit on every edit.
+        """
         material = "|".join(
             (
                 normalize_text(self.name),
                 normalize_text(self.current_company),
                 normalize_text(self.current_title),
                 normalize_text(self.location),
+                normalize_text(" ".join(self.skills)),
             )
         )
         return hashlib.sha256(material.encode("utf-8")).hexdigest()
@@ -213,17 +257,37 @@ def _clean(value) -> str | None:
 # --------------------------------------------------------------------------- #
 
 
+def _provider_domain(profile_url: str, provider: str | None) -> str | None:
+    """The domain to `site:`-scope a source-profile discovery query to.
+
+    `source_provider` is a display label ("LinkedIn") more often than a host,
+    so the profile URL's own host is the reliable source; the label is only
+    used when it already looks like a domain. Returns None when neither gives
+    a usable host, so no malformed `site:` query is ever emitted."""
+    host = canonical_url(profile_url).split("://")[-1].split("/")[0]
+    if host:
+        return host
+    if provider and "." in provider and " " not in provider:
+        return provider
+    return None
+
+
 def build_queries(fp: Fingerprint) -> list[str]:
     """Ordered, progressively more specific queries (§7–§8).
 
-    Only queries whose fields exist are built — a query with a missing
-    employer would waste a Serper call on a name-only search, exactly what
-    §4 forbids. Queries stay short (§8): at most name + two attributes.
+    Only queries whose fields exist are built, and a query always pairs the
+    name with **at least one other attribute** — a bare `"name"` query returns
+    a page of strangers and is exactly what §4 forbids. When the fingerprint is
+    name-only this returns `[]`: the route then answers a structured
+    `needs_context` status instead of spending a Serper call. Queries stay
+    short (§8): at most name + two attributes.
     """
     name = fp.name
     company = fp.current_company
     title = fp.current_title
     location = fp.location
+    skills = list(fp.skills[:3])
+    top_skill = skills[0] if skills else None
     queries: list[str] = []
 
     def q(*parts: str | None) -> None:
@@ -231,27 +295,48 @@ def build_queries(fp: Fingerprint) -> list[str]:
         if rendered and rendered not in queries:
             queries.append(rendered)
 
+    # A discovered source profile is the strongest anchor: search the URL
+    # itself and the provider's own site for the person unless we already know
+    # this IS their profile.
+    if fp.source_profile_url:
+        q(fp.source_profile_url)
+        provider_domain = _provider_domain(fp.source_profile_url, fp.source_provider)
+        if provider_domain:
+            q(f'site:{provider_domain} "{name}"', company or top_skill)
+
     if company and location:
         q(f'"{name}"', company, location)
     if company and title and location:
         q(f'"{name}"', company, f'"{title}"', location)
+    if company and title and top_skill:
+        q(f'"{name}"', company, f'"{title}"', f'"{top_skill}"')
     if company and fp.previous_companies and location:
         q(f'"{name}"', company, fp.previous_companies[0], location)
     if company and location:
         q(f'site:linkedin.com/in/ "{name}"', company, location)
+    # Skill-anchored queries: when the employer is unknown, a named skill plus
+    # location narrows far better than the name alone.
+    if top_skill and location:
+        q(f'"{name}" "{top_skill}"', location)
+    elif top_skill and title:
+        q(f'"{name}" "{top_skill}"', f'"{title}"')
     if title and location:
         q(f'"{name}" "{title}"', location)
     if title and company:
         q(f'site:linkedin.com/in/ "{name}" "{title}"')
     if fp.previous_companies and title:
         q(f'"{name}" {fp.previous_companies[0]} "{title}"')
-    # Last resort: the strongest attribute we have alongside the name.
+    # Last resort: the strongest attribute we have alongside the name. Never
+    # the bare name — if none of the above had a second attribute, `queries`
+    # is empty and the caller answers `needs_context`.
     if company:
         q(f'"{name}"', company)
+    elif top_skill:
+        q(f'"{name}" "{top_skill}"')
     elif location:
         q(f'"{name}"', location)
-    else:
-        q(f'"{name}"')
+    elif title:
+        q(f'"{name}" "{title}"')
     return queries
 
 
@@ -353,6 +438,34 @@ def extract_evidence(
 
     if is_professional_profile(result.url):
         add("profile_url", canonical_url(result.url), "profile_url")
+
+    # A result whose URL IS the discovered source profile is the strongest
+    # single signal available (§6): it confirms we found the very page the
+    # career bot pointed at, whatever its host.
+    if fp.source_profile_url and canonical_url(result.url) == canonical_url(
+        fp.source_profile_url
+    ):
+        add("source_profile", canonical_url(result.url), "profile_url")
+
+    # §15 skill signal: each matched named skill is worth a little, capped at
+    # the `skills` bucket so three common skills cannot outvote an employer.
+    if fp.skills:
+        matched_skills = [
+            s for s in fp.skills if _contains(tokens, name_tokens(s))
+        ]
+        if matched_skills:
+            capped = min(weights["skills"], 5 * len(matched_skills))
+            out.append(
+                Evidence(
+                    type="skills",
+                    value=", ".join(matched_skills),
+                    source_url=result.url,
+                    source_domain=result.domain,
+                    query=result.query,
+                    confidence=min(100, capped * 4),
+                    weight=capped,
+                )
+            )
 
     if any(hint in normalize_text(blob) for hint in _EDU_HINTS):
         add("education", "education mention", "education")
@@ -624,6 +737,26 @@ async def resolve(
 
     limit = budget.get(mode, budget.get("normal", 3))
     queries = build_queries(fp)[:limit]
+
+    if not queries:
+        # §4: a name-only fingerprint has nothing to anchor a query on. Return
+        # without a single provider call — the route maps this to
+        # `needs_context` and nothing is persisted.
+        return Resolution(
+            status="needs_context",
+            confidence=0,
+            canonical_profile_url=None,
+            current_company=fp.current_company,
+            current_title=fp.current_title,
+            location=fp.location,
+            previous_companies=list(fp.previous_companies),
+            evidence=[],
+            queries_used=0,
+            freshness_status="unknown",
+            clusters=[],
+            enrichment_allowed=False,
+            contradictions=0,
+        )
 
     clusters: dict[str, Cluster] = {}
     contradictions = 0

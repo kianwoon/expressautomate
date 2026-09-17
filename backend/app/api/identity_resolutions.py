@@ -54,12 +54,24 @@ router = APIRouter(tags=["identity_resolutions"])
 STATUS_UNCONFIGURED = "unconfigured"
 STATUS_UNREACHABLE = "unreachable"
 STATUS_NOT_PROVISIONED = "not_provisioned"
+# §4: the candidate carried nothing beyond a name, so no query could be built.
+STATUS_NEEDS_CONTEXT = "needs_context"
 
 # Modes accepted by the POST (§56): `normal`/`refresh`/`deep`. A bare body or
 # no body is `normal`.
 _MODES = {"normal", "refresh", "deep"}
 
 _MISSING_TABLE = "42P01"
+
+
+def _needs_context_message(fp: Fingerprint) -> str:
+    """The sentence naming what the recruiter must supply (§4, §15: never
+    invent a value, say what is missing instead)."""
+    return (
+        f"Cannot resolve {fp.name or 'this candidate'} from a name alone. "
+        "Add an employer, job title, location or a named skill — searching a "
+        "bare name returns unrelated people."
+    )
 
 
 class CandidateFingerprint(BaseModel):
@@ -75,6 +87,13 @@ class CandidateFingerprint(BaseModel):
     current_title: str | None = None
     location: str | None = None
     previous_companies: list[str] = Field(default_factory=list)
+    # §6 enrichment: skills, the prose context, and a discovered source
+    # profile. Optional and backward-compatible — a caller sending only the
+    # original five fields still resolves.
+    skills: list[str] = Field(default_factory=list)
+    context: str | None = None
+    source_profile_url: str | None = None
+    source_provider: str | None = None
 
 
 class ResolveIdentityBody(BaseModel):
@@ -212,6 +231,16 @@ async def resolve_identity(
     # network calls, and holding a transaction open across a Serper round trip
     # (up to 8 of them) would pin a database connection for the duration. All
     # authorisation already happened above.
+    if not fingerprint.has_context():
+        # §4: a name-only candidate cannot be resolved — searching the bare
+        # name returns strangers and burns budget. Answered structurally, with
+        # no Serper call and nothing persisted, so the panel can name what is
+        # missing and offer deep mode once the recruiter supplies it.
+        return {
+            "status": STATUS_NEEDS_CONTEXT,
+            "message": _needs_context_message(fingerprint),
+        }
+
     try:
         resolution = await identity_resolver.resolve(
             fingerprint, provider, mode=body.mode
