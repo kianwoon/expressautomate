@@ -7,6 +7,7 @@ import {
   type ExternalSearchResults,
   type ExternalTaskStatus,
   type IdentityResolutionSummary,
+  type IdentityResolveMode,
   type ResolvedIdentity,
   platformLabel,
   summaryLine,
@@ -79,7 +80,7 @@ export function ExternalCandidatesStage({
   /** The job order's resolution history, newest first — the past-results
    *  list the modal offers (§28). */
   identityHistory?: IdentityResolutionSummary[];
-  onResolveIdentity?: (candidate: ExternalCandidate) => void;
+  onResolveIdentity?: (candidate: ExternalCandidate, mode?: IdentityResolveMode) => void;
   onReopenIdentity?: (resolutionId: string) => void;
 }) {
   return (
@@ -164,7 +165,7 @@ function Results({
   identities?: Record<string, ResolvedIdentity>;
   resolvingFor?: string | null;
   identityHistory?: IdentityResolutionSummary[];
-  onResolveIdentity?: (candidate: ExternalCandidate) => void;
+  onResolveIdentity?: (candidate: ExternalCandidate, mode?: IdentityResolveMode) => void;
   onReopenIdentity?: (resolutionId: string) => void;
 }) {
   const line = summaryLine(results.summary);
@@ -215,7 +216,7 @@ function ExternalRow({
   identity?: ResolvedIdentity;
   resolving?: boolean;
   history?: IdentityResolutionSummary[];
-  onResolveIdentity?: (candidate: ExternalCandidate) => void;
+  onResolveIdentity?: (candidate: ExternalCandidate, mode?: IdentityResolveMode) => void;
   onReopenIdentity?: (resolutionId: string) => void;
 }) {
   const score = Math.round(candidate.match_score);
@@ -262,6 +263,15 @@ function ExternalRow({
               ? `Identity: ${statusLabel(identity.status)}`
               : "Identity: Not resolved"}
           </span>
+          {identity?.cached && (
+            <span
+              className="jo-external-chip jo-identity-cached"
+              data-testid="jo-identity-cached"
+              title="Served from cache — use Refresh for a fresh web search"
+            >
+              Cached
+            </span>
+          )}
         </span>
         <span className="jo-external-score" title={`Match score ${candidate.match_score} of 100`}>
           {score}
@@ -284,14 +294,42 @@ function ExternalRow({
           </a>
         )}
         {identity ? (
-          <button
-            type="button"
-            className="jo-external-chip jo-identity-view"
-            data-testid="jo-identity-view"
-            onClick={() => setShowModal(true)}
-          >
-            View
-          </button>
+          <>
+            <button
+              type="button"
+              className="jo-external-chip jo-identity-view"
+              data-testid="jo-identity-view"
+              onClick={() => setShowModal(true)}
+            >
+              View
+            </button>
+            {onResolveIdentity && (
+              <>
+                <button
+                  type="button"
+                  className="jo-external-chip jo-identity-refresh"
+                  data-testid="jo-identity-refresh"
+                  title="Re-search with fresh web results (bypasses cache)"
+                  aria-label="Re-search with fresh web results (bypasses cache)"
+                  onClick={() => onResolveIdentity(candidate, "refresh")}
+                  disabled={resolving}
+                >
+                  {resolving ? "Searching…" : "Refresh"}
+                </button>
+                <button
+                  type="button"
+                  className="jo-external-chip jo-identity-deep"
+                  data-testid="jo-identity-deep"
+                  title="Deep search — more queries, fresh web results (bypasses cache)"
+                  aria-label="Deep search — more queries with fresh web results (bypasses cache)"
+                  onClick={() => onResolveIdentity(candidate, "deep")}
+                  disabled={resolving}
+                >
+                  {resolving ? "Searching…" : "Deep"}
+                </button>
+              </>
+            )}
+          </>
         ) : (
           onResolveIdentity && (
             <button

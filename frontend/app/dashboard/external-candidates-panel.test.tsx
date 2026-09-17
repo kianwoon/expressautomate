@@ -11,6 +11,7 @@ import {
   type ExternalSearchResults,
   type ExternalTaskStatus,
   type IdentityResolutionSummary,
+  type IdentityResolveMode,
   type ResolvedIdentity,
 } from "./external-candidates";
 
@@ -79,7 +80,7 @@ function panel(overrides: {
   identityError?: string | null;
   resolvingFor?: string | null;
   identityHistory?: IdentityResolutionSummary[];
-  onResolveIdentity?: (candidate: ExternalCandidate) => void;
+  onResolveIdentity?: (candidate: ExternalCandidate, mode?: IdentityResolveMode) => void;
   onReopenIdentity?: (resolutionId: string) => void;
 } = {}) {
   return render(
@@ -526,6 +527,46 @@ describe("the per-candidate Resolve Identity control", () => {
     expect(screen.getByTestId("jo-identity-badge").textContent).toBe("Identity: Resolved");
     expect(screen.getByTestId("jo-identity-view").textContent).toBe("View");
     expect(screen.queryByTestId("jo-identity-resolve")).toBeNull();
+  });
+
+  it("offers Refresh and Deep only when a prior result exists, and fires the mode", () => {
+    const onResolveIdentity = vi.fn();
+    panel({
+      taskStatus: "completed",
+      results: results(),
+      identities: { "c-1": identity() },
+      onResolveIdentity,
+    });
+    fireEvent.click(screen.getByTestId("jo-identity-refresh"));
+    expect(onResolveIdentity.mock.calls[0][1]).toBe("refresh");
+    fireEvent.click(screen.getByTestId("jo-identity-deep"));
+    expect(onResolveIdentity.mock.calls[1][1]).toBe("deep");
+  });
+
+  it("hides Refresh and Deep before any result exists", () => {
+    panel({ taskStatus: "completed", results: results(), onResolveIdentity: () => {} });
+    expect(screen.queryByTestId("jo-identity-refresh")).toBeNull();
+    expect(screen.queryByTestId("jo-identity-deep")).toBeNull();
+  });
+
+  it("shows a Cached tag when the result came from cache", () => {
+    panel({
+      taskStatus: "completed",
+      results: results(),
+      identities: { "c-1": identity({ cached: true }) },
+      onResolveIdentity: () => {},
+    });
+    expect(screen.getByTestId("jo-identity-cached").textContent).toBe("Cached");
+  });
+
+  it("shows no Cached tag when the result is fresh", () => {
+    panel({
+      taskStatus: "completed",
+      results: results(),
+      identities: { "c-1": identity({ cached: false }) },
+      onResolveIdentity: () => {},
+    });
+    expect(screen.queryByTestId("jo-identity-cached")).toBeNull();
   });
 });
 

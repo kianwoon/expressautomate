@@ -800,7 +800,7 @@ function Detail({
           identityError={identity.error}
           resolvingFor={identity.resolvingFor}
           identityHistory={identity.history}
-          onResolveIdentity={(candidate) => void identity.resolve(candidate)}
+          onResolveIdentity={(candidate, mode) => void identity.resolve(candidate, mode)}
           onReopenIdentity={(resolutionId) => void identity.reopen(resolutionId)}
         />
       )}
