@@ -38,7 +38,6 @@ from app.services.serper import (
 from tests.conftest import AdminSessionLocal, cleanup_tenant
 from tests.test_opportunities_api import sign_in
 
-
 # --------------------------------------------------------------------------- #
 # A fake provider: records queries, answers from a script.
 # --------------------------------------------------------------------------- #
@@ -129,7 +128,10 @@ async def test_name_only_never_resolves():
     fp_ = fp()
     queries = build_queries(fp_)
     provider = FakeProvider(
-        {q: [result("Claire Chew", "https://example.com/a", "some unrelated page")] for q in queries}
+        {
+            q: [result("Claire Chew", "https://example.com/a", "some unrelated page")]
+            for q in queries
+        }
     )
     res = await resolve(fp_, provider)
     assert res.status == "unresolved"
@@ -399,7 +401,9 @@ async def test_another_agencys_job_order_is_404_on_every_route(provider):
                 json={"mode": "normal", "candidate": CANDIDATE},
             )
             assert res.status_code == 404
-            assert (await c.get(f"/api/opportunities/{oid}/identity-resolutions")).status_code == 404
+            assert (
+                await c.get(f"/api/opportunities/{oid}/identity-resolutions")
+            ).status_code == 404
             assert (
                 await c.get(
                     f"/api/opportunities/{oid}/identity-resolutions/{uuid.uuid4()}"

@@ -189,7 +189,10 @@ class SerperSearchProvider:
                 payload = await self._post(body, headers)
             except SerperError as exc:
                 # Permanent client error — do not retry (§39).
-                if exc.status is not None and _CLIENT_ERROR_FLOOR <= exc.status < _SERVER_ERROR_FLOOR:
+                if (
+                    exc.status is not None
+                    and _CLIENT_ERROR_FLOOR <= exc.status < _SERVER_ERROR_FLOOR
+                ):
                     raise
                 last_error = exc
             except Exception as exc:  # network/timeout — transient

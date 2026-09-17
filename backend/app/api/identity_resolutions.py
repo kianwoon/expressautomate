@@ -24,7 +24,7 @@ dependency so tests substitute a fake provider; the key is read inside
 
 import datetime as dt
 import uuid
-from typing import Any
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -32,7 +32,6 @@ from sqlalchemy import select
 from sqlalchemy.exc import DBAPIError
 
 from app.api.auth import _require_session_with_role
-from app.core.config import settings
 from app.core.logging import get_logger
 from app.db.rls import tenant_session
 from app.models.candidate_identity_resolution import CandidateIdentityResolution
@@ -168,7 +167,7 @@ async def resolve_identity(
     opportunity_id: uuid.UUID,
     candidate_key: str,
     body: ResolveIdentityBody,
-    provider: WebSearchProvider = Depends(serper_provider),
+    provider: Annotated[WebSearchProvider, Depends(serper_provider)],
 ) -> dict:
     """Resolve one external candidate's identity (§27, §56).
 

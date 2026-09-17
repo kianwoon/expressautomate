@@ -30,7 +30,6 @@ import re
 import unicodedata
 from dataclasses import dataclass, field
 
-from app.core.config import settings
 from app.services.serper import (
     NormalizedSearchResult,
     SearchQuery,
@@ -346,7 +345,11 @@ def extract_evidence(
     if company_present and matched_previous:
         # §15 "matching career history": the one page ties current and past
         # employers together, which a single-employer page cannot.
-        add("career_history", f"{fp.current_company} / {fp.previous_companies[0]}", "career_history")
+        add(
+            "career_history",
+            f"{fp.current_company} / {fp.previous_companies[0]}",
+            "career_history",
+        )
 
     if is_professional_profile(result.url):
         add("profile_url", canonical_url(result.url), "profile_url")
@@ -429,7 +432,19 @@ def _mentions_other_location(tokens: set[str], fp: Fingerprint) -> bool:
     known = name_tokens(fp.location) | _SINGAPORE
     # A tiny, high-precision list: an explicit different country is the signal
     # we trust. This is deliberately not a global gazetteer.
-    other = {"london", "hongkong", "newyork", "tokyo", "sydney", "dubai", "shanghai", "mumbai", "bangalore", "paris", "berlin"}
+    other = {
+        "london",
+        "hongkong",
+        "newyork",
+        "tokyo",
+        "sydney",
+        "dubai",
+        "shanghai",
+        "mumbai",
+        "bangalore",
+        "paris",
+        "berlin",
+    }
     return bool(tokens & other) and not (tokens & known)
 
 
