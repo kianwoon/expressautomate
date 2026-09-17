@@ -33,6 +33,7 @@ out/
 *.log
 dist/
 build/
+graphify-out/
 
 # Design assets (not code)
 branding.png
