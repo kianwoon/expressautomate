@@ -51,6 +51,11 @@ WEIGHTS: dict[str, int] = {
     # evidence, but capped low — a common skill ("AWS") appears on thousands of
     # unrelated pages, so this can nudge a cluster, never resolve one alone.
     "skills": 10,
+    # §6/§15 context signal: a distinctive word mined from the free-prose
+    # context ("tenure", "domain") that appears on a result page is mild
+    # corroboration. +3 per matched term, at most 3 terms (+9) — enough to break
+    # a tie between two same-name pages, never enough to resolve one alone.
+    "context": 3,
     "employer_contradiction": -30,
     "location_contradiction": -25,
     "role_contradiction": -20,
@@ -97,6 +102,48 @@ _STOPWORDS = {
 }
 
 _WORD = re.compile(r"[a-z0-9]+")
+
+# §6 context mining: prose filler that carries no identity signal. These are
+# dropped before a context term is chosen so a distinctive word like "tenure"
+# or "domain" is not crowded out by "years" or "exact" from a summary sentence.
+_CONTEXT_STOPWORDS = _STOPWORDS | {
+    "years", "year", "exact", "deep", "match", "matches", "matching", "strong",
+    "very", "more", "most", "well", "also", "plus", "high", "senior", "based",
+    "work", "works", "worked", "working", "role", "roles", "team", "teams",
+    "across", "within", "around", "including", "over", "than", "with", "from",
+    "this", "that", "their", "they", "have", "has", "been", "will", "into",
+    "track", "record", "proven", "hands", "hand", "level", "large", "scale",
+}
+
+
+def context_terms(fp: "Fingerprint", limit: int = 3) -> list[str]:
+    """§6 — distinctive single-word terms mined from the free-prose `context`.
+
+    Only words the fingerprint has not already captured in the name, employer,
+    title, location or previous employers qualify, so a term adds genuinely new
+    signal rather than restating an attribute that already anchors a query.
+    Deterministic and cheap: no LLM, first-seen order, capped at `limit`.
+    """
+    if not fp.context:
+        return []
+    covered = (
+        name_tokens(fp.name)
+        | org_tokens(fp.current_company)
+        | name_tokens(fp.current_title)
+        | name_tokens(fp.location)
+        | {t for p in fp.previous_companies for t in org_tokens(p)}
+        | {t for s in fp.skills for t in name_tokens(s)}
+    )
+    out: list[str] = []
+    for token in normalize_text(fp.context).split():
+        if len(token) < 4 or token in _CONTEXT_STOPWORDS or token in covered:
+            continue
+        if token not in out:
+            out.append(token)
+        if len(out) >= limit:
+            break
+    return out
+
 
 
 # --------------------------------------------------------------------------- #
@@ -326,6 +373,17 @@ def build_queries(fp: Fingerprint) -> list[str]:
         q(f'site:linkedin.com/in/ "{name}" "{title}"')
     if fp.previous_companies and title:
         q(f'"{name}" {fp.previous_companies[0]} "{title}"')
+    # §6 context anchor: when the employer is unknown (or the structured fields
+    # yielded fewer than two queries) a distinctive prose term is the only
+    # second attribute available. Keep it short: name + one context term +
+    # location when we have one.
+    terms = context_terms(fp)
+    if terms and (not company or len(queries) < 2):
+        anchor = terms[0]
+        if location:
+            q(f'"{name}" "{anchor}"', location)
+        else:
+            q(f'"{name}" "{anchor}"')
     # Last resort: the strongest attribute we have alongside the name. Never
     # the bare name — if none of the above had a second attribute, `queries`
     # is empty and the caller answers `needs_context`.
@@ -490,6 +548,25 @@ def extract_evidence(
 
     if any(hint in normalize_text(blob) for hint in _EDU_HINTS):
         add("education", "education mention", "education")
+
+    # §6/§15 context signal: each distinctive prose term present on the page is
+    # worth a little, capped at three terms so context can never outvote an
+    # employer. This is what lets a page carrying "UBS", "Barclays" and "tenure"
+    # outrank a page mentioning only the employer.
+    matched_terms = [t for t in context_terms(fp) if t in tokens]
+    if matched_terms:
+        capped = min(3 * weights["context"], 3 * len(matched_terms))
+        out.append(
+            Evidence(
+                type="context",
+                value=", ".join(matched_terms),
+                source_url=result.url,
+                source_domain=result.domain,
+                query=result.query,
+                confidence=min(100, capped * 4),
+                weight=capped,
+            )
+        )
 
     # §15 negative signals — only reachable once the name matched.
     out.extend(_contradictions(tokens, fp, result, weights))

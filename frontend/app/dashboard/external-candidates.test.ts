@@ -54,6 +54,36 @@ describe("identityFingerprint", () => {
     ).toEqual([]);
   });
 
+  it("recovers employers from an 'at X and Y' list, pre-dedup against current", () => {
+    // The Andrew Ng / JobStreet prose shape: no "previously" marker at all.
+    const prose =
+      "14+ years Product Control at UBS and Barclays in Singapore; exact domain match with deep tenure";
+    const fp = identityFingerprint(
+      candidate({
+        title: "Andrew Ng",
+        subtitle: "Product Control at UBS",
+        summary: prose,
+        match_reason: null,
+      }),
+    );
+    // Both names surface from the list (first mention = current employer), and
+    // the current employer is dropped from previous.
+    expect(fp.current_company).toBe("UBS");
+    expect(fp.previous_companies).toEqual(["Barclays"]);
+  });
+
+  it("ignores a long prose phrase on either side of 'and'", () => {
+    // "at UBS and a very long descriptive phrase" must not be guessed at (§52).
+    const fp = identityFingerprint(
+      candidate({
+        subtitle: "Product Control at UBS",
+        summary: "at UBS and several other Banks in the region",
+        match_reason: null,
+      }),
+    );
+    expect(fp.previous_companies).toEqual([]);
+  });
+
   it("prefers an explicit company field over the subtitle split", () => {
     const fp = identityFingerprint(candidate({ company: "UBS" } as never));
     expect(fp.current_company).toBe("UBS");

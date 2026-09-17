@@ -287,6 +287,61 @@ def test_name_only_fingerprint_builds_no_queries():
     assert empty.has_context() is False
 
 
+def test_context_terms_are_distinctive_and_bounded():
+    """§6 — context mining drops covered attributes, stopwords and short words,
+    and never returns more than three terms."""
+    fp_ = fp(
+        context=(
+            "exact domain match with deep tenure across years of "
+            "product control in Singapore"
+        )
+    )
+    terms = identity_resolver.context_terms(fp_)
+    assert terms == ["domain", "tenure"]
+    assert all(len(t) >= 4 for t in terms)
+
+
+def test_context_anchored_query_when_company_missing():
+    """§6/§4 — with no employer, a distinctive prose term plus location still
+    produces a short, name-anchored query (never the bare name)."""
+    fp_ = fp(
+        current_company=None, current_title=None, previous_companies=(),
+        skills=(), location="Singapore",
+        context="exact domain match with deep tenure in product control",
+    )
+    queries = build_queries(fp_)
+    anchor = identity_resolver.context_terms(fp_)[0]
+    assert any(f'"{anchor}"' in q and "Singapore" in q for q in queries)
+    assert '"Claire Sze Wei Chew"' not in queries
+
+
+def test_context_terms_score_and_break_ties():
+    """§15 — a page carrying the employer *and* distinctive prose terms
+    outscores an otherwise identical page carrying the employer alone."""
+    fp_ = andrew_fp(
+        context=(
+            "14+ years Product Control at UBS and Barclays in Singapore; "
+            "exact domain match with deep tenure"
+        )
+    )
+    rich = result(
+        "Andrew Ng - Product Control - UBS",
+        "https://www.vault.example/andrew-ng",
+        "Andrew Ng, UBS and Barclays, Singapore. Deep tenure in this domain.",
+    )
+    bare = result(
+        "Andrew Ng - Product Control - UBS",
+        "https://www.plain.example/andrew-ng",
+        "Andrew Ng, UBS, Singapore.",
+    )
+    W = identity_resolver.WEIGHTS
+    rich_ev = identity_resolver.extract_evidence(rich, fp_, W)
+    bare_ev = identity_resolver.extract_evidence(bare, fp_, W)
+    assert sum(e.weight for e in rich_ev) > sum(e.weight for e in bare_ev)
+    assert "context" in {e.type for e in rich_ev}
+
+
+
 async def test_name_only_resolve_makes_no_provider_call():
     """§4 — a name-only fingerprint never reaches Serper and is unresolved."""
     empty = fp(

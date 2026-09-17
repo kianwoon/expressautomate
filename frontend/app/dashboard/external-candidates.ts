@@ -509,10 +509,15 @@ export function identityFingerprint(candidate: ExternalCandidate): {
   const prose = [candidate.summary, candidate.match_reason]
     .filter((s): s is string => typeof s === "string" && s.trim().length > 0)
     .join(" — ");
-  // Recover previous employers only from an explicit "previously at X" /
-  // "ex-X" marker — §52 warns against guessing, so a bare sentence with no
-  // marker yields nothing.
-  const previous = previousCompaniesFromProse(prose);
+  const currentCompany = explicitCompany ?? parsedCompany;
+  // Recover previous employers from prose (explicit markers and employment
+  // lists), then drop any entry that is really the current employer — an
+  // employment list names the current role first ("at UBS and Barclays" with
+  // current UBS leaves just Barclays).
+  const norm = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, "");
+  const previous = previousCompaniesFromProse(prose).filter(
+    (name) => !currentCompany || norm(name) !== norm(currentCompany),
+  );
 
   const skills = Array.isArray(candidate.skills)
     ? candidate.skills
@@ -522,7 +527,7 @@ export function identityFingerprint(candidate: ExternalCandidate): {
 
   return {
     name: candidate.title,
-    current_company: explicitCompany ?? parsedCompany,
+    current_company: currentCompany,
     current_title: parsedTitle ?? null,
     location: candidate.location ?? null,
     previous_companies: previous,
@@ -539,23 +544,54 @@ export function identityFingerprint(candidate: ExternalCandidate): {
   };
 }
 
-/** Named former employers recovered from the review prose. Only an explicit
- *  marker counts — "previously at X", "ex-X", "former X" — because §52 makes a
- *  wrong employer the most expensive mistake here. */
+/** Named former employers recovered from the review prose.
+ *
+ *  Two independent signals, both conservative:
+ *
+ *  1. An explicit marker — "previously at X", "ex-X", "former X" — because §52
+ *     makes a wrong employer the most expensive mistake here.
+ *  2. An employment list — "at UBS and Barclays" — which names two employers
+ *     with no marker at all. This is the shape the career-bot prose actually
+ *     uses ("14+ years Product Control at UBS and Barclays in Singapore"), and
+ *     dropping it is exactly the data loss this fixes. It stays conservative:
+ *     both names must be short, org-like tokens (<=3 words, each capitalised),
+ *     and the list is returned **pre-dedup** — the current employer may appear
+ *     first ("at UBS and Barclays" with current UBS). `identityFingerprint`
+ *     drops entries matching the derived current company, so "at UBS and
+ *     Barclays" with current UBS yields previous `["Barclays"]`.
+ */
 function previousCompaniesFromProse(prose: string): string[] {
   const out: string[] = [];
+  const push = (name: string) => {
+    const cleaned = name.trim().replace(/[.,;:'-]+$/, "");
+    if (cleaned && !out.includes(cleaned)) out.push(cleaned);
+  };
   const patterns = [
     /\b[Pp]reviously(?:\s+(?:at|with|worked\s+at))?\s+([A-Z][\w&'-]*(?:\s+[A-Z][\w&'-]*){0,3})/g,
     /\b[Ff]ormer(?:ly)?\s+([A-Z][\w&'-]*(?:\s+[A-Z][\w&'-]*){0,3})/g,
   ];
   for (const pattern of patterns) {
     for (const match of prose.matchAll(pattern)) {
-      const name = match[1]?.trim().replace(/[.,;:'-]+$/, "");
-      if (name && !out.includes(name)) out.push(name);
+      if (match[1]) push(match[1]);
     }
   }
-  return out.slice(0, 3);
+  // Employment list: "at UBS and Barclays". Both sides must be short org-like
+  // tokens — a long phrase on either side is prose, not an employer, and is
+  // discarded rather than guessed at (§52).
+  const wordCount = (value: string) => value.trim().split(/\s+/).length;
+  const orgLike = (value: string) =>
+    wordCount(value) <= 3 && /^[A-Z][\w&'.-]*(?:\s+[A-Z][\w&'.-]*)*$/.test(value.trim());
+  const list = /\b(?:at|with)\s+([A-Z][\w&'.-]*(?:\s+[A-Z][\w&'.-]*){0,3})\s+and\s+([A-Z][\w&'.-]*(?:\s+[A-Z][\w&'.-]*){0,3})/g;
+  for (const match of prose.matchAll(list)) {
+    const [, first, second] = match;
+    if (first && second && orgLike(first) && orgLike(second)) {
+      push(first);
+      push(second);
+    }
+  }
+  return out.slice(0, 4);
 }
+
 
 /** Resolve one candidate. The structured statuses (`unconfigured` /
  *  `unreachable` / `not_provisioned`) are ordinary answers here, not
