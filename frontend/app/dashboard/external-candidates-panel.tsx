@@ -355,8 +355,14 @@ function IdentityModal({
   onReopen?: (resolutionId: string) => void;
 }) {
   const profile = identity.canonical_profile_url;
-  // §28: the ✓ checklist names the matched signals, never the contradictions.
-  const matched = identity.evidence.filter((e) => e.weight > 0);
+  // §28: the ✓ checklist names the matched signals. Contradictions are shown
+  // as ✗ rows rather than hidden, so a recruiter can see *why* an identity is
+  // unresolved; zero-weight same-name profile notes are shown separately.
+  const matched = identity.evidence.filter((e) => (e.weight ?? 0) > 0);
+  const contradictions = identity.evidence.filter(
+    (e) => e.type === "contradiction" || (e.weight ?? 0) < 0,
+  );
+  const sameName = identity.evidence.filter((e) => e.type === "same_name_profile");
   return (
     <div
       className="jo-identity-modal-backdrop"
@@ -395,7 +401,7 @@ function IdentityModal({
           </p>
         )}
         <h5 className="jo-sub">Matched evidence</h5>
-        {matched.length === 0 ? (
+        {matched.length === 0 && contradictions.length === 0 ? (
           <p className="body src-note">No corroborating evidence found.</p>
         ) : (
           <ul className="jo-identity-evidence" data-testid="jo-identity-evidence">
@@ -407,7 +413,27 @@ function IdentityModal({
                 )}
               </li>
             ))}
+            {contradictions.map((item, index) => (
+              <li
+                key={`contra-${item.type}-${index}`}
+                className="body src-error"
+                data-testid="jo-identity-contradiction"
+              >
+                ✗ {item.value}
+                {item.source_domain && (
+                  <span className="jo-sub"> — {item.source_domain}</span>
+                )}
+              </li>
+            ))}
           </ul>
+        )}
+        {sameName.length > 0 && (
+          <p className="body src-note" data-testid="jo-identity-same-name">
+            {sameName.length === 1
+              ? "A same-name profile was found"
+              : "Same-name profiles were found"}{" "}
+            — none corroborates your employer, title or location.
+          </p>
         )}
         {profile && (
           <p className="body">

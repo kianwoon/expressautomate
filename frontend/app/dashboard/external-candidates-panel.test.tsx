@@ -542,14 +542,43 @@ describe("the identity modal", () => {
 
     const modal = screen.getByTestId("jo-identity-modal");
     expect(modal.textContent).toContain("Identity confidence: 94%");
-    // The ✓ checklist names the matched signals (§28), never contradictions.
+    // The ✓ checklist names the matched signals (§28), and contradictions are
+    // rendered as ✗ rows so the recruiter can see why the identity is unsafe.
     const evidence = screen.getByTestId("jo-identity-evidence").textContent;
     expect(evidence).toContain("UBS");
     expect(evidence).toContain("Singapore");
-    expect(evidence).not.toContain("different location");
+    expect(evidence).toContain("✗ different location");
     // The professional profile link is offered.
     const link = screen.getByText("https://www.linkedin.com/in/yap-chean-wei");
     expect(link.getAttribute("href")).toBe("https://www.linkedin.com/in/yap-chean-wei");
+  });
+
+  it("names same-name profiles that corroborate nothing", () => {
+    panel({
+      taskStatus: "completed",
+      results: results(),
+      identities: {
+        "c-1": identity({
+          canonical_profile_url: null,
+          evidence: [
+            {
+              type: "same_name_profile",
+              value: "https://www.linkedin.com/in/andrewyng",
+              source_url: "https://www.linkedin.com/in/andrewyng",
+              source_domain: "linkedin.com",
+              query: "q",
+              confidence: 0,
+              weight: 0,
+            },
+          ],
+        }),
+      },
+    });
+    fireEvent.click(screen.getByTestId("jo-identity-view"));
+    expect(screen.getByTestId("jo-identity-same-name").textContent).toContain(
+      "none corroborates your employer",
+    );
+    expect(screen.queryByText("Professional profile found:", { exact: false })).toBeNull();
   });
 
   it("warns when the web shows a different employer than the record", () => {

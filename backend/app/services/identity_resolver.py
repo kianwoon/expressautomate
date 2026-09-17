@@ -414,10 +414,12 @@ def extract_evidence(
         add("current_company", fp.current_company or "", "current_company")
 
     title_tokens = name_tokens(fp.current_title) - _STOPWORDS
-    if title_tokens and _contains(tokens, title_tokens):
+    title_present = bool(title_tokens) and _contains(tokens, title_tokens)
+    if title_present:
         add("title", fp.current_title or "", "title")
 
-    if _contains(tokens, name_tokens(fp.location)):
+    location_present = _contains(tokens, name_tokens(fp.location))
+    if location_present:
         add("location", fp.location or "", "location")
 
     matched_previous = False
@@ -436,8 +438,27 @@ def extract_evidence(
             "career_history",
         )
 
+    # §20/§15: a LinkedIn `/in/` page scores only when some *other* signal on
+    # the same result corroborates it. A same-name profile with zero employer,
+    # title or location match is a famous namesake as often as the candidate
+    # ("Andrew Ng" the AI researcher vs "Andrew Ng" at UBS), so it is recorded
+    # as a zero-weight, visible note the modal can name — never as a match.
+    corroborated = company_present or title_present or location_present
     if is_professional_profile(result.url):
-        add("profile_url", canonical_url(result.url), "profile_url")
+        if corroborated:
+            add("profile_url", canonical_url(result.url), "profile_url")
+        else:
+            out.append(
+                Evidence(
+                    type="same_name_profile",
+                    value=canonical_url(result.url),
+                    source_url=result.url,
+                    source_domain=result.domain,
+                    query=result.query,
+                    confidence=0,
+                    weight=0,
+                )
+            )
 
     # A result whose URL IS the discovered source profile is the strongest
     # single signal available (§6): it confirms we found the very page the
@@ -601,9 +622,29 @@ class Cluster:
     @property
     def profile_url(self) -> str | None:
         for e in self.evidence:
-            if e.type == "profile_url":
+            if e.type in ("profile_url", "source_profile"):
                 return e.value
         return None
+
+    @property
+    def corroborated(self) -> bool:
+        """§15 — whether anything other than the name and a bare profile
+        anchors this cluster. A cluster whose only positive signals are the
+        name, a same-name profile and an education mention does not identify
+        the candidate; a canonical profile URL must never be offered for it."""
+        return any(
+            e.type
+            in (
+                "current_company",
+                "title",
+                "location",
+                "previous_company",
+                # §6: a result whose URL IS the candidate's own discovered
+                # source profile corroborates by itself.
+                "source_profile",
+            )
+            for e in self.evidence
+        )
 
     def as_dict(self) -> dict:
         return {
@@ -658,23 +699,25 @@ def _status_for(confidence: int, thresholds: tuple[int, int]) -> str:
 def _freshness(fp: Fingerprint, clusters: list[Cluster]) -> str:
     """§21 — compare the record's employer with what the web now shows.
 
-    Returns `current` when the top cluster corroborates the recorded employer,
-    `possible_change` when the name resolves but a different employer appears,
-    `unknown` when nothing places the candidate either way.
+    Returns `current` when some page corroborates the recorded employer,
+    `possible_change` only when a page actively contradicts the employer, and
+    `unknown` otherwise. `unknown` is the honest default: a same-name profile,
+    an education mention or a URL is not evidence that the employer changed,
+    and a location/role mismatch is a different *person*, not a changed job —
+    it already blocks the gate, so it must not masquerade as an employment
+    change. The previous implementation returned `possible_change` whenever
+    the evidence carried any token beyond the name — which a bare profile URL
+    always does, so a famous namesake read as "Employment may have changed".
     """
     if not clusters:
         return "unknown"
-    company_tokens = org_tokens(fp.current_company)
-    name = name_tokens(fp.name)
-    for cluster in sorted(clusters, key=lambda c: c.score, reverse=True):
-        blob = normalize_text(
-            " ".join(e.value for e in cluster.evidence if e.value)
-        )
-        tokens = set(blob.split())
-        if _contains(tokens, company_tokens):
-            return "current"
-        if _contains(tokens, name) and (tokens - name):
-            return "possible_change"
+    evidence = [e for cluster in clusters for e in cluster.evidence]
+    if any(e.type == "current_company" for e in evidence):
+        return "current"
+    if any(
+        e.type == "contradiction" and "employer" in e.value for e in evidence
+    ):
+        return "possible_change"
     return "unknown"
 
 
@@ -787,10 +830,14 @@ async def resolve(
     freshness = _freshness(fp, ordered)
 
     evidence_flat = list(top.evidence) if top else []
+    # §15: a canonical profile is only trustworthy when the top cluster carries
+    # employer/title/location corroboration on the same page. Otherwise a
+    # same-name namesake would be presented as "Professional profile found".
+    canonical = top.profile_url if top and top.corroborated else None
     return Resolution(
         status=status,
         confidence=confidence,
-        canonical_profile_url=top.profile_url if top else None,
+        canonical_profile_url=canonical,
         current_company=fp.current_company,
         current_title=fp.current_title,
         location=fp.location,

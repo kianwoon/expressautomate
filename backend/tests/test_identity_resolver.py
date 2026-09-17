@@ -341,6 +341,121 @@ async def test_source_profile_url_match_is_strong_evidence():
 
 
 # --------------------------------------------------------------------------- #
+# The famous-stranger case (2026-09)
+# --------------------------------------------------------------------------- #
+
+
+def andrew_fp(**overrides) -> Fingerprint:
+    base: dict = dict(
+        name="Andrew Ng",
+        location="Singapore",
+        current_company="UBS",
+        current_title="Product Control",
+        previous_companies=("Barclays",),
+    )
+    base.update(overrides)
+    return Fingerprint(**base)
+
+
+async def test_famous_stranger_does_not_resolve():
+    """A same-name LinkedIn page with no employer/title/location corroboration
+    must not resolve. Regression: 'Andrew Ng' at UBS resolved to
+    linkedin.com/in/andrewyng (the AI researcher, USA) at 55%."""
+    fp_ = andrew_fp()
+    queries = build_queries(fp_)
+    provider = FakeProvider(
+        {
+            q: [
+                result(
+                    "Andrew Ng - Stanford University - AI researcher",
+                    "https://www.linkedin.com/in/andrewyng",
+                    "Andrew Ng is a professor at Stanford University, founder of Coursera.",
+                )
+            ]
+            for q in queries
+        }
+    )
+    res = await resolve(fp_, provider)
+    assert res.status == "unresolved"
+    assert res.confidence < identity_resolver.PROBABLE_MIN
+    assert res.canonical_profile_url is None
+    assert res.freshness_status == "unknown"
+    assert res.enrichment_allowed is False
+    # The same-name profile is recorded, visible, and scores nothing.
+    same = [e for e in res.evidence if e.type == "same_name_profile"]
+    assert same and all(e.weight == 0 for e in same)
+    assert not any(e.type == "profile_url" for e in res.evidence)
+
+
+async def test_same_name_profile_with_employer_corroboration_counts():
+    """The control: same shape, but the page names the candidate's employer —
+    the profile signal then counts and confidence rises."""
+    fp_ = andrew_fp()
+    queries = build_queries(fp_)
+    provider = FakeProvider(
+        {
+            q: [
+                result(
+                    "Andrew Ng - Product Control - UBS Singapore",
+                    "https://www.linkedin.com/in/andrew-ng-ubs",
+                    "Product Control at UBS in Singapore. Previously Barclays.",
+                )
+            ]
+            for q in queries
+        }
+    )
+    res = await resolve(fp_, provider)
+    assert res.canonical_profile_url == "https://www.linkedin.com/in/andrew-ng-ubs"
+    assert any(e.type == "profile_url" for e in res.evidence)
+    assert not any(e.type == "same_name_profile" for e in res.evidence)
+    assert res.confidence >= identity_resolver.RESOLVED_MIN
+    assert res.freshness_status == "current"
+
+
+async def test_freshness_is_unknown_without_company_and_no_contradiction():
+    """§21 — a name match plus a profile/nothing never reads as
+    `possible_change`; with no employer evidence and no contradiction it is
+    `unknown`."""
+    fp_ = andrew_fp(current_company=None, previous_companies=())
+    queries = build_queries(fp_)
+    provider = FakeProvider(
+        {
+            q: [
+                result(
+                    "Andrew Ng Singapore",
+                    "https://www.linkedin.com/in/andrewyng",
+                )
+            ]
+            for q in queries
+        }
+    )
+    res = await resolve(fp_, provider)
+    assert res.freshness_status == "unknown"
+    assert res.contradictions == 0
+
+
+async def test_freshness_possible_change_only_on_contradiction():
+    """§21 — `possible_change` requires active contradicting evidence."""
+    fp_ = andrew_fp()
+    queries = build_queries(fp_)
+    provider = FakeProvider(
+        {
+            q: [
+                result(
+                    "Andrew Ng",
+                    "https://example.com/profile",
+                    "London based consultant.",
+                )
+            ]
+            for q in queries
+        }
+    )
+    res = await resolve(fp_, provider)
+    assert res.contradictions > 0
+    assert res.freshness_status == "possible_change"
+
+
+# --------------------------------------------------------------------------- #
 # API (§34 cache, §56)
 # --------------------------------------------------------------------------- #
 
