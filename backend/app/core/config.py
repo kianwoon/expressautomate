@@ -1072,6 +1072,29 @@ class Settings(BaseSettings):
     # dead URL fails fast into `career_bot_unreachable`.
     CAREER_BOT_TIMEOUT_SECONDS: float = 15.0
 
+    # --- Serper (candidate identity resolution) ---
+    # Public web evidence retrieval for the Identity Resolver (spec: "serper
+    # design.md"). Backend-only by design (§42): the key must never reach the
+    # browser, frontend JavaScript, the candidate UI, a log line, or an LLM
+    # context. Empty by default so the feature is answerable at the edge
+    # (`serper_configured()`) rather than crashing inside httpx — the same
+    # reading GRAPH_BASE_URL and CAREER_BOT_URL take. When unset, the resolver
+    # still runs against an injected fake provider in tests; a live caller
+    # gets a structured `unconfigured` answer, never a 500.
+    SERPER_API_KEY: str = ""
+    # Serper's search endpoint. Base URL from config, not hardcoded, so a plan
+    # change or a proxy is an env edit rather than a deploy.
+    SERPER_BASE_URL: str = "https://google.serper.dev/search"
+    # One HTTP round trip per query; bounded so a dead provider fails fast into
+    # the transient retry path rather than hanging the request.
+    SERPER_TIMEOUT_SECONDS: float = 15.0
+    # Default market — Singapore (§11, §61). Kept as settings rather than
+    # constants so a second market does not require a code change.
+    IDENTITY_COUNTRY: str = "sg"
+    IDENTITY_LANGUAGE: str = "en"
+    # How many results to ask for per query (§11 resultLimit).
+    IDENTITY_RESULT_LIMIT: int = 10
+
     # Telegram echoes this in `X-Telegram-Bot-Api-Secret-Token`. Without it the
     # webhook accepts anything that can reach the URL, and the URL is public.
     TELEGRAM_WEBHOOK_SECRET: str = ""
@@ -1428,6 +1451,15 @@ class Settings(BaseSettings):
     def career_bot_configured(self) -> bool:
         """Same question, asked of the external candidate-search service."""
         return bool(self.CAREER_BOT_URL and self.CAREER_BOT_API_KEY)
+
+    def serper_configured(self) -> bool:
+        """Whether the identity resolver has a live search provider.
+
+        The resolver does not depend on this being true: tests inject a fake
+        provider, and the API answers a structured `unconfigured` status when
+        the key is absent (never a 500). This only gates the real Serper call.
+        """
+        return bool(self.SERPER_API_KEY)
 
     def google_configured(self) -> bool:
         """Identity only — Google users have no mailbox to ingest."""

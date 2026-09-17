@@ -88,6 +88,18 @@ EXEMPT: dict[str, dict[str, str]] = {
             "rather than reaching for somebody else's candidate."
         ),
     },
+    "identity_resolutions.py": {
+        "resolve_identity": (
+            "Names a `candidate_key`, but that is an external-candidate "
+            "identifier carried on a job order, not a `Candidate` row — the "
+            "route reads no Candidate by id (`_reads_a_candidate_by_id` flags "
+            "it on the parameter name alone). It loads the job order through "
+            "`load_visible_opportunity`, which is the correct guard for an "
+            "opportunity-keyed route and the one "
+            "`test_opportunity_routes_guarded.py` holds it to; the Candidate "
+            "guard has no row of its own to apply to."
+        ),
+    },
 }
 
 

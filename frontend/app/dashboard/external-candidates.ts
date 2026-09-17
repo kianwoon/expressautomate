@@ -6,6 +6,8 @@ import {
   externalCandidateLatestPath,
   externalCandidateSearchPath,
   externalCandidateSearchResultsPath,
+  identityResolutionPath,
+  identityResolutionsPath,
   EXTERNAL_SEARCH_POLL_MS,
 } from "../api";
 import { ApiError, readError } from "./candidates";
@@ -401,4 +403,219 @@ export function useExternalCandidates(rowId: string): {
     start,
     reset,
   };
+}
+
+/**
+ * The Candidate Identity Resolver, as the panel sees it (spec: "serper
+ * design.md" §24, §27, §28, §57). One external candidate can be resolved to a
+ * public professional identity; the result is stored server-side and can be
+ * reopened from the job order's resolution history without re-running Serper.
+ *
+ * The hook mirrors `useExternalCandidates`: it owns the resolve call, the
+ * per-candidate in-flight state, and the history list, while the panel owns
+ * the layout. Kept deliberately small — Phase 1 adds a button, a badge, and a
+ * modal; the asynchronous/batch flow is Phase 2 (§60).
+ */
+
+/** One evidence item, §13/§15 — the weighted signal and the page it came
+ *  from. `type` is the spec's own vocabulary; the panel renders the server's
+ *  sentence for `value`, not a translation of it. */
+export type IdentityEvidenceItem = {
+  type: string;
+  value: string;
+  source_url: string;
+  source_domain: string;
+  query: string;
+  confidence: number;
+  weight: number;
+};
+
+/** A resolved identity (§24/§57). `status` is `resolved` | `probable` |
+ *  `unresolved`; `cached` is true when the server answered from its §34 cache
+ *  rather than calling Serper again. */
+export type ResolvedIdentity = {
+  id: string;
+  candidate_key: string;
+  status: "resolved" | "probable" | "unresolved";
+  confidence: number;
+  canonical_profile_url: string | null;
+  current_company: string | null;
+  current_title: string | null;
+  location: string | null;
+  previous_companies: string[];
+  evidence: IdentityEvidenceItem[];
+  queries_used: number;
+  freshness_status: "current" | "possible_change" | "unknown" | null;
+  created_at: string | null;
+  expires_at: string | null;
+  cached?: boolean;
+};
+
+/** A row of the history list — enough to reopen the modal by id. */
+export type IdentityResolutionSummary = {
+  id: string;
+  candidate_key: string;
+  status: ResolvedIdentity["status"];
+  confidence: number;
+  created_at: string | null;
+  expires_at: string | null;
+  expired: boolean;
+};
+
+/** §56 mode. `refresh`/`deep` deliberately bypass the §34 cache. */
+export type IdentityResolveMode = "normal" | "refresh" | "deep";
+
+/** What the POST needs from a candidate — the §6 fingerprint fields, taken
+ *  from the candidate object the panel already has.
+ *
+ *  The career bot's result shape has no dedicated employer field, so the
+ *  fingerprint is assembled from what it does carry, conservatively: an
+ *  explicit `company`/`employer` field when a future version ships one, else
+ *  the "Title at Company" split of `subtitle`, and `location` verbatim. A
+ *  wrong value here poisons the whole resolution (§52: employer and location
+ *  carry the weight), so nothing is guessed beyond that one split. */
+export function identityFingerprint(candidate: ExternalCandidate): {
+  name: string;
+  current_company: string | null;
+  current_title: string | null;
+  location: string | null;
+  previous_companies: string[];
+} {
+  const record = candidate as Record<string, unknown>;
+  const explicitCompany =
+    typeof record.company === "string"
+      ? record.company
+      : typeof record.employer === "string"
+        ? record.employer
+        : null;
+  const subtitle = candidate.subtitle ?? null;
+  // "Product Control at Standard Chartered" → title / employer. The career
+  // bot's own subtitle convention; anything without the marker stays a title.
+  const at = subtitle ? subtitle.split(/\s+at\s+/i) : [];
+  const parsedTitle = at.length === 2 ? at[0].trim() : subtitle;
+  const parsedCompany = at.length === 2 ? at[1].trim() : null;
+  return {
+    name: candidate.title,
+    current_company: explicitCompany ?? parsedCompany,
+    current_title: parsedTitle,
+    location: candidate.location ?? null,
+    previous_companies: [],
+  };
+}
+
+/** Resolve one candidate. The structured statuses (`unconfigured` /
+ *  `unreachable` / `not_provisioned`) are ordinary answers here, not
+ *  exceptions — the panel branches on `status`, never on copy. A cache hit is
+ *  a normal 200 with `cached: true`. */
+export async function resolveIdentity(
+  opportunityId: string,
+  candidate: ExternalCandidate,
+  mode: IdentityResolveMode = "normal",
+): Promise<ResolvedIdentity> {
+  const res = await fetch(identityResolutionPath(opportunityId, candidate.id), {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify({ mode, candidate: identityFingerprint(candidate) }),
+  });
+  if (!res.ok) throw new ApiError(await readError(res));
+  return (await res.json()) as ResolvedIdentity;
+}
+
+/** The job order's resolution history, newest first — what the past-results
+ *  list in the modal reads. */
+export async function listIdentityResolutions(
+  opportunityId: string,
+): Promise<IdentityResolutionSummary[]> {
+  const res = await fetch(identityResolutionsPath(opportunityId), {
+    credentials: "include",
+    headers: { Accept: "application/json" },
+  });
+  if (!res.ok) throw new ApiError(await readError(res));
+  const body = (await res.json()) as { resolutions: IdentityResolutionSummary[] };
+  return body.resolutions ?? [];
+}
+
+/** Reopen one stored resolution — a plain read, so no Serper call (§34). */
+export async function getIdentityResolution(
+  opportunityId: string,
+  resolutionId: string,
+): Promise<ResolvedIdentity> {
+  const res = await fetch(identityResolutionsPath(opportunityId, resolutionId), {
+    credentials: "include",
+    headers: { Accept: "application/json" },
+  });
+  if (!res.ok) throw new ApiError(await readError(res));
+  const body = (await res.json()) as { resolution: ResolvedIdentity };
+  return body.resolution;
+}
+
+export function useIdentityResolution(opportunityId: string): {
+  resolvingFor: string | null;
+  error: string | null;
+  results: Record<string, ResolvedIdentity>;
+  history: IdentityResolutionSummary[];
+  resolve: (
+    candidate: ExternalCandidate,
+    mode?: IdentityResolveMode,
+  ) => Promise<void>;
+  reopen: (resolutionId: string) => Promise<void>;
+  refreshHistory: () => Promise<void>;
+} {
+  const [resolvingFor, setResolvingFor] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [results, setResults] = useState<Record<string, ResolvedIdentity>>({});
+  const [history, setHistory] = useState<IdentityResolutionSummary[]>([]);
+
+  const refreshHistory = useCallback(async () => {
+    try {
+      setHistory(await listIdentityResolutions(opportunityId));
+    } catch {
+      // History is a convenience; its absence must not error the panel.
+    }
+  }, [opportunityId]);
+
+  useEffect(() => {
+    void refreshHistory();
+  }, [refreshHistory]);
+
+  const resolve = useCallback(
+    async (candidate: ExternalCandidate, mode: IdentityResolveMode = "normal") => {
+      setResolvingFor(candidate.id);
+      setError(null);
+      try {
+        const body = await resolveIdentity(opportunityId, candidate, mode);
+        setResults((prev) => ({ ...prev, [candidate.id]: body }));
+        await refreshHistory();
+      } catch (err) {
+        setError(
+          err instanceof Error
+            ? err.message
+            : "The identity could not be resolved just now.",
+        );
+      } finally {
+        setResolvingFor(null);
+      }
+    },
+    [opportunityId, refreshHistory],
+  );
+
+  const reopen = useCallback(
+    async (resolutionId: string) => {
+      setError(null);
+      try {
+        const body = await getIdentityResolution(opportunityId, resolutionId);
+        setResults((prev) => ({ ...prev, [body.candidate_key]: body }));
+      } catch (err) {
+        setError(
+          err instanceof Error
+            ? err.message
+            : "That saved result could not be opened.",
+        );
+      }
+    },
+    [opportunityId],
+  );
+
+  return { resolvingFor, error, results, history, resolve, reopen, refreshHistory };
 }

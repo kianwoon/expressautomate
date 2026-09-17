@@ -95,6 +95,16 @@ EXEMPT: dict[str, dict[str, str]] = {
             "undecided product question."
         ),
     },
+    "identity_resolutions.py": {
+        "resolve_identity": (
+            "Exempt from the EDIT assertion only, and it still fails the read "
+            "assertion if it drops the read guard. The row it writes is a "
+            "`candidate_identity_resolutions` row, not the job order. A share "
+            "recipient may resolve an external candidate on work shown to "
+            "them: that is visibility, not edit rights — the same reading "
+            "`run_intelligence`'s exemption takes."
+        ),
+    },
     "buddies.py": {
         "list_buddies": (
             "Lists buddies, not job orders by id; the opportunity count is a "

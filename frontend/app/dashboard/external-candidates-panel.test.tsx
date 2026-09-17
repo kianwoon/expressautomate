@@ -10,6 +10,8 @@ import {
   type ExternalCandidate,
   type ExternalSearchResults,
   type ExternalTaskStatus,
+  type IdentityResolutionSummary,
+  type ResolvedIdentity,
 } from "./external-candidates";
 
 /**
@@ -73,6 +75,12 @@ function panel(overrides: {
   results?: ExternalSearchResults | null;
   resultsError?: string | null;
   onFind?: () => void;
+  identities?: Record<string, ResolvedIdentity>;
+  identityError?: string | null;
+  resolvingFor?: string | null;
+  identityHistory?: IdentityResolutionSummary[];
+  onResolveIdentity?: (candidate: ExternalCandidate) => void;
+  onReopenIdentity?: (resolutionId: string) => void;
 } = {}) {
   return render(
     <ExternalCandidatesStage
@@ -84,6 +92,12 @@ function panel(overrides: {
       results={overrides.results ?? null}
       resultsError={overrides.resultsError ?? null}
       onFind={overrides.onFind ?? (() => {})}
+      identities={overrides.identities}
+      identityError={overrides.identityError}
+      resolvingFor={overrides.resolvingFor}
+      identityHistory={overrides.identityHistory}
+      onResolveIdentity={overrides.onResolveIdentity}
+      onReopenIdentity={overrides.onReopenIdentity}
     />,
   );
 }
@@ -324,10 +338,12 @@ describe("a rendered candidate row", () => {
     const chips = [
       ...screen.getByTestId("jo-external-row").querySelectorAll(".jo-external-chip"),
     ].map((el) => el.textContent);
-    // The platform chip rides beside the name; the Open-profile link chip
-    // leads the meta row — this fixture's row carries a source URL.
+    // The platform chip and the identity badge ride beside the name; the
+    // Open-profile link chip leads the meta row — this fixture's row carries
+    // a source URL.
     expect(chips).toEqual([
       "LinkedIn",
+      "Identity: Not resolved",
       "Open profile ↗",
       "Singapore, Singapore",
       "A",
@@ -396,5 +412,179 @@ describe("a rendered candidate row", () => {
     expect(screen.getByTestId("jo-external-panel").textContent).toContain(
       "Second Person",
     );
+  });
+});
+
+/** A resolved identity, §24/§57 shape. */
+function identity(overrides: Partial<ResolvedIdentity> = {}): ResolvedIdentity {
+  return {
+    id: "res-1",
+    candidate_key: "c-1",
+    status: "resolved",
+    confidence: 94,
+    canonical_profile_url: "https://www.linkedin.com/in/yap-chean-wei",
+    current_company: "UBS",
+    current_title: "Product Control",
+    location: "Singapore",
+    previous_companies: ["Barclays"],
+    evidence: [
+      {
+        type: "current_company",
+        value: "UBS",
+        source_url: "https://www.linkedin.com/in/yap-chean-wei",
+        source_domain: "linkedin.com",
+        query: "q",
+        confidence: 100,
+        weight: 25,
+      },
+      {
+        type: "location",
+        value: "Singapore",
+        source_url: "https://www.linkedin.com/in/yap-chean-wei",
+        source_domain: "linkedin.com",
+        query: "q",
+        confidence: 60,
+        weight: 15,
+      },
+      {
+        type: "contradiction",
+        value: "different location",
+        source_url: "https://example.com/x",
+        source_domain: "example.com",
+        query: "q",
+        confidence: 45,
+        weight: -25,
+      },
+    ],
+    queries_used: 2,
+    freshness_status: "current",
+    created_at: "2026-09-03T00:00:00+00:00",
+    expires_at: "2026-10-03T00:00:00+00:00",
+    cached: false,
+    ...overrides,
+  };
+}
+
+function history(
+  overrides: Partial<IdentityResolutionSummary> = {},
+): IdentityResolutionSummary {
+  return {
+    id: "res-1",
+    candidate_key: "c-1",
+    status: "resolved",
+    confidence: 94,
+    created_at: "2026-09-03T00:00:00+00:00",
+    expires_at: "2026-10-03T00:00:00+00:00",
+    expired: false,
+    ...overrides,
+  };
+}
+
+describe("the per-candidate Resolve Identity control", () => {
+  it("shows a Not resolved badge and offers Resolve Identity", () => {
+    panel({ taskStatus: "completed", results: results(), onResolveIdentity: () => {} });
+    expect(screen.getByTestId("jo-identity-badge").textContent).toBe(
+      "Identity: Not resolved",
+    );
+    expect(screen.getByTestId("jo-identity-resolve").textContent).toBe("Resolve Identity");
+  });
+
+  it("fires onResolveIdentity with the candidate when clicked", () => {
+    const onResolveIdentity = vi.fn();
+    panel({ taskStatus: "completed", results: results(), onResolveIdentity });
+    fireEvent.click(screen.getByTestId("jo-identity-resolve"));
+    expect(onResolveIdentity).toHaveBeenCalledTimes(1);
+    expect(onResolveIdentity.mock.calls[0][0].id).toBe("c-1");
+  });
+
+  it("shows Searching… and disables the button while resolving", () => {
+    panel({
+      taskStatus: "completed",
+      results: results(),
+      resolvingFor: "c-1",
+      onResolveIdentity: () => {},
+    });
+    const button = screen.getByTestId("jo-identity-resolve") as HTMLButtonElement;
+    expect(button.textContent).toBe("Searching…");
+    expect(button.disabled).toBe(true);
+  });
+
+  it("surfaces an identity error in the server's words", () => {
+    panel({ identityError: "The web search provider could not be reached." });
+    expect(screen.getByRole("alert").textContent).toBe(
+      "The web search provider could not be reached.",
+    );
+  });
+
+  it("shows the resolved badge and a View button once resolved", () => {
+    panel({
+      taskStatus: "completed",
+      results: results(),
+      identities: { "c-1": identity() },
+      onResolveIdentity: () => {},
+    });
+    expect(screen.getByTestId("jo-identity-badge").textContent).toBe("Identity: Resolved");
+    expect(screen.getByTestId("jo-identity-view").textContent).toBe("View");
+    expect(screen.queryByTestId("jo-identity-resolve")).toBeNull();
+  });
+});
+
+describe("the identity modal", () => {
+  it("opens on View and shows confidence, evidence and the profile link", () => {
+    panel({
+      taskStatus: "completed",
+      results: results(),
+      identities: { "c-1": identity() },
+      identityHistory: [history()],
+    });
+    expect(screen.queryByTestId("jo-identity-modal")).toBeNull();
+    fireEvent.click(screen.getByTestId("jo-identity-view"));
+
+    const modal = screen.getByTestId("jo-identity-modal");
+    expect(modal.textContent).toContain("Identity confidence: 94%");
+    // The ✓ checklist names the matched signals (§28), never contradictions.
+    const evidence = screen.getByTestId("jo-identity-evidence").textContent;
+    expect(evidence).toContain("UBS");
+    expect(evidence).toContain("Singapore");
+    expect(evidence).not.toContain("different location");
+    // The professional profile link is offered.
+    const link = screen.getByText("https://www.linkedin.com/in/yap-chean-wei");
+    expect(link.getAttribute("href")).toBe("https://www.linkedin.com/in/yap-chean-wei");
+  });
+
+  it("warns when the web shows a different employer than the record", () => {
+    panel({
+      taskStatus: "completed",
+      results: results(),
+      // No contradiction evidence: that renders its own alert, and this test
+      // asserts the single freshness warning.
+      identities: {
+        "c-1": identity({
+          freshness_status: "possible_change",
+          evidence: identity().evidence.filter((e) => e.type !== "contradiction"),
+        }),
+      },
+    });
+    fireEvent.click(screen.getByTestId("jo-identity-view"));
+    expect(screen.getByRole("alert").textContent).toContain("Employment may have changed");
+  });
+
+  it("lists past results and reopens one without a new resolve", () => {
+    const onReopenIdentity = vi.fn();
+    panel({
+      taskStatus: "completed",
+      results: results(),
+      identities: { "c-1": identity() },
+      identityHistory: [
+        history({ id: "res-old", confidence: 71, status: "probable" }),
+      ],
+      onReopenIdentity,
+    });
+    fireEvent.click(screen.getByTestId("jo-identity-view"));
+    const item = screen.getByTestId("jo-identity-history-open");
+    expect(item.textContent).toContain("Probable");
+    expect(item.textContent).toContain("71%");
+    fireEvent.click(item);
+    expect(onReopenIdentity).toHaveBeenCalledWith("res-old");
   });
 });

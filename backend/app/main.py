@@ -33,6 +33,7 @@ from app.api import (
     external_candidates,
     glossary,
     graph_webhook,
+    identity_resolutions,
     job_intelligence,
     mailbox,
     members,
@@ -159,6 +160,12 @@ api.include_router(job_intelligence.router)
 # handed to the generic route as a path parameter and answered 422 "not a
 # valid UUID".
 api.include_router(external_candidates.router)
+# Before `opportunities`, for the same shadowing reason as `external_candidates`
+# above: this router owns the LITERAL path segment `/opportunities/
+# {opportunity_id}/identity-resolutions`. Declared after
+# `/opportunities/{opportunity_id}`, the first literal segment would be handed
+# to the generic route as a path parameter and answered 422.
+api.include_router(identity_resolutions.router)
 # Before `opportunities`, for the same shadowing reason as `sourcing` above:
 # this router owns the LITERAL path `/opportunities/documents` (and the
 # no-opportunity-yet upload that makes the New job order dialog work).

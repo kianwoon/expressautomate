@@ -11,7 +11,7 @@ import { type TabKey, TabBar } from "./detail-panel-tabs";
 import {
   ExternalCandidatesStage,
 } from "./external-candidates-panel";
-import { useExternalCandidates } from "./external-candidates";
+import { useExternalCandidates, useIdentityResolution } from "./external-candidates";
 import { Salary, Value, day } from "./format";
 import { PersonStage, SearchStage, WorkStage, type StageState } from "./job-intelligence-panel";
 import { useJobIntelligence } from "./job-intelligence";
@@ -201,6 +201,10 @@ function Detail({
   // Candidates" button and the External Candidates tab, the same split as
   // `ji` above: the hook owns the search, the modal owns the layout.
   const ext = useExternalCandidates(row.id);
+  // The Identity Resolver (spec: "serper design.md") — one hook for the
+  // per-candidate [Resolve Identity] button, the badge, and the result modal.
+  // Keyed on `row.id` for the same remount-on-row-change lifecycle as `ext`.
+  const identity = useIdentityResolution(row.id);
   // Which tab is showing. Lives here, not in the hook: the hook owns the
   // analysis, the modal owns the layout. Survives row polls (same `key` rule
   // that keeps `placement` alive); resets when a different row is opened.
@@ -792,6 +796,12 @@ function Detail({
           results={ext.results}
           resultsError={ext.resultsError}
           onFind={() => void ext.start()}
+          identities={identity.results}
+          identityError={identity.error}
+          resolvingFor={identity.resolvingFor}
+          identityHistory={identity.history}
+          onResolveIdentity={(candidate) => void identity.resolve(candidate)}
+          onReopenIdentity={(resolutionId) => void identity.reopen(resolutionId)}
         />
       )}
       </div>

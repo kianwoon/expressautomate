@@ -305,6 +305,9 @@
     "/api/opportunities/{opportunity_id}/candidates/{candidate_id}/eligibility": [
       "GET"
     ],
+    "/api/opportunities/{opportunity_id}/candidates/{candidate_key}/resolve-identity": [
+      "POST"
+    ],
     "/api/opportunities/{opportunity_id}/claim": [
       "POST"
     ],
@@ -321,6 +324,12 @@
       "GET"
     ],
     "/api/opportunities/{opportunity_id}/external-candidates/search/{task_id}/results": [
+      "GET"
+    ],
+    "/api/opportunities/{opportunity_id}/identity-resolutions": [
+      "GET"
+    ],
+    "/api/opportunities/{opportunity_id}/identity-resolutions/{resolution_id}": [
       "GET"
     ],
     "/api/opportunities/{opportunity_id}/intelligence": [

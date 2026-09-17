@@ -160,6 +160,26 @@ export function externalCandidateLatestPath(id: string): string {
 }
 
 /**
+ * The Identity Resolver for one external candidate (spec: "serper design.md"
+ * §56). POST resolves (`{mode, candidate}`) and answers the stored result;
+ * GET lists the job order's resolution history; GET with a resolution id
+ * reopens one past result in the modal. Literal segments
+ * (`identity-resolutions`), declared before the `{opportunity_id}` route
+ * server-side for the same shadowing reason as `external-candidates`. Both
+ * ids are encoded, like every id-in-path helper on this page.
+ */
+export function identityResolutionPath(id: string, candidateKey: string): string {
+  return `${OPPORTUNITIES_PATH}/${encodeURIComponent(id)}/candidates/${encodeURIComponent(
+    candidateKey,
+  )}/resolve-identity`;
+}
+
+export function identityResolutionsPath(id: string, resolutionId?: string): string {
+  const base = `${OPPORTUNITIES_PATH}/${encodeURIComponent(id)}/identity-resolutions`;
+  return resolutionId ? `${base}/${encodeURIComponent(resolutionId)}` : base;
+}
+
+/**
  * How often the panel asks the career bot how the search is going. The
  * service's own spec recommends ~5s (§3: "do not hammer") and its searches
  * run 30–120s, so this sits between the sourcing poll and a guess. Same

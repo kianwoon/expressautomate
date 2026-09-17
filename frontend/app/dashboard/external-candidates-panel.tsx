@@ -1,9 +1,13 @@
 "use client";
 
+import { useState } from "react";
+
 import {
   type ExternalCandidate,
   type ExternalSearchResults,
   type ExternalTaskStatus,
+  type IdentityResolutionSummary,
+  type ResolvedIdentity,
   platformLabel,
   summaryLine,
 } from "./external-candidates";
@@ -52,6 +56,12 @@ export function ExternalCandidatesStage({
   results,
   resultsError,
   onFind,
+  identities,
+  identityError,
+  resolvingFor,
+  identityHistory,
+  onResolveIdentity,
+  onReopenIdentity,
 }: {
   state: ExternalPanelState;
   starting: boolean;
@@ -61,6 +71,16 @@ export function ExternalCandidatesStage({
   results: ExternalSearchResults | null;
   resultsError: string | null;
   onFind: () => void;
+  /** Per-candidate resolved identities, keyed by candidate id (§24). */
+  identities?: Record<string, ResolvedIdentity>;
+  identityError?: string | null;
+  /** The candidate id currently being resolved, or null (§29 "Resolving"). */
+  resolvingFor?: string | null;
+  /** The job order's resolution history, newest first — the past-results
+   *  list the modal offers (§28). */
+  identityHistory?: IdentityResolutionSummary[];
+  onResolveIdentity?: (candidate: ExternalCandidate) => void;
+  onReopenIdentity?: (resolutionId: string) => void;
 }) {
   return (
     <div className="jo-intel-stage" data-testid="jo-external-panel">
@@ -103,7 +123,21 @@ export function ExternalCandidatesStage({
           {resultsError}
         </p>
       )}
-      {results && <Results results={results} />}
+      {identityError && (
+        <p className="body src-error" role="alert">
+          {identityError}
+        </p>
+      )}
+      {results && (
+        <Results
+          results={results}
+          identities={identities}
+          resolvingFor={resolvingFor}
+          identityHistory={identityHistory}
+          onResolveIdentity={onResolveIdentity}
+          onReopenIdentity={onReopenIdentity}
+        />
+      )}
     </div>
   );
 }
@@ -118,7 +152,21 @@ function buttonLabel(starting: boolean, status: ExternalTaskStatus | null): stri
   return "Find External Candidates";
 }
 
-function Results({ results }: { results: ExternalSearchResults }) {
+function Results({
+  results,
+  identities,
+  resolvingFor,
+  identityHistory,
+  onResolveIdentity,
+  onReopenIdentity,
+}: {
+  results: ExternalSearchResults;
+  identities?: Record<string, ResolvedIdentity>;
+  resolvingFor?: string | null;
+  identityHistory?: IdentityResolutionSummary[];
+  onResolveIdentity?: (candidate: ExternalCandidate) => void;
+  onReopenIdentity?: (resolutionId: string) => void;
+}) {
   const line = summaryLine(results.summary);
   if (results.results.length === 0) {
     return (
@@ -132,20 +180,53 @@ function Results({ results }: { results: ExternalSearchResults }) {
       {line && <p className="body jo-sub">{line}</p>}
       <ul className="jo-external-list">
         {results.results.map((candidate) => (
-          <ExternalRow key={candidate.id} candidate={candidate} />
+          <ExternalRow
+            key={candidate.id}
+            candidate={candidate}
+            identity={identities?.[candidate.id]}
+            resolving={resolvingFor === candidate.id}
+            history={identityHistory}
+            onResolveIdentity={onResolveIdentity}
+            onReopenIdentity={onReopenIdentity}
+          />
         ))}
       </ul>
     </>
   );
 }
 
-function ExternalRow({ candidate }: { candidate: ExternalCandidate }) {
+/** §16/§28 labels for a resolution status. */
+function statusLabel(status: ResolvedIdentity["status"]): string {
+  if (status === "resolved") return "Resolved";
+  if (status === "probable") return "Probable";
+  return "Not resolved";
+}
+
+function ExternalRow({
+  candidate,
+  identity,
+  resolving,
+  history,
+  onResolveIdentity,
+  onReopenIdentity,
+}: {
+  candidate: ExternalCandidate;
+  identity?: ResolvedIdentity;
+  resolving?: boolean;
+  history?: IdentityResolutionSummary[];
+  onResolveIdentity?: (candidate: ExternalCandidate) => void;
+  onReopenIdentity?: (resolutionId: string) => void;
+}) {
   const score = Math.round(candidate.match_score);
   const platform = platformLabel(candidate);
+  const [showModal, setShowModal] = useState(false);
   const sourceUrl =
     typeof candidate.source_url === "string" && candidate.source_url.trim()
       ? candidate.source_url.trim()
       : null;
+  // Past results for this candidate, newest first — what the modal's
+  // "Past results" list reopens (§28).
+  const past = (history ?? []).filter((h) => h.candidate_key === candidate.id);
   return (
     <li className="jo-external-row" data-testid="jo-external-row">
       <div className="jo-external-row-head">
@@ -171,6 +252,15 @@ function ExternalRow({ candidate }: { candidate: ExternalCandidate }) {
               {platform}
             </span>
           )}
+          <span
+            className="jo-external-chip jo-external-identity"
+            data-testid="jo-identity-badge"
+            data-status={identity?.status ?? "none"}
+          >
+            {identity
+              ? `Identity: ${statusLabel(identity.status)}`
+              : "Identity: Not resolved"}
+          </span>
         </span>
         <span className="jo-external-score" title={`Match score ${candidate.match_score} of 100`}>
           {score}
@@ -191,6 +281,28 @@ function ExternalRow({ candidate }: { candidate: ExternalCandidate }) {
           >
             Open profile ↗
           </a>
+        )}
+        {identity ? (
+          <button
+            type="button"
+            className="jo-external-chip jo-identity-view"
+            data-testid="jo-identity-view"
+            onClick={() => setShowModal(true)}
+          >
+            View
+          </button>
+        ) : (
+          onResolveIdentity && (
+            <button
+              type="button"
+              className="jo-external-chip jo-identity-resolve"
+              data-testid="jo-identity-resolve"
+              onClick={() => onResolveIdentity(candidate)}
+              disabled={resolving}
+            >
+              {resolving ? "Searching…" : "Resolve Identity"}
+            </button>
+          )
         )}
         {candidate.location && <span className="jo-external-chip">{candidate.location}</span>}
         {candidate.skills &&
@@ -215,6 +327,117 @@ function ExternalRow({ candidate }: { candidate: ExternalCandidate }) {
       {candidate.recommended_action && (
         <p className="body jo-sub">{candidate.recommended_action}</p>
       )}
+      {showModal && identity && (
+        <IdentityModal
+          identity={identity}
+          past={past}
+          onClose={() => setShowModal(false)}
+          onReopen={onReopenIdentity}
+        />
+      )}
     </li>
+  );
+}
+
+/** §28 — the resolution modal: confidence, the matched-evidence checklist,
+ *  the professional profile link, a freshness warning when the web disagrees
+ *  with the record, and the candidate's past results to reopen. */
+function IdentityModal({
+  identity,
+  past,
+  onClose,
+  onReopen,
+}: {
+  identity: ResolvedIdentity;
+  past: IdentityResolutionSummary[];
+  onClose: () => void;
+  onReopen?: (resolutionId: string) => void;
+}) {
+  const profile = identity.canonical_profile_url;
+  // §28: the ✓ checklist names the matched signals, never the contradictions.
+  const matched = identity.evidence.filter((e) => e.weight > 0);
+  return (
+    <div
+      className="jo-identity-modal-backdrop"
+      data-testid="jo-identity-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Resolved identity"
+    >
+      <div className="jo-identity-modal">
+        <div className="jo-identity-modal-head">
+          <h4 className="jo-intel-stage-title">Identity confidence: {identity.confidence}%</h4>
+          <button
+            type="button"
+            className="jo-external-chip"
+            onClick={onClose}
+            aria-label="Close"
+          >
+            Close
+          </button>
+        </div>
+        <p className="body jo-sub">
+          {statusLabel(identity.status)} · {identity.queries_used} search
+          {identity.queries_used === 1 ? "" : "es"} used
+          {identity.cached ? " · from cache" : ""}
+        </p>
+        {identity.freshness_status === "possible_change" && (
+          <p className="body src-note" role="alert">
+            Employment may have changed — the web now shows a different
+            employer than the record.
+          </p>
+        )}
+        {identity.evidence.some((e) => e.type === "contradiction") && (
+          <p className="body src-error" role="alert">
+            Conflicting evidence found — this identity is not safe to enrich
+            automatically.
+          </p>
+        )}
+        <h5 className="jo-sub">Matched evidence</h5>
+        {matched.length === 0 ? (
+          <p className="body src-note">No corroborating evidence found.</p>
+        ) : (
+          <ul className="jo-identity-evidence" data-testid="jo-identity-evidence">
+            {matched.map((item, index) => (
+              <li key={`${item.type}-${index}`} className="body">
+                ✓ {item.value}
+                {item.source_domain && (
+                  <span className="jo-sub"> — {item.source_domain}</span>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+        {profile && (
+          <p className="body">
+            Professional profile found:{" "}
+            <a href={profile} target="_blank" rel="noreferrer noopener">
+              {profile}
+            </a>
+          </p>
+        )}
+        {past.length > 0 && (
+          <>
+            <h5 className="jo-sub">Past results</h5>
+            <ul className="jo-identity-history" data-testid="jo-identity-history">
+              {past.map((row) => (
+                <li key={row.id} className="body">
+                  <button
+                    type="button"
+                    className="jo-identity-history-open"
+                    data-testid="jo-identity-history-open"
+                    onClick={() => onReopen?.(row.id)}
+                  >
+                    {statusLabel(row.status)} · {row.confidence}%
+                    {row.created_at ? ` · ${row.created_at.slice(0, 10)}` : ""}
+                    {row.expired ? " · expired" : ""}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
+      </div>
+    </div>
   );
 }
