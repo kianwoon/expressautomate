@@ -332,6 +332,9 @@
     "/api/opportunities/{opportunity_id}/identity-resolutions/{resolution_id}": [
       "GET"
     ],
+    "/api/opportunities/{opportunity_id}/identity-resolutions/{resolution_id}/reveal-contact": [
+      "POST"
+    ],
     "/api/opportunities/{opportunity_id}/intelligence": [
       "GET",
       "POST"
