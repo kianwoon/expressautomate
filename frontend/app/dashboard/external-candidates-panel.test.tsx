@@ -418,6 +418,13 @@ describe("a rendered candidate row", () => {
 });
 
 /** A resolved identity, §24/§57 shape. */
+/** Open the collapsed "Why this match?" toggle so the matched-evidence rows
+ *  are in the DOM a test can query. */
+function openEvidence(): void {
+  const why = screen.getByTestId("jo-identity-why") as HTMLDetailsElement;
+  fireEvent.click(why.querySelector("summary") as HTMLElement);
+}
+
 function identity(overrides: Partial<ResolvedIdentity> = {}): ResolvedIdentity {
   return {
     id: "res-1",
@@ -598,12 +605,18 @@ describe("the identity modal", () => {
 
     const modal = screen.getByTestId("jo-identity-modal");
     expect(modal.textContent).toContain("Identity confidence: 94%");
-    // The ✓ checklist names the matched signals (§28), and contradictions are
-    // rendered as ✗ rows so the recruiter can see why the identity is unsafe.
+    // Decision and the explaining contradiction stay visible; the full ✓
+    // checklist lives behind a closed "Why this match?" toggle by default.
+    const why = screen.getByTestId("jo-identity-why") as HTMLDetailsElement;
+    expect(why.open).toBe(false);
+    const contradiction = screen.getByTestId("jo-identity-contradiction").textContent;
+    expect(contradiction).toContain("✗ different location");
+
+    // Opening the toggle reveals the matched-signal rows (§28).
+    fireEvent.click(why.querySelector("summary") as HTMLElement);
     const evidence = screen.getByTestId("jo-identity-evidence").textContent;
     expect(evidence).toContain("UBS");
     expect(evidence).toContain("Singapore");
-    expect(evidence).toContain("✗ different location");
     // The professional profile link is offered.
     const link = screen.getByText("https://www.linkedin.com/in/yap-chean-wei");
     expect(link.getAttribute("href")).toBe("https://www.linkedin.com/in/yap-chean-wei");
@@ -661,6 +674,7 @@ describe("the identity modal", () => {
       },
     });
     fireEvent.click(screen.getByTestId("jo-identity-view"));
+    openEvidence();
     const groups = screen.getAllByTestId("jo-identity-evidence-group");
     expect(groups).toHaveLength(1);
     expect(groups[0].textContent).toBe("✓ Andrew Ng — rocketreach.co ×3");
@@ -690,6 +704,7 @@ describe("the identity modal", () => {
       },
     });
     fireEvent.click(screen.getByTestId("jo-identity-view"));
+    openEvidence();
     const groups = screen.getAllByTestId("jo-identity-evidence-group");
     expect(groups).toHaveLength(2);
     expect(groups[0].textContent).toBe(

@@ -249,6 +249,44 @@ def org_tokens(value: str | None) -> set[str]:
     return {t for t in normalize_text(value).split() if t not in _STOPWORDS}
 
 
+# Minimum token length that can carry identity signal. A two-character fragment
+# ("ag", "sg", "co") is a suffix or an artefact, never the distinctive part of
+# an employer or role.
+_SIGNAL_MIN_LEN = 3
+
+# A title only counts when its FULL phrase is present — at least two surviving
+# tokens, all of which the page must name. A single leftover token ("product"
+# from "Product Control") is a fragment, not a title: crediting it would let an
+# unrelated page that merely says "product" earn the +20 title signal.
+_TITLE_MIN_TOKENS = 2
+
+
+def signal_tokens(value: str | None) -> set[str]:
+    """Non-stopword tokens of `value` long enough to carry identity signal."""
+    return {t for t in (name_tokens(value) - _STOPWORDS) if len(t) >= _SIGNAL_MIN_LEN}
+
+
+def title_phrase_tokens(value: str | None) -> set[str]:
+    """Full-phrase title tokens, or empty when the title cannot qualify.
+
+    Requires the whole phrase — every surviving token must appear on the page
+    (`_contains`) — and at least `_TITLE_MIN_TOKENS` of them. "Product Control"
+    therefore scores only when a page names both "product" and "control"; a
+    page naming just "product" scores nothing and the modal shows nothing.
+    """
+    toks = signal_tokens(value)
+    return toks if len(toks) >= _TITLE_MIN_TOKENS else set()
+
+
+def company_phrase_tokens(value: str | None) -> set[str]:
+    """Company tokens: min one meaningful token, short fragments rejected.
+
+    `UBS`, `HSBC` and `OCBC` survive; a two-character fragment does not, so a
+    stray "ag" from `UBS AG` can never anchor a company match on its own.
+    """
+    return signal_tokens(value)
+
+
 def canonical_url(url: str) -> str:
     """§19 — http→https, drop query/fragment/trailing slash, lowercase host."""
     if not url:
@@ -567,13 +605,16 @@ def extract_evidence(
     # §15 positive signals.
     add("name", fp.name, "name")
 
-    company_tokens = org_tokens(fp.current_company)
+    company_tokens = company_phrase_tokens(fp.current_company)
     company_present = _contains(tokens, company_tokens)
     if company_present:
         add("current_company", fp.current_company or "", "current_company")
 
-    title_tokens = name_tokens(fp.current_title) - _STOPWORDS
-    title_present = bool(title_tokens) and _contains(tokens, title_tokens)
+    # Full-phrase title match only (§15): "Product Control" scores when the page
+    # names both words; a page naming just "product" is a fragment and scores
+    # nothing — it must neither resolve nor display as title evidence.
+    title_tokens = title_phrase_tokens(fp.current_title)
+    title_present = _contains(tokens, title_tokens)
     if title_present:
         add("title", fp.current_title or "", "title")
 
@@ -712,7 +753,7 @@ def _contradictions(
             )
         )
 
-    company_tokens = org_tokens(fp.current_company)
+    company_tokens = company_phrase_tokens(fp.current_company)
     company_present = _contains(tokens, company_tokens)
     location_tokens = name_tokens(fp.location)
     location_present = bool(location_tokens) and _contains(tokens, location_tokens)
@@ -738,9 +779,10 @@ def _contradictions(
         add("contradiction", "different location", "location_contradiction")
         return out
 
-    # Role contradiction: a title signal exists and the page asserts a title
-    # nothing like it.
-    title_tokens = name_tokens(fp.current_title) - _STOPWORDS
+    # Role contradiction: a full title phrase exists and the page asserts a
+    # title nothing like it. A fragment ("product") is not a title, so it must
+    # not manufacture a contradiction either.
+    title_tokens = title_phrase_tokens(fp.current_title)
     if title_tokens and not _contains(tokens, title_tokens):
         add("contradiction", "different role", "role_contradiction")
         return out
@@ -1005,6 +1047,15 @@ async def resolve(
     contradictions = 0
     queries_used = 0
 
+    # §32 ambiguity early stop: when the run is stably ambiguous — the leader is
+    # below RESOLVED but two distinct person-scoped identities already sit at
+    # PROBABLE or above — more queries only spend Serper quota to learn what the
+    # first few already showed. We stop once the leader's cluster is the same as
+    # the previous query's, provided at least three queries ran (so a single
+    # lucky page cannot pre-empt the run).
+    AMBIGUITY_MIN_QUERIES = 3
+    prev_leader: str | None = None
+
     for query in queries:
         result_set = await provider.search(SearchQuery(query=query))
         queries_used += 1
@@ -1022,6 +1073,27 @@ async def resolve(
             best = max(c.score for c in clusters.values())
             if best >= EARLY_STOP_MIN and contradictions == 0:
                 break
+
+            # Stable ambiguity: the best cluster is still below RESOLVED, yet two
+            # or more distinct person-scoped identities already clear the
+            # PROBABLE floor. If the leader has not changed from the previous
+            # query and we are at least `AMBIGUITY_MIN_QUERIES` in, the answer
+            # will not improve — stop and record the queries actually used.
+            leader = max(clusters.values(), key=lambda c: c.score)
+            distinct_high = {
+                c.key
+                for c in clusters.values()
+                if c.score >= PROBABLE_MIN
+                and (c.key.startswith("li:") or c.key.startswith("agg:"))
+            }
+            if (
+                queries_used >= AMBIGUITY_MIN_QUERIES
+                and best < EARLY_STOP_MIN
+                and len(distinct_high) >= 2
+                and leader.key == prev_leader
+            ):
+                break
+            prev_leader = leader.key
 
     ordered = sorted(clusters.values(), key=lambda c: c.score, reverse=True)
     top = ordered[0] if ordered else None

@@ -495,24 +495,8 @@ function IdentityModal({
             automatically.
           </p>
         )}
-        <h5 className="jo-sub">Matched evidence</h5>
-        {matched.length === 0 && contradictions.length === 0 ? (
-          <p className="body src-note">No corroborating evidence found.</p>
-        ) : (
-          <ul className="jo-identity-evidence" data-testid="jo-identity-evidence">
-            {matchedGroups.map((group, index) => {
-              const note = groupNote(group);
-              return (
-                <li
-                  key={`${group.type}-${index}`}
-                  className="body"
-                  data-testid="jo-identity-evidence-group"
-                >
-                  ✓ {group.value}
-                  {note && <span className="jo-sub"> — {note}</span>}
-                </li>
-              );
-            })}
+        {contradictions.length > 0 && (
+          <ul className="jo-identity-evidence" data-testid="jo-identity-contradictions">
             {contradictions.map((item, index) => (
               <li
                 key={`contra-${item.type}-${index}`}
@@ -535,6 +519,28 @@ function IdentityModal({
             — none corroborates your employer, title or location.
           </p>
         )}
+        <details className="jo-identity-why" data-testid="jo-identity-why">
+          <summary className="body jo-sub">Why this match? — matched evidence</summary>
+          {matched.length === 0 ? (
+            <p className="body src-note">No corroborating evidence found.</p>
+          ) : (
+            <ul className="jo-identity-evidence" data-testid="jo-identity-evidence">
+              {matchedGroups.map((group, index) => {
+                const note = groupNote(group);
+                return (
+                  <li
+                    key={`${group.type}-${index}`}
+                    className="body"
+                    data-testid="jo-identity-evidence-group"
+                  >
+                    ✓ {group.value}
+                    {note && <span className="jo-sub"> — {note}</span>}
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </details>
         {profile && (
           <p className="body">
             Professional profile found:{" "}

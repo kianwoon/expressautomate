@@ -696,6 +696,61 @@ async def test_andrew_ng_live_shape_is_at_most_probable_with_no_profile():
     assert res.enrichment_allowed is False
 
 
+async def test_title_fragment_never_scores_or_displays():
+    """§15 — a single-word title fragment must not score.
+
+    Regression: the fingerprint's "Product Control" credited +20 to any page
+    that merely said "product". The match now requires the full phrase (both
+    "product" and "control"), so a page naming only "product" yields no title
+    evidence at all — and nothing for the modal to display.
+    """
+    fp_ = andrew_fp(previous_companies=(), location=None)
+    partial = result(
+        "Andrew Ng - product analyst",
+        "https://www.linkedin.com/in/andrew-ng-product",
+        "Andrew Ng works on product.",
+    )
+    ev = identity_resolver.extract_evidence(partial, fp_, identity_resolver.WEIGHTS)
+    assert not any(e.type == "title" for e in ev)
+
+    full = result(
+        "Andrew Ng - Product Control",
+        "https://www.linkedin.com/in/andrew-ng-pc",
+        "Andrew Ng, Product Control.",
+    )
+    ev_full = identity_resolver.extract_evidence(full, fp_, identity_resolver.WEIGHTS)
+    assert any(e.type == "title" for e in ev_full)
+
+
+async def test_stable_ambiguity_stops_early_in_refresh_mode():
+    """§32 — a stably ambiguous run must not spend the whole refresh budget.
+
+    Two distinct LinkedIn profiles both clear PROBABLE but neither resolves and
+    the leader never changes, so the run stops at 3 queries (not the refresh
+    budget of 5) and records the queries actually used.
+    """
+    fp_ = andrew_fp(previous_companies=())
+    queries = build_queries(fp_)
+    assert len(queries) >= 5, "refresh budget must offer more than 3 queries"
+    page = [
+        result(
+            "Andrew Ng - Product Control - UBS",
+            "https://www.linkedin.com/in/andrew-ng-a",
+            "Andrew Ng, Product Control at UBS.",
+        ),
+        result(
+            "Andrew Ng - Product Control - UBS",
+            "https://www.linkedin.com/in/andrew-ng-b",
+            "Andrew Ng, Product Control at UBS.",
+        ),
+    ]
+    provider = FakeProvider({q: list(page) for q in queries})
+    res = await resolve(fp_, provider, mode="refresh")
+    assert res.status != "resolved"
+    assert res.queries_used == 3
+    assert len(provider.queries) == 3
+
+
 # --------------------------------------------------------------------------- #
 # API (§34 cache, §56)
 # --------------------------------------------------------------------------- #
