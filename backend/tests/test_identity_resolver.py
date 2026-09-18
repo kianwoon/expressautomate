@@ -68,12 +68,12 @@ class FailingProvider:
         raise self.exc
 
 
-def result(title, url, snippet=None, query="q"):
+def result(title, url, snippet=None, query="q", domain="linkedin.com"):
     return NormalizedSearchResult(
         title=title,
         url=url,
         snippet=snippet,
-        domain="linkedin.com",
+        domain=domain,
         position=1,
         provider="serper",
         query=query,
@@ -508,6 +508,192 @@ async def test_freshness_possible_change_only_on_contradiction():
     res = await resolve(fp_, provider)
     assert res.contradictions > 0
     assert res.freshness_status == "possible_change"
+
+
+# --------------------------------------------------------------------------- #
+# Aggregator over-merge, Tier-C trust and ambiguity (2026-09-03)
+#
+# Scoring math after these fixes, for `andrew_fp()` (UBS / Product Control /
+# Singapore / prev Barclays) on a RocketReach page naming all of it:
+#   name 15→7, company 25→12, title 20→10, location 15→7, previous 10→5,
+#   career_history 10→5  ⇒ 46, well under PROBABLE_MIN(70).
+# Tier C halves and rounds down every positive weight; contradictions keep full
+# magnitude. Three mirrored RocketReach pages therefore score 46 each, not one
+# 100-point stack.
+# --------------------------------------------------------------------------- #
+
+
+def _rocketreach(slug: str) -> NormalizedSearchResult:
+    return result(
+        "Andrew Ng - Product Control - UBS",
+        f"https://rocketreach.co/andrew-ng-{slug}",
+        "Andrew Ng, UBS and Barclays, Singapore.",
+        domain="rocketreach.co",
+    )
+
+
+async def test_aggregator_pages_do_not_merge_into_one_cluster():
+    """§18 — three person-scoped RocketReach profile URLs are three people (or
+    at least three claims), never one cluster. Folding them by host previously
+    stacked name+company per URL into a false RESOLVED."""
+    fp_ = andrew_fp()
+    queries = build_queries(fp_)
+    pages = [_rocketreach("a"), _rocketreach("b"), _rocketreach("c")]
+    provider = FakeProvider({q: list(pages) for q in queries})
+    res = await resolve(fp_, provider)
+
+    agg_clusters = [c for c in res.clusters if c.key.startswith("agg:")]
+    assert len(agg_clusters) == 3, "each aggregator URL is its own cluster"
+    # Tier-C halving keeps each page modest — none reaches PROBABLE alone.
+    assert all(c.score < identity_resolver.PROBABLE_MIN for c in agg_clusters)
+    assert res.confidence < identity_resolver.RESOLVED_MIN
+    assert res.status != "resolved"
+    assert res.enrichment_allowed is False
+
+
+async def test_tier_c_halves_positive_signals():
+    """§23 — the same page scores roughly half on an aggregator domain as it
+    does on a first-party domain."""
+    fp_ = andrew_fp()
+    W = identity_resolver.WEIGHTS
+    tier_b = result(
+        "Andrew Ng - Product Control - UBS",
+        "https://www.ubs.example/andrew-ng",
+        "Andrew Ng, UBS and Barclays, Singapore.",
+        domain="ubs.example",
+    )
+    tier_c = result(
+        "Andrew Ng - Product Control - UBS",
+        "https://rocketreach.co/andrew-ng",
+        "Andrew Ng, UBS and Barclays, Singapore.",
+        domain="rocketreach.co",
+    )
+    b = sum(e.weight for e in identity_resolver.extract_evidence(tier_b, fp_, W))
+    c = sum(e.weight for e in identity_resolver.extract_evidence(tier_c, fp_, W))
+    assert c < b
+    assert c <= b // 2
+
+
+async def test_two_distinct_profiles_downgrade_to_probable():
+    """§17 — two distinct person-scoped identities both at PROBABLE or above
+    means we cannot say *which* person this is. The score stays (it is the best
+    candidate's) but the status must be `probable` and no canonical profile is
+    offered — a 93% RESOLVED on an ambiguous name must not stand."""
+    fp_ = andrew_fp()
+    queries = build_queries(fp_)
+    provider = FakeProvider(
+        {
+            queries[0]: [
+                result(
+                    "Andrew Ng - Product Control - UBS Singapore",
+                    "https://www.linkedin.com/in/andrew-ng-ubs",
+                    "Product Control at UBS in Singapore. Previously Barclays.",
+                ),
+                result(
+                    "Andrew Ng - Product Control - UBS Singapore",
+                    "https://www.linkedin.com/in/andrew-ng-barclays",
+                    "Product Control at UBS in Singapore. Previously Barclays.",
+                ),
+            ]
+        }
+    )
+    res = await resolve(fp_, provider)
+    assert res.confidence >= identity_resolver.PROBABLE_MIN
+    assert res.status == "probable"
+    assert res.canonical_profile_url is None
+    assert res.freshness_status == "unknown"
+    assert res.enrichment_allowed is False
+
+
+async def test_other_location_suppresses_location_credit():
+    """§17 query-echo: a snippet quoting the query's "Singapore" *and* a real
+    "White Plains, New York" must not earn the +15 location signal."""
+    fp_ = andrew_fp()
+    queries = build_queries(fp_)
+    provider = FakeProvider(
+        {
+            q: [
+                result(
+                    "Andrew Ng",
+                    "https://rocketreach.co/andrew-ng-ny",
+                    "Andrew Ng, Singapore. Global Markets Business Manager, "
+                    "White Plains, New York, USA.",
+                    domain="rocketreach.co",
+                )
+            ]
+            for q in queries
+        }
+    )
+    res = await resolve(fp_, provider)
+    assert not any(e.type == "location" for e in res.evidence)
+
+
+async def test_new_york_location_contradicts_singapore_fingerprint():
+    """§17 — a page placing the name only in New York contradicts a Singapore
+    fingerprint: no location credit, and the contradiction fires."""
+    fp_ = andrew_fp()
+    queries = build_queries(fp_)
+    provider = FakeProvider(
+        {
+            q: [
+                result(
+                    "Andrew Ng",
+                    "https://example.com/andrew-ng",
+                    "Andrew Ng, Global Markets Business Manager, "
+                    "White Plains, New York, USA.",
+                )
+            ]
+            for q in queries
+        }
+    )
+    res = await resolve(fp_, provider)
+    assert not any(e.type == "location" for e in res.evidence)
+    assert res.contradictions > 0
+    assert res.enrichment_allowed is False
+
+
+async def test_andrew_ng_live_shape_is_at_most_probable_with_no_profile():
+    """Acceptance gate (1): the observed live shape — RocketReach-heavy, the
+    real UBS/Barcalys profile in White Plains NY, plus other Singapore namesakes
+    — must not resolve and must offer no canonical profile."""
+    fp_ = andrew_fp()
+    provider = FakeProvider(
+        {
+            q: [
+                result(
+                    "Andrew Ng - Product Control - UBS",
+                    "https://rocketreach.co/andrew-ng-1",
+                    "Andrew Ng, UBS, Product Control, Singapore.",
+                    domain="rocketreach.co",
+                ),
+                result(
+                    "Andrew Ng - Barclays",
+                    "https://rocketreach.co/andrew-ng-2",
+                    "Andrew Ng, Product Control, Singapore.",
+                    domain="rocketreach.co",
+                ),
+                result(
+                    "Andrew Ng - Global Markets Business Manager, US/London "
+                    "Credit Product Controller",
+                    "https://www.linkedin.com/in/andrew-ng-ny",
+                    "Andrew Ng, UBS 14 yrs 9 mos, Global Markets Business "
+                    "Manager. White Plains, New York, USA.",
+                ),
+                result(
+                    "Andrew Ng - DBS Group Executive",
+                    "https://www.linkedin.com/in/andrew-ng-sg",
+                    "Andrew Ng, DBS Group Executive, Operational Risk AVP, "
+                    "Singapore.",
+                ),
+            ]
+            for q in build_queries(fp_)
+        }
+    )
+    res = await resolve(fp_, provider)
+    assert res.status in ("probable", "unresolved")
+    assert res.status != "resolved"
+    assert res.canonical_profile_url is None
+    assert res.enrichment_allowed is False
 
 
 # --------------------------------------------------------------------------- #

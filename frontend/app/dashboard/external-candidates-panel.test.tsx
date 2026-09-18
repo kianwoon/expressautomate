@@ -560,6 +560,20 @@ describe("the per-candidate Resolve Identity control", () => {
     expect(screen.getByTestId("jo-identity-cached").textContent).toBe("Cached");
   });
 
+  it("labels a high-confidence probable identity as needing the recruiter's call", () => {
+    panel({
+      taskStatus: "completed",
+      results: results(),
+      identities: {
+        "c-1": identity({ status: "probable", confidence: 93, canonical_profile_url: null }),
+      },
+      onResolveIdentity: () => {},
+    });
+    expect(screen.getByTestId("jo-identity-badge").textContent).toBe(
+      "Identity: Probable — needs your call",
+    );
+  });
+
   it("shows no Cached tag when the result is fresh", () => {
     panel({
       taskStatus: "completed",

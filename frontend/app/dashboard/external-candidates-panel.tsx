@@ -197,10 +197,20 @@ function Results({
   );
 }
 
-/** §16/§28 labels for a resolution status. */
-function statusLabel(status: ResolvedIdentity["status"]): string {
+/** §16/§28 labels for a resolution status. A `probable` outcome at or above
+ *  the resolved floor is the ambiguity case — the score is high but 2+ possible
+ *  people were found, so the label asks the recruiter to choose rather than
+ *  claiming a resolution. */
+function statusLabel(
+  status: ResolvedIdentity["status"],
+  confidence?: number,
+): string {
   if (status === "resolved") return "Resolved";
-  if (status === "probable") return "Probable";
+  if (status === "probable") {
+    return confidence != null && confidence >= 85
+      ? "Probable — needs your call"
+      : "Probable";
+  }
   if (status === "needs_context") return "Needs more detail";
   return "Not resolved";
 }
@@ -261,7 +271,7 @@ function ExternalRow({
             data-status={identity?.status ?? "none"}
           >
             {identity
-              ? `Identity: ${statusLabel(identity.status)}`
+              ? `Identity: ${statusLabel(identity.status, identity.confidence)}`
               : "Identity: Not resolved"}
           </span>
           {identity?.cached && (
@@ -463,10 +473,16 @@ function IdentityModal({
           </button>
         </div>
         <p className="body jo-sub">
-          {statusLabel(identity.status)} · {identity.queries_used} search
+          {statusLabel(identity.status, identity.confidence)} · {identity.queries_used} search
           {identity.queries_used === 1 ? "" : "es"} used
           {identity.cached ? " · from cache" : ""}
         </p>
+        {identity.status === "probable" && identity.confidence >= 85 && (
+          <p className="body src-note" role="alert">
+            More than one possible identity was found — this is not safe to
+            enrich automatically. Pick the right profile or run a Deep search.
+          </p>
+        )}
         {identity.freshness_status === "possible_change" && (
           <p className="body src-note" role="alert">
             Employment may have changed — the web now shows a different

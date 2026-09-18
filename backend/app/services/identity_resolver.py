@@ -61,6 +61,62 @@ WEIGHTS: dict[str, int] = {
     "role_contradiction": -20,
 }
 
+# --- §23 source trust tiers (unimplemented until now) -----------------------
+#
+# Not every page is equal evidence. The tier decides the multiplier applied to
+# every *positive* signal extracted from a result; contradictions keep full
+# magnitude (a wrong-person page is a red flag whoever hosts it).
+#
+#   Tier A — full weight: the employer's own site, professional associations,
+#            universities, conference programmes. First-party or curated.
+#   Tier B — full weight: LinkedIn / GitHub / personal portfolios. A person's
+#            own hand-maintained page.
+#   Tier C — half weight: people-aggregators and scraped directories
+#            (RocketReach, ZoomInfo, SignalHire, Apollo, Lusha …). They mirror
+#            each other, so three of them are not three independent sightings.
+#
+# The multiplier is a module constant so it is configurable in one place, next
+# to `WEIGHTS`, not recomputed per call.
+TIER_C_MULTIPLIER = 0.5
+
+# People-aggregator profile domains. Their *profile* URLs are person-scoped the
+# way a LinkedIn `/in/` URL is, so they must cluster per URL — see
+# `cluster_key`. This is a subset of the Tier C trust set.
+AGGREGATOR_DOMAINS = frozenset(
+    {
+        "rocketreach.co",
+        "zoominfo.com",
+        "signalhire.com",
+        "apollo.io",
+        "lusha.com",
+        "uplead.com",
+        "leadiq.com",
+        "contactout.com",
+        "hunter.io",
+        "clearbit.com",
+        "peopledatalabs.com",
+        "wiza.co",
+        "kaspr.io",
+        "seamless.ai",
+        "spokeo.com",
+    }
+)
+
+# Tier C trust domains: the aggregators above plus the scraped-directory
+# family. Matched on the registrable suffix, so `www.rocketreach.co` and
+# `rocketreach.co` are both Tier C.
+TIER_C_DOMAINS = AGGREGATOR_DOMAINS | frozenset(
+    {"crunchbase.com", "companieshouse.gov.uk", "opencorporates.com", "dnb.com"}
+)
+
+
+def _matches_domain(domain: str | None, domains: frozenset[str]) -> bool:
+    """Whether `domain` is one of `domains` or a subdomain of one."""
+    host = (domain or "").lower().strip().lstrip(".")
+    if not host:
+        return False
+    return any(host == d or host.endswith("." + d) for d in domains)
+
 # --- §16 confidence thresholds and §31 query budget ---
 
 RESOLVED_MIN = 85
@@ -78,6 +134,29 @@ REQUIRE_RESOLVED_IDENTITY = True
 # location string mentions one of these matches the location signal; a result
 # that places the name somewhere else entirely is a location contradiction.
 _SINGAPORE = {"singapore", "sg", "s'pore"}
+
+# High-precision list of other major markets (§17). Deliberately not a global
+# gazetteer — an explicit, well-known market is the signal we trust. Tokens are
+# normalized whole words, so multi-word places are joined ("newyork",
+# "whiteplains", "unitedstates").
+_OTHER_LOCATIONS = frozenset(
+    {
+        # North America
+        "newyork", "newyorkcity", "nyc", "unitedstates", "usa",
+        "america", "whiteplains", "california", "sanfrancisco", "chicago",
+        "boston", "seattle", "houston", "toronto", "canada",
+        # Europe
+        "london", "paris", "berlin", "frankfurt", "zurich", "geneva",
+        "amsterdam", "madrid", "milan", "luxembourg", "dublin", "edinburgh",
+        "manchester", "unitedkingdom", "uk", "england", "germany",
+        "switzerland", "france",
+        # Asia / Middle East / Oceania
+        "hongkong", "tokyo", "osaka", "shanghai", "beijing", "shenzhen",
+        "mumbai", "bangalore", "bengaluru", "delhi", "chennai", "kolkata",
+        "dubai", "abudhabi", "doha", "riyadh", "seoul", "taipei", "jakarta",
+        "bangkok", "manila", "kualalumpur", "sydney", "melbourne", "auckland",
+    }
+)
 
 # Institutions that count as the §15 education signal.
 _EDU_HINTS = (
@@ -194,15 +273,24 @@ def is_professional_profile(url: str) -> bool:
 def cluster_key(url: str) -> str:
     """§18 — the key two results share when they describe the same person.
 
-    A LinkedIn profile URL is person-scoped, so it clusters on its own. Every
-    other URL clusters by host: a company bio and a conference page on the
-    same domain are one identity, two pages."""
+    A LinkedIn profile URL is person-scoped, so it clusters on its own. A
+    *people-aggregator* profile URL (RocketReach, ZoomInfo …) is person-scoped
+    in exactly the same way: `/p/andrew-ng` and `/p/andrew-ng-2` are two people.
+    Folding them by host merged three distinct profiles into one cluster and
+    stacked their name+company signals into a false RESOLVED, so aggregators
+    also cluster per canonical URL.
+
+    Every other URL clusters by host: a company bio and a conference page on
+    the same domain are one identity, two pages."""
     canon = canonical_url(url)
     if is_professional_profile(canon):
         return f"li:{canon}"
     from urllib.parse import urlsplit
 
-    return f"dom:{(urlsplit(canon).hostname or '') if canon else ''}"
+    host = (urlsplit(canon).hostname or "") if canon else ""
+    if _matches_domain(host, AGGREGATOR_DOMAINS):
+        return f"agg:{canon}"
+    return f"dom:{host}"
 
 
 # --------------------------------------------------------------------------- #
@@ -444,7 +532,20 @@ def extract_evidence(
     name = name_tokens(fp.name)
     out: list[Evidence] = []
 
+    # §23: Tier C (aggregator/directory) positive signals are discounted so a
+    # handful of mirrored directory pages cannot outvote one real first-party
+    # signal. Round down, floor of 1 for a positive signal. Contradictions are
+    # handled in `_contradictions` and keep full magnitude — a wrong-person page
+    # is a red flag whoever hosts it.
+    tier_c = _matches_domain(result.domain, TIER_C_DOMAINS)
+
+    def scaled(weight: int) -> int:
+        if weight <= 0 or not tier_c:
+            return weight
+        return max(1, int(weight * TIER_C_MULTIPLIER))
+
     def add(etype: str, value: str, weight_key: str) -> None:
+        weight = scaled(weights[weight_key])
         out.append(
             Evidence(
                 type=etype,
@@ -452,8 +553,8 @@ def extract_evidence(
                 source_url=result.url,
                 source_domain=result.domain,
                 query=result.query,
-                confidence=min(100, abs(weights[weight_key]) * 4),
-                weight=weights[weight_key],
+                confidence=min(100, abs(weight) * 4),
+                weight=weight,
             )
         )
 
@@ -476,8 +577,15 @@ def extract_evidence(
     if title_present:
         add("title", fp.current_title or "", "title")
 
+    # §15/§17: the location signal only counts when the page mentions the
+    # candidate's location AND does not also name a different market. Query-echo
+    # contamination is common — a snippet quotes the query's "Singapore" while
+    # the profile is actually "White Plains, New York" — so requiring the
+    # absence of another location stops a page from earning the +15 for a
+    # location it also contradicts.
     location_present = _contains(tokens, name_tokens(fp.location))
-    if location_present:
+    location_other = _mentions_any_other_location(tokens)
+    if location_present and not location_other:
         add("location", fp.location or "", "location")
 
     matched_previous = False
@@ -534,6 +642,7 @@ def extract_evidence(
         ]
         if matched_skills:
             capped = min(weights["skills"], 5 * len(matched_skills))
+            weight = scaled(capped)
             out.append(
                 Evidence(
                     type="skills",
@@ -541,8 +650,8 @@ def extract_evidence(
                     source_url=result.url,
                     source_domain=result.domain,
                     query=result.query,
-                    confidence=min(100, capped * 4),
-                    weight=capped,
+                    confidence=min(100, weight * 4),
+                    weight=weight,
                 )
             )
 
@@ -556,6 +665,7 @@ def extract_evidence(
     matched_terms = [t for t in context_terms(fp) if t in tokens]
     if matched_terms:
         capped = min(3 * weights["context"], 3 * len(matched_terms))
+        weight = scaled(capped)
         out.append(
             Evidence(
                 type="context",
@@ -563,8 +673,8 @@ def extract_evidence(
                 source_url=result.url,
                 source_domain=result.domain,
                 query=result.query,
-                confidence=min(100, capped * 4),
-                weight=capped,
+                confidence=min(100, weight * 4),
+                weight=weight,
             )
         )
 
@@ -638,25 +748,33 @@ def _contradictions(
     return out
 
 
+def _other_location_hits(tokens: set[str]) -> set[str]:
+    """The set of known other-market tokens the page names, if any."""
+    return tokens & _OTHER_LOCATIONS
+
+
+def _mentions_any_other_location(tokens: set[str]) -> bool:
+    """Whether the page names any known market other than the candidate's.
+
+    Unlike `_mentions_other_location` this does NOT suppress on the presence of
+    the candidate's own location: a snippet echoing the query's "Singapore"
+    alongside a real "White Plains, New York" names a different market and must
+    not earn the location signal (query-echo contamination, §17)."""
+    return bool(_other_location_hits(tokens))
+
+
 def _mentions_other_location(tokens: set[str], fp: Fingerprint) -> bool:
-    """Whether the page names a location that is not the candidate's."""
+    """Whether the page places the name somewhere else entirely.
+
+    Used by the contradiction path: a page that echoes the candidate's own
+    location (query contamination) is not a location contradiction, so the
+    candidate's own location suppresses the signal here.
+
+    `tokens` are normalized whole words, so multi-word markets appear here in
+    their joined form ("newyork", "whiteplains", "hongkong", "unitedstates").
+    """
     known = name_tokens(fp.location) | _SINGAPORE
-    # A tiny, high-precision list: an explicit different country is the signal
-    # we trust. This is deliberately not a global gazetteer.
-    other = {
-        "london",
-        "hongkong",
-        "newyork",
-        "tokyo",
-        "sydney",
-        "dubai",
-        "shanghai",
-        "mumbai",
-        "bangalore",
-        "paris",
-        "berlin",
-    }
-    return bool(tokens & other) and not (tokens & known)
+    return _mentions_any_other_location(tokens) and not (tokens & known)
 
 
 # --------------------------------------------------------------------------- #
@@ -815,9 +933,14 @@ def _safety_gate(
         return False
     # Multiple high-scoring identities remaining (§17).
     high = [c for c in clusters if c.score >= PROBABLE_MIN]
-    # Distinct LinkedIn identities at or above the probable floor are two
-    # different people; two pages on one domain are one person (§18).
-    distinct = {c.key for c in high if c.key.startswith("li:")}
+    # Distinct person-scoped identities at or above the probable floor are two
+    # different people: a LinkedIn `/in/` URL and an aggregator profile URL are
+    # both person-scoped (§18). Two pages on one host are one person.
+    distinct = {
+        c.key
+        for c in high
+        if c.key.startswith("li:") or c.key.startswith("agg:")
+    }
     if len(distinct) >= 2:
         return False
     return True
@@ -906,11 +1029,37 @@ async def resolve(
     status = _status_for(confidence, thresholds)
     freshness = _freshness(fp, ordered)
 
+    # §17 ambiguity: two or more DISTINCT person-scoped identities sitting at
+    # PROBABLE or above means we do not know *which* person this is. The score
+    # is real (it is the best candidate's), but reporting RESOLVED is a lie — so
+    # downgrade to `probable`, withhold the canonical profile, and drop the
+    # freshness verdict (a job-change warning is meaningless when the subject is
+    # ambiguous). Enrichment stays blocked via the status check in the gate.
+    distinct_people = {
+        c.key
+        for c in ordered
+        if c.score >= PROBABLE_MIN and (c.key.startswith("li:") or c.key.startswith("agg:"))
+    }
+    ambiguous = len(distinct_people) >= 2
+    if ambiguous and status == "resolved":
+        status = "probable"
+        freshness = "unknown"
+
     evidence_flat = list(top.evidence) if top else []
     # §15: a canonical profile is only trustworthy when the top cluster carries
-    # employer/title/location corroboration on the same page. Otherwise a
-    # same-name namesake would be presented as "Professional profile found".
-    canonical = top.profile_url if top and top.corroborated else None
+    # employer/title/location corroboration on the same page, the identity is
+    # not ambiguous, and the cluster actually clears the probable floor — a
+    # corroborated same-name page below PROBABLE is still a coin flip and must
+    # not be presented as "Professional profile found". The one exception is a
+    # URL that IS the candidate's own discovered source profile (§6): finding
+    # that very page is the strongest single signal and stands on its own.
+    source_profile_found = top is not None and any(
+        e.type == "source_profile" for e in top.evidence
+    )
+    offerable = top is not None and top.corroborated and (
+        confidence >= PROBABLE_MIN or source_profile_found
+    )
+    canonical = top.profile_url if (offerable and not ambiguous) else None
     return Resolution(
         status=status,
         confidence=confidence,
