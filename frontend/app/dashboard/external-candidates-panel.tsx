@@ -64,6 +64,9 @@ export function ExternalCandidatesStage({
   identityHistory,
   onResolveIdentity,
   onReopenIdentity,
+  onRevealContact,
+  revealingFor,
+  revealError,
 }: {
   state: ExternalPanelState;
   starting: boolean;
@@ -83,6 +86,12 @@ export function ExternalCandidatesStage({
   identityHistory?: IdentityResolutionSummary[];
   onResolveIdentity?: (candidate: ExternalCandidate, mode?: IdentityResolveMode) => void;
   onReopenIdentity?: (resolutionId: string) => void;
+  /** §26 — reveal contacts for one stored resolution (public emails + vendor). */
+  onRevealContact?: (resolutionId: string) => void;
+  /** §26 — the resolution id currently revealing, or null. */
+  revealingFor?: string | null;
+  /** §26 — a reveal refusal (the 409 sentence) or failure. */
+  revealError?: string | null;
 }) {
   return (
     <div className="jo-intel-stage" data-testid="jo-external-panel">
@@ -138,6 +147,9 @@ export function ExternalCandidatesStage({
           identityHistory={identityHistory}
           onResolveIdentity={onResolveIdentity}
           onReopenIdentity={onReopenIdentity}
+          onRevealContact={onRevealContact}
+          revealingFor={revealingFor}
+          revealError={revealError}
         />
       )}
     </div>
@@ -161,6 +173,9 @@ function Results({
   identityHistory,
   onResolveIdentity,
   onReopenIdentity,
+  onRevealContact,
+  revealingFor,
+  revealError,
 }: {
   results: ExternalSearchResults;
   identities?: Record<string, ResolvedIdentity>;
@@ -168,6 +183,9 @@ function Results({
   identityHistory?: IdentityResolutionSummary[];
   onResolveIdentity?: (candidate: ExternalCandidate, mode?: IdentityResolveMode) => void;
   onReopenIdentity?: (resolutionId: string) => void;
+  onRevealContact?: (resolutionId: string) => void;
+  revealingFor?: string | null;
+  revealError?: string | null;
 }) {
   const line = summaryLine(results.summary);
   if (results.results.length === 0) {
@@ -190,6 +208,9 @@ function Results({
             history={identityHistory}
             onResolveIdentity={onResolveIdentity}
             onReopenIdentity={onReopenIdentity}
+            onRevealContact={onRevealContact}
+            revealing={revealingFor === candidate.id}
+            revealError={revealError}
           />
         ))}
       </ul>
@@ -222,6 +243,9 @@ function ExternalRow({
   history,
   onResolveIdentity,
   onReopenIdentity,
+  onRevealContact,
+  revealing,
+  revealError,
 }: {
   candidate: ExternalCandidate;
   identity?: ResolvedIdentity;
@@ -229,6 +253,9 @@ function ExternalRow({
   history?: IdentityResolutionSummary[];
   onResolveIdentity?: (candidate: ExternalCandidate, mode?: IdentityResolveMode) => void;
   onReopenIdentity?: (resolutionId: string) => void;
+  onRevealContact?: (resolutionId: string) => void;
+  revealing?: boolean;
+  revealError?: string | null;
 }) {
   const score = Math.round(candidate.match_score);
   const platform = platformLabel(candidate);
@@ -383,6 +410,9 @@ function ExternalRow({
           past={past}
           onClose={() => setShowModal(false)}
           onReopen={onReopenIdentity}
+          onRevealContact={onRevealContact}
+          revealing={revealing}
+          revealError={revealError}
         />
       )}
     </li>
@@ -436,13 +466,26 @@ function IdentityModal({
   past,
   onClose,
   onReopen,
+  onRevealContact,
+  revealing,
+  revealError,
 }: {
   identity: ResolvedIdentity;
   past: IdentityResolutionSummary[];
   onClose: () => void;
   onReopen?: (resolutionId: string) => void;
+  onRevealContact?: (resolutionId: string) => void;
+  revealing?: boolean;
+  revealError?: string | null;
 }) {
   const profile = identity.canonical_profile_url;
+  const publicEmails = identity.public_emails ?? [];
+  const enrichment = identity.contact_enrichment ?? null;
+  // §17/§26: Reveal Contact is offered only for a `resolved` identity. A
+  // `probable` one is the ambiguity case — spending a vendor credit on a coin
+  // flip is exactly what the safety gate exists to prevent, so the button is
+  // simply not offered (the server would refuse with a 409 anyway).
+  const canReveal = identity.status === "resolved" && Boolean(onRevealContact);
   // §28: the ✓ checklist names the matched signals. Contradictions are shown
   // as ✗ rows rather than hidden, so a recruiter can see *why* an identity is
   // unresolved; zero-weight same-name profile notes are shown separately.
@@ -548,6 +591,82 @@ function IdentityModal({
               {profile}
             </a>
           </p>
+        )}
+        {/* §26 Reveal Contact — the decision area. The button is offered only
+            when the identity is resolved; below it, the two answer sections. */}
+        {canReveal && (
+          <div className="jo-identity-reveal" data-testid="jo-identity-reveal">
+            <button
+              type="button"
+              className="jo-external-chip jo-identity-reveal-btn"
+              data-testid="jo-identity-reveal-button"
+              onClick={() => onRevealContact?.(identity.id)}
+              disabled={revealing}
+            >
+              {revealing ? "Revealing…" : "Reveal Contact"}
+            </button>
+          </div>
+        )}
+        {revealError && (
+          <p className="body src-error" role="alert" data-testid="jo-reveal-error">
+            {revealError}
+          </p>
+        )}
+        {/* The free half: publicly listed, unverified addresses. */}
+        {publicEmails.length > 0 && (
+          <div data-testid="jo-public-emails">
+            <h5 className="jo-sub">Publicly listed — unverified</h5>
+            <ul className="jo-identity-emails">
+              {publicEmails.map((item) => (
+                <li key={item.email} className="body">
+                  <a href={`mailto:${item.email}`}>{item.email}</a>
+                  {item.source_url && (
+                    <span className="jo-sub">
+                      {" "}
+                      —{" "}
+                      <a
+                        href={item.source_url}
+                        target="_blank"
+                        rel="noreferrer noopener"
+                      >
+                        source
+                      </a>
+                    </span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+        {/* The paid half: the vendor answer, or the honest empty message. */}
+        {enrichment && (
+          <div data-testid="jo-contact-enrichment">
+            <h5 className="jo-sub">Verified contacts</h5>
+            {enrichment.message && (
+              <p className="body src-note" data-testid="jo-contact-provider-message">
+                {enrichment.message}
+              </p>
+            )}
+            {(enrichment.emails?.length ?? 0) > 0 && (
+              <ul className="jo-identity-emails" data-testid="jo-provider-emails">
+                {enrichment.emails.map((item, index) => (
+                  <li key={`prov-${index}`} className="body">
+                    <a href={`mailto:${item.email}`}>{String(item.email)}</a>
+                    {enrichment.verified && <span className="jo-sub"> · verified</span>}
+                  </li>
+                ))}
+              </ul>
+            )}
+            {(enrichment.phones?.length ?? 0) > 0 && (
+              <ul className="jo-identity-emails" data-testid="jo-provider-phones">
+                {enrichment.phones.map((item, index) => (
+                  <li key={`tel-${index}`} className="body">
+                    {String(item.number ?? item.phone ?? "")}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
         )}
         {past.length > 0 && (
           <>

@@ -802,6 +802,9 @@ function Detail({
           identityHistory={identity.history}
           onResolveIdentity={(candidate, mode) => void identity.resolve(candidate, mode)}
           onReopenIdentity={(resolutionId) => void identity.reopen(resolutionId)}
+          onRevealContact={(resolutionId) => void identity.reveal(resolutionId)}
+          revealingFor={identity.revealingFor}
+          revealError={identity.revealError}
         />
       )}
       </div>

@@ -180,6 +180,15 @@ export function identityResolutionsPath(id: string, resolutionId?: string): stri
 }
 
 /**
+ * §26 Reveal Contact — the POST that returns the free public emails plus the
+ * vendor answer for one stored resolution. A sub-path of the resolution id, so
+ * the `{resolution_id}` route owns it.
+ */
+export function revealContactPath(id: string, resolutionId: string): string {
+  return `${identityResolutionsPath(id, resolutionId)}/reveal-contact`;
+}
+
+/**
  * How often the panel asks the career bot how the search is going. The
  * service's own spec recommends ~5s (§3: "do not hammer") and its searches
  * run 30–120s, so this sits between the sourcing poll and a guess. Same

@@ -1095,6 +1095,12 @@ class Settings(BaseSettings):
     # How many results to ask for per query (§11 resultLimit).
     IDENTITY_RESULT_LIMIT: int = 10
 
+    # §26 Contact provider (Reveal Contact). "none" is the shipped default: the
+    # Noop provider answers with an honest "connect a provider" sentence and
+    # makes no network call, so the free public-email half works everywhere and
+    # a vendor is an env edit plus one class in `contact_provider.py`.
+    CONTACT_PROVIDER: str = "none"
+
     # Telegram echoes this in `X-Telegram-Bot-Api-Secret-Token`. Without it the
     # webhook accepts anything that can reach the URL, and the URL is public.
     TELEGRAM_WEBHOOK_SECRET: str = ""

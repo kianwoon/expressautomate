@@ -87,6 +87,20 @@ class CandidateIdentityResolution(Base, UUIDPrimaryKey, TenantScoped, Timestamps
     # §15/§24/§47 — the weighted evidence, each item carrying its source URL.
     evidence: Mapped[list | None] = mapped_column(JSONB)
 
+    # §26 Phase 3 (Reveal Contact): publicly listed emails the run surfaced, each
+    # `{email, source_url, verified: false}` — extracted from the result titles
+    # and snippets already fetched, never by fetching a page. Stored, not
+    # recomputed, so reopening a resolution shows the same addresses without a
+    # second pass (and so a future re-extraction rule does not silently rewrite
+    # history). Unverified by construction: a vendor's job, not this column's.
+    public_emails: Mapped[list | None] = mapped_column(JSONB)
+
+    # §26 — the vendor enrichment result, written only by the reveal-contact
+    # route when a provider is configured. NULL means "not yet revealed"; a
+    # Noop provider answer is a stored `{status: "no_provider"}` object, so the
+    # row distinguishes "never asked" from "asked, no provider connected".
+    contact_enrichment: Mapped[dict | None] = mapped_column(JSONB)
+
     # §24/§43 — how many Serper queries this run spent (the cost line).
     queries_used: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 

@@ -20,6 +20,7 @@ The adversarial assertions are the boundary ones:
 allow-hardcode: the titles, URLs and SQL below are test fixtures.
 """
 
+import json
 import uuid
 
 import pytest
@@ -1003,3 +1004,210 @@ async def test_unknown_mode_is_422(provider):
             assert res.status_code == 422
     finally:
         await _drop_agency(tid)
+
+
+# --------------------------------------------------------------------------- #
+# Reveal Contact (§26, Phase 3 first slice)
+# --------------------------------------------------------------------------- #
+
+# A page that names the candidate and publicly lists an address, so both the
+# resolve (identity) and reveal (contact) halves have something to show.
+_RESOLVING_WITH_EMAIL = {
+    '"Claire Sze Wei Chew" Standard Chartered Singapore': [
+        result(
+            "Claire Sze Wei Chew - Product Control - Standard Chartered",
+            "https://www.linkedin.com/in/claire-chew",
+            "Standard Chartered Singapore. Previously Credit Suisse. "
+            "Reach Claire at claire.chew@example-bank.com.",
+        )
+    ]
+}
+
+
+async def _insert_resolution(
+    tenant_id: uuid.UUID,
+    opportunity_id: uuid.UUID,
+    user_id: uuid.UUID,
+    *,
+    status: str,
+    evidence: list[dict],
+    public_emails: list[dict] | None = None,
+) -> uuid.UUID:
+    """Insert one resolution row directly — the gate reads the *stored* row, so
+    these tests set the row's shape rather than re-deriving it through Serper."""
+    rid = uuid.uuid4()
+    async with AdminSessionLocal() as s:
+        await s.execute(
+            text(
+                "INSERT INTO candidate_identity_resolutions (id, tenant_id,"
+                " opportunity_id, candidate_key, fingerprint, fingerprint_hash,"
+                " status, confidence, evidence, public_emails, queries_used,"
+                " expires_at, created_by)"
+                " VALUES (:i, :t, :o, 'cand-1', '{}'::jsonb, :h, :s, 90,"
+                " CAST(:e AS jsonb), CAST(:p AS jsonb), 2,"
+                " now() + interval '30 days', :u)"
+            ),
+            {
+                "i": rid,
+                "t": tenant_id,
+                "o": opportunity_id,
+                "h": str(rid).replace("-", "")[:64],
+                "s": status,
+                "e": json.dumps(evidence),
+                "p": json.dumps(public_emails or []),
+                "u": user_id,
+            },
+        )
+        await s.commit()
+    return rid
+
+
+async def test_resolve_surfaces_public_emails(provider):
+    """§26 — an address in a result snippet is stored unverified and returned."""
+    tid, uid = await _seed_agency()
+    oid = await _opportunity(tid, uid)
+    fake = FakeProvider(_RESOLVING_WITH_EMAIL)
+    app.dependency_overrides[serper_provider] = lambda: fake
+    try:
+        async with _http(tid, uid) as c:
+            res = await c.post(
+                f"/api/opportunities/{oid}/candidates/cand-1/resolve-identity",
+                json={"mode": "normal", "candidate": CANDIDATE},
+            )
+            assert res.status_code == 200, res.text
+            assert res.json()["status"] == "resolved"
+            emails = res.json()["public_emails"]
+            assert emails == [
+                {
+                    "email": "claire.chew@example-bank.com",
+                    "source_url": "https://www.linkedin.com/in/claire-chew",
+                    "verified": False,
+                }
+            ]
+    finally:
+        app.dependency_overrides.pop(serper_provider, None)
+        await _drop_agency(tid)
+
+
+async def test_reveal_contact_noop_on_resolved(provider):
+    """The shipped default: a resolved identity reveals with `no_provider` and
+    the vendor-setup sentence, plus the free public emails."""
+    tid, uid = await _seed_agency()
+    oid = await _opportunity(tid, uid)
+    try:
+        rid = await _insert_resolution(
+            tid,
+            oid,
+            uid,
+            status="resolved",
+            evidence=[
+                {"type": "name", "value": "Claire", "weight": 15},
+                {"type": "current_company", "value": "SC", "weight": 25},
+            ],
+            public_emails=[
+                {
+                    "email": "claire@example-bank.com",
+                    "source_url": "https://x.example.org",
+                    "verified": False,
+                }
+            ],
+        )
+        async with _http(tid, uid) as c:
+            res = await c.post(
+                f"/api/opportunities/{oid}/identity-resolutions/{rid}/reveal-contact"
+            )
+            assert res.status_code == 200, res.text
+            body = res.json()
+            assert body["status"] == "no_provider"
+            assert body["provider"] == "none"
+            assert "ContactOut" in body["message"]
+            assert body["emails"] == []
+            assert body["public_emails"][0]["email"] == "claire@example-bank.com"
+            assert body["verified"] is False
+
+            # Persisted: reopening the resolution shows the enrichment answer.
+            detail = await c.get(
+                f"/api/opportunities/{oid}/identity-resolutions/{rid}"
+            )
+            assert detail.json()["resolution"]["contact_enrichment"]["status"] == (
+                "no_provider"
+            )
+    finally:
+        await _drop_agency(tid)
+
+
+async def test_reveal_contact_refused_on_probable_with_no_provider_call(provider):
+    """§17 — a `probable` identity is a 409 with a reason, and no provider runs.
+
+    The Noop makes no network call, so "no call" is asserted by the absence of a
+    stored `contact_enrichment`: a refused reveal must leave the row untouched.
+    """
+    tid, uid = await _seed_agency()
+    oid = await _opportunity(tid, uid)
+    try:
+        rid = await _insert_resolution(
+            tid,
+            oid,
+            uid,
+            status="probable",
+            evidence=[{"type": "name", "value": "Claire", "weight": 15}],
+        )
+        async with _http(tid, uid) as c:
+            res = await c.post(
+                f"/api/opportunities/{oid}/identity-resolutions/{rid}/reveal-contact"
+            )
+            assert res.status_code == 409, res.text
+            assert "resolved" in res.json()["detail"]
+            detail = await c.get(
+                f"/api/opportunities/{oid}/identity-resolutions/{rid}"
+            )
+            assert detail.json()["resolution"]["contact_enrichment"] is None
+    finally:
+        await _drop_agency(tid)
+
+
+async def test_reveal_contact_refused_on_contradiction(provider):
+    """A stored contradiction blocks enrichment even at `resolved` (§17)."""
+    tid, uid = await _seed_agency()
+    oid = await _opportunity(tid, uid)
+    try:
+        rid = await _insert_resolution(
+            tid,
+            oid,
+            uid,
+            status="resolved",
+            evidence=[
+                {"type": "name", "value": "Claire", "weight": 15},
+                {
+                    "type": "contradiction",
+                    "value": "Other Co",
+                    "weight": -30,
+                },
+            ],
+        )
+        async with _http(tid, uid) as c:
+            res = await c.post(
+                f"/api/opportunities/{oid}/identity-resolutions/{rid}/reveal-contact"
+            )
+            assert res.status_code == 409, res.text
+            assert "conflict" in res.json()["detail"].lower()
+    finally:
+        await _drop_agency(tid)
+
+
+async def test_reveal_contact_404_for_another_agencys_resolution(provider):
+    tid, uid = await _seed_agency()
+    other_tid, other_uid = await _seed_agency()
+    oid = await _opportunity(other_tid, other_uid)
+    try:
+        rid = await _insert_resolution(
+            other_tid, oid, other_uid, status="resolved", evidence=[]
+        )
+        async with _http(tid, uid) as c:
+            res = await c.post(
+                f"/api/opportunities/{oid}/identity-resolutions/{rid}/reveal-contact"
+            )
+            assert res.status_code == 404
+    finally:
+        await _drop_agency(tid)
+        await _drop_agency(other_tid)

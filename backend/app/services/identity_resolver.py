@@ -30,6 +30,7 @@ import re
 import unicodedata
 from dataclasses import dataclass, field
 
+from app.services.contact_extract import extract_public_emails as _extract_public_emails
 from app.services.serper import (
     NormalizedSearchResult,
     SearchQuery,
@@ -907,6 +908,11 @@ class Resolution:
     clusters: list[Cluster] = field(default_factory=list)
     enrichment_allowed: bool = False
     contradictions: int = 0
+    # §26 Phase 3 first slice: publicly listed emails mined from the result
+    # titles/snippets this run already fetched. Free, deterministic, never
+    # fetched server-side, and always `verified: False` — see
+    # `contact_extract.py`. Empty when the web surfaced no address.
+    public_emails: list[dict] = field(default_factory=list)
 
     def as_dict(self) -> dict:
         return {
@@ -921,6 +927,7 @@ class Resolution:
             "queries_used": self.queries_used,
             "freshness_status": self.freshness_status,
             "enrichment_allowed": self.enrichment_allowed,
+            "public_emails": self.public_emails,
         }
 
 
@@ -1041,11 +1048,19 @@ async def resolve(
             clusters=[],
             enrichment_allowed=False,
             contradictions=0,
+            public_emails=[],
         )
 
     clusters: dict[str, Cluster] = {}
     contradictions = 0
     queries_used = 0
+
+    # §26: the result-page texts already fetched, index-aligned with their URLs,
+    # so the public-email pass at the end needs no new network call and no
+    # stored raw response. `title + snippet` is the whole blob a recruiter could
+    # see in the search UI — nothing is fetched server-side.
+    page_texts: list[str] = []
+    page_urls: list[str] = []
 
     # §32 ambiguity early stop: when the run is stably ambiguous — the leader is
     # below RESOLVED but two distinct person-scoped identities already sit at
@@ -1060,6 +1075,11 @@ async def resolve(
         result_set = await provider.search(SearchQuery(query=query))
         queries_used += 1
         for result in result_set.results:
+            # Record the page text for the §26 public-email pass regardless of
+            # whether the page carried identity evidence — an address on a page
+            # that did not corroborate the identity is still a public listing.
+            page_texts.append(f"{result.title} {result.snippet or ''}")
+            page_urls.append(result.url)
             evidence = extract_evidence(result, fp, weights)
             if not evidence:
                 continue
@@ -1148,6 +1168,7 @@ async def resolve(
             status, ordered, contradictions, _name_only(ordered)
         ),
         contradictions=contradictions,
+        public_emails=_extract_public_emails(page_texts, page_urls),
     )
 
 

@@ -8,6 +8,7 @@ import {
   externalCandidateSearchResultsPath,
   identityResolutionPath,
   identityResolutionsPath,
+  revealContactPath,
   EXTERNAL_SEARCH_POLL_MS,
 } from "../api";
 import { ApiError, readError } from "./candidates";
@@ -430,6 +431,27 @@ export type IdentityEvidenceItem = {
   weight: number;
 };
 
+/** A publicly listed email found in the search results (§26). Always
+ *  `verified: false` — this is scraped prose, not a confirmed address; the UI
+ *  must say so. `source_url` is the page the address was seen on. */
+export type PublicEmail = {
+  email: string;
+  source_url: string;
+  verified: boolean;
+};
+
+/** The vendor enrichment answer (§26). `status` is `no_provider` when none is
+ *  configured (the shipped default), `ok` when a vendor returned data. `emails`
+ *  /`phones` are the vendor's — each carries its own shape. */
+export type ContactEnrichment = {
+  status: string;
+  provider: string;
+  emails: { email: string; [key: string]: unknown }[];
+  phones: { number?: string; [key: string]: unknown }[];
+  verified: boolean;
+  message: string | null;
+};
+
 /** A resolved identity (§24/§57). `status` is `resolved` | `probable` |
  *  `unresolved`; `cached` is true when the server answered from its §34 cache
  *  rather than calling Serper again. */
@@ -448,6 +470,10 @@ export type ResolvedIdentity = {
   freshness_status: "current" | "possible_change" | "unknown" | null;
   created_at: string | null;
   expires_at: string | null;
+  /** §26 — publicly listed, unverified addresses surfaced at resolve time. */
+  public_emails?: PublicEmail[];
+  /** §26 — the stored vendor answer, or null when contact was never revealed. */
+  contact_enrichment?: ContactEnrichment | null;
   cached?: boolean;
   /** Present on the structured `needs_context` answer (§4): the sentence
    *  naming what the recruiter must add before a resolve can run. */
@@ -640,6 +666,25 @@ export async function getIdentityResolution(
   return body.resolution;
 }
 
+/** §26 Reveal Contact — one POST returning both halves: the free public emails
+ *  and the vendor answer. A 409 (probable / contradicted) surfaces as an
+ *  `ApiError` carrying the server's sentence, so the panel shows the reason
+ *  rather than a generic failure. */
+export async function revealContact(
+  opportunityId: string,
+  resolutionId: string,
+): Promise<ContactEnrichment & { public_emails: PublicEmail[] }> {
+  const res = await fetch(revealContactPath(opportunityId, resolutionId), {
+    method: "POST",
+    credentials: "include",
+    headers: { Accept: "application/json" },
+  });
+  if (!res.ok) throw new ApiError(await readError(res), res.status);
+  return (await res.json()) as ContactEnrichment & {
+    public_emails: PublicEmail[];
+  };
+}
+
 export function useIdentityResolution(opportunityId: string): {
   resolvingFor: string | null;
   error: string | null;
@@ -651,11 +696,18 @@ export function useIdentityResolution(opportunityId: string): {
   ) => Promise<void>;
   reopen: (resolutionId: string) => Promise<void>;
   refreshHistory: () => Promise<void>;
+  /** §26 — the resolution id currently revealing contacts, or null. */
+  revealingFor: string | null;
+  /** §26 — a reveal refusal (the 409 sentence) or failure, per resolution. */
+  revealError: string | null;
+  reveal: (resolutionId: string) => Promise<void>;
 } {
   const [resolvingFor, setResolvingFor] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [results, setResults] = useState<Record<string, ResolvedIdentity>>({});
   const [history, setHistory] = useState<IdentityResolutionSummary[]>([]);
+  const [revealingFor, setRevealingFor] = useState<string | null>(null);
+  const [revealError, setRevealError] = useState<string | null>(null);
 
   const refreshHistory = useCallback(async () => {
     try {
@@ -716,5 +768,59 @@ export function useIdentityResolution(opportunityId: string): {
     [opportunityId],
   );
 
-  return { resolvingFor, error, results, history, resolve, reopen, refreshHistory };
+  const reveal = useCallback(
+    async (resolutionId: string) => {
+      setRevealingFor(resolutionId);
+      setRevealError(null);
+      try {
+        const body = await revealContact(opportunityId, resolutionId);
+        // Fold the answer back into the stored resolution so the modal renders
+        // both sections from state — a reopen shows them without a second call.
+        setResults((prev) => {
+          const next = { ...prev };
+          for (const [key, value] of Object.entries(next)) {
+            if (value.id === resolutionId) {
+              next[key] = {
+                ...value,
+                public_emails: body.public_emails,
+                contact_enrichment: {
+                  status: body.status,
+                  provider: body.provider,
+                  emails: body.emails,
+                  phones: body.phones,
+                  verified: body.verified,
+                  message: body.message,
+                },
+              };
+            }
+          }
+          return next;
+        });
+      } catch (err) {
+        // A 409 gate refusal carries the server's sentence — surface it
+        // verbatim rather than a generic failure.
+        setRevealError(
+          err instanceof Error
+            ? err.message
+            : "Contacts could not be revealed just now.",
+        );
+      } finally {
+        setRevealingFor(null);
+      }
+    },
+    [opportunityId],
+  );
+
+  return {
+    resolvingFor,
+    error,
+    results,
+    history,
+    resolve,
+    reopen,
+    refreshHistory,
+    revealingFor,
+    revealError,
+    reveal,
+  };
 }

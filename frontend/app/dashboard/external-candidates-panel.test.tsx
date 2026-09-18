@@ -83,6 +83,9 @@ function panel(overrides: {
   identityHistory?: IdentityResolutionSummary[];
   onResolveIdentity?: (candidate: ExternalCandidate, mode?: IdentityResolveMode) => void;
   onReopenIdentity?: (resolutionId: string) => void;
+  onRevealContact?: (resolutionId: string) => void;
+  revealingFor?: string | null;
+  revealError?: string | null;
 } = {}) {
   return render(
     <ExternalCandidatesStage
@@ -100,6 +103,9 @@ function panel(overrides: {
       identityHistory={overrides.identityHistory}
       onResolveIdentity={overrides.onResolveIdentity}
       onReopenIdentity={overrides.onReopenIdentity}
+      onRevealContact={overrides.onRevealContact}
+      revealingFor={overrides.revealingFor}
+      revealError={overrides.revealError}
     />,
   );
 }
@@ -747,5 +753,100 @@ describe("the identity modal", () => {
     expect(item.textContent).toContain("71%");
     fireEvent.click(item);
     expect(onReopenIdentity).toHaveBeenCalledWith("res-old");
+  });
+});
+
+describe("Reveal Contact (§26)", () => {
+  it("offers the button only for a resolved identity and calls the handler", () => {
+    const onRevealContact = vi.fn();
+    panel({
+      taskStatus: "completed",
+      results: results(),
+      identities: { "c-1": identity() },
+      onRevealContact,
+    });
+    fireEvent.click(screen.getByTestId("jo-identity-view"));
+    const button = screen.getByTestId("jo-identity-reveal-button");
+    expect(button.textContent).toBe("Reveal Contact");
+    fireEvent.click(button);
+    expect(onRevealContact).toHaveBeenCalledWith("res-1");
+  });
+
+  it("does not offer the button for a probable identity", () => {
+    panel({
+      taskStatus: "completed",
+      results: results(),
+      identities: { "c-1": identity({ status: "probable", confidence: 92 }) },
+      onRevealContact: () => {},
+    });
+    fireEvent.click(screen.getByTestId("jo-identity-view"));
+    expect(screen.queryByTestId("jo-identity-reveal-button")).toBeNull();
+  });
+
+  it("renders public emails as unverified mailto links with their source", () => {
+    panel({
+      taskStatus: "completed",
+      results: results(),
+      identities: {
+        "c-1": identity({
+          public_emails: [
+            {
+              email: "jane@acme.com.sg",
+              source_url: "https://acme.com.sg/team",
+              verified: false,
+            },
+          ],
+        }),
+      },
+      onRevealContact: () => {},
+    });
+    fireEvent.click(screen.getByTestId("jo-identity-view"));
+    const section = screen.getByTestId("jo-public-emails");
+    expect(section.textContent).toContain("Publicly listed — unverified");
+    const link = section.querySelector("a") as HTMLAnchorElement;
+    expect(link.getAttribute("href")).toBe("mailto:jane@acme.com.sg");
+  });
+
+  it("shows a stored past reveal without re-extraction", () => {
+    panel({
+      taskStatus: "completed",
+      results: results(),
+      identities: {
+        "c-1": identity({
+          public_emails: [
+            { email: "a@b.com", source_url: "https://b.com", verified: false },
+          ],
+          contact_enrichment: {
+            status: "no_provider",
+            provider: "none",
+            emails: [],
+            phones: [],
+            verified: false,
+            message:
+              "Connect a contact provider (ContactOut/RocketReach/Apollo) to reveal verified contacts.",
+          },
+        }),
+      },
+      onRevealContact: () => {},
+    });
+    fireEvent.click(screen.getByTestId("jo-identity-view"));
+    expect(screen.getByTestId("jo-contact-provider-message").textContent).toContain(
+      "Connect a contact provider",
+    );
+    expect(screen.getByTestId("jo-public-emails").textContent).toContain("a@b.com");
+  });
+
+  it("surfaces a 409 reveal refusal sentence", () => {
+    panel({
+      taskStatus: "completed",
+      results: results(),
+      identities: { "c-1": identity({ status: "probable", confidence: 88 }) },
+      onRevealContact: () => {},
+      revealError: "Contact enrichment needs a resolved identity — this one is probable.",
+    });
+    fireEvent.click(screen.getByTestId("jo-identity-view"));
+    expect(screen.getByTestId("jo-reveal-error").textContent).toContain(
+      "needs a resolved identity",
+    );
   });
 });

@@ -104,6 +104,16 @@ EXEMPT: dict[str, dict[str, str]] = {
             "them: that is visibility, not edit rights — the same reading "
             "`run_intelligence`'s exemption takes."
         ),
+        "reveal_contact": (
+            "Exempt from the EDIT assertion only, and it still fails the read "
+            "assertion if it drops the read guard. The row it writes is the "
+            "same `candidate_identity_resolutions` row (its "
+            "`contact_enrichment` column), not the job order. A share "
+            "recipient may reveal contacts on work shown to them: that is "
+            "visibility, not edit rights — the same reading `resolve_identity` "
+            "takes, and the write is gated by §17 (`resolved`, no "
+            "contradiction) regardless of who clicks."
+        ),
     },
     "buddies.py": {
         "list_buddies": (

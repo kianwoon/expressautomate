@@ -35,7 +35,7 @@ from app.api.auth import _require_session_with_role
 from app.core.logging import get_logger
 from app.db.rls import tenant_session
 from app.models.candidate_identity_resolution import CandidateIdentityResolution
-from app.services import identity_resolver
+from app.services import contact_provider, identity_resolver
 from app.services.identity_resolver import Fingerprint
 from app.services.serper import (
     SerperError,
@@ -132,6 +132,12 @@ def _serialize(row: CandidateIdentityResolution) -> dict[str, Any]:
         "location": row.location,
         "previous_companies": row.previous_companies or [],
         "evidence": row.evidence or [],
+        # §26 Reveal Contact: the unverified public emails found at resolve
+        # time, and the vendor enrichment answer if one was ever requested
+        # (`None` = never asked). Both are stored, so a reopened modal shows
+        # them without re-extraction or a second provider call.
+        "public_emails": row.public_emails or [],
+        "contact_enrichment": row.contact_enrichment,
         "queries_used": row.queries_used,
         "freshness_status": row.freshness_status,
         "created_at": row.created_at.isoformat() if row.created_at else None,
@@ -286,6 +292,7 @@ async def resolve_identity(
         location=resolution.location,
         previous_companies=resolution.previous_companies,
         evidence=[e.as_dict() for e in resolution.evidence],
+        public_emails=resolution.public_emails,
         queries_used=resolution.queries_used,
         freshness_status=resolution.freshness_status,
         expires_at=identity_resolver.expires_at(resolution.status),
@@ -399,6 +406,146 @@ async def get_identity_resolution(
     if row is None:
         raise HTTPException(status_code=404, detail="Resolution not found.")
     return {"status": "ok", "resolution": _serialize(row)}
+
+
+# The structured statuses the reveal-contact route answers with, in the same
+# never-a-500 family as the resolve route's.
+STATUS_NO_PROVIDER = "no_provider"
+
+
+def _enrichment_gate_reason(row: CandidateIdentityResolution) -> str | None:
+    """§17/§61: why contact enrichment is refused, or None when allowed.
+
+    Two conditions, mirroring the resolver's own safety gate at the persistence
+    boundary — a resolution stored before this route existed still gets the same
+    verdict, because both are read from the stored row rather than recomputed:
+
+    1. **Status must be `resolved`.** `probable` means "more than one person
+       could be this"; spending a vendor credit on a coin flip is the expensive
+       mistake §17 exists to prevent. `unresolved` is nowhere near enough.
+    2. **No contradiction.** A stored contradiction is a page that fits the name
+       but names a different employer/location — enriching it would attach a
+       stranger's contact to the row.
+    """
+    if row.status != "resolved":
+        return (
+            f"Contact enrichment needs a resolved identity — this one is "
+            f"{row.status}. Resolve it (or run a Deep search) first."
+        )
+    if any(
+        e.get("type") == "contradiction" or (e.get("weight") or 0) < 0
+        for e in (row.evidence or [])
+    ):
+        return (
+            "This identity has conflicting evidence, so it is not safe to "
+            "enrich. Resolve the conflict first."
+        )
+    return None
+
+
+@router.post(
+    "/opportunities/{opportunity_id}/identity-resolutions/{resolution_id}/reveal-contact"
+)
+async def reveal_contact(
+    request: Request,
+    opportunity_id: uuid.UUID,
+    resolution_id: uuid.UUID,
+) -> dict:
+    """Reveal contacts for a resolved identity (§26, Phase 3).
+
+    Two halves, deliberately different in honesty:
+
+    - **Public emails** come free from the stored resolution — already
+      extracted at resolve time from Serper titles/snippets, labeled
+      `verified: false`. This route never fetches a page server-side.
+    - **Vendor enrichment** goes through the `contact_provider` seam. With no
+      provider configured (the shipped default) the Noop answers
+      `no_provider` with a sentence naming the vendors a recruiter could
+      connect — an honest empty answer, not an error.
+
+    Gated like every route here by read-visibility (see the module docstring).
+    The gate refuses `probable`/`unresolved`/contradicted rows with a 409 naming
+    the reason, **before** any provider call — so a refused request costs
+    nothing. The provider answer is persisted to `contact_enrichment` so a
+    reopened modal shows it without a second call.
+    """
+    user_uuid, tenant_uuid, role = await _require_session_with_role(request)
+    async with tenant_session(tenant_uuid) as session:
+        try:
+            current = await load_visible_opportunity(
+                session, opportunity_id, user_uuid, role
+            )
+            row = (
+                await session.execute(
+                    select(CandidateIdentityResolution).where(
+                        CandidateIdentityResolution.id == resolution_id,
+                        CandidateIdentityResolution.opportunity_id == current.id,
+                    )
+                )
+            ).scalar_one_or_none()
+        except HTTPException:
+            raise
+        except DBAPIError as exc:
+            if _sqlstate(exc) == _MISSING_TABLE:
+                return _not_provisioned(exc)
+            raise
+
+        if row is None:
+            raise HTTPException(status_code=404, detail="Resolution not found.")
+
+        reason = _enrichment_gate_reason(row)
+        if reason is not None:
+            # 409 with the sentence, and no provider call: the whole point of
+            # the gate is that a refused reveal is free.
+            raise HTTPException(status_code=409, detail=reason)
+
+        public_emails = row.public_emails or []
+        canonical = {
+            "name": (row.fingerprint or {}).get("name"),
+            "canonical_profile_url": row.canonical_profile_url,
+            "current_company": row.current_company,
+            "current_title": row.current_title,
+            "location": row.location,
+        }
+
+        provider = contact_provider.get_provider()
+        result = await provider.enrich(canonical)
+
+        # Persist the vendor answer; a persistence miss must not fail the read
+        # (the recruiter can still see it now) — the same reading the resolve
+        # route takes.
+        row.contact_enrichment = result.as_dict()
+        try:
+            await session.commit()
+        except DBAPIError as exc:
+            if _sqlstate(exc) == _MISSING_TABLE:
+                return _not_provisioned(exc)
+            log.warning(
+                "contact_enrichment_persist_failed",
+                resolution_id=str(resolution_id),
+                error=str(exc),
+                exc_info=True,
+            )
+
+    log.info(
+        "reveal_contact_done",
+        resolution_id=str(resolution_id),
+        provider=result.provider,
+        status=result.status,
+        public_emails=len(public_emails),
+    )
+
+    return {
+        "status": result.status,
+        "provider": result.provider,
+        "emails": result.emails,
+        "phones": result.phones,
+        "verified": result.verified,
+        "message": result.message,
+        # The free half travels with every answer, so the panel renders both
+        # sections from one response.
+        "public_emails": public_emails,
+    }
 
 
 def _sqlstate(exc: DBAPIError) -> str | None:
