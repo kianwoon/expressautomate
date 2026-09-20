@@ -1054,3 +1054,203 @@ async def test_latest_reports_an_in_flight_saved_search_as_running(configured):
             assert body["search"]["results"] == []
     finally:
         await _drop_agency(tid)
+
+
+# --- Fail-fast split: a transient mid-poll blip must NOT fabricate `failed`
+# (one unreachable tick killed a healthy search — the bug this fixes); a
+# permanent failure (4xx refusal, unconfigured) still fails fast.
+
+
+async def test_a_transient_mid_poll_blip_keeps_the_search_alive(monkeypatch):
+    """An unreachable GET mid-poll is TRANSIENT: the poll is already a 5s
+    retry loop, so the route reports the row's last-known status (still
+    `running`) with `transient: true` and no terminal `error` — never the
+    fabricated `failed` that permanently killed the search."""
+    monkeypatch.setattr(settings, "CAREER_BOT_URL", "http://career-bot.test")
+    monkeypatch.setattr(settings, "CAREER_BOT_API_KEY", "test-key")
+
+    async def _start(self, payload):
+        return career_bot.StartedSearch(task_id="task-blip")
+
+    async def _dead(self, task_id):
+        raise career_bot.CareerBotUnreachableError("unreachable")
+
+    monkeypatch.setattr(career_bot.CareerBotClient, "start_search", _start)
+    monkeypatch.setattr(career_bot.CareerBotClient, "get_task", _dead)
+    tid, uid = await _seed_agency()
+    oid = await _opportunity(tid, uid)
+    await _analyse(tid, oid, PLAN)
+    try:
+        async with _http(tid, uid) as c:
+            started = await c.post(
+                f"/api/opportunities/{oid}/external-candidates/search"
+            )
+            task_id = started.json()["task_id"]
+            poll = await c.get(
+                f"/api/opportunities/{oid}/external-candidates/search/{task_id}"
+            )
+            assert poll.status_code == 200, poll.text
+            body = poll.json()
+            assert body["transient"] is True
+            assert body["task_status"] == "running"
+            assert body["error"] is None
+            assert body["poll_error"]
+    finally:
+        await _drop_agency(tid)
+
+
+async def test_a_429_mid_poll_is_transient_not_failed(monkeypatch):
+    """A 429 mid-poll is the service alive and asking us to wait — transient,
+    never a fabricated terminal `failed`."""
+    monkeypatch.setattr(settings, "CAREER_BOT_URL", "http://career-bot.test")
+    monkeypatch.setattr(settings, "CAREER_BOT_API_KEY", "test-key")
+
+    async def _start(self, payload):
+        return career_bot.StartedSearch(task_id="task-429")
+
+    async def _limited(self, task_id):
+        raise career_bot.CareerBotRateLimited("slow down", 429, 3)
+
+    monkeypatch.setattr(career_bot.CareerBotClient, "start_search", _start)
+    monkeypatch.setattr(career_bot.CareerBotClient, "get_task", _limited)
+    tid, uid = await _seed_agency()
+    oid = await _opportunity(tid, uid)
+    await _analyse(tid, oid, PLAN)
+    try:
+        async with _http(tid, uid) as c:
+            started = await c.post(
+                f"/api/opportunities/{oid}/external-candidates/search"
+            )
+            task_id = started.json()["task_id"]
+            poll = await c.get(
+                f"/api/opportunities/{oid}/external-candidates/search/{task_id}"
+            )
+            assert poll.status_code == 200, poll.text
+            body = poll.json()
+            assert body["transient"] is True
+            assert body["task_status"] == "running"
+            assert body["error"] is None
+    finally:
+        await _drop_agency(tid)
+
+
+async def test_a_4xx_mid_poll_still_fails_fast(monkeypatch):
+    """A quotable 4xx refusal is a real verdict: `failed` with the reason in
+    `error`, no transient flag — the panel stops and shows it."""
+    monkeypatch.setattr(settings, "CAREER_BOT_URL", "http://career-bot.test")
+    monkeypatch.setattr(settings, "CAREER_BOT_API_KEY", "test-key")
+
+    async def _start(self, payload):
+        return career_bot.StartedSearch(task_id="task-4xx")
+
+    async def _refuse(self, task_id):
+        raise career_bot.CareerBotError("no such task", 404)
+
+    monkeypatch.setattr(career_bot.CareerBotClient, "start_search", _start)
+    monkeypatch.setattr(career_bot.CareerBotClient, "get_task", _refuse)
+    tid, uid = await _seed_agency()
+    oid = await _opportunity(tid, uid)
+    await _analyse(tid, oid, PLAN)
+    try:
+        async with _http(tid, uid) as c:
+            started = await c.post(
+                f"/api/opportunities/{oid}/external-candidates/search"
+            )
+            task_id = started.json()["task_id"]
+            poll = await c.get(
+                f"/api/opportunities/{oid}/external-candidates/search/{task_id}"
+            )
+            assert poll.status_code == 200, poll.text
+            body = poll.json()
+            assert body["task_status"] == "failed"
+            assert body["error"] == "no such task"
+            assert body["transient"] is False
+    finally:
+        await _drop_agency(tid)
+
+
+async def test_unconfigured_poll_still_fails_fast(monkeypatch):
+    """An unconfigured deployment is permanent — the poll fails fast with the
+    sentence, not a transient keep-alive."""
+    monkeypatch.setattr(settings, "CAREER_BOT_URL", "")
+    monkeypatch.setattr(settings, "CAREER_BOT_API_KEY", "")
+    tid, uid = await _seed_agency()
+    oid = await _opportunity(tid, uid)
+    try:
+        async with _http(tid, uid) as c:
+            poll = await c.get(
+                f"/api/opportunities/{oid}/external-candidates/search/task-x"
+            )
+            assert poll.status_code == 200, poll.text
+            body = poll.json()
+            assert body["task_status"] == "failed"
+            assert body["transient"] is False
+            assert "not set up" in body["error"]
+    finally:
+        await _drop_agency(tid)
+
+
+# --- The client's retry policy: one retry for idempotent GETs, none for POST.
+
+
+async def test_a_get_retries_once_on_a_transient_blip(monkeypatch):
+    """A GET that fails once then succeeds retries transparently — the poll's
+    own idempotent read absorbs the blip instead of surfacing it."""
+    monkeypatch.setattr(settings, "CAREER_BOT_URL", "http://career-bot.test")
+    monkeypatch.setattr(settings, "CAREER_BOT_API_KEY", "test-key")
+    attempts = {"n": 0}
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        attempts["n"] += 1
+        if attempts["n"] == 1:
+            return httpx.Response(503, json={"error": {"message": "boom"}})
+        return httpx.Response(200, json={"task_id": "t", "status": "running"})
+
+    async with AsyncClient(
+        transport=httpx.MockTransport(_handler), base_url=settings.CAREER_BOT_URL
+    ) as http:
+        client = career_bot.CareerBotClient(client=http)
+        task = await client.get_task("t")
+    assert task.status == "running"
+    assert attempts["n"] == 2
+
+
+async def test_a_post_is_never_retried(monkeypatch):
+    """POST /search/candidates has no idempotency key — a retry could start a
+    second billable search, so even a transient 503 is raised on the first
+    attempt."""
+    monkeypatch.setattr(settings, "CAREER_BOT_URL", "http://career-bot.test")
+    monkeypatch.setattr(settings, "CAREER_BOT_API_KEY", "test-key")
+    attempts = {"n": 0}
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        attempts["n"] += 1
+        return httpx.Response(503, json={"error": {"message": "boom"}})
+
+    async with AsyncClient(
+        transport=httpx.MockTransport(_handler), base_url=settings.CAREER_BOT_URL
+    ) as http:
+        client = career_bot.CareerBotClient(client=http)
+        with pytest.raises(career_bot.CareerBotUnreachableError):
+            await client.start_search({"queries": ["x"]})
+    assert attempts["n"] == 1
+
+
+async def test_a_get_gives_up_after_one_retry(monkeypatch):
+    """Two consecutive failures on a GET surface as unreachable — the retry is
+    one, not an unbounded loop."""
+    monkeypatch.setattr(settings, "CAREER_BOT_URL", "http://career-bot.test")
+    monkeypatch.setattr(settings, "CAREER_BOT_API_KEY", "test-key")
+    attempts = {"n": 0}
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        attempts["n"] += 1
+        return httpx.Response(503, json={"error": {"message": "boom"}})
+
+    async with AsyncClient(
+        transport=httpx.MockTransport(_handler), base_url=settings.CAREER_BOT_URL
+    ) as http:
+        client = career_bot.CareerBotClient(client=http)
+        with pytest.raises(career_bot.CareerBotUnreachableError):
+            await client.get_task("t")
+    assert attempts["n"] == 2

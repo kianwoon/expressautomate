@@ -66,10 +66,15 @@ export type ExternalSearchStart =
 
 /** The poll answer. `task_status` is optional at the type level because the
  *  JSON boundary can answer without it — a partial or refusal-shaped body —
- *  and the poll must survive that rather than push `undefined` into state. */
+ *  and the poll must survive that rather than push `undefined` into state.
+ *  `transient` marks a mid-poll blip (unreachable/429/5xx): the search is
+ *  still alive, so keep polling and do not set `failed` from it. `poll_error`
+ *  carries the blip's reason without touching the `error` a real verdict uses. */
 export type ExternalSearchStatus = {
   status: string;
   task_status?: ExternalTaskStatus | null;
+  transient?: boolean;
+  poll_error?: string | null;
   error?: string | null;
   message?: string | null;
 };
@@ -361,9 +366,17 @@ export function useExternalCandidates(rowId: string): {
           if (status.error) setTaskError(status.error);
           return;
         }
+        // A transient blip mid-poll (unreachable/429/5xx) reports the row's
+        // last-known status, not a verdict — keep polling and never let one
+        // lost tick permanently kill a live search. The message is not a
+        // failure sentence, so it does not go into `taskError`; the next good
+        // poll clears any stale error.
+        if (status.transient) return;
         setTaskStatus(status.task_status);
         if (status.task_status === "failed" && status.error) {
           setTaskError(status.error);
+        } else if (externalSearchInFlight(status.task_status)) {
+          setTaskError(null);
         }
       } catch {
         // One lost poll is not a failed search — the next tick asks again.

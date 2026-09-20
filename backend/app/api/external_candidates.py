@@ -104,20 +104,41 @@ def _unreachable_body(exc: CareerBotUnreachableError) -> dict[str, Any]:
     return {"status": STATUS_UNREACHABLE, "task_id": None, "message": exc.message}
 
 
-def _poll_body(body: dict[str, Any]) -> dict[str, Any]:
+def _poll_body(
+    body: dict[str, Any],
+    *,
+    transient: bool = False,
+    row_status: str | None = None,
+) -> dict[str, Any]:
     """A status-poll answer must ALWAYS carry `task_status`.
 
-    The panel's poll stops on a terminal status and treats a missing one as
-    "not in flight". A refusal/unreachable body built for the POST route has
-    no `task_status` at all, so handing it back on the poll route read as
-    `undefined` and stopped the poll with nothing shown — the search went
-    quiet instead of reporting what happened. The reason travels as `error`
-    (the key the panel renders) while the original `status`/`message` stay
-    for the copy.
+    A mid-poll blip — connection refused, 5xx, 429, malformed JSON — is
+    TRANSIENT: the poll is already a 5s retry loop, so fabricating `failed`
+    from one unreachable tick killed a healthy search permanently (the bug
+    this fixes). A transient body therefore reports the row's own last-known
+    status (never `failed`), sets `transient`, and carries the reason as
+    `poll_error` while `error` stays null — the panel renders `error` only on
+    a real verdict.
+
+    A PERMANENT failure — unconfigured, not provisioned, or a 4xx refusal —
+    is a real verdict, so it keeps `task_status: "failed"` and puts the
+    sentence in `error` for the panel to show and stop on.
+
+    The panel treats a missing `task_status` as "not in flight", which is why
+    every branch here carries one.
     """
+    if transient:
+        return {
+            **body,
+            "task_status": row_status or "running",
+            "transient": True,
+            "poll_error": body.get("message"),
+            "error": None,
+        }
     return {
         **body,
         "task_status": "failed",
+        "transient": False,
         "error": body.get("message"),
     }
 
@@ -463,8 +484,20 @@ async def get_external_search_status(
     try:
         task = await _client().get_task(task_id)
     except CareerBotUnreachableError as exc:
-        return _poll_body(_unreachable_body(exc))
+        # Transport blip / 5xx / unreadable body: transient — keep the row's
+        # last-known status and let the panel's next 5s tick retry.
+        return _poll_body(
+            _unreachable_body(exc),
+            transient=True,
+            row_status=row_status_of(row),
+        )
+    except career_bot.CareerBotRateLimited as exc:
+        # 429: the service is alive and told us to wait; the poll retries.
+        return _poll_body(
+            _refusal(exc), transient=True, row_status=row_status_of(row)
+        )
     except CareerBotError as exc:
+        # A quotable 4xx refusal is a real verdict — fail fast.
         return _poll_body(_refusal(exc))
 
     # The terminal state lands on the row the same read authorised — a

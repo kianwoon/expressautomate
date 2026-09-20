@@ -14,6 +14,8 @@ caller outside this process — no exception message names the URL or the key,
 so a caller that logs or serialises an exception cannot leak either.
 """
 
+import asyncio
+import random
 from dataclasses import dataclass
 from typing import Any
 
@@ -111,21 +113,8 @@ class CareerBotClient:
         client = self._client or httpx.AsyncClient(
             timeout=settings.CAREER_BOT_TIMEOUT_SECONDS
         )
-        headers = {"X-API-Key": settings.CAREER_BOT_API_KEY}
-        url = f"{settings.CAREER_BOT_URL}{path}"
         try:
-            if method == "GET":
-                response = await client.get(url, headers=headers)
-            else:
-                response = await client.post(url, json=payload, headers=headers)
-        except httpx.HTTPError as exc:
-            # Never a URL, never the key — see the module docstring.
-            log.warning(
-                "career_bot_transport_error", path=path, error=type(exc).__name__
-            )
-            raise CareerBotUnreachableError(
-                "the external candidate search service could not be reached"
-            ) from exc
+            return await self._attempt(client, method, path, payload)
         finally:
             if self._owns_client:
                 try:
@@ -133,18 +122,78 @@ class CareerBotClient:
                 except httpx.HTTPError:
                     pass
 
-        if response.status_code >= 500:
-            log.warning("career_bot_5xx", path=path, status_code=response.status_code)
-            raise CareerBotUnreachableError(
-                "the external candidate search service returned a server error"
-            )
-        if response.status_code == 429:
-            raise CareerBotRateLimited(
-                _error_message(response), 429, _retry_after(response)
-            )
-        if response.status_code >= 400:
-            raise CareerBotError(_error_message(response), response.status_code)
-        return _json(response)
+    # One retry (0.4s + jitter) per call, and only for idempotent GETs: a
+    # transient blip mid-poll is not a failed search. POST /search/candidates
+    # is NEVER retried here — it carries no idempotency key, so a duplicate
+    # would start a second billable search. A 429's Retry-After is honoured
+    # only up to this bound; longer is the service telling us to back off for
+    # real, so we surface it rather than sleep the request awake.
+    _RETRY_AFTER_MAX = 10
+    _RETRY_BASE_DELAY = 0.4
+
+    async def _attempt(
+        self, client: httpx.AsyncClient, method: str, path: str, payload: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        headers = {"X-API-Key": settings.CAREER_BOT_API_KEY}
+        url = f"{settings.CAREER_BOT_URL}{path}"
+        retryable = method == "GET"
+        for attempt in range(2):
+            last = attempt == 1
+            try:
+                if method == "GET":
+                    response = await client.get(url, headers=headers)
+                else:
+                    response = await client.post(url, json=payload, headers=headers)
+            except httpx.HTTPError as exc:
+                # Never a URL, never the key — see the module docstring.
+                log.warning(
+                    "career_bot_transport_error", path=path, error=type(exc).__name__
+                )
+                if retryable and not last:
+                    await self._sleep_before_retry(None)
+                    continue
+                raise CareerBotUnreachableError(
+                    "the external candidate search service could not be reached"
+                ) from exc
+
+            retry_after = _retry_after(response)
+            if response.status_code >= 500 or response.status_code == 429:
+                if retryable and not last:
+                    log.warning(
+                        "career_bot_retrying",
+                        path=path,
+                        status_code=response.status_code,
+                    )
+                    await self._sleep_before_retry(retry_after)
+                    continue
+            if response.status_code >= 500:
+                log.warning(
+                    "career_bot_5xx", path=path, status_code=response.status_code
+                )
+                raise CareerBotUnreachableError(
+                    "the external candidate search service returned a server error"
+                )
+            if response.status_code == 429:
+                raise CareerBotRateLimited(
+                    _error_message(response), 429, retry_after
+                )
+            if response.status_code >= 400:
+                raise CareerBotError(_error_message(response), response.status_code)
+            return _json(response)
+
+        # Unreachable: the loop only exits here after a retryable failure.
+        raise CareerBotUnreachableError(
+            "the external candidate search service could not be reached"
+        )
+
+    async def _sleep_before_retry(self, retry_after: int | None) -> None:
+        """0.4s + up to 0.5s jitter, or the caller's Retry-After when it is a
+        small one. A large Retry-After is not slept through here."""
+        if retry_after is not None and retry_after <= self._RETRY_AFTER_MAX:
+            delay = float(retry_after)
+        else:
+            delay = self._RETRY_BASE_DELAY + random.uniform(0, 0.5)
+        await asyncio.sleep(delay)
 
     # The career bot's search takes minutes and is polled — that is its own
     # design, not ours. Nothing here polls on the caller's behalf: the panel
