@@ -64,12 +64,14 @@ export type ExternalSearchStart =
       retry_after_seconds?: number;
     };
 
-/** The poll answer. */
+/** The poll answer. `task_status` is optional at the type level because the
+ *  JSON boundary can answer without it — a partial or refusal-shaped body —
+ *  and the poll must survive that rather than push `undefined` into state. */
 export type ExternalSearchStatus = {
   status: string;
-  task_status: ExternalTaskStatus | null;
-  error: string | null;
-  message: string | null;
+  task_status?: ExternalTaskStatus | null;
+  error?: string | null;
+  message?: string | null;
 };
 
 /** One ranked result, as the career bot defines it (spec §4). Passed through
@@ -349,6 +351,16 @@ export function useExternalCandidates(rowId: string): {
       try {
         const status = await getExternalSearchStatus(rowId, taskId);
         if (cancelled) return;
+        // A body without `task_status` is not a verdict — it is a malformed
+        // or partial answer. Setting it verbatim would push `undefined`
+        // into state, and an `undefined` status reads as "not in flight",
+        // which tore the poll down on the first tick and left the search
+        // silent with nothing on screen. Keep polling; only a real status
+        // may move the state machine.
+        if (status.task_status == null) {
+          if (status.error) setTaskError(status.error);
+          return;
+        }
         setTaskStatus(status.task_status);
         if (status.task_status === "failed" && status.error) {
           setTaskError(status.error);

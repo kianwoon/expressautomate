@@ -104,6 +104,24 @@ def _unreachable_body(exc: CareerBotUnreachableError) -> dict[str, Any]:
     return {"status": STATUS_UNREACHABLE, "task_id": None, "message": exc.message}
 
 
+def _poll_body(body: dict[str, Any]) -> dict[str, Any]:
+    """A status-poll answer must ALWAYS carry `task_status`.
+
+    The panel's poll stops on a terminal status and treats a missing one as
+    "not in flight". A refusal/unreachable body built for the POST route has
+    no `task_status` at all, so handing it back on the poll route read as
+    `undefined` and stopped the poll with nothing shown — the search went
+    quiet instead of reporting what happened. The reason travels as `error`
+    (the key the panel renders) while the original `status`/`message` stay
+    for the copy.
+    """
+    return {
+        **body,
+        "task_status": "failed",
+        "error": body.get("message"),
+    }
+
+
 # SQLSTATE class 42 = insufficient schema / undefined object.
 _MISSING_TABLE = "42P01"
 
@@ -430,11 +448,12 @@ async def get_external_search_status(
     user_uuid, tenant_uuid, role = await _require_session_with_role(request)
 
     if not settings.career_bot_configured():
-        return {
-            "status": STATUS_UNCONFIGURED,
-            "task_status": None,
-            "message": "External candidate search is not set up for this deployment.",
-        }
+        return _poll_body(
+            {
+                "status": STATUS_UNCONFIGURED,
+                "message": "External candidate search is not set up for this deployment.",
+            }
+        )
 
     async with tenant_session(tenant_uuid) as session:
         current = await load_visible_opportunity(session, opportunity_id, user_uuid, role)
@@ -444,9 +463,9 @@ async def get_external_search_status(
     try:
         task = await _client().get_task(task_id)
     except CareerBotUnreachableError as exc:
-        return _unreachable_body(exc)
+        return _poll_body(_unreachable_body(exc))
     except CareerBotError as exc:
-        return _refusal(exc)
+        return _poll_body(_refusal(exc))
 
     # The terminal state lands on the row the same read authorised — a
     # completed poll stores the results, so a panel that only ever polls
