@@ -334,6 +334,67 @@ async def test_malformed_json_on_unbounded_completion_keeps_class_and_carries_ta
     assert "finish_reason=stop" in str(excinfo.value)
 
 
+async def test_raw_control_character_in_a_value_parses_leniently():
+    """GLM pretty-prints, and when it wraps a long value across lines the
+    newline lands RAW inside the string — which strict `json.loads` rejects
+    ("Invalid control character at: line N column M").
+
+    Production failure this fixes (job intelligence, 2026-09-30, row
+    53ec2133): the answer closed cleanly at `}` and reported
+    `finish_reason=stop`, so no truncation retry fired, and the recruiter was
+    shown the raw JSON head as the failure reason. Every value still comes
+    from the model — the lenient parse only tolerates the character, it
+    invents nothing (§15).
+    """
+    payload = {
+        "choices": [
+            {
+                "message": {
+                    # A REAL newline inside the string value, not an escape.
+                    "content": '{\n  "role": "line one\nline two"\n}',
+                    "finish_reason": "stop",
+                }
+            }
+        ],
+        "usage": {},
+        "model": "glm-4.6",
+    }
+
+    result = await complete_json(
+        "prompt", model="test/fast", schema={}, transport=_transport(payload)
+    )
+
+    assert result.data == {"role": "line one\nline two"}
+
+
+async def test_genuinely_broken_json_reports_the_parser_diagnosis():
+    """Leniency must not paper over real malformation. An unescaped inner
+    quote fails both the strict and the lenient parse, so this stays
+    `LLMInvalidJSON` — and the message now carries the strict parser's own
+    reason, which says WHERE the answer broke. The old code raised the head
+    slice alone, so an answer broken past the first 500 characters left no
+    offset to work from.
+    """
+    content = '{"role": "say "hi" now"}'
+    payload = {
+        "choices": [
+            {"message": {"content": content}, "finish_reason": "stop"}
+        ],
+        "usage": {},
+        "model": "glm-4.6",
+    }
+
+    with pytest.raises(LLMInvalidJSON) as excinfo:
+        await complete_json(
+            "prompt", model="test/fast", schema={}, transport=_transport(payload)
+        )
+
+    message = str(excinfo.value)
+    assert "Expecting" in message or "Invalid" in message
+    assert content[:500] in message
+    assert "finish_reason=stop" in message
+
+
 async def test_missing_finish_reason_keeps_class_unknown_but_not_truncated():
     """A provider that omits finish_reason must not be mistaken for one
     that said length — the remedy differs (grow budget vs re-ask).

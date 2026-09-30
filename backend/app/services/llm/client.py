@@ -331,23 +331,48 @@ def _truncate_reason(finish_reason: str | None, content: str) -> str:
     return f"no finish_reason in response (ends: ...{tail!r})"
 
 
+def _loads(text: str) -> dict:
+    """`json.loads`, falling back once to strict=False.
+
+    `strict` (the default) rejects raw control characters inside string
+    values — a literal newline or tab. GLM's pretty-printed answers contain
+    exactly that when the model wraps a long value across lines, and the
+    production failure (job intelligence, 2026-09-30) died on it with
+    `finish_reason=stop` and a cleanly-closed object, so no truncation retry
+    fired. strict=False tolerates those characters without inventing data:
+    every value still comes from the model's answer. The strict attempt runs
+    first, and when both fail the raised error carries the strict parser's
+    own diagnosis ("Invalid control character at: line 7 column 12") — the
+    one detail that says WHERE the answer broke, which a head-only message
+    never did.
+    """
+    try:
+        return json.loads(text)
+    except (json.JSONDecodeError, TypeError) as exc:
+        try:
+            return json.loads(text, strict=False)
+        except (json.JSONDecodeError, TypeError):
+            raise LLMInvalidJSON(f"{exc}; {text[:500]}") from None
+
+
 def _parse(content: str) -> dict:
     if match := _FENCE.match(content or ""):
         content = match.group(1)
     try:
-        parsed = json.loads(content)
-    except (json.JSONDecodeError, TypeError):
+        parsed = _loads(content)
+    except LLMInvalidJSON:
         # GLM's coding plan sometimes returns the answer envelope as MALFORMED
         # JSON: `{"answer": "<pretty-printed inner JSON with raw newlines and
-        # unescaped quotes>"}`. The outer `json.loads` fails on the control
-        # characters before we ever see the envelope, so recover by extracting
-        # the inner JSON document and parsing it directly.
+        # unescaped quotes>"}`. The outer parse fails on the control characters
+        # before we ever see the envelope, so recover by extracting the inner
+        # JSON document and parsing it directly.
         rescued = _rescue_answer_envelope(content)
         if rescued is not None:
             return rescued
         # Truncated: the message ends up in logs, and a runaway completion would
-        # otherwise put a whole email body there.
-        raise LLMInvalidJSON(content[:500]) from None
+        # otherwise put a whole email body there. `_loads` has already appended
+        # the strict parser's diagnosis ahead of the head slice.
+        raise
     if not isinstance(parsed, dict):
         # A bare list or number parses fine and would then fail far downstream
         # on an attribute the caller assumed. Reject it where it happened.
@@ -385,10 +410,7 @@ def _parse(content: str) -> dict:
             # a code fence if the model wrapped the string, then re-parse.
             if match := _FENCE.match(answer):
                 answer = match.group(1)
-            try:
-                inner = json.loads(answer)
-            except (json.JSONDecodeError, TypeError) as exc:
-                raise LLMInvalidJSON(answer[:500]) from exc
+            inner = _loads(answer)
             if isinstance(inner, dict):
                 return inner
             raise LLMInvalidJSON(
