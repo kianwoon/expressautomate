@@ -25,7 +25,7 @@ from app.services.job_intelligence.schema import (
     JobIntelligenceResult,
     SearchPlan,
 )
-from app.services.llm.client import LLMInvalidJSON
+from app.services.llm.client import LLMInvalidJSON, LLMSyntaxError
 from app.workers.job_intelligence_jobs import run_job_intelligence
 from tests.conftest import AdminSessionLocal, cleanup_tenant
 
@@ -280,6 +280,42 @@ async def test_model_refusal_text_becomes_the_failure_reason(monkeypatch):
             assert row.state == "failed"
             assert "almost no substantive information" in row.failure_reason
             assert len(row.failure_reason) <= 240
+    finally:
+        await _drop(tid)
+
+
+async def test_syntax_error_failure_reason_is_actionable_not_raw(monkeypatch):
+    """JSON-shaped garbage that survived the engine's re-ask reaches the
+    recruiter as an actionable sentence — never the raw parser offset or the
+    JSON head slice that `_recruiter_reason` forwards for other classes.
+    """
+    monkeypatch.setattr(settings, "JOB_INTELLIGENCE_MAX_ATTEMPTS", 3)
+    fake = AsyncMock(
+        side_effect=LLMSyntaxError(
+            "Expecting property name enclosed in double quotes: line 38 column 4 "
+            '(char 1319); {"likely_backgrounds": ["Retail'
+        )
+    )
+    monkeypatch.setattr("app.workers.job_intelligence_jobs.analyze", fake)
+
+    tid, uid, oid, row_id = await _seed()
+    try:
+        await run_job_intelligence(
+            ctx={},
+            tenant_id=str(tid),
+            opportunity_id=str(oid),
+            row_id=str(row_id),
+        )
+
+        async with tenant_session(tid) as s:
+            row = await s.get(JobIntelligence, row_id)
+            assert row.state == "failed"
+            assert row.failure_reason == (
+                "The model returned malformed data for this analysis, even "
+                "after a retry. Please try again or report this."
+            )
+            assert "Expecting" not in row.failure_reason
+            assert "likely_backgrounds" not in row.failure_reason
     finally:
         await _drop(tid)
 

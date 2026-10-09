@@ -79,6 +79,20 @@ class LLMResponseTruncated(LLMInvalidJSON):
     """
 
 
+class LLMSyntaxError(LLMInvalidJSON):
+    """The model answered in what looked like JSON, but the document does not parse.
+
+    Distinct from a prose refusal (plain `LLMInvalidJSON`): the content starts
+    with `{`/`[`, so the defect is structural noise inside the document, not a
+    meaningful answer a human should read. The remedy differs — a re-ask is
+    worth one shot because provider sampling is not fully deterministic in
+    practice (the same order retried succeeds), while a refusal's prose IS the
+    diagnosis and must be forwarded, not retried away. Repair is still bounded
+    by the no-invention rule: only syntax-noise fixes (comma strip, fence
+    strip, strict=False) run before this class is raised.
+    """
+
+
 @dataclass
 class LLMResult:
     data: dict
@@ -331,8 +345,53 @@ def _truncate_reason(finish_reason: str | None, content: str) -> str:
     return f"no finish_reason in response (ends: ...{tail!r})"
 
 
+def _strip_trailing_commas(text: str) -> str:
+    """Remove commas that sit immediately before a `}` or `]`, outside strings.
+
+    A trailing comma is pure syntax noise — `json.loads` refuses it with
+    "Expecting property name enclosed in double quotes", the position naming
+    the closer the comma precedes — while every value around it is complete
+    and unambiguous. Deleting the comma invents nothing (§15): no value is
+    added, defaulted, or altered. The scan is string-aware — a comma inside a
+    string value (`"yes, }"`) is data and must survive — and escape-aware,
+    since `\\"` does not close a string.
+
+    Production failure this fixes: a job-intelligence persona answer (2026-10)
+    ended cleanly at `}` with a trailing comma after its last field, failed
+    both loads attempts, and surfaced to the recruiter as the raw parser
+    error — the same class the strict=False leniency already serves for raw
+    control characters.
+    """
+    out: list[str] = []
+    in_string = False
+    escaped = False
+    for ch in text:
+        if in_string:
+            out.append(ch)
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+            out.append(ch)
+        elif ch in "}]":
+            end = len(out)
+            while end > 0 and out[end - 1] in " \t\r\n":
+                end -= 1
+            if end > 0 and out[end - 1] == ",":
+                del out[end - 1 :]
+            out.append(ch)
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
 def _loads(text: str) -> dict:
-    """`json.loads`, falling back once to strict=False.
+    """`json.loads`, falling back twice: strict=False, then a comma strip.
 
     `strict` (the default) rejects raw control characters inside string
     values — a literal newline or tab. GLM's pretty-printed answers contain
@@ -340,11 +399,22 @@ def _loads(text: str) -> dict:
     production failure (job intelligence, 2026-09-30) died on it with
     `finish_reason=stop` and a cleanly-closed object, so no truncation retry
     fired. strict=False tolerates those characters without inventing data:
-    every value still comes from the model's answer. The strict attempt runs
-    first, and when both fail the raised error carries the strict parser's
-    own diagnosis ("Invalid control character at: line 7 column 12") — the
-    one detail that says WHERE the answer broke, which a head-only message
-    never did.
+    every value still comes from the model's answer.
+
+    The third attempt strips trailing commas before a closer — a second
+    formatting habit (`",\n}`), and the same class of pure syntax noise. It
+    runs only when both parses above fail, and it, too, invents nothing: a
+    comma carries no value. The repaired text is parsed with strict=False so
+    both leniencies compose — an answer can carry a raw newline AND a trailing
+    comma at once. The strip is applied to a fixpoint (bounded at 4 passes,
+    which the strictly-shrinking strip can never reach) so doubled commas
+    (`[1, 2,,]`, `{"a": 1,,}`) collapse too: each pass removes one comma
+    immediately before a closer, and one pass is not enough for two in a row.
+    If the strip cannot fix it the original strict parser's diagnosis is what
+    the caller sees: the raised error carries `exc` from the first attempt
+    ("Invalid control character at: line 7 column 12", or "Expecting property
+    name enclosed in double quotes") — the one detail that says WHERE the
+    answer broke, which a head-only message never did.
     """
     try:
         return json.loads(text)
@@ -352,6 +422,21 @@ def _loads(text: str) -> dict:
         try:
             return json.loads(text, strict=False)
         except (json.JSONDecodeError, TypeError):
+            # Bounded fixpoint: strip, parse leniently, and if the strip changed
+            # the text and it still will not parse, strip the result again.
+            # `_strip_trailing_commas` strictly shrinks (or stabilizes) the
+            # text, so this terminates; 4 passes is a defensive ceiling, not a
+            # reachable depth. Each pass invents nothing — a comma carries no
+            # value, so dropping it adds, defaults, and alters nothing (§15).
+            repaired = text
+            for _ in range(4):
+                stripped = _strip_trailing_commas(repaired)
+                if stripped == repaired:
+                    break
+                try:
+                    return json.loads(stripped, strict=False)
+                except (json.JSONDecodeError, TypeError):
+                    repaired = stripped
             raise LLMInvalidJSON(f"{exc}; {text[:500]}") from None
 
 
@@ -360,7 +445,7 @@ def _parse(content: str) -> dict:
         content = match.group(1)
     try:
         parsed = _loads(content)
-    except LLMInvalidJSON:
+    except LLMInvalidJSON as exc:
         # GLM's coding plan sometimes returns the answer envelope as MALFORMED
         # JSON: `{"answer": "<pretty-printed inner JSON with raw newlines and
         # unescaped quotes>"}`. The outer parse fails on the control characters
@@ -369,9 +454,19 @@ def _parse(content: str) -> dict:
         rescued = _rescue_answer_envelope(content)
         if rescued is not None:
             return rescued
+        # JSON-shaped content means the defect is structural noise inside the
+        # document — it starts with `{`/`[` — not a prose refusal whose text is
+        # itself the diagnosis. Raise the subclass so the engine re-asks syntax
+        # garbage once; `complete_json`'s re-raise uses `type(exc)`, so the
+        # subclass survives the truncate-note append, and every existing
+        # `except LLMInvalidJSON` handler still catches it (it is a subclass).
+        # `content` is already fence-stripped above. The message is unchanged.
+        #
         # Truncated: the message ends up in logs, and a runaway completion would
         # otherwise put a whole email body there. `_loads` has already appended
         # the strict parser's diagnosis ahead of the head slice.
+        if content.lstrip()[:1] in ("{", "["):
+            raise LLMSyntaxError(str(exc)) from exc
         raise
     if not isinstance(parsed, dict):
         # A bare list or number parses fine and would then fail far downstream

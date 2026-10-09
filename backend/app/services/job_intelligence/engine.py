@@ -31,6 +31,7 @@ from app.services.job_intelligence.understand import understand
 from app.services.llm.client import (
     LLMNoContent,
     LLMResponseTruncated,
+    LLMSyntaxError,
     complete_json,
 )
 
@@ -41,19 +42,32 @@ from app.services.llm.client import (
 _TRUNCATION_RETRY_MAX_TOKENS_CAP = 131072
 
 
-def _truncation_retry(llm):
-    """Wrap a stage's llm callable with one retry on a truncated/empty answer.
+def _llm_retry(llm):
+    """Wrap a stage's llm callable with one retry per failure type.
 
-    `LLMResponseTruncated` and `LLMNoContent` are the
-    two failures the client's docstring marks retryable: the answer was never
-    emitted — a reasoning model spent its whole output budget thinking — so
-    re-asking under a grown `max_tokens` and the reasoning knob removed is a
+    Two remedies, chosen by failure class.
+
+    `LLMResponseTruncated` and `LLMNoContent` are the two failures the
+    client's docstring marks retryable: the answer was never emitted — a
+    reasoning model spent its whole output budget thinking — so re-asking
+    under a grown `max_tokens` and the reasoning knob removed is a
     *materially different request*, not a temperature-zero replay of the same
-    answer. Ordinary `LLMInvalidJSON` is deliberately not caught: a real bad
-    answer replayed at temperature zero is the same answer twice, and guessing
-    or repairing truncated JSON would fabricate data. One retry only — a
-    second miss means the budget itself is wrong and the analysis fails
-    terminally, where the worker records an actionable reason.
+    answer.
+
+    `LLMSyntaxError` is JSON-shaped but malformed content. The answer
+    finished; it was structurally broken, so a larger budget is the wrong
+    remedy (there is nothing left to emit). It is re-asked ONCE with the
+    request unchanged: provider sampling is not fully deterministic in
+    practice, and the same call retried succeeds. User directive 2026-10-10:
+    this error class is handled, amending the earlier "same answer twice"
+    rationale — that rationale now covers only prose refusals, whose text IS
+    the diagnosis and is forwarded, not retried.
+
+    Ordinary `LLMInvalidJSON` (a prose refusal) is deliberately not caught,
+    for that same reason. One re-ask per failure type — a second miss means
+    the analysis fails terminally, where the worker records an actionable
+    reason. The two except clauses each fire at most once, so a failure inside
+    the retry call propagates.
 
     Production failure this fixes: the GLM coding-plan provider truncated an
     answer mid-key while reporting a non-length finish_reason, so the client
@@ -64,6 +78,14 @@ def _truncation_retry(llm):
 
     async def resolve(prompt, **kwargs):
         try:
+            return await llm(prompt, **kwargs)
+        except LLMSyntaxError:
+            # JSON-shaped garbage, not a budget problem: re-ask ONCE with the
+            # request unchanged. Growing the budget would be the wrong remedy —
+            # the answer finished; it was malformed. Sampling variance is the
+            # repair. User directive 2026-10-10: this error class is handled,
+            # amending the earlier "same answer twice" rationale, which now
+            # covers only prose refusals (their text is the diagnosis).
             return await llm(prompt, **kwargs)
         except (LLMResponseTruncated, LLMNoContent):
             retry_body = dict(kwargs.get("extra_body") or {})
@@ -149,7 +171,7 @@ async def analyze(
     — GLM (the Z.AI wrapper) when the Job Intelligence GLM provider is enabled,
     otherwise `complete_json`.
     """
-    llm = _truncation_retry(llm or _get_llm_for_job_intelligence())
+    llm = _llm_retry(llm or _get_llm_for_job_intelligence())
     context: OpportunityContext = assemble(opportunity, codes)
 
     understanding, r1 = await understand(context.text, llm=llm)

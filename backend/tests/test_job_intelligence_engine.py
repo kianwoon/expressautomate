@@ -25,6 +25,7 @@ from app.services.llm.client import (
     LLMNoContent,
     LLMResponseTruncated,
     LLMResult,
+    LLMSyntaxError,
     complete_json,
 )
 
@@ -310,3 +311,27 @@ async def test_analyze_ordinary_invalid_json_fails_fast_with_no_retry(monkeypatc
         await analyze(_Opp(), codes=(), llm=llm)
     # Three calls only — the persona failure propagated immediately.
     assert len(llm.prompts) == 3
+
+
+async def test_syntax_error_gets_one_unchanged_re_ask():
+    """JSON-shaped garbage is re-asked once with the request unchanged.
+
+    `LLMSyntaxError` is not a budget problem — the answer finished, it was
+    malformed — so the retry must NOT grow `max_tokens` or drop the reasoning
+    knob (that is the truncation remedy). It re-asks the identical request
+    once, because provider sampling is not fully deterministic in practice.
+    """
+    llm = _SequenceLLM(
+        _understanding_payload(),
+        _occupation_profile_payload(),
+        LLMSyntaxError("Expecting property name; {...}"),
+        _persona_payload(),
+        _search_payload(),
+    )
+    outcome = await analyze(_Opp(), codes=(), llm=llm)
+
+    assert outcome.result.persona.likely_backgrounds == ["Logistics coordinator"]
+    # Five calls: the persona re-ask adds exactly one.
+    assert len(llm.prompts) == 5
+    # The re-ask is the same request: no budget growth, reasoning knob intact.
+    assert llm.extra_bodies[2] == llm.extra_bodies[3]

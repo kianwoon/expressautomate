@@ -14,6 +14,7 @@ from app.services.llm.client import (
     LLMInvalidJSON,
     LLMNoContent,
     LLMResponseTruncated,
+    LLMSyntaxError,
     complete_json,
 )
 
@@ -367,6 +368,173 @@ async def test_raw_control_character_in_a_value_parses_leniently():
     assert result.data == {"role": "line one\nline two"}
 
 
+async def test_trailing_comma_in_an_object_parses_with_the_comma_dropped():
+    """GLM pretty-prints and sometimes leaves a comma after the last field
+    before the closing brace, which strict `json.loads` rejects
+    ("Expecting property name enclosed in double quotes").
+
+    Production failure this fixes (job intelligence persona stage, 2026-10):
+    the answer closed cleanly at `}` with a trailing comma after its last
+    field, so `_looks_truncated` correctly said "not truncated" and no retry
+    fired — the recruiter was shown the raw parser error ("Expecting property
+    name enclosed in double quotes: line 38 column 4"). Deleting the comma
+    invents nothing: every value still comes from the model's answer (§15).
+    """
+    payload = {
+        "choices": [
+            {
+                "message": {
+                    "content": (
+                        "{\n"
+                        '  "likely_backgrounds": [\n'
+                        '    "Retail or hospitality frontline work",\n'
+                        '    "Customer service or cash handling experience"\n'
+                        "  ],\n"
+                        '  "communication_style": "Warm and practical",\n'
+                        "}"
+                    ),
+                    "finish_reason": "stop",
+                }
+            }
+        ],
+        "usage": {},
+        "model": "glm-4.6",
+    }
+
+    result = await complete_json(
+        "prompt", model="test/fast", schema={}, transport=_transport(payload)
+    )
+
+    assert result.data == {
+        "likely_backgrounds": [
+            "Retail or hospitality frontline work",
+            "Customer service or cash handling experience",
+        ],
+        "communication_style": "Warm and practical",
+    }
+
+
+async def test_trailing_comma_in_an_array_parses_leniently():
+    """The same formatting rule in an unseen shape: a trailing comma before a
+    nested `]`. The strip is closer-agnostic — `}` and `]` alike — so the
+    general rule is what is tested, not the one reported string.
+    """
+    payload = {
+        "choices": [
+            {
+                "message": {"content": '{"behaviours": ["punctual", "reliable",]}'},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {},
+        "model": "glm-4.6",
+    }
+
+    result = await complete_json(
+        "prompt", model="test/fast", schema={}, transport=_transport(payload)
+    )
+
+    assert result.data == {"behaviours": ["punctual", "reliable"]}
+
+
+async def test_comma_inside_a_string_value_is_never_touched():
+    """The repair is string-aware: a comma inside a value is DATA, not syntax.
+    This answer has no trailing comma at all, so the strip must leave it
+    untouched — deleting the comma would be fabrication (§15).
+    """
+    payload = {
+        "choices": [
+            {
+                "message": {"content": '{"note": "yes, } and ] too", "n": 1}'},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {},
+        "model": "glm-4.6",
+    }
+
+    result = await complete_json(
+        "prompt", model="test/fast", schema={}, transport=_transport(payload)
+    )
+
+    assert result.data == {"note": "yes, } and ] too", "n": 1}
+
+
+async def test_doubled_trailing_commas_parse_after_the_fixpoint_strip():
+    """A single strip pass removes only the comma immediately before a closer,
+    so two in a row (`reliable",,`) survive it. The bounded fixpoint loop
+    strips again and the answer parses — same no-invention argument: a comma
+    carries no value, so deleting it adds, defaults, and alters nothing.
+
+    This is an unseen input the general rule covers beyond the reported single
+    trailing comma: doubled commas before either a `]` or a `}`.
+    """
+    payload = {
+        "choices": [
+            {
+                "message": {"content": '{"behaviours": ["punctual", "reliable",,], "n": 1,}'},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {},
+        "model": "glm-4.6",
+    }
+
+    result = await complete_json(
+        "prompt", model="test/fast", schema={}, transport=_transport(payload)
+    )
+
+    assert result.data == {"behaviours": ["punctual", "reliable"], "n": 1}
+
+
+async def test_json_shaped_garbage_raises_llm_syntax_error():
+    """Content that starts with `{`/`[` but cannot be repaired by any
+    syntax-noise fix is structural garbage, not prose — it gets the
+    `LLMSyntaxError` subclass so the engine re-asks it once. It is still an
+    `LLMInvalidJSON` (subclass), so every existing handler catches it, and the
+    message still carries the strict parser's own diagnosis.
+    """
+    payload = {
+        "choices": [
+            {
+                "message": {"content": '{"broken":}'},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {},
+        "model": "glm-4.6",
+    }
+
+    with pytest.raises(LLMSyntaxError) as excinfo:
+        await complete_json(
+            "prompt", model="test/fast", schema={}, transport=_transport(payload)
+        )
+    assert isinstance(excinfo.value, LLMInvalidJSON)
+    assert "Expecting" in str(excinfo.value)
+
+
+async def test_prose_answer_stays_plain_invalid_json():
+    """A prose refusal is a meaningful answer whose text IS the diagnosis, so
+    it must NOT become an `LLMSyntaxError` — the engine must not retry it away.
+    """
+    payload = {
+        "choices": [
+            {
+                "message": {"content": "The job order states almost nothing to analyse."},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {},
+        "model": "glm-4.6",
+    }
+
+    with pytest.raises(LLMInvalidJSON) as excinfo:
+        await complete_json(
+            "prompt", model="test/fast", schema={}, transport=_transport(payload)
+        )
+    assert not isinstance(excinfo.value, LLMSyntaxError)
+
+
 async def test_genuinely_broken_json_reports_the_parser_diagnosis():
     """Leniency must not paper over real malformation. An unescaped inner
     quote fails both the strict and the lenient parse, so this stays
@@ -459,12 +627,16 @@ async def test_truncated_mid_key_with_no_finish_reason_is_classified_truncated()
 
 
 async def test_complete_but_malformed_json_ending_in_brace_stays_invalid():
-    """No behavior change: content that ends at `}` but will not parse is a
-    genuinely bad answer (returns it as ordinary LLMInvalidJSON), not a
-    budget truncation — replaying it at temperature zero is the same answer
-    twice."""
+    """Content that ends at `}` but will not parse is not a budget truncation,
+    so the truncation retry must not fire — it stays an `LLMInvalidJSON`.
+
+    The defect used here is a missing delimiter, which no syntax-noise repair
+    can fix. (This test previously used a doubled trailing comma; user
+    directive 2026-10-10 makes the strip run to a fixpoint, so that case now
+    parses — see `test_doubled_trailing_commas_parse_after_the_fixpoint_strip`.)
+    """
     payload = {
-        "choices": [{"message": {"content": '{"role": "Analyst",,}'}}],
+        "choices": [{"message": {"content": '{"role": "Analyst" "n": 1}'}}],
         "usage": {},
         "model": "glm-4.6",
     }

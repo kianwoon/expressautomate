@@ -214,8 +214,19 @@ def _recruiter_reason(exc: Exception) -> str:
     Truncated hard: `failure_reason` is a UI string, not a log, and a runaway
     model answer must not render as a wall of text.
     """
-    from app.services.llm.client import LLMInvalidJSON, LLMResponseTruncated
+    from app.services.llm.client import (
+        LLMInvalidJSON,
+        LLMResponseTruncated,
+        LLMSyntaxError,
+    )
 
+    if isinstance(exc, LLMSyntaxError):
+        # JSON-shaped garbage that the engine's re-ask also missed. The raw
+        # parser offset is developer detail, not a recruiter sentence.
+        return (
+            "The model returned malformed data for this analysis, even after "
+            "a retry. Please try again or report this."
+        )
     if isinstance(exc, LLMResponseTruncated):
         # Actionable, not a wall of the raw preview: the engine's grown-budget
         # retry already missed, so the fix is human (rerun later / report it),
